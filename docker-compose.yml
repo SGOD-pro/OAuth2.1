@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # NestJS API — Better Auth + OAuth Provider
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  api:
+    build: ./backend
+    ports:
+      - "3000:3000"
+    env_file: ./backend/.env
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/auth/ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # React Frontend — Auth UI
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # Nginx — TLS termination + reverse proxy
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # Handles:
+  #   - /.well-known/jwks.json → proxied to api with caching headers
+  #   - /api/* → proxied to api
+  #   - /* → proxied to frontend
+  #   - TLS + security headers (HSTS, CSP, X-Frame-Options)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped

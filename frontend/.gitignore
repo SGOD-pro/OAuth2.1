@@ -1,0 +1,10 @@
+/ode_modules
+/skills
+.env
+package-lock.json
+/skills/**/.venv
+.vscode
+node_modules
+.vite
+dist
+.code-review-graph/
