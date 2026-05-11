@@ -3,11 +3,13 @@ import { betterAuth } from "better-auth";
 import { admin, jwt } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
-import { db, client } from "../db/mongo";
+import { getDb, client } from "../db/mongo";
 
 
 export const AUTH_INSTANCE = Symbol("AUTH_INSTANCE");
 export type AuthInstance = ReturnType<typeof betterAuth>;
+
+const database = await getDb();
 
 export const authProvider = betterAuth({
     baseURL: config.auth.baseURL,
@@ -26,7 +28,7 @@ export const authProvider = betterAuth({
     },
 
     database: mongodbAdapter(
-        db,
+        database,
         { client }
     ),
 

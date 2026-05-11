@@ -3,7 +3,9 @@ import { authProvider } from "../utils/auth";
 
 const auth = new Hono();
 
-auth.on(["POST", "GET"], "/", (c) => {
+auth.get("/", (c) => c.json({ status: "ok" }));
+
+auth.all("/*", (c) => {
 
     const appName =
         c.req.header("x-app-name")

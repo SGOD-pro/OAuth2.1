@@ -6,40 +6,22 @@ import {
 import { config }
   from "../config";
 
-const client =
-  new MongoClient(
-    config.mongo.uri
-  );
+const client = new MongoClient(config.mongo.uri);
 
-let db: Db;
+let db: Db | null = null;
 
-let connectPromise:
-  Promise<Db> | null = null;
+const connectPromise: Promise<Db> = client.connect().then(() => {
+  db = client.db();
+  console.log("Mongo connected");
+  return db;
+});
 
-export async function connectDb() {
+export async function getDb(): Promise<Db> {
   if (db) {
     return db;
-  }
-
-  if (!connectPromise) {
-    connectPromise =
-      client
-        .connect()
-        .then(() => {
-          db = client.db();
-
-          console.log(
-            "Mongo connected"
-          );
-
-          return db;
-        });
   }
 
   return connectPromise;
 }
 
-export {
-  client,
-  db,
-};
+export { client };

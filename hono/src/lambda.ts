@@ -1,4 +1,7 @@
 import { handle } from "hono/lambda-edge";
-import app from "./app";
+import app, { appBootTime } from "./app";
 
-export const handler = handle(app)
+const initMs = Date.now() - appBootTime;
+console.log(`Lambda init in ${initMs}ms`);
+
+export const handler = handle(app);

@@ -10,17 +10,19 @@ import {
     originCache,
 } from "../cache/origin-cache";
 
-import { db } from "../db/mongo";
+import { getDb } from "../db/mongo";
 
-export async function isOriginAllowed(origin: string ): Promise<boolean> {
-    const client =
-        await db
-            .collection("oauthClient")
-            .findOne({
-                allowedOrigins: origin,
-            });
+export async function isOriginAllowed(origin: string): Promise<boolean> {
+    const database = await getDb();
+    const client = await database.collection("oauthClient").findOne({
+        redirectUris: {
+            $elemMatch: {
+                $regex: `^${escapeRegex(origin)}`,
+            },
+        },
+    });
 
-    return !!client;
+    return Boolean(client);
 }
 
 function applyCorsHeaders(
@@ -48,6 +50,28 @@ function applyCorsHeaders(
     );
 }
 
+function applyCorsHeadersToResponse(
+    c: Context,
+    origin: string
+) {
+    c.res.headers.set(
+        "Access-Control-Allow-Origin",
+        origin
+    );
+    c.res.headers.set(
+        "Access-Control-Allow-Credentials",
+        "true"
+    );
+    c.res.headers.set(
+        "Access-Control-Allow-Methods",
+        "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
+    c.res.headers.set(
+        "Access-Control-Allow-Headers",
+        "Content-Type,Authorization"
+    );
+}
+
 export async function dynamicCors(
     c: Context,
     next: Next
@@ -70,6 +94,7 @@ export async function dynamicCors(
         }
 
         await next();
+        applyCorsHeadersToResponse(c, origin || ownFrontend);
         return;
     }
 
@@ -106,4 +131,9 @@ export async function dynamicCors(
     }
 
     await next();
+    applyCorsHeadersToResponse(c, origin);
+}
+
+function escapeRegex(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
