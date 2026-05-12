@@ -1,17 +1,23 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useSession } from '../lib/auth-client';
+import GlassSurface from '@/components/GlassSurface';
 
 const LoadingSpinner: React.FC = () => (
-  <div
-    style={{
-      height: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-    }}
-  >
-    <div className="loading-spinner" />
+  <div className="w-full h-dvh px-6 grid place-items-center">
+    <GlassSurface
+      width="100%"
+      height="auto"
+      borderRadius={28}
+      backgroundOpacity={0.12}
+      blur={12}
+      saturation={1.6}
+      className="w-full max-w-md mx-auto"
+    >
+      <div className="w-full px-8 py-10 text-center">
+        <div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+      </div>
+    </GlassSurface>
   </div>
 );
 
@@ -21,8 +27,8 @@ interface AdminRouteProps {
 
 /**
  * Route guard for all /admin/* routes.
- * Redirects to /sign-in if not authenticated.
- * Redirects to / if authenticated but not admin.
+ * Redirects to /admin/login if not authenticated.
+ * Redirects to /admin/login?error=access_denied if authenticated but not admin.
  */
 export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
   const { data: session, isPending } = useSession();

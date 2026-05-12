@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { SilkBackground } from '../components/SilkBackground';
-import { ThemeToggle } from '../components/ThemeToggle';
-import { authClient } from '../lib/auth-client';
+import { authClient } from '@/lib/auth-client';
+import GlassSurface from '@/components/GlassSurface';
+import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
 
 /**
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -54,66 +55,78 @@ export const Consent: React.FC = () => {
   };
 
   return (
-    <div className="app-container">
-      <ThemeToggle />
-      <div className="left-pane">
-        <div className="glass-surface auth-form" style={{ viewTransitionName: 'auth-form', maxWidth: '480px' }}>
-          <div className="auth-header">
-            <h1>Authorize Access</h1>
-            <p>
-              <strong style={{ color: 'var(--primary-color)' }}>{clientId}</strong> wants to access your account.
-            </p>
-          </div>
+    <div className="w-full max-w-3xl px-6">
+      <GlassSurface
+        width="100%"
+        height="auto"
+        borderRadius={28}
+        backgroundOpacity={0.14}
+        blur={12}
+        saturation={1.6}
+        className="w-full max-w-lg mx-auto"
+      >
+        <div className="w-full px-8 py-10 text-left">
+          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">SWYRA Consent</p>
+          <h1 className="mt-3 text-2xl font-semibold text-foreground">Authorize access</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            <span className="text-foreground font-medium">{clientId}</span> wants to access your account.
+          </p>
 
           {error && (
-            <div className="auth-error" role="alert">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            <div
+              className="mt-6 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+              role="alert"
+            >
               {error}
             </div>
           )}
 
-          <div className="consent-scopes">
-            <p style={{ fontWeight: 600, marginBottom: '0.75rem', fontSize: '0.95rem', opacity: 0.8 }}>
-              This application will be able to:
-            </p>
-            <ul className="scope-list">
+          <div className="mt-6 rounded-2xl border border-border/60 bg-background/40 p-4">
+            <p className="text-sm font-medium text-foreground">This application will be able to:</p>
+            <ul className="mt-4 space-y-3 text-sm text-foreground">
               {scopes.map((scope) => {
                 const desc = scopeDescriptions[scope] || { label: scope, icon: '📋' };
                 return (
-                  <li key={scope} className="scope-item">
-                    <span className="scope-icon">{desc.icon}</span>
-                    <span>{desc.label}</span>
+                  <li key={scope} className="flex items-start gap-3">
+                    <span className="text-lg" aria-hidden="true">{desc.icon}</span>
+                    <span className="text-muted-foreground">{desc.label}</span>
                   </li>
                 );
               })}
             </ul>
           </div>
 
-          <div className="consent-actions">
-            <button
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <Button
               type="button"
-              className="btn-primary"
+              className="w-full"
               onClick={() => handleConsent(true)}
               disabled={loading}
             >
-              {loading ? 'Processing...' : 'Allow Access'}
-            </button>
-            <button
+              {loading ? 'Processing...' : 'Allow access'}
+            </Button>
+            <Button
               type="button"
-              className="btn-secondary"
+              variant="outline"
+              className="w-full"
               onClick={() => handleConsent(false)}
               disabled={loading}
             >
               Deny
-            </button>
+            </Button>
           </div>
 
-          <p style={{ textAlign: 'center', fontSize: '0.8rem', opacity: 0.5, marginTop: '1rem' }}>
+          <div className="my-6 flex items-center gap-4">
+            <Separator className="flex-1" />
+            <span className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">notice</span>
+            <Separator className="flex-1" />
+          </div>
+
+          <p className="text-xs text-muted-foreground text-center">
             You can revoke access at any time from your account settings.
           </p>
         </div>
-      </div>
-      <SilkBackground />
+      </GlassSurface>
     </div>
   );
 };

@@ -1,32 +1,56 @@
-import { RouterProvider, createBrowserRouter } from 'react-router-dom';
-import { SignIn } from './pages/SignIn';
-import { SignUp } from './pages/SignUp';
-import { ForgotPassword } from './pages/ForgotPassword';
-import { ResetPassword } from './pages/ResetPassword';
-import { Consent } from './pages/Consent';
-import { AuthCallback } from './pages/AuthCallback';
-import { AdminDashboard } from './pages/admin/AdminDashboard';
-import { AdminClients } from './pages/admin/AdminClients';
-import { AdminLogs } from './pages/admin/AdminLogs';
-import { AdminLogin } from './pages/admin/AdminLogin';
-import { AdminRoute } from './components/AdminRoute';
+import { Suspense, lazy, type ReactNode } from 'react';
+import { RouterProvider, createBrowserRouter, Navigate } from 'react-router-dom';
+import { AdminRoute } from '@/components/AdminRoute';
+import { Layout } from '@/components/Layout';
+import { RouteLoader } from '@/components/RouteLoader';
 import './index.css';
 
+const SignIn = lazy(() => import('@/pages/SignIn').then((module) => ({ default: module.SignIn })));
+const ForgotPassword = lazy(() =>
+  import('@/pages/ForgotPassword').then((module) => ({ default: module.ForgotPassword }))
+);
+const ResetPassword = lazy(() =>
+  import('@/pages/ResetPassword').then((module) => ({ default: module.ResetPassword }))
+);
+const Consent = lazy(() => import('@/pages/Consent').then((module) => ({ default: module.Consent })));
+const AuthCallback = lazy(() =>
+  import('@/pages/AuthCallback').then((module) => ({ default: module.AuthCallback }))
+);
+const NotFound = lazy(() =>
+  import('@/pages/NotFound').then((module) => ({ default: module.NotFound }))
+);
+const AdminDashboard = lazy(() =>
+  import('@/pages/admin/AdminDashboard').then((module) => ({ default: module.AdminDashboard }))
+);
+const AdminClients = lazy(() =>
+  import('@/pages/admin/AdminClients').then((module) => ({ default: module.AdminClients }))
+);
+const AdminLogs = lazy(() =>
+  import('@/pages/admin/AdminLogs').then((module) => ({ default: module.AdminLogs }))
+);
+const AdminLogin = lazy(() =>
+  import('@/pages/admin/AdminLogin').then((module) => ({ default: module.AdminLogin }))
+);
+
+const withSuspense = (node: ReactNode) => (
+  <Suspense fallback={<RouteLoader />}>{node}</Suspense>
+);
+
+const withLayout = (node: ReactNode) => <Layout>{withSuspense(node)}</Layout>;
 const router = createBrowserRouter([
-  // ── Public auth pages ──────────────────────────────────────────
-  { path: '/',                element: <SignIn /> },
-  { path: '/sign-in',        element: <SignIn /> },
-  { path: '/sign-up',        element: <SignUp /> },
-  { path: '/forgot-password', element: <ForgotPassword /> },
-  { path: '/reset-password', element: <ResetPassword /> },
-  { path: '/consent',        element: <Consent /> },
-  { path: '/callback',       element: <AuthCallback /> },
+ 
+  { path: '/', element: <Navigate to="/auth" replace /> },
+  { path: '/auth', element: withLayout(<SignIn />) },
+  { path: '/forgot-password', element: withLayout(<ForgotPassword />) },
+  { path: '/reset-password', element: withLayout(<ResetPassword />) },
+  { path: '/consent', element: withLayout(<Consent />) },
+  { path: '/callback', element: withLayout(<AuthCallback />) },
 
   // ── Admin panel (role-gated) ───────────────────────────────────
-  { path: '/admin/login', element: <AdminLogin /> },
+  { path: '/admin/login', element: withSuspense(<AdminLogin />) },
   {
     path: '/admin',
-    element: (
+    element: withSuspense(
       <AdminRoute>
         <AdminDashboard />
       </AdminRoute>
@@ -34,7 +58,7 @@ const router = createBrowserRouter([
   },
   {
     path: '/admin/clients',
-    element: (
+    element: withSuspense(
       <AdminRoute>
         <AdminClients />
       </AdminRoute>
@@ -42,12 +66,13 @@ const router = createBrowserRouter([
   },
   {
     path: '/admin/logs',
-    element: (
+    element: withSuspense(
       <AdminRoute>
         <AdminLogs />
       </AdminRoute>
     ),
   },
+  { path: '*', element: withLayout(<NotFound />) },
 ]);
 
 function App() {
