@@ -4,6 +4,7 @@ import { RegisterAppModal } from './RegisterAppModal';
 import { EditAppModal } from './EditAppModal';
 import GlassSurface from '@/components/GlassSurface';
 import { Button } from '@/components/ui/button';
+import { csrfHeaders } from '@/lib/csrf';
 
 interface OAuthClient {
   client_id: string;
@@ -58,6 +59,9 @@ export const AdminClients: React.FC = () => {
       const res = await fetch(`/api/admin/clients/${client.client_id}`, {
         method: 'DELETE',
         credentials: 'include',
+        headers: {
+          ...csrfHeaders(),
+        },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setClients((c) => c.filter((x) => x.client_id !== client.client_id));

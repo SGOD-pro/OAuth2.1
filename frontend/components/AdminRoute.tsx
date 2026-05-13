@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useSession } from '../lib/auth-client';
 import GlassSurface from '@/components/GlassSurface';
@@ -32,6 +32,18 @@ interface AdminRouteProps {
  */
 export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
   const { data: session, isPending } = useSession();
+  const role = (session?.user as { role?: string })?.role;
+  const isAdmin = role === 'admin';
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    fetch('/api/admin/stats', {
+      credentials: 'include',
+      method: 'GET',
+    }).catch(() => {
+      // Silent fail - mutations will still be blocked if session is invalid.
+    });
+  }, [isAdmin]);
 
   if (isPending) return <LoadingSpinner />;
   
@@ -39,8 +51,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
     return <Navigate to="/admin/login" replace />;
   }
 
-  const role = (session.user as { role?: string }).role;
-  if (role !== 'admin') {
+  if (!isAdmin) {
     return <Navigate to="/admin/login?error=access_denied" replace />;
   }
 

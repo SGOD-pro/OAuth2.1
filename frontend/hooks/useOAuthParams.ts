@@ -5,6 +5,16 @@ function isValidClientId(value: string): boolean {
   return /^[a-zA-Z0-9_-]{20,100}$/.test(value);
 }
 
+function isValidRedirectUri(uri: string | null): boolean {
+  if (!uri) return false;
+  try {
+    const url = new URL(uri);
+    return ['http:', 'https:'].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
 export function useOAuthParams() {
   const [params] = useSearchParams();
 
@@ -20,7 +30,8 @@ export function useOAuthParams() {
     state &&
     codeChallenge &&
     codeChallengeMethod === 'S256' &&
-    isValidClientId(clientId),
+    isValidClientId(clientId) &&
+    isValidRedirectUri(redirectUri),
   );
 
   return {

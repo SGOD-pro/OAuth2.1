@@ -8,6 +8,37 @@ const admin = new Hono();
 
 type JsonObject = Record<string, unknown>;
 
+function validateRedirectUri(uri: string): boolean {
+  try {
+    const url = new URL(uri);
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+    if (url.protocol === 'javascript:') return false;
+    const privateRanges = [
+      /^localhost/,
+      /^127\./,
+      /^10\./,
+      /^192\.168\./,
+      /^172\.(1[6-9]|2\d|3[01])\./,
+    ];
+    const isProduction = process.env.NODE_ENV === "production";
+    if (isProduction && privateRanges.some((r) => r.test(url.hostname))) return false;
+    if (uri.includes("*")) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validateRedirectUris(uris: string[]): string | null {
+  for (const uri of uris) {
+    if (!validateRedirectUri(uri)) {
+      return uri;
+    }
+  }
+
+  return null;
+}
+
 function getHeaders(c: Context): Record<string, string> {
   return Object.fromEntries(c.req.raw.headers.entries());
 }
@@ -47,6 +78,19 @@ admin.post("/clients", async (c) => {
   const redirectUris = Array.isArray(body.redirect_uris)
     ? (body.redirect_uris as string[])
     : [];
+  const allowedOrigins = Array.isArray(body.allowed_origins)
+    ? (body.allowed_origins as string[])
+    : [];
+
+  const invalidRedirectUri = validateRedirectUris(redirectUris);
+  if (invalidRedirectUri) {
+    return c.json({ error: `Invalid redirect_uri: ${invalidRedirectUri}` }, 400);
+  }
+
+  const invalidAllowedOrigin = validateRedirectUris(allowedOrigins);
+  if (invalidAllowedOrigin) {
+    return c.json({ error: `Invalid redirect_uri: ${invalidAllowedOrigin}` }, 400);
+  }
 
   const result = await authProvider.api.adminCreateOAuthClient({
     headers: getHeaders(c),
@@ -75,6 +119,27 @@ admin.patch("/clients/:id", async (c) => {
 
   if (!body) {
     return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const redirectUris = Array.isArray(body.redirect_uris)
+    ? (body.redirect_uris as string[])
+    : null;
+  const allowedOrigins = Array.isArray(body.allowed_origins)
+    ? (body.allowed_origins as string[])
+    : null;
+
+  if (redirectUris) {
+    const invalidRedirectUri = validateRedirectUris(redirectUris);
+    if (invalidRedirectUri) {
+      return c.json({ error: `Invalid redirect_uri: ${invalidRedirectUri}` }, 400);
+    }
+  }
+
+  if (allowedOrigins) {
+    const invalidAllowedOrigin = validateRedirectUris(allowedOrigins);
+    if (invalidAllowedOrigin) {
+      return c.json({ error: `Invalid redirect_uri: ${invalidAllowedOrigin}` }, 400);
+    }
   }
 
   const result = await authProvider.api.adminUpdateOAuthClient({

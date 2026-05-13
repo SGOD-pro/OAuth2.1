@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import { csrfHeaders } from '@/lib/csrf';
 
 interface OAuthClient {
   client_id: string;
@@ -95,7 +96,10 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
       const res = await fetch(`/api/admin/clients/${client.client_id}`, {
         method: 'PATCH',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...csrfHeaders(),
+        },
         body: JSON.stringify({
           redirect_uris: redirectUris,
           allowed_origins: allowedOrigins,

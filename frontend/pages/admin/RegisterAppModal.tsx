@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Checkbox } from '@/components/ui/checkbox';
+import { csrfHeaders } from '@/lib/csrf';
 
 interface RegisterAppModalProps {
   onClose: () => void;
@@ -94,6 +95,8 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
   const [error, setError] = useState('');
   const [created, setCreated] = useState<CreatedClient | null>(null);
   const [copied, setCopied] = useState<'id' | 'secret' | null>(null);
+  const [secretVisible, setSecretVisible] = useState(true);
+  const [secretCopied, setSecretCopied] = useState(false);
 
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -105,6 +108,16 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
     await navigator.clipboard.writeText(text);
     setCopied(which);
     setTimeout(() => setCopied(null), 2000);
+  };
+
+  const copySecret = async () => {
+    if (!created?.client_secret) return;
+    await navigator.clipboard.writeText(created.client_secret);
+    setCopied('secret');
+    setSecretCopied(true);
+    setTimeout(() => {
+      setSecretVisible(false);
+    }, 3000);
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -120,7 +133,10 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
       const res = await fetch('/api/admin/clients', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...csrfHeaders(),
+        },
         body: JSON.stringify({
           client_name: form.clientName.trim(),
           redirect_uris: form.redirectUris,
@@ -180,8 +196,15 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
               <div className="rounded-2xl border border-border/60 bg-background/40 p-4">
                 <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Client Secret</p>
                 <div className="mt-2 flex items-center justify-between gap-3">
-                  <code className="text-xs text-foreground/80 break-all">{created.client_secret}</code>
-                  <Button size="sm" variant="outline" onClick={() => void copy(created.client_secret, 'secret')}>
+                  <code className="text-xs text-foreground/80 break-all">
+                    {secretVisible && !secretCopied
+                      ? created.client_secret
+                      : secretCopied
+                      ? "••••••••••••••••••••••••••••••••"
+                      : "[ copied & hidden ]"
+                    }
+                  </code>
+                  <Button size="sm" variant="outline" onClick={() => void copySecret()}>
                     {copied === 'secret' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
@@ -194,8 +217,12 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
                 </p>
               </div>
 
-              <Button className="w-full" onClick={() => { onSuccess(); onClose(); }}>
-                Done
+              <Button
+                className="w-full"
+                disabled={!secretCopied}
+                onClick={() => { onSuccess(); onClose(); }}
+              >
+                {secretCopied ? 'Done' : 'Copy secret before closing'}
               </Button>
             </div>
           ) : (

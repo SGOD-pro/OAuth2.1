@@ -137,7 +137,7 @@ export const AdminLogs: React.FC = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-xs text-muted-foreground">
                         {formatDate(log.createdAt)}
                       </td>
-                      <td className="px-6 py-4 max-w-[220px] truncate">
+                      <td className="px-6 py-4 max-w-55 truncate">
                         {log.userEmail ?? (
                           <code className="text-xs text-muted-foreground">
                             {log.userId?.slice(0, 16)}...
