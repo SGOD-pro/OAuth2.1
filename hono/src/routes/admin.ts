@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { clearOriginCache } from "../cache/origin-cache";
+import { config } from "../config";
 
 const admin = new Hono();
 
@@ -20,7 +21,7 @@ function validateRedirectUri(uri: string): boolean {
       /^192\.168\./,
       /^172\.(1[6-9]|2\d|3[01])\./,
     ];
-    const isProduction = process.env.NODE_ENV === "production";
+    const isProduction = config.env === "production";
     if (isProduction && privateRanges.some((r) => r.test(url.hostname))) return false;
     if (uri.includes("*")) return false;
     return true;
@@ -102,7 +103,7 @@ admin.post("/clients", async (c) => {
     },
   });
 
-  clearOriginCache();
+  await clearOriginCache();
 
   return c.json(result, 201);
 });
@@ -152,7 +153,7 @@ admin.patch("/clients/:id", async (c) => {
     },
   });
 
-  clearOriginCache();
+  await clearOriginCache();
 
   return c.json(result);
 });
@@ -165,7 +166,7 @@ admin.delete("/clients/:id", async (c) => {
     body: { client_id: id },
   });
 
-  clearOriginCache();
+  await clearOriginCache();
 
   return c.json(result);
 });

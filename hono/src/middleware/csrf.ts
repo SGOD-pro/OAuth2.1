@@ -1,5 +1,6 @@
 import { Context, Next } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
+import { config } from "../config";
 
 const CSRF_HEADER = "x-csrf-token";
 const CSRF_COOKIE = "csrf_token";
@@ -26,7 +27,7 @@ export async function csrfProtection(c: Context, next: Next) {
     setCookie(c, CSRF_COOKIE, token, {
       httpOnly: false,
       sameSite: "Strict",
-      secure: process.env.NODE_ENV === "production",
+      secure: config.env === "production",
       path: "/",
     });
   }

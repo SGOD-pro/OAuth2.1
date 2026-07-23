@@ -1,4 +1,4 @@
-import { handle } from "hono/lambda-edge";
+import { handle } from "hono/aws-lambda";
 import app, { appBootTime } from "./app";
 
 const initMs = Date.now() - appBootTime;

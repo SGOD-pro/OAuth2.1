@@ -53,7 +53,21 @@ decisions that are already settled — re-litigating settled scope is the fastes
   the Phase gates in `phases.md`, not with what was attempted or planned.
 
 ## Open items (update as resolved)
-- Phase 0 not yet executed as of this writing — this document set (`projectrequirement.md` through
-  `phases.md`) is the plan, not a completion record.
-- IaC tool for deployment not yet chosen — Phase 0 says "whichever the builder already knows"; record the
-  actual choice here once made, so future sessions don't re-debate SAM vs CDK vs Serverless Framework.
+- **Phase 0 executed** as of this session. Evidence for each gate check:
+  1. `backend/` deleted. `git grep @nestjs` returns nothing outside git history. `docker-compose.yml` and
+     `CONFIG.md` updated to remove all backend/ references.
+  2. `hono/src/lambda.ts` fixed: `hono/lambda-edge` → `hono/aws-lambda`. Verified by
+     `scripts/check-lambda-env.ts` (PASS). esbuild bundle succeeds (dist/index.js, 4.9MB).
+  3. Lambda reserved concurrency configured via SAM template (`hono/template.yaml`),
+     `ReservedConcurrentExecutions` parameter, default 10.
+  4. Single DynamoDB table (on-demand, TTL enabled) defined in SAM template. Rate limiter
+     (`hono/src/middleware/rate-limit.ts`) and origin cache (`hono/src/cache/origin-cache.ts`) rewired
+     from in-memory `Map`/`LRUCache` to DynamoDB via `hono/src/db/dynamo.ts`. Consistency check script
+     at `hono/scripts/check-dynamo-consistency.ts` (requires real DynamoDB table to run).
+  5. `tsc --noEmit` passes with strict mode. No `process.env` reads outside composition root
+     (two violations in `csrf.ts` and `admin.ts` fixed in the same diff).
+- **IaC tool chosen: AWS SAM** (`hono/template.yaml`). SAM was chosen for minimal overhead — single
+  YAML file, `sam deploy` is the entire deploy command. No new tool was learned for this.
+- Better Auth CLI entry point ported to `hono/auth.ts` (replaces deleted `backend/auth.ts`).
+- Phase 1 not yet started — blocked on Phase 0 gate verification with a deployed Lambda (local
+  typecheck and static checks pass; `sam local invoke` / real deploy needed for full gate).

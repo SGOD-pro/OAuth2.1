@@ -7,7 +7,7 @@ typescript
 **Step 2: Promote the account to Admin**
 Now that the account exists in the database, run the script to grant it admin privileges:
 ```bash
-cd backend
+cd hono
 npx ts-node scripts/make-admin.ts the-email-you-just-used@example.com
 
 npx tsx scripts/make-admin.ts swyra@auth2.1.com

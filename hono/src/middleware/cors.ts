@@ -7,7 +7,8 @@ import { config }
     from "../config";
 
 import {
-    originCache,
+    getCachedOrigin,
+    setCachedOrigin,
 } from "../cache/origin-cache";
 
 import { getDb } from "../db/mongo";
@@ -100,17 +101,17 @@ export async function dynamicCors(
 
     // Cache lookup
     let allowed =
-        originCache.get(origin);
+        await getCachedOrigin(origin);
 
     // Cache miss
-    if (allowed === undefined) {
+    if (allowed === null) {
         try {
             allowed =
                 await isOriginAllowed(origin);
 
-            originCache.set(
+            await setCachedOrigin(
                 origin,
-                allowed
+                allowed,
             );
         } catch {
             allowed = false;

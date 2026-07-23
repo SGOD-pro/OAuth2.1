@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: OAuth 2.1 / OIDC provider — Hono + Better Auth + MongoDB, single Lambda
+
+Parameters:
+  ReservedConcurrency:
+    Type: Number
+    Default: 10
+    Description: >-
+      Max concurrent Lambda execution environments. Must not exceed your
+      MongoDB Atlas tier's connection limit. See architecture.md.
+  MongoUri:
+    Type: String
+    NoEcho: true
+  BetterAuthSecret:
+    Type: String
+    NoEcho: true
+  BetterAuthUrl:
+    Type: String
+  GoogleClientId:
+    Type: String
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
+  FrontendUrl:
+    Type: String
+
+Globals:
+  Function:
+    Timeout: 30
+    Runtime: nodejs20.x
+
+Resources:
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      CodeUri: dist/
+      MemorySize: 256
+      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+      Environment:
+        Variables:
+          NODE_ENV: production
+          MONGO_URI: !Ref MongoUri
+          BETTER_AUTH_SECRET: !Ref BetterAuthSecret
+          BETTER_AUTH_URL: !Ref BetterAuthUrl
+          GOOGLE_CLIENT_ID: !Ref GoogleClientId
+          GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret
+          FRONTEND_URL: !Ref FrontendUrl
+          DYNAMODB_TABLE: !Ref StateTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref StateTable
+      FunctionUrlConfig:
+        AuthType: NONE
+
+Outputs:
+  ApiUrl:
+    Description: Lambda Function URL
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  TableName:
+    Description: DynamoDB state table name
+    Value: !Ref StateTable

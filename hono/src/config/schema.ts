@@ -17,6 +17,8 @@ export const envSchema = z.object({
     GOOGLE_CLIENT_ID: z.string(),
     GOOGLE_CLIENT_SECRET: z.string(),
     FRONTEND_URL: z.string(),
+    DYNAMODB_TABLE: z.string(),
+    AWS_REGION: z.string().default('us-east-1'),
 })
 
 export type Env = z.infer<typeof envSchema>
