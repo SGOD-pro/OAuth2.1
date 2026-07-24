@@ -1,34 +1,28 @@
 import { Hono } from "hono";
-import { authProvider } from "../utils/auth";
+import { authProvider, validateAuthPasswordBoundary } from "../utils/auth";
+import { getTrustedClientIp } from "../utils/security";
 
 const auth = new Hono();
 
 auth.get("/", (c) => c.json({ status: "ok" }));
 
-auth.all("/*", (c) => {
+auth.all("/*", async (c) => {
+    const path = c.req.path;
 
-    const appName =
-        c.req.header("x-app-name")
-
-    const appVersion =
-        c.req.header("x-app-version")
-
-    const userAgent =
-        c.req.header("user-agent")
-
-    const path =
-        c.req.path
-
-    const ip =
-        c.req.header("x-forwarded-for")
+    if (c.req.method === "POST") {
+        const body = await c.req.raw.clone().json().catch(() => null);
+        const passwordError = validateAuthPasswordBoundary(path, body);
+        if (passwordError) {
+            return c.json({ error: passwordError }, 400);
+        }
+    }
 
     console.log({
-        appName,
-        appVersion,
+        event: "auth_request",
+        method: c.req.method,
         path,
-        ip,
-        userAgent,
-    })
+        ip: getTrustedClientIp(c.req.raw.headers),
+    });
 
     return authProvider.handler(c.req.raw);
 });

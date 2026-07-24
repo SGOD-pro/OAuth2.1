@@ -5,6 +5,7 @@ import {
   PutCommand,
   DeleteCommand,
   ScanCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { config } from "../config";
 
@@ -31,6 +32,7 @@ export async function putRateLimit(
   ip: string,
   count: number,
   resetAt: number,
+  now?: number,
 ): Promise<void> {
   await ddb.send(
     new PutCommand({
@@ -41,8 +43,69 @@ export async function putRateLimit(
         resetAt,
         ttl: Math.ceil(resetAt / 1000), // DynamoDB TTL is epoch seconds
       },
+      ...(now !== undefined
+        ? {
+            ConditionExpression:
+              "attribute_not_exists(#resetAt) OR #resetAt <= :now",
+            ExpressionAttributeNames: { "#resetAt": "resetAt" },
+            ExpressionAttributeValues: { ":now": now },
+          }
+        : {}),
     }),
   );
+}
+
+export async function incrementRateLimit(
+  ip: string,
+  now: number,
+  windowMs: number,
+): Promise<RateLimitEntry> {
+  const resetAt = now + windowMs;
+
+  try {
+    const result = await ddb.send(
+      new UpdateCommand({
+        TableName,
+        Key: { pk: `RATE#${ip}` },
+        UpdateExpression:
+          "SET #resetAt = if_not_exists(#resetAt, :resetAt), #ttl = if_not_exists(#ttl, :ttl) ADD #count :one",
+        ConditionExpression:
+          "attribute_not_exists(#resetAt) OR #resetAt > :now",
+        ExpressionAttributeNames: {
+          "#count": "count",
+          "#resetAt": "resetAt",
+          "#ttl": "ttl",
+        },
+        ExpressionAttributeValues: {
+          ":one": 1,
+          ":now": now,
+          ":resetAt": resetAt,
+          ":ttl": Math.ceil(resetAt / 1000),
+        },
+        ReturnValues: "ALL_NEW",
+      }),
+    );
+
+    return {
+      count: (result.Attributes?.count as number | undefined) ?? 1,
+      resetAt: (result.Attributes?.resetAt as number | undefined) ?? resetAt,
+    };
+  } catch (error) {
+    if ((error as { name?: string }).name !== "ConditionalCheckFailedException") {
+      throw error;
+    }
+
+    try {
+      await putRateLimit(ip, 1, resetAt, now);
+      return { count: 1, resetAt };
+    } catch (putError) {
+      if ((putError as { name?: string }).name !== "ConditionalCheckFailedException") {
+        throw putError;
+      }
+
+      return incrementRateLimit(ip, now, windowMs);
+    }
+  }
 }
 
 // ── Origin Cache ────────────────────────────────────────

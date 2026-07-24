@@ -1,6 +1,7 @@
 import { Context, Next } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { config } from "../config";
+import { timingSafeEqualStr } from "../utils/security";
 
 const CSRF_HEADER = "x-csrf-token";
 const CSRF_COOKIE = "csrf_token";
@@ -16,7 +17,7 @@ export async function csrfProtection(c: Context, next: Next) {
     const cookieToken = getCookie(c, CSRF_COOKIE);
     const headerToken = c.req.header(CSRF_HEADER);
 
-    if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    if (!cookieToken || !headerToken || !timingSafeEqualStr(cookieToken, headerToken)) {
       return c.json({ error: "CSRF validation failed" }, 403);
     }
   }

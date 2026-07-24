@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
+import { isPublicSignupEnabled, safeCallbackURL } from '@/lib/security';
 
 type SignInFormProps = {
   email: string;
@@ -175,7 +176,7 @@ const SignUpForm = React.memo(({
           id="signup-password"
           placeholder="••••••••"
           required
-          minLength={8}
+          minLength={12}
           value={password}
           onChange={(e) => onPasswordChange(e.target.value)}
           disabled={loading}
@@ -216,14 +217,20 @@ export const SignIn: React.FC = () => {
   const [signUpError, setSignUpError] = useState('');
   const [loading, setLoading] = useState(false);
   const [searchParams] = useSearchParams();
+  const signupEnabled = useMemo(() => isPublicSignupEnabled(), []);
 
   const callbackURL = useMemo(
-    () => searchParams.get('callbackURL') ?? undefined,
+    () => safeCallbackURL(searchParams.get('callbackURL')),
     [searchParams]
   );
 
   const handleSignIn = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!signupEnabled) {
+      setSignUpError('Public sign-up is disabled.');
+      return;
+    }
+
     setLoading(true);
     setError('');
 
@@ -268,7 +275,7 @@ export const SignIn: React.FC = () => {
       setSignUpError(authError.message || 'Sign up failed. Please try again.');
       setLoading(false);
     }
-  }, [callbackURL, signUpEmail, signUpName, signUpPassword]);
+  }, [callbackURL, signUpEmail, signUpName, signUpPassword, signupEnabled]);
 
   const handleGoogleSignUp = useCallback(async () => {
     setLoading(true);
@@ -304,9 +311,9 @@ export const SignIn: React.FC = () => {
             Sign in to continue to SWYRA.
           </p>
           <Tabs value={tab} onValueChange={setTab} className="mt-6">
-            <TabsList className="w-full grid grid-cols-2">
+            <TabsList className={`w-full grid ${signupEnabled ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <TabsTrigger value="sign-in">Sign in</TabsTrigger>
-              <TabsTrigger value="sign-up">Sign up</TabsTrigger>
+              {signupEnabled && <TabsTrigger value="sign-up">Sign up</TabsTrigger>}
             </TabsList>
 
             <SignInForm
@@ -320,22 +327,23 @@ export const SignIn: React.FC = () => {
               onGoogle={handleGoogleSignIn}
             />
 
-            <SignUpForm
-              name={signUpName}
-              email={signUpEmail}
-              password={signUpPassword}
-              error={signUpError}
-              loading={loading}
-              onNameChange={setSignUpName}
-              onEmailChange={setSignUpEmail}
-              onPasswordChange={setSignUpPassword}
-              onSubmit={handleSignUp}
-              onGoogle={handleGoogleSignUp}
-            />
+            {signupEnabled && (
+              <SignUpForm
+                name={signUpName}
+                email={signUpEmail}
+                password={signUpPassword}
+                error={signUpError}
+                loading={loading}
+                onNameChange={setSignUpName}
+                onEmailChange={setSignUpEmail}
+                onPasswordChange={setSignUpPassword}
+                onSubmit={handleSignUp}
+                onGoogle={handleGoogleSignUp}
+              />
+            )}
           </Tabs>
         </div>
       </GlassSurface>
     </div>
   );
 };
-

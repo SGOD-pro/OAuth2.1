@@ -3,42 +3,11 @@ import type { Context } from "hono";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { clearOriginCache } from "../cache/origin-cache";
-import { config } from "../config";
+import { validateRedirectUris } from "../utils/security";
 
 const admin = new Hono();
 
 type JsonObject = Record<string, unknown>;
-
-function validateRedirectUri(uri: string): boolean {
-  try {
-    const url = new URL(uri);
-    if (!['http:', 'https:'].includes(url.protocol)) return false;
-    if (url.protocol === 'javascript:') return false;
-    const privateRanges = [
-      /^localhost/,
-      /^127\./,
-      /^10\./,
-      /^192\.168\./,
-      /^172\.(1[6-9]|2\d|3[01])\./,
-    ];
-    const isProduction = config.env === "production";
-    if (isProduction && privateRanges.some((r) => r.test(url.hostname))) return false;
-    if (uri.includes("*")) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function validateRedirectUris(uris: string[]): string | null {
-  for (const uri of uris) {
-    if (!validateRedirectUri(uri)) {
-      return uri;
-    }
-  }
-
-  return null;
-}
 
 function getHeaders(c: Context): Record<string, string> {
   return Object.fromEntries(c.req.raw.headers.entries());
@@ -83,6 +52,14 @@ admin.post("/clients", async (c) => {
     ? (body.allowed_origins as string[])
     : [];
 
+  if (redirectUris.length === 0) {
+    return c.json({ error: "At least one redirect_uri is required" }, 400);
+  }
+
+  if (allowedOrigins.length === 0) {
+    return c.json({ error: "At least one allowed_origin is required" }, 400);
+  }
+
   const invalidRedirectUri = validateRedirectUris(redirectUris);
   if (invalidRedirectUri) {
     return c.json({ error: `Invalid redirect_uri: ${invalidRedirectUri}` }, 400);
@@ -98,10 +75,17 @@ admin.post("/clients", async (c) => {
     body: {
       client_name: body.client_name as string,
       redirect_uris: redirectUris,
+      allowed_origins: allowedOrigins,
       skip_consent: (body.skip_consent as boolean) ?? false,
       enable_end_session: (body.enable_end_session as boolean) ?? true,
     },
   });
+
+  const database = await getDb();
+  await database.collection("oauthClient").updateOne(
+    { clientId: result.client_id },
+    { $set: { allowedOrigins } },
+  );
 
   await clearOriginCache();
 
@@ -148,10 +132,24 @@ admin.patch("/clients/:id", async (c) => {
     body: {
       client_id: id,
       update: {
-        ...body,
+        ...(typeof body.client_name === "string" ? { client_name: body.client_name } : {}),
+        ...(redirectUris ? { redirect_uris: redirectUris } : {}),
+        ...(allowedOrigins ? { allowed_origins: allowedOrigins } : {}),
+        ...(typeof body.skip_consent === "boolean" ? { skip_consent: body.skip_consent } : {}),
+        ...(typeof body.enable_end_session === "boolean" ? { enable_end_session: body.enable_end_session } : {}),
+        ...(typeof body.disabled === "boolean" ? { disabled: body.disabled } : {}),
+        ...(typeof body.is_active === "boolean" ? { disabled: !body.is_active } : {}),
       },
     },
   });
+
+  if (allowedOrigins !== null) {
+    const database = await getDb();
+    await database.collection("oauthClient").updateOne(
+      { clientId: id },
+      { $set: { allowedOrigins } },
+    );
+  }
 
   await clearOriginCache();
 
@@ -195,10 +193,8 @@ admin.get("/stats", async (c) => {
       recentLogins,
     });
   } catch (error) {
-    return c.json(
-      { error: `Failed to query stats: ${String(error)}` },
-      500,
-    );
+    console.error({ event: "admin_stats_failed", error });
+    return c.json({ error: "Failed to query stats" }, 500);
   }
 });
 
@@ -232,10 +228,8 @@ admin.get("/logs", async (c) => {
 
     return c.json(logs);
   } catch (error) {
-    return c.json(
-      { error: `Failed to query logs: ${String(error)}` },
-      500,
-    );
+    console.error({ event: "admin_logs_failed", error });
+    return c.json({ error: "Failed to query logs" }, 500);
   }
 });
 

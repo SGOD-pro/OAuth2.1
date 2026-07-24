@@ -4,6 +4,7 @@ import { admin, jwt } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { getDb, client } from "../db/mongo";
+import { isStrongPassword } from "./security";
 
 
 export const AUTH_INSTANCE = Symbol("AUTH_INSTANCE");
@@ -18,6 +19,47 @@ export const authProvider = betterAuth({
 
     emailAndPassword: {
         enabled: true,
+        disableSignUp:
+            config.env === "production" && !config.auth.publicSignupEnabled,
+        minPasswordLength: 12,
+        maxPasswordLength: 128,
+        requireEmailVerification: config.env === "production",
+        autoSignIn: config.env !== "production",
+        revokeSessionsOnPasswordReset: true,
+    },
+
+    emailVerification: {
+        sendOnSignUp: config.env === "production",
+        sendOnSignIn: config.env === "production",
+        expiresIn: 3600,
+    },
+
+    advanced: {
+        useSecureCookies: config.env === "production",
+        disableCSRFCheck: false,
+        disableOriginCheck: false,
+        defaultCookieAttributes: {
+            httpOnly: true,
+            secure: config.env === "production",
+            sameSite: "lax",
+        },
+        ipAddress: {
+            trustedProxies: config.trustedProxyCidrs,
+            ipAddressHeaders: ["x-forwarded-for", "x-real-ip"],
+        },
+    },
+
+    rateLimit: {
+        enabled: true,
+        storage: "database",
+        window: 60,
+        max: 100,
+        customRules: {
+            "/sign-in/email": { window: 60, max: 10 },
+            "/sign-up/email": { window: 60, max: 5 },
+            "/request-password-reset": { window: 60, max: 5 },
+            "/reset-password": { window: 60, max: 5 },
+        },
     },
 
     socialProviders: {
@@ -46,8 +88,7 @@ export const authProvider = betterAuth({
                 expirationTime: "15m",
                 definePayload: ({ user }) => ({
                     sub: user.id,
-                    email: user.email,
-                    name: user.name,
+                    role: user.role,
                 }),
             },
         }),
@@ -77,7 +118,7 @@ export const authProvider = betterAuth({
 
             // Token expiration (in seconds)
             accessTokenExpiresIn: 900,       // 15 minutes
-            refreshTokenExpiresIn: 2592000,  // 30 days
+            refreshTokenExpiresIn: 604800,   // 7 days
 
             accessToken: {
                 format: "jwt"
@@ -95,3 +136,21 @@ export const authProvider = betterAuth({
         }),
     ],
 });
+
+export function validateAuthPasswordBoundary(path: string, body: unknown): string | null {
+    if (!body || typeof body !== "object") return null;
+
+    const candidate =
+        path.endsWith("/sign-up/email")
+            ? (body as { password?: unknown }).password
+            : path.endsWith("/reset-password")
+              ? (body as { newPassword?: unknown }).newPassword
+              : null;
+
+    if (candidate === null) return null;
+    if (typeof candidate !== "string" || !isStrongPassword(candidate)) {
+        return "Password must be 12-128 characters and include uppercase, lowercase, number, and symbol.";
+    }
+
+    return null;
+}

@@ -7,7 +7,8 @@
     "update": "aws lambda update-function-code --zip-file fileb://lambda.zip --function-name hello --region us-east-1",
     "publish": "aws lambda publish-version --function-name hello --region us-east-1",
     "deploy": "run-s build zip update publish",
-    "dev": "tsx watch src/dev.ts"
+    "dev": "tsx watch src/dev.ts",
+    "security:self-check": "tsx scripts/security-self-check.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

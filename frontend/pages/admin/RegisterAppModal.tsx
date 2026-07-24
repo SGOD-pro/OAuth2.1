@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Checkbox } from '@/components/ui/checkbox';
 import { csrfHeaders } from '@/lib/csrf';
+import { validateUri } from '@/lib/security';
 
 interface RegisterAppModalProps {
   onClose: () => void;
@@ -38,7 +39,7 @@ const TagInput: React.FC<{
     const val = input.trim();
     if (!val) return;
     if (!validate(val)) {
-      setErr('Must start with http:// or https://');
+      setErr('Enter a valid http(s) URL without wildcards or credentials');
       return;
     }
     if (tags.includes(val)) {
@@ -81,14 +82,12 @@ const TagInput: React.FC<{
   );
 };
 
-const validateUri = (val: string) => val.startsWith('http://') || val.startsWith('https://');
-
 export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onSuccess }) => {
   const [form, setForm] = useState<FormState>({
     clientName: '',
     redirectUris: [],
     allowedOrigins: [],
-    skipConsent: true,
+    skipConsent: false,
     enableEndSession: true,
   });
   const [loading, setLoading] = useState(false);

@@ -5,6 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { csrfHeaders } from '@/lib/csrf';
+import { validateUri } from '@/lib/security';
 
 interface OAuthClient {
   client_id: string;
@@ -35,7 +36,7 @@ const TagInput: React.FC<{
   const add = () => {
     const val = input.trim();
     if (!val) return;
-    if (!validate(val)) { setErr('Must start with http:// or https://'); return; }
+    if (!validate(val)) { setErr('Enter a valid http(s) URL without wildcards or credentials'); return; }
     if (tags.includes(val)) { setErr('Already added'); return; }
     onAdd(val);
     setInput('');
@@ -70,8 +71,6 @@ const TagInput: React.FC<{
     </div>
   );
 };
-
-const validateUri = (val: string) => val.startsWith('http://') || val.startsWith('https://');
 
 export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onSuccess }) => {
   const [redirectUris, setRedirectUris] = useState<string[]>(client.redirect_uris ?? []);

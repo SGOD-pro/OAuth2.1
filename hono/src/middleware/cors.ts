@@ -1,140 +1,108 @@
-import type {
-    Context,
-    Next,
-} from "hono";
+import type { Context, Next } from "hono";
 
-import { config }
-    from "../config";
-
+import { config } from "../config";
 import {
-    getCachedOrigin,
-    setCachedOrigin,
+  getCachedOrigin,
+  setCachedOrigin,
 } from "../cache/origin-cache";
-
 import { getDb } from "../db/mongo";
+import { normalizeOrigin, originMatchesRedirectUri } from "../utils/security";
+
+const CORS_ALLOW_HEADERS =
+  "Content-Type,Authorization,X-CSRF-Token,x-csrf-token";
 
 export async function isOriginAllowed(origin: string): Promise<boolean> {
-    const database = await getDb();
-    const client = await database.collection("oauthClient").findOne({
-        redirectUris: {
-            $elemMatch: {
-                $regex: `^${escapeRegex(origin)}`,
-            },
-        },
-    });
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) {
+    return false;
+  }
 
-    return Boolean(client);
-}
+  const database = await getDb();
+  const clients = await database
+    .collection("oauthClient")
+    .find(
+      {},
+      { projection: { redirectUris: 1, allowedOrigins: 1 } },
+    )
+    .toArray();
 
-function applyCorsHeaders(
-    c: Context,
-    origin: string
-) {
-    c.header(
-        "Access-Control-Allow-Origin",
-        origin
-    );
-
-    c.header(
-        "Access-Control-Allow-Credentials",
-        "true"
-    );
-
-    c.header(
-        "Access-Control-Allow-Methods",
-        "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
-
-    c.header(
-        "Access-Control-Allow-Headers",
-        "Content-Type,Authorization"
-    );
-}
-
-function applyCorsHeadersToResponse(
-    c: Context,
-    origin: string
-) {
-    c.res.headers.set(
-        "Access-Control-Allow-Origin",
-        origin
-    );
-    c.res.headers.set(
-        "Access-Control-Allow-Credentials",
-        "true"
-    );
-    c.res.headers.set(
-        "Access-Control-Allow-Methods",
-        "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
-    c.res.headers.set(
-        "Access-Control-Allow-Headers",
-        "Content-Type,Authorization"
-    );
-}
-
-export async function dynamicCors(
-    c: Context,
-    next: Next
-) {
-    const origin =
-        c.req.header("origin");
-
-    const ownFrontend =
-        config.frontendUrl;
-
-    // Allow internal frontend
-    if (
-        !origin ||
-        origin === ownFrontend
-    ) {
-        applyCorsHeaders(c, origin || ownFrontend);
-
-        if (c.req.method === "OPTIONS") {
-            return c.body(null, 204);
-        }
-
-        await next();
-        applyCorsHeadersToResponse(c, origin || ownFrontend);
-        return;
+  for (const client of clients) {
+    const redirectUris = (client["redirectUris"] as string[] | undefined) ?? [];
+    for (const uri of redirectUris) {
+      if (originMatchesRedirectUri(normalizedOrigin, uri)) return true;
     }
 
-    // Cache lookup
-    let allowed =
-        await getCachedOrigin(origin);
-
-    // Cache miss
-    if (allowed === null) {
-        try {
-            allowed =
-                await isOriginAllowed(origin);
-
-            await setCachedOrigin(
-                origin,
-                allowed,
-            );
-        } catch {
-            allowed = false;
-        }
+    const allowedOrigins =
+      (client["allowedOrigins"] as string[] | undefined) ?? [];
+    for (const allowed of allowedOrigins) {
+      if (allowed === normalizedOrigin) return true;
+      // Also accept full URLs stored as "allowed origins"
+      if (originMatchesRedirectUri(normalizedOrigin, allowed)) return true;
     }
+  }
 
-    if (!allowed) {
-        return c.json({
-            error:
-                "Origin not allowed",
-        }, 403);
-    }
+  return false;
+}
 
-    applyCorsHeaders(c, origin);
+function applyCorsHeaders(c: Context, origin: string) {
+  c.header("Access-Control-Allow-Origin", origin);
+  c.header("Access-Control-Allow-Credentials", "true");
+  c.header(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+  );
+  c.header("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
+}
+
+function applyCorsHeadersToResponse(c: Context, origin: string) {
+  c.res.headers.set("Access-Control-Allow-Origin", origin);
+  c.res.headers.set("Access-Control-Allow-Credentials", "true");
+  c.res.headers.set(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+  );
+  c.res.headers.set("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
+}
+
+export async function dynamicCors(c: Context, next: Next) {
+  const origin = c.req.header("origin");
+  const ownFrontend = config.frontendUrl;
+  const normalizedOrigin = origin ? normalizeOrigin(origin) : null;
+
+  // Allow internal frontend (and same-origin / non-browser requests without Origin)
+  if (!normalizedOrigin || normalizedOrigin === ownFrontend) {
+    applyCorsHeaders(c, normalizedOrigin || ownFrontend);
 
     if (c.req.method === "OPTIONS") {
-        return c.body(null, 204);
+      return c.body(null, 204);
     }
 
     await next();
-    applyCorsHeadersToResponse(c, origin);
-}
+    applyCorsHeadersToResponse(c, normalizedOrigin || ownFrontend);
+    return;
+  }
 
-function escapeRegex(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let allowed = await getCachedOrigin(normalizedOrigin);
+
+  if (allowed === null) {
+    try {
+      allowed = await isOriginAllowed(normalizedOrigin);
+      await setCachedOrigin(normalizedOrigin, allowed);
+    } catch {
+      allowed = false;
+    }
+  }
+
+  if (!allowed) {
+    return c.json({ error: "Origin not allowed" }, 403);
+  }
+
+  applyCorsHeaders(c, normalizedOrigin);
+
+  if (c.req.method === "OPTIONS") {
+    return c.body(null, 204);
+  }
+
+  await next();
+  applyCorsHeadersToResponse(c, normalizedOrigin);
 }

@@ -1,7 +1,7 @@
 nginx
 
 .claude
-.agent
+.agents
 .gemini
 node_modules
 logs
@@ -10,5 +10,5 @@ package-lock.json
 .vscode
 .qoder
 .code-review-graph
-
+.agent
 examples

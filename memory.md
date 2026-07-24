@@ -33,7 +33,8 @@ decisions that are already settled — re-litigating settled scope is the fastes
 ## Stable facts about the existing system (verified against actual repo files, not assumed)
 - Admin access is server-side role-gated (`role === "admin"` check in Hono middleware and in the legacy
   NestJS controller — the latter is being deleted).
-- CORS is dynamic, derived from `oauthClient.redirectUris` matched by prefix against the request Origin.
+- CORS is dynamic, derived from persisted OAuth client origins/redirect URIs and now uses exact origin
+  matching via the shared security helper, not prefix/regex matching.
 - CSRF protection (`hono/src/middleware/csrf.ts`) applies to non-safe-method admin requests via a
   double-submit cookie/header pattern.
 - Redirect URI validation already rejects non-http(s) schemes and wildcard characters; the private-network
@@ -69,5 +70,13 @@ decisions that are already settled — re-litigating settled scope is the fastes
 - **IaC tool chosen: AWS SAM** (`hono/template.yaml`). SAM was chosen for minimal overhead — single
   YAML file, `sam deploy` is the entire deploy command. No new tool was learned for this.
 - Better Auth CLI entry point ported to `hono/auth.ts` (replaces deleted `backend/auth.ts`).
+- Session update (2026-07-23): hardened auth/admin surface by reusing shared redirect URI validation in
+  `hono/src/routes/admin.ts`, persisting `allowed_origins` on client create/update, allowlisting update
+  payload fields instead of spreading raw request bodies, adding a timing-safe CSRF compare, making the
+  admin rate limiter atomic in DynamoDB, and defaulting new OAuth clients to `skip_consent: false` in the
+  frontend.
+- Validation note: `hono` now builds cleanly after `npm install` (`esbuild` bundle succeeds). The
+  frontend dependency install/build was not cleanly revalidated in this session because the install
+  did not finish in the workspace tool session before the turn ended.
 - Phase 1 not yet started — blocked on Phase 0 gate verification with a deployed Lambda (local
   typecheck and static checks pass; `sam local invoke` / real deploy needed for full gate).
