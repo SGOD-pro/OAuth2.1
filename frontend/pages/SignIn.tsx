@@ -226,10 +226,6 @@ export const SignIn: React.FC = () => {
 
   const handleSignIn = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!signupEnabled) {
-      setSignUpError('Public sign-up is disabled.');
-      return;
-    }
 
     setLoading(true);
     setError('');
@@ -261,6 +257,11 @@ export const SignIn: React.FC = () => {
 
   const handleSignUp = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!signupEnabled) {
+      setSignUpError('Public sign-up is disabled.');
+      return;
+    }
+
     setLoading(true);
     setSignUpError('');
 

@@ -110,7 +110,7 @@ export async function incrementRateLimit(
 
 // ── Origin Cache ────────────────────────────────────────
 
-const ORIGIN_TTL_SEC = 300; // 5 minutes, matches previous LRU TTL
+const ORIGIN_TTL_SEC = 60; // Keep revocations from lingering longer than one minute.
 
 export async function getOriginCache(
   origin: string,

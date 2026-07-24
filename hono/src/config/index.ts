@@ -16,6 +16,8 @@ export const config = Object.freeze({
         baseURL: parsedEnv.BETTER_AUTH_URL,
         publicSignupEnabled:
             parsedEnv.AUTH_PUBLIC_SIGNUP_ENABLED === 'true',
+        emailVerificationEnabled:
+            parsedEnv.AUTH_EMAIL_VERIFICATION_ENABLED === 'true',
     },
 
     google: {

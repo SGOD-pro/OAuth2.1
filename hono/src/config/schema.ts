@@ -21,6 +21,7 @@ export const envSchema = z.object({
     AWS_REGION: z.string().default('us-east-1'),
     TRUSTED_PROXY_CIDRS: z.string().default(''),
     AUTH_PUBLIC_SIGNUP_ENABLED: z.string().default('false'),
+    AUTH_EMAIL_VERIFICATION_ENABLED: z.string().default('false'),
 })
 
 export type Env = z.infer<typeof envSchema>

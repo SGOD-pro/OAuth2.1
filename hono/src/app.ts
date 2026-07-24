@@ -25,7 +25,7 @@ app.use("*", async (c, next) => {
 		[
 			"default-src 'self'",
 			"script-src 'self'",
-			"style-src 'self' 'unsafe-inline'",
+			"style-src 'self'",
 			"img-src 'self' data: https:",
 			"font-src 'self' https://fonts.gstatic.com",
 			"connect-src 'self' https://accounts.google.com",

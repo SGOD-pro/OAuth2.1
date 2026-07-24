@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { authProvider, validateAuthPasswordBoundary } from "../utils/auth";
-import { getTrustedClientIp } from "../utils/security";
 
 const auth = new Hono();
 
@@ -21,7 +20,6 @@ auth.all("/*", async (c) => {
         event: "auth_request",
         method: c.req.method,
         path,
-        ip: getTrustedClientIp(c.req.raw.headers),
     });
 
     return authProvider.handler(c.req.raw);

@@ -1,62 +1,62 @@
 # Architecture
 
 ## System Shape
-- Frontend: React 19 + Vite + React Router v7, static build, deployable to S3 + CloudFront or any static host.
-- API edge: Hono, deployed as a single AWS Lambda function behind API Gateway (HTTP API) or a Lambda Function URL.
-- Identity engine: Better Auth v1.6.x + `@better-auth/oauth-provider`.
-- Primary datastore: MongoDB Atlas (unchanged — see ADR in `decision.md` for why this is not being migrated).
-- Ephemeral/cross-invocation state (rate limits, CORS origin cache): DynamoDB, on-demand billing, TTL-based expiry.
-- Local dev: Docker Compose (API + frontend + optional Nginx).
-- Legacy: NestJS backend — **deleted**, not retained, not migrated in parallel.
+
+- Frontend: React 19 + Vite + React Router v7, static build, deployable to any static host.
+- API edge: Hono, deployed via platform-specific entry points using Hono's first-class runtime adapters (`hono/aws-lambda`, `hono/vercel`, `hono/netlify`, `hono/node-server` for Railway/Fly/Render/GCP Cloud Run/Azure Container Apps, `hono/cloudflare-workers`).
+- Identity engine: Better Auth v1.6.x + `@better-auth/oauth-provider` + `twoFactor` plugin (TOTP, RFC 6238, backup codes).
+- Primary datastore: MongoDB Atlas for persistent identity state (users, sessions, OAuth clients) and ephemeral cross-invocation state (rate-limit counters, CORS origin cache) via TTL-indexed collections. No second database required.
+- Local dev: Docker Compose for API, frontend, and MongoDB.
 
 ## Why Each Component Exists
-- **Hono**: compiles cleanly to a single Lambda bundle via `hono/aws-lambda`, has no framework runtime
-  overhead comparable to NestJS/Express, and keeps middleware (CORS, CSRF, rate limit, headers) explicit
-  and readable in one file (`hono/src/app.ts`). This is the correct choice for a Lambda-first target;
-  NestJS is not, and running both was the actual bug — not a migration in progress, dead weight.
-- **Better Auth + oauth-provider plugin**: implements OAuth 2.1/OIDC (PKCE, consent, token exchange,
-  refresh, introspection, revocation, JWKS, dynamic client registration) correctly, without hand-rolling
-  cryptography. "Zero dependency" as literally stated in earlier scoping was rejected for exactly this
-  reason — see `decision.md`. The real constraint honored here is zero *mandatory operational*
-  dependency (no Redis, no message broker), not zero library dependency.
-- **MongoDB Atlas**: already the working, tested persistence layer. Kept as-is under the "don't rewrite
-  what works, fix the actual bug" principle. The real production risk was never "wrong database" — it was
-  unbounded concurrent connections from Lambda, which is solved without touching the DB layer (see below).
-- **Lambda reserved concurrency**: caps the maximum number of concurrent execution environments, which
-  directly caps the maximum number of concurrent MongoDB connections opened against Atlas. This is a
-  platform configuration, not a code change — the cheapest fix that fully addresses the connection-
-  exhaustion risk that a Postgres/serverless-driver rewrite would have addressed at 10x the cost.
-- **DynamoDB (on-demand)**: the only new component in this architecture, and it exists solely because
-  in-memory `Map`/`LRUCache` state (the original rate limiter and origin cache) does not survive across
-  Lambda's independent, concurrently-warm execution environments — this was a live correctness bug, not
-  a scaling concern for later. DynamoDB's per-request pricing keeps idle cost at effectively zero, and its
-  TTL feature replaces the LRU-with-ttl pattern the code already assumed.
-- **S3 + CloudFront** (frontend): static hosting, no server to manage, pairs naturally with an API-only Lambda backend.
-- **Docker Compose** (local only): lets a self-hoster or contributor run the full stack locally before
-  touching AWS — this is what makes the project "config-only to run," not a production deployment target.
 
-## Data Flow
-1. Browser reaches the React app (S3/CloudFront or local Vite dev server).
-2. Frontend calls `/api/auth/*` and `/api/admin/*` against the Lambda-backed API.
-3. Hono middleware chain, in order: dynamic CORS (checked against Mongo-persisted OAuth client origins,
-   cached in DynamoDB) → security headers → request logging → (admin routes only) CSRF → rate limit → role check.
-4. Better Auth handles authentication, session, OAuth/OIDC, consent, and token operations against MongoDB.
-5. Admin mutations (client create/update/delete) write to MongoDB, then invalidate the relevant DynamoDB
-   cache entries so CORS decisions reflect the change on the **next** request, regardless of which Lambda
-   execution environment serves it — closing the cross-container staleness gap in the original design.
+- `Hono`: compiles to platform-specific bundles via first-class adapters. One `app.ts`, multiple entry points (`lambda.ts`, `vercel.ts`, `node-server.ts`, etc.).
+- Better Auth + plugins: implements OAuth 2.1/OIDC and TOTP-based MFA (RFC 6238, QR provisioning, backup codes) correctly, without hand-rolling cryptography. The `twoFactor` plugin allows standard apps like Google Authenticator and Microsoft Authenticator to generate 6-digit codes locally.
+- MongoDB Atlas: the only database. Serves both persistent state and ephemeral state (rate-limit counters, origin cache) via native TTL indexes (`expireAfterSeconds`). Atlas encrypts at rest by default at the infrastructure level.
+- MongoDB TTL collections: replace the previous DynamoDB dependency entirely, making the system deployable to any platform without AWS-specific state infrastructure.
+
+## Multi-Platform Deploy Architecture
+
+The app code in `hono/src/app.ts` is platform-agnostic. Each target gets its own thin entry point:
+
+| Platform | Entry Point | Adapter | Notes |
+| --- | --- | --- | --- |
+| AWS Lambda | `hono/src/lambda.ts` | `hono/aws-lambda` | Set reserved concurrency to match Atlas tier |
+| Vercel | `hono/src/vercel.ts` | `hono/vercel` | Serverless Functions, connection pooling varies |
+| Netlify | `hono/src/netlify.ts` | `hono/netlify` | Same connection-pooling caveat as Vercel |
+| Railway/Fly/Render | `hono/src/node-server.ts` | `hono/node-server` | Long-lived container, natural connection reuse |
+| GCP Cloud Run | `hono/src/node-server.ts` | `hono/node-server` | Set min-instances > 0 for warm connection pool |
+| Azure Container Apps | `hono/src/node-server.ts` | `hono/node-server` | Same as GCP Cloud Run |
+| Cloudflare Workers | `hono/src/cloudflare.ts` | `hono/cloudflare-workers` | No MongoDB driver support, documented limitation |
+
+## Data Protection Strategy
+
+- Passwords: hashed one-way with bcrypt or argon2 via Better Auth.
+- Client secrets: hashed for verification only, shown once at issuance.
+- TOTP secrets: encrypted at rest by Better Auth's `twoFactor` plugin.
+- JWT access tokens: RS256-signed, verified via the JWKS public key endpoint.
+- Data in transit: TLS enforced, HSTS headers set.
+- Data at rest: MongoDB Atlas encrypts at rest by default.
+- No hand-rolled encryption: no symmetric-encryption layer over arbitrary fields.
+
+## OIDC Consumer-DB Workflow
+
+Standard OIDC flow, with no new feature or sync service:
+
+1. User authenticates via the auth service.
+2. Auth service issues an ID token (JWT) containing claims such as `sub` and `email`.
+3. The consuming app decodes the token and creates or updates a local user row in its own DB, keyed on `sub`.
+4. The consuming app verifies subsequent JWTs using the auth service's public key from JWKS.
 
 ## Runtime Boundaries
-- Frontend must not query MongoDB or DynamoDB directly.
-- Admin authorization is enforced at the API boundary (Hono middleware), never only in the frontend route guard.
-- CORS allowlists are derived from persisted OAuth client data, never hardcoded.
-- The Lambda bundle must stay a single artifact, built via `hono/aws-lambda`, with no Lambda@Edge code
-  path — Lambda@Edge cannot read environment variables at all, which is incompatible with this project's
-  fully env-driven config model (see `decision.md`).
 
-## Current Known Risks (carried forward honestly, not hidden)
-- MongoDB Atlas connection limits are managed by reserved concurrency, not eliminated. A self-hoster on a
-  low Atlas tier who sets concurrency too high can still exhaust connections — this must be documented in
-  the setup guide, not silently assumed away.
-- DynamoDB introduces AWS-specific coupling. A self-hoster deploying to a non-AWS target (Cloudflare
-  Workers, Fly.io, etc.) does not get this fix for free — out of scope for this build, documented as a
-  known limitation, not solved speculatively.
+- Frontend must not query MongoDB directly.
+- Admin authorization is enforced at the API boundary with Hono middleware.
+- Admin login requires username/password plus a valid TOTP code when 2FA is enabled.
+- Entry point files contain only adapter wiring, not business logic.
+
+## Current Known Risks
+
+- MongoDB Atlas connection limits vary by tier. Each deploy target's connection-pooling behavior must be documented, not solved uniformly in code.
+- Cloudflare Workers does not support the MongoDB Node driver natively.
+- Lambda Function URLs cannot have AWS WAF attached directly. This is an accepted risk.

@@ -23,14 +23,17 @@ export const authProvider = betterAuth({
             config.env === "production" && !config.auth.publicSignupEnabled,
         minPasswordLength: 12,
         maxPasswordLength: 128,
-        requireEmailVerification: config.env === "production",
+        requireEmailVerification:
+            config.env === "production" && config.auth.emailVerificationEnabled,
         autoSignIn: config.env !== "production",
         revokeSessionsOnPasswordReset: true,
     },
 
     emailVerification: {
-        sendOnSignUp: config.env === "production",
-        sendOnSignIn: config.env === "production",
+        sendOnSignUp:
+            config.env === "production" && config.auth.emailVerificationEnabled,
+        sendOnSignIn:
+            config.env === "production" && config.auth.emailVerificationEnabled,
         expiresIn: 3600,
     },
 
@@ -66,6 +69,10 @@ export const authProvider = betterAuth({
         google: {
             clientId: config.google.clientId,
             clientSecret: config.google.clientSecret,
+            disableSignUp:
+                config.env === "production" && !config.auth.publicSignupEnabled,
+            disableImplicitSignUp:
+                config.env === "production" && !config.auth.publicSignupEnabled,
         },
     },
 

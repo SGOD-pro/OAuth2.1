@@ -107,7 +107,7 @@ export function getTrustedClientIp(
   const xff = headers.get("x-forwarded-for");
 
   if (trustedProxyCidrs.length === 0) {
-    return singleHop && !xff ? singleHop.trim() : "unknown";
+    return "unknown";
   }
 
   const chain = [

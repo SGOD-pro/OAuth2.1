@@ -41,6 +41,7 @@ const forged = new Headers({
   "x-forwarded-for": "203.0.113.10, 10.0.0.5",
 });
 assert.equal(getTrustedClientIp(forged, []), "unknown");
+assert.equal(getTrustedClientIp(new Headers({ "x-real-ip": "203.0.113.7" }), []), "unknown");
 assert.equal(getTrustedClientIp(forged, ["10.0.0.0/8"]), "203.0.113.10");
 
 console.log("security self-check passed");

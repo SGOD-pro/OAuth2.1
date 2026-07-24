@@ -23,6 +23,16 @@ export function safeCallbackURL(value: string | null): string | undefined {
   }
 }
 
+export function isStrongPassword(password: string): boolean {
+  if (password.length < 12 || password.length > 128) return false;
+  return (
+    /[a-z]/.test(password) &&
+    /[A-Z]/.test(password) &&
+    /\d/.test(password) &&
+    /[^A-Za-z0-9]/.test(password)
+  );
+}
+
 export function isPublicSignupEnabled(): boolean {
   return !import.meta.env.PROD || import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED === 'true';
 }

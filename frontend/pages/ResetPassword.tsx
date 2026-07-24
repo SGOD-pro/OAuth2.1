@@ -5,6 +5,7 @@ import GlassSurface from '@/components/GlassSurface';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import { isStrongPassword } from '@/lib/security';
 
 export const ResetPassword: React.FC = () => {
   const [password, setPassword] = useState('');
@@ -26,8 +27,8 @@ export const ResetPassword: React.FC = () => {
       return;
     }
 
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
+    if (!isStrongPassword(password)) {
+      setError('Password must be 12-128 characters and include uppercase, lowercase, number, and symbol.');
       setLoading(false);
       return;
     }
@@ -98,7 +99,7 @@ export const ResetPassword: React.FC = () => {
                   id="password"
                   placeholder="••••••••"
                   required
-                  minLength={8}
+                  minLength={12}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={loading}
@@ -113,7 +114,7 @@ export const ResetPassword: React.FC = () => {
                   id="confirmPassword"
                   placeholder="••••••••"
                   required
-                  minLength={8}
+                  minLength={12}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   disabled={loading}

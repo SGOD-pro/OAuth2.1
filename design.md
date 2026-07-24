@@ -1,68 +1,74 @@
 # Design
 
 ## Design Principles
+
 - Keep the auth service narrow: it is a passport office, not a product dashboard.
-- Explicit boundaries between browser UI, public auth routes, and privileged admin routes.
-- Composition over framework magic — Hono middleware chain is linear and readable, not a hidden DI graph.
-- Security controls sit close to the transport boundary (CORS, CSRF, headers, rate limit all live in
-  `hono/src/middleware/*` and are wired explicitly in `hono/src/app.ts`, not scattered per-route).
-- Fix the smallest correct thing. No abstraction is added that wasn't required to close a real gap
-  (see `decision.md` for the explicit rejection of a DB adapter abstraction layer in this build).
+- Favor composition over framework magic. The Hono middleware chain is linear and readable.
+- Use existing audited libraries for security primitives: Better Auth, MongoDB TTL, and Hono adapters.
 
 ## Domain Model
-- **User**: authenticated principal, Better Auth `user` collection, `role` field gates admin access.
-- **Session**: sign-in state, also doubles as the audit source for the admin logs endpoint (no separate
-  audit collection exists — this is a documented simplification, not an oversight; see `decision.md`).
-- **OAuth client**: an application registered to use this auth server. Owns `redirectUris` and derived
-  `allowedOrigins`, validated before persistence.
-- **Admin user**: a `User` with `role === "admin"`. No separate admin entity.
-- **RateLimitEntry / OriginCacheEntry**: new for this build. Live in DynamoDB, not in the domain layer —
-  these are infrastructure concerns (cross-invocation state), not business entities, and must not leak
-  into route handlers as anything other than a middleware concern.
+
+- `User`: authenticated principal; the `role` field gates admin access.
+- `Session`: sign-in state; also the audit source for admin logs.
+- `OAuth client`: application registered to use this auth server. `client_secret` is hashed at rest.
+- `Admin user`: user with `role === "admin"`. Has a TOTP secret, provisioned via QR and stored encrypted.
+- `RateLimitEntry` / `OriginCacheEntry`: ephemeral records stored in MongoDB TTL collections.
 
 ## Patterns
-- **DDD-lite**: users, sessions, and OAuth clients are modeled as separate concerns with clear ownership;
-  no shared "everything" collection.
-- **SOLID, pragmatically**: API handlers in `hono/src/routes/*` do one thing — parse/validate the request,
-  delegate to Better Auth's `authProvider.api.*` or a direct Mongo query, return a response. They do not
-  contain business rules Better Auth already owns (token issuance, session validation).
-- **Anti-corruption layer**: the frontend route guard (`AdminRoute.tsx`) is UX only. It never becomes the
-  authorization decision — every admin route re-checks role server-side via `requireAdmin` middleware,
-  independent of what the frontend believes.
-- **Composition root**: `hono/src/config/index.ts` is the single place environment variables are parsed
-  (via `envSchema`, zod) and frozen into a typed `config` object. No other file reads `process.env` directly.
+
+- DDD-lite: clear ownership for users, sessions, and OAuth clients.
+- Anti-corruption layer: the frontend route guard is UX only. The server re-checks role.
+- Composition root: `hono/src/config/index.ts` is the single place env vars are parsed.
+- Platform abstraction seam: `hono/src/app.ts` contains all logic. Entry point files contain only adapter wiring.
 
 ## API Contracts
-- `GET /` — health check, returns `{ message, status }`.
-- `/api/auth/*` — delegated entirely to Better Auth's handler (`authProvider.handler`). Not reimplemented.
-- `POST /api/admin/clients` — create OAuth client. Body: `client_name`, `redirect_uris[]`,
-  `allowed_origins[]`, `skip_consent`, `enable_end_session`. Validates every URI via `validateRedirectUri`
-  before calling Better Auth. Invalidates the DynamoDB origin cache on success.
-- `GET /api/admin/clients` — list all registered OAuth clients.
-- `GET /api/admin/clients/:id` — fetch one client.
-- `PATCH /api/admin/clients/:id` — partial update, same URI validation as create, same cache invalidation.
-- `DELETE /api/admin/clients/:id` — delete, same cache invalidation.
-- `GET /api/admin/stats` — `{ totalUsers, totalClients, activeClients, recentLogins }`, computed directly
-  against MongoDB (`user`, `oauthClient`, `session` collections). `recentLogins` = sessions created in the
-  last 24h, used as a proxy for sign-in events — there is no dedicated login-event log.
-- `GET /api/admin/logs` — last 100 sessions, newest first, joined against `user` for email, shaped as
-  `{ userId, userEmail, action: "sign_in", ipAddress, createdAt }`.
 
-## New in this build: DynamoDB access pattern
-- Table: single table, on-demand billing, TTL attribute enabled.
-- Rate limit key: `RATE#<ip>` → `{ count, resetAt }`, TTL = `resetAt`.
-- Origin cache key: `ORIGIN#<origin>` → `{ allowed: boolean }`, TTL = 5 minutes from write, matching the
-  previous LRU TTL behavior.
-- Cache invalidation on admin mutation: delete the specific `ORIGIN#*` items belonging to the mutated
-  client's known origins if determinable, otherwise a bounded scan-and-delete by prefix is acceptable
-  given expected table size (self-hosted, single-tenant, not a shared multi-tenant table) — full
-  wholesale invalidation is an acceptable tradeoff here, not a hidden performance bug, because table size
-  per deployment is small by construction.
+- `GET /` - health check.
+- `/.well-known/jwks.json` - JWKS public key endpoint.
+- `/.well-known/openid-configuration` - OIDC discovery document.
+- `/api/auth/*` - delegated to Better Auth for OAuth 2.1/OIDC, email or Google sign-in, and TOTP MFA.
+- `POST /api/admin/clients` - create OAuth client. `client_secret` is returned once and hashed at rest.
+- `GET /api/admin/clients` - list clients.
+- `GET /api/admin/clients/:id` - fetch one client.
+- `PATCH /api/admin/clients/:id` - partial update.
+- `DELETE /api/admin/clients/:id` - delete.
+- `GET /api/admin/stats` - computed directly against MongoDB collections.
+- `GET /api/admin/logs` - last 100 sessions, joined against user for email.
+- Admin login flow: `POST /api/auth/sign-in/email` -> if 2FA is enabled, `POST /api/auth/two-factor/verify`.
 
-## Explicitly rejected in this design
-- A `DatabaseAdapter` abstraction to support Postgres/MySQL alongside Mongo — not needed, Mongo already
-  works, and Better Auth's own adapter interface already provides this seam if a self-hoster wants to swap
-  it later. Building an in-house abstraction on top of an abstraction that already exists is waste.
-- A dedicated audit-log collection — the sessions-as-proxy approach already meets the stated requirement
-  ("recent sign-in activity"); building a separate event-sourcing system for this is scope creep against
-  the 3-week constraint.
+## MongoDB TTL Collection Design
+
+### `rate_limits` collection
+
+- Schema: `{ _id: "RATE#<ip>", count: number, createdAt: Date }`
+- Index: `{ createdAt: 1 }`
+- Expiration: `expireAfterSeconds: 60`
+
+### `origin_cache` collection
+
+- Schema: `{ _id: "ORIGIN#<origin>", allowed: boolean, cachedAt: Date }`
+- Index: `{ cachedAt: 1 }`
+- Expiration: `expireAfterSeconds: 300`
+
+## Admin MFA Flow
+
+### Setup
+
+Admin clicks "Enable 2FA". The backend generates a TOTP secret. The frontend renders a QR code. The admin scans it with Google Authenticator or Microsoft Authenticator, then enters a 6-digit code to confirm. Backup codes are shown once.
+
+### Login
+
+Admin enters email and password. If 2FA is enabled, the frontend shows a 6-digit TOTP prompt. The admin enters the code from the authenticator app. Better Auth verifies the code and creates the session.
+
+### Multiple Deployments
+
+Each deployment has its own admin account. The same authenticator app manages all of them, which is standard TOTP behavior.
+
+## Explicitly Rejected in This Design
+
+- Database adapter abstraction.
+- Dedicated audit-log collection.
+- Email OTP for admin MFA.
+- Hand-rolled symmetric encryption layer.
+- Per-client DB routing.
+- Custom TOTP implementation.

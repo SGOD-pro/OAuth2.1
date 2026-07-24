@@ -113,6 +113,14 @@ admin.patch("/clients/:id", async (c) => {
     ? (body.allowed_origins as string[])
     : null;
 
+  if (redirectUris?.length === 0) {
+    return c.json({ error: "At least one redirect_uri is required" }, 400);
+  }
+
+  if (allowedOrigins?.length === 0) {
+    return c.json({ error: "At least one allowed_origin is required" }, 400);
+  }
+
   if (redirectUris) {
     const invalidRedirectUri = validateRedirectUris(redirectUris);
     if (invalidRedirectUri) {
