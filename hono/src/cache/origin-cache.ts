@@ -2,7 +2,7 @@ import {
   getOriginCache,
   putOriginCache,
   invalidateOriginCache,
-} from "../db/dynamo";
+} from "../db/state";
 
 export async function getCachedOrigin(
   origin: string,

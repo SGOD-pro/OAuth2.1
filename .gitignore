@@ -12,3 +12,12 @@ package-lock.json
 .code-review-graph
 .agent
 examples
+
+# environment secrets — never commit real values
+.env
+*.env.local
+
+# scratch/test scripts
+hono/rate-limit-test.cjs
+hono/test2.cjs
+skills-lock.json

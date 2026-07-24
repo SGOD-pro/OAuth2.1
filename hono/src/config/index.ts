@@ -30,11 +30,6 @@ export const config = Object.freeze({
 
     frontendUrl: parsedEnv.FRONTEND_URL,
 
-    dynamodb: {
-        table: parsedEnv.DYNAMODB_TABLE,
-        region: parsedEnv.AWS_REGION,
-    },
-
     trustedProxyCidrs:
         parsedEnv.TRUSTED_PROXY_CIDRS
             .split(',')

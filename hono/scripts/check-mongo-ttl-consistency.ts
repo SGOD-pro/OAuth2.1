@@ -1,21 +1,21 @@
 /**
  * Verification script: confirms rate-limit and origin-cache consistency
- * across simulated concurrent Lambda invocations via DynamoDB.
+ * across simulated concurrent Lambda invocations via MongoDB TTL collections.
  *
- * Requires a real DynamoDB table (local or deployed).
- * Run: DYNAMODB_TABLE=<table-name> AWS_REGION=<region> npx tsx scripts/check-dynamo-consistency.ts
+ * Requires MONGO_URI to point at a disposable local or remote database.
+ * Run: MONGO_URI=<uri> npx tsx scripts/check-mongo-ttl-consistency.ts
  *
  * What it checks:
  *   1. Two concurrent rate-limit increments both land (count reaches 2, not 1).
  *   2. Origin-cache write is visible immediately, and invalidation removes it.
  */
 import {
-  getRateLimit,
-  putRateLimit,
+  incrementRateLimit,
   getOriginCache,
   putOriginCache,
   invalidateOriginCache,
-} from "../src/db/dynamo";
+} from "../src/db/state";
+import { closeDb } from "../src/db/mongo";
 
 const TEST_IP = `test-${Date.now()}`;
 const TEST_ORIGIN = `https://test-${Date.now()}.example.com`;
@@ -23,32 +23,17 @@ const TEST_ORIGIN = `https://test-${Date.now()}.example.com`;
 async function checkRateLimitConsistency() {
   console.log("── Rate limit consistency ──");
 
-  const resetAt = Date.now() + 60_000;
-
-  // Simulate two concurrent increments
-  await Promise.all([
-    putRateLimit(TEST_IP, 1, resetAt),
-    (async () => {
-      // Small delay to simulate near-concurrent write
-      await new Promise((r) => setTimeout(r, 50));
-      const entry = await getRateLimit(TEST_IP);
-      const count = entry ? entry.count + 1 : 1;
-      await putRateLimit(TEST_IP, count, resetAt);
-    })(),
+  const [, final] = await Promise.all([
+    incrementRateLimit(TEST_IP, Date.now(), 60_000),
+    incrementRateLimit(TEST_IP, Date.now(), 60_000),
   ]);
-
-  const final = await getRateLimit(TEST_IP);
-  if (!final) {
-    console.error("FAIL: rate-limit entry not found after writes");
-    process.exit(1);
-  }
 
   if (final.count < 2) {
     console.error(`FAIL: expected count >= 2, got ${final.count} (lost write)`);
     process.exit(1);
   }
 
-  console.log(`PASS: rate-limit count = ${final.count} (both writes visible)`);
+  console.log(`PASS: rate-limit count = ${final.count} (both increments visible)`);
 }
 
 async function checkOriginCacheConsistency() {
@@ -76,10 +61,12 @@ async function checkOriginCacheConsistency() {
 async function main() {
   await checkRateLimitConsistency();
   await checkOriginCacheConsistency();
-  console.log("\n✓ All DynamoDB consistency checks passed");
+  console.log("\nAll MongoDB TTL consistency checks passed");
+  await closeDb();
 }
 
 main().catch((err) => {
   console.error("ERROR:", err);
+  void closeDb();
   process.exit(1);
 });

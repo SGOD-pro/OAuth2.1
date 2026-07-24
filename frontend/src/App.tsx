@@ -31,6 +31,12 @@ const AdminLogs = lazy(() =>
 const AdminLogin = lazy(() =>
   import('@/pages/admin/AdminLogin').then((module) => ({ default: module.AdminLogin }))
 );
+const AdminTwoFactor = lazy(() =>
+  import('@/pages/admin/AdminTwoFactor').then((module) => ({ default: module.AdminTwoFactor }))
+);
+const AdminSecurity = lazy(() =>
+  import('@/pages/admin/AdminSecurity').then((module) => ({ default: module.AdminSecurity }))
+);
 
 const withSuspense = (node: ReactNode) => (
   <Suspense fallback={<RouteLoader />}>{node}</Suspense>
@@ -48,6 +54,8 @@ const router = createBrowserRouter([
 
   // ── Admin panel (role-gated) ───────────────────────────────────
   { path: '/admin/login', element: withSuspense(<AdminLogin />) },
+  // 2FA code entry — no AdminRoute guard (user is mid-authentication)
+  { path: '/admin/two-factor', element: withSuspense(<AdminTwoFactor />) },
   {
     path: '/admin',
     element: withSuspense(
@@ -69,6 +77,14 @@ const router = createBrowserRouter([
     element: withSuspense(
       <AdminRoute>
         <AdminLogs />
+      </AdminRoute>
+    ),
+  },
+  {
+    path: '/admin/security',
+    element: withSuspense(
+      <AdminRoute>
+        <AdminSecurity />
       </AdminRoute>
     ),
   },

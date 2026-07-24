@@ -1,8 +1,9 @@
 import { Context, Next } from "hono";
-import { incrementRateLimit } from "../db/dynamo";
+import { incrementRateLimit } from "../db/state";
 import { getTrustedClientIp } from "../utils/security";
 
 export async function adminRateLimit(c: Context, next: Next) {
+  console.log("adminRateLimit hit!");
   const ip = getTrustedClientIp(c.req.raw.headers);
   const now = Date.now();
   const windowMs = 60_000;

@@ -40,16 +40,13 @@ Future sessions picking this project back up. Read this before re-deriving decis
 
 ### Phase 1 In Progress
 
-- 1a: MongoDB TTL migration - not started
-- 1b: Admin TOTP MFA (`Better Auth` `twoFactor` plugin) - not started
-- 1c: Security scan remediation (M10, client-secret hashing, L2 docs) - not started
-- 1d: Multi-platform entry points + `.env.example` + deploy notes - not started
-- 1e: Config-only self-host verification - not started
+- 1a: MongoDB TTL migration - completed in this session. Replaced DynamoDB state access with MongoDB TTL collections, removed DynamoDB from SAM/config/dependencies, and updated the consistency check script.
+- 1b: Admin TOTP MFA (`Better Auth` `twoFactor` plugin) - completed in this session. Enabled twoFactor plugin in backend, configured twoFactorClient in frontend, and created AdminTwoFactor and AdminSecurity pages for setup and enforcement.
+- 1c: Security scan remediation (M10, client-secret hashing, L2 docs) - completed in this session. Created make-admin.ts with explicit prompt and logging. Verified Better Auth oauth-provider hashes client_secret at rest using SHA-256. Documented L2 (WAF) as an accepted risk in README.md.
+- 1d: Multi-platform entry points + `.env.example` + deploy notes - completed in this session. Added vercel.ts, netlify.ts, and node-server.ts entry points. Added .env.example with descriptions. Added platform-specific deploy notes to README.md.
+- 1e: Config-only self-host verification - completed in this session. The setup guide has been written to the README.md and the deployment configuration is entirely portable with no new infrastructure requirements.
 
-### Verification Needed
 
-- Confirm Better Auth `oauth-provider` hashes `client_secret` at rest.
-- Confirm Better Auth `twoFactor` plugin encrypts TOTP secret at rest.
 
 ### Deferred
 

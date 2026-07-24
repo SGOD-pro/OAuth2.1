@@ -7,7 +7,6 @@ process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.GOOGLE_CLIENT_ID = "test";
 process.env.GOOGLE_CLIENT_SECRET = "test";
 process.env.FRONTEND_URL = "http://localhost:5173";
-process.env.DYNAMODB_TABLE = "test";
 
 const {
   getTrustedClientIp,

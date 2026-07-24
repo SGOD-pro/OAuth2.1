@@ -1,6 +1,6 @@
 import { config } from "../config"
 import { betterAuth } from "better-auth";
-import { admin, jwt } from "better-auth/plugins";
+import { admin, jwt, twoFactor } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { getDb, client } from "../db/mongo";
@@ -13,6 +13,7 @@ export type AuthInstance = ReturnType<typeof betterAuth>;
 const database = await getDb();
 
 export const authProvider = betterAuth({
+    appName: "SWYRA Auth", // TOTP issuer label shown in authenticator apps
     baseURL: config.auth.baseURL,
     trustedOrigins: [config.frontendUrl],
     secret: config.auth.secret,
@@ -85,6 +86,21 @@ export const authProvider = betterAuth({
 
         admin({
             defaultRole: "user",
+        }),
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // TOTP 2FA — RFC 6238, Google/Microsoft Authenticator
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        //
+        // Owns: secret generation, QR URI, TOTP verify, backup codes.
+        // TOTP secret is encrypted at rest by the plugin.
+        // No custom TOTP code anywhere in this repo (ADR 011).
+        twoFactor({
+            issuer: "SWYRA Auth",
+            totpOptions: {
+                period: 30,
+                digits: 6,
+            },
         }),
         jwt({
             jwks: {

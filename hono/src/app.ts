@@ -47,9 +47,9 @@ app.use("*", async (c, next) => {
 	);
 });
 
-admin.use("/*", csrfProtection);
-admin.use("/*", adminRateLimit);
-admin.use("/*", requireAdmin);
+app.use("/api/admin/*", csrfProtection);
+app.use("/api/admin/*", adminRateLimit);
+app.use("/api/admin/*", requireAdmin);
 
 app.get("/", (c) => c.json({ message: "Health check", status: "ok" }));
 app.route("/api/admin", admin);  // all /api/admin/* routes
