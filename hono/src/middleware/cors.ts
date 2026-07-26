@@ -93,11 +93,11 @@ export async function dynamicCors(c: Context, next: Next) {
     }
   }
 
+  applyCorsHeaders(c, normalizedOrigin);
+
   if (!allowed) {
     return c.json({ error: "Origin not allowed" }, 403);
   }
-
-  applyCorsHeaders(c, normalizedOrigin);
 
   if (c.req.method === "OPTIONS") {
     return c.body(null, 204);

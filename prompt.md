@@ -30,3 +30,13 @@ abstractions, reuse before rewrite, root-cause fixes at the shared function rath
 No fluff. No introductory pleasantries. Give me the code diff, the verification step, the .md updates, and state you are ready for the next task.
 
 Awaiting my specific task. Execute context loading now.
+
+
+
+
+
+
+create auth servers like that to test the application i amnyly config multiple appliction through
+  admin dashboard, first you create the server files(separate on test folder init with npm(use tsconfig) and give backend the
+  application urls for add in admin dashboard then run thee files once and check for different applciation it was handles or
+  not.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 process.env.NODE_ENV = "test";
-process.env.MONGO_URI = "mongodb://localhost:27017/test";
+process.env.MONGO_URI = "mongodb://172.25.240.1:27017/test";
 process.env.BETTER_AUTH_SECRET = "x".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.GOOGLE_CLIENT_ID = "test";

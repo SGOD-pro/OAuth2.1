@@ -1,0 +1,5 @@
+No this was like a centralize auth service an user build this for connecting his public apps for authservice, so when from a
+  registerd app (here app1/2) a client(consumer of the app) logs in,then the app verifies the user is a verified authenticated
+  or not.. not the admin details shows there. like the admin is me i have app1,2...n i configure the apps url, and fallback url.
+  the just configure the frontend url in the apps frontend adn the clientid,secret in the apps backend to verify the user is
+  logedin or not.

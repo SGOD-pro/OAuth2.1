@@ -79,7 +79,7 @@ export const authProvider = betterAuth({
 
     database: mongodbAdapter(
         database,
-        { client }
+        { client, transaction: false }
     ),
 
     plugins: [
@@ -132,9 +132,8 @@ export const authProvider = betterAuth({
         //   GET  /oauth2/userinfo   — OIDC user info
         //   POST /oauth2/register   — dynamic client registration
         oauthProvider({
-            // Pages the OAuth flow redirects to
-            loginPage: "/sign-in",
-            consentPage: "/consent",
+            loginPage: `${config.frontendUrl}/auth`,
+            consentPage: `${config.frontendUrl}/consent`,
 
             // Supported OIDC scopes
             scopes: ["openid", "profile", "email", "offline_access"],

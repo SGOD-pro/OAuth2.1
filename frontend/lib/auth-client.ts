@@ -11,7 +11,9 @@ import { twoFactorClient } from "better-auth/client/plugins";
  * Provides: signIn, signUp, signOut, useSession, oauth2.*, twoFactor.*
  */
 export const authClient = createAuthClient({
-  baseURL: import.meta.env.VITE_AUTH_URL || "http://localhost:3000",
+  // In dev: requests go through Vite proxy (/api → localhost:3000), same-origin.
+  // In prod: set VITE_AUTH_URL to the deployed API base (e.g. https://api.yourdomain.com).
+  baseURL: import.meta.env.VITE_AUTH_URL || `${window.location.origin}`,
   plugins: [
     oauthProviderClient(),
     // Intercepts sign-in when 2FA is required; redirects to the TOTP page.
