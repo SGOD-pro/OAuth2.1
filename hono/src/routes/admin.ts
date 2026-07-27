@@ -14,11 +14,33 @@ function getHeaders(c: Context): Record<string, string> {
 }
 
 admin.get("/clients", async (c) => {
-  const result = await authProvider.api.getOAuthClients({
-    headers: getHeaders(c),
-  });
+  try {
+    const database = await getDb();
+    const clients = await database.collection("oauthClient").find({}).toArray();
 
-  return c.json(result);
+    const mapped = clients.map(client => ({
+      id: String(client._id),
+      client_id: client.clientId,
+      client_name: client.name,
+      client_secret: client.clientSecret,
+      redirect_uris: client.redirectUris || [],
+      disabled: client.disabled || false,
+      skip_consent: client.skipConsent || false,
+      enable_end_session: client.enableEndSession ?? true,
+      metadata: {
+        allowedOrigins: client.allowedOrigins || [],
+      },
+      adminUserId: client.adminUserId,
+      adminEmail: client.adminEmail,
+      createdAt: client.createdAt,
+      updatedAt: client.updatedAt
+    }));
+
+    return c.json(mapped);
+  } catch (error) {
+    console.error({ event: "admin_get_clients_failed", error });
+    return c.json({ error: "Failed to query clients" }, 500);
+  }
 });
 
 admin.get("/clients/:id", async (c) => {
@@ -165,16 +187,28 @@ admin.patch("/clients/:id", async (c) => {
 });
 
 admin.delete("/clients/:id", async (c) => {
-  const id = c.req.param("id");
+  try {
+    const id = c.req.param("id");
+    console.log("Delete client requested for id:", id);
+    const database = await getDb();
+    
+    const result = await database.collection("oauthClient").deleteOne({ clientId: id });
+    console.log("Delete client result:", result);
+    
+    if (result.deletedCount === 0) {
+      // Try to find if the client exists to debug
+      const client = await database.collection("oauthClient").findOne({ clientId: id });
+      console.log("Found client with this id?", !!client);
+      return c.json({ error: "Client not found" }, 404);
+    }
 
-  const result = await authProvider.api.deleteOAuthClient({
-    headers: getHeaders(c),
-    body: { client_id: id },
-  });
+    await clearOriginCache();
 
-  await clearOriginCache();
-
-  return c.json(result);
+    return c.json({ success: true });
+  } catch (error) {
+    console.error({ event: "admin_delete_client_failed", error });
+    return c.json({ error: "Failed to delete client" }, 500);
+  }
 });
 
 admin.get("/stats", async (c) => {
@@ -238,6 +272,68 @@ admin.get("/logs", async (c) => {
   } catch (error) {
     console.error({ event: "admin_logs_failed", error });
     return c.json({ error: "Failed to query logs" }, 500);
+  }
+});
+
+admin.post("/users", async (c) => {
+  let body: JsonObject | null = null;
+  try {
+    body = (await c.req.json()) as JsonObject;
+  } catch {
+    body = null;
+  }
+
+  if (!body || typeof body.email !== "string" || typeof body.password !== "string" || typeof body.clientId !== "string") {
+    return c.json({ error: "Invalid request body. Expected email, password, and clientId" }, 400);
+  }
+
+  try {
+    // 1. Create the user using Better Auth API to ensure proper password hashing
+    const signUpResult = await authProvider.api.signUpEmail({
+      body: {
+        email: body.email,
+        password: body.password,
+        name: typeof body.name === "string" ? body.name : "App Admin",
+      },
+      headers: c.req.raw.headers,
+    });
+
+    if (!signUpResult || !signUpResult.user) {
+      console.error('Failed to create user via Auth Provider. Result:', signUpResult);
+      return c.json({ error: "Failed to create user via Auth Provider" }, 500);
+    }
+
+    const userId = signUpResult.user.id;
+
+    // 2. Update the user document to set role: "admin"
+    const database = await getDb();
+    await database.collection("user").updateOne(
+      { _id: userId },
+      { $set: { role: "admin" } }
+    );
+
+    // 3. Update the oauthClient document to set adminUserId and adminEmail
+    await database.collection("oauthClient").updateOne(
+      { clientId: body.clientId },
+      { 
+        $set: { 
+          adminUserId: userId,
+          adminEmail: body.email,
+        } 
+      }
+    );
+
+    return c.json({
+      success: true,
+      user: {
+        id: userId,
+        email: body.email,
+        role: "admin",
+      }
+    });
+  } catch (error) {
+    console.error({ event: "admin_create_app_admin_failed", error });
+    return c.json({ error: "Failed to provision app admin", details: error instanceof Error ? error.message : String(error) }, 500);
   }
 });
 

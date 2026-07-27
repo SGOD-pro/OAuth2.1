@@ -4,6 +4,7 @@ import { AdminRoute } from '@/components/AdminRoute';
 import { Layout } from '@/components/Layout';
 import { RouteLoader } from '@/components/RouteLoader';
 import './index.css';
+import './App.css';
 
 const SignIn = lazy(() => import('@/pages/SignIn').then((module) => ({ default: module.SignIn })));
 const ForgotPassword = lazy(() =>

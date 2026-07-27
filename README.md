@@ -11,6 +11,15 @@ During our security auditing, several items were remediated (e.g., client secret
 **Status:** Accepted Risk (Timebox limitation).
 **Production Upgrade Path:** For production deployments, it is highly recommended to place this service behind CloudFront with AWS WAF enabled, or an API Gateway HTTP API with WAF integrations, to protect against application-layer attacks (e.g., SQLi/NoSQLi, XSS, rate-limit evasion). We do not build this within the current timebox as it is an infrastructure concern rather than application code.
 
+### Centralized MFA for Client Applications
+Because this service acts as a centralized OIDC provider, Multi-Factor Authentication (MFA) is tied directly to the user identity, rather than being managed by individual client applications.
+
+If a user enables Two-Factor Authentication (TOTP) on their account (via the `/security` page), they will automatically be prompted for their 6-digit TOTP code when logging into *any* registered OAuth client application.
+
+**Client app developers do not need to write any MFA logic.** They simply redirect to the auth server's authorize endpoint (`/api/auth/oauth2/authorize`). The auth server handles the entire login and 2FA challenge workflow centrally before redirecting back to the client application with the appropriate authorization code or tokens.
+
+*Note on Client App Admins:* Client apps do not configure their own admins. The Auth Server admin promotes a user to the 'admin' role via the Users dashboard. When that user authenticates via OIDC, the 'admin' role is included in their JWT token. The client app reads this claim to grant admin panel access.
+
 ## Setup & Deployment
 
 1. **Clone the repository** and install dependencies in both `hono` and `frontend` folders (e.g. `npm install`).

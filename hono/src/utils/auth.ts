@@ -155,6 +155,13 @@ export const authProvider = betterAuth({
                 revoke: { window: 60, max: 30 },
                 userinfo: { window: 60, max: 60 },
             },
+            
+            client: {
+                fields: {
+                    adminUserId: { type: "string", required: false },
+                    adminEmail: { type: "string", required: false }
+                }
+            }
         }),
     ],
 });

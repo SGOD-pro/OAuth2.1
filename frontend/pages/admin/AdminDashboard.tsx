@@ -6,20 +6,25 @@ import { useAdminStore } from '@/lib/adminStore';
 
 const StatCard = React.memo(
   ({ label, value, loading, icon }: { label: string; value: number | null; loading: boolean, icon: React.ReactNode }) => (
-    <Card className="bg-card/50 backdrop-blur-md border-border/50 hover:bg-card/80 transition-colors shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
+    <Card className="bg-card/50 backdrop-blur-md border-border/50 hover:bg-card/80 transition-colors shadow-sm relative">
+      <CardHeader className="flex flex-row items-center justify-between pb-2 relative z-10">
         <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{label}</CardTitle>
         <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary">
           {icon}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className='relative z-10'>
         {loading ? (
           <div className="h-8 w-16 rounded-full bg-muted animate-pulse mt-1" />
         ) : (
           <div className="text-3xl font-semibold text-foreground">{value ?? '—'}</div>
         )}
+
+
       </CardContent>
+      <div className="absolute inset-0 z-0 pointer-events-none rounded-xl overflow-hidden opacity-60">
+        <div className="gradient-matcha-no-kuuki"></div>
+      </div>
     </Card>
   )
 );
@@ -28,8 +33,8 @@ export const AdminDashboard: React.FC = () => {
   const { data: stats, loading } = useAdminStore((state) => state.stats);
   const fetchStats = useAdminStore((state) => state.fetchStats);
 
-  useEffect(() => { 
-    void fetchStats(); 
+  useEffect(() => {
+    void fetchStats();
   }, [fetchStats]);
 
   return (
@@ -49,40 +54,40 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard 
-          label="Applications" 
-          value={stats?.totalClients ?? null} 
-          loading={loading && !stats} 
+        <StatCard
+          label="Applications"
+          value={stats?.totalClients ?? null}
+          loading={loading && !stats}
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" />
             </svg>
           }
         />
-        <StatCard 
-          label="Active Apps" 
-          value={stats?.activeClients ?? null} 
+        <StatCard
+          label="Active Apps"
+          value={stats?.activeClients ?? null}
           loading={loading && !stats}
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
             </svg>
-          } 
+          }
         />
-        <StatCard 
-          label="Total Users" 
-          value={stats?.totalUsers ?? null} 
-          loading={loading && !stats} 
+        <StatCard
+          label="Total Users"
+          value={stats?.totalUsers ?? null}
+          loading={loading && !stats}
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
           }
         />
-        <StatCard 
-          label="Logins (24h)" 
-          value={stats?.recentLogins ?? null} 
-          loading={loading && !stats} 
+        <StatCard
+          label="Logins (24h)"
+          value={stats?.recentLogins ?? null}
+          loading={loading && !stats}
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
@@ -90,16 +95,16 @@ export const AdminDashboard: React.FC = () => {
           }
         />
       </div>
-      
+
       <div className="mt-8 grid gap-6 md:grid-cols-2">
-         <Card className="bg-card/50 backdrop-blur-md border-border/50 shadow-sm h-64 flex flex-col items-center justify-center text-muted-foreground border-dashed">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="mb-4 opacity-50"><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>
-            <p className="text-sm">Activity Chart (Coming soon)</p>
-         </Card>
-         <Card className="bg-card/50 backdrop-blur-md border-border/50 shadow-sm h-64 flex flex-col items-center justify-center text-muted-foreground border-dashed">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="mb-4 opacity-50"><path d="M12 20v-6M6 20V10M18 20V4" /></svg>
-            <p className="text-sm">User Growth (Coming soon)</p>
-         </Card>
+        <Card className="bg-card/50 backdrop-blur-md border-border/50 shadow-sm h-64 flex flex-col items-center justify-center text-muted-foreground border-dashed">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="mb-4 opacity-50"><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>
+          <p className="text-sm">Activity Chart (Coming soon)</p>
+        </Card>
+        <Card className="bg-card/50 backdrop-blur-md border-border/50 shadow-sm h-64 flex flex-col items-center justify-center text-muted-foreground border-dashed">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="mb-4 opacity-50"><path d="M12 20v-6M6 20V10M18 20V4" /></svg>
+          <p className="text-sm">User Growth (Coming soon)</p>
+        </Card>
       </div>
     </AdminLayout>
   );

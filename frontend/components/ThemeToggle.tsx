@@ -3,9 +3,22 @@ import { Button } from '@/components/ui/button';
 import { useTheme } from 'next-themes';
 
 export const ThemeToggle: React.FC = () => {
-  const { theme, setTheme } = useTheme();
-  
-  const isDark = theme === 'dark' || (theme === 'system' && typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const { setTheme, resolvedTheme } = useTheme();
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <Button variant="ghost" size="icon" className="rounded-full opacity-0">
+        <span className="sr-only">Toggle theme</span>
+      </Button>
+    );
+  }
+
+  const isDark = resolvedTheme === 'dark';
 
   return (
     <Button
