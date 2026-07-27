@@ -55,6 +55,10 @@ export const AdminLogin: React.FC = () => {
     });
 
     if (authError) {
+      if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
+        // Handled by the auth-client plugin redirect.
+        return;
+      }
       toast.error(authError.message || 'Invalid credentials');
       setLoading(false);
     }

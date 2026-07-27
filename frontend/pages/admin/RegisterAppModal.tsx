@@ -9,7 +9,7 @@ import { validateUri } from '@/lib/security';
 
 interface RegisterAppModalProps {
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (client: any) => void;
 }
 
 interface FormState {
@@ -212,7 +212,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
               <Button
                 className="w-full"
                 disabled={!secretCopied}
-                onClick={() => { onSuccess(); onClose(); }}
+                onClick={() => { onSuccess(created); onClose(); }}
               >
                 {secretCopied ? 'Done' : 'Copy secret before closing'}
               </Button>

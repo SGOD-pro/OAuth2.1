@@ -1,18 +1,10 @@
-import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { AdminLayout } from './AdminLayout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { toast } from 'sonner';
-
-interface LogEntry {
-  userId: string;
-  userEmail: string | null;
-  action: string;
-  ipAddress: string | null;
-  createdAt: string;
-}
+import { useAdminStore } from '@/lib/adminStore';
 
 const PAGE_SIZE = 20;
 
@@ -32,29 +24,19 @@ function getActionColor(action: string) {
 }
 
 export const AdminLogs: React.FC = () => {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [filtered, setFiltered] = useState<LogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, loading } = useAdminStore((state) => state.logs);
+  const fetchLogs = useAdminStore((state) => state.fetchLogs);
+  
+  const logs = data || [];
+  
+  const [filtered, setFiltered] = useState(logs);
   const [page, setPage] = useState(0);
   const [actionFilter, setActionFilter] = useState('all');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchLogs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/admin/logs', { credentials: 'include' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: LogEntry[] = await res.json();
-      setLogs(data);
-    } catch (err) {
-      toast.error(`Failed to load logs: ${String(err)}`);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     void fetchLogs();
-    intervalRef.current = setInterval(() => { void fetchLogs(); }, 30_000);
+    intervalRef.current = setInterval(() => { void fetchLogs(true); }, 30_000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [fetchLogs]);
 
@@ -100,7 +82,7 @@ export const AdminLogs: React.FC = () => {
             </div>
           </div>
           
-          <Button variant="outline" size="icon" onClick={() => { setLoading(true); void fetchLogs(); }} disabled={loading} className="rounded-full h-9 w-9">
+          <Button variant="outline" size="icon" onClick={() => void fetchLogs(true)} disabled={loading} className="rounded-full h-9 w-9">
             <svg className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>
           </Button>
         </div>

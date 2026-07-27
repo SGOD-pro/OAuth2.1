@@ -20,7 +20,7 @@ interface OAuthClient {
 interface EditAppModalProps {
   client: OAuthClient;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (client: any) => void;
 }
 
 const TagInput: React.FC<{
@@ -113,8 +113,9 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
         throw new Error((body as { message?: string }).message || `HTTP ${res.status}`);
       }
 
+      const updatedClient = await res.json();
       setSuccess(true);
-      onSuccess();
+      onSuccess(updatedClient);
       setTimeout(() => onClose(), 1500);
     } catch (err) {
       setError(String(err));

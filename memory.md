@@ -38,16 +38,29 @@ Future sessions picking this project back up. Read this before re-deriving decis
 
 ## Open Items
 
-### Phase 1 In Progress
+### Phase 1: Portability and Security Hardening (Completed)
+- 1a: MongoDB TTL migration. Replaced DynamoDB state access with MongoDB TTL collections, removed DynamoDB from config.
+- 1c: Security scan remediation (M10, client-secret hashing, L2 docs).
+- 1d: Multi-platform entry points + `.env.example` + deploy notes.
+- 1e: Config-only self-host verification.
 
-- 1a: MongoDB TTL migration - completed in this session. Replaced DynamoDB state access with MongoDB TTL collections, removed DynamoDB from SAM/config/dependencies, and updated the consistency check script.
-- 1b: Admin TOTP MFA (`Better Auth` `twoFactor` plugin) - completed in this session. Enabled twoFactor plugin in backend, configured twoFactorClient in frontend, and created AdminTwoFactor and AdminSecurity pages for setup and enforcement.
-- 1c: Security scan remediation (M10, client-secret hashing, L2 docs) - completed in this session. Created make-admin.ts with explicit prompt and logging. Verified Better Auth oauth-provider hashes client_secret at rest using SHA-256. Documented L2 (WAF) as an accepted risk in README.md.
-- 1d: Multi-platform entry points + `.env.example` + deploy notes - completed in this session. Added vercel.ts, netlify.ts, and node-server.ts entry points. Added .env.example with descriptions. Added platform-specific deploy notes to README.md.
-- 1e: Config-only self-host verification - completed in this session. The setup guide has been written to the README.md and the deployment configuration is entirely portable with no new infrastructure requirements.
+### Phase 2: Frontend Premium Redesign (Completed)
+- Integrated the "Cohere" premium design system across all public and admin pages (glassmorphism, mesh gradients, noise/grain).
+- Implemented `next-themes` ThemeProvider for flawless light/dark mode toggling across the application.
+- Added `zustand` based state management with a 30s TTL cache and optimistic UI updates for Admin Dashboard, Clients, and Logs.
+- Standardized forms using `react-hook-form`, `@hookform/resolvers`, and `zod`.
+- Replaced legacy notifications with `sonner` toasts.
+- Refined backend rate limiting to specifically target `/api/auth/*` while keeping `/api/admin/*` smooth for authenticated use.
 
+### Phase 3: Admin & Client App TOTP MFA Integration (Completed)
+- **3a:** Enabled `twoFactor` plugin in backend via Better Auth.
+- **3b:** Fixed frontend MFA setup UI loop in `AdminSecurity.tsx`. Setup now correctly finalizes after 6-digit confirmation, and shows a "Disable 2FA" button thereafter. Fixed login flows in `SignIn.tsx` and `AdminLogin.tsx` to properly catch 2FA required status without showing generic errors. Additionally fixed state hallucination in setup page by strictly checking `isPending` state before evaluating `twoFactorEnabled`, preventing auto-generation of QR codes.
+- **3c:** Verified that client app logins natively inherit the 2FA requirement.
 
+### Phase 4: Ship and Document (In Progress)
+- Needs public repository push, markdown doc verification.
+- Needs public write-up post on engineering decisions.
+- Needs resume/LinkedIn addition.
 
 ### Deferred
-
 - Email verification at signup stays off until a real mailer is wired.

@@ -63,6 +63,10 @@ export const SignIn: React.FC = () => {
     });
 
     if (authError) {
+      if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
+        // Handled by the auth-client plugin redirect.
+        return;
+      }
       toast.error(authError.message || 'Sign in failed. Please try again.');
       setLoading(false);
     }

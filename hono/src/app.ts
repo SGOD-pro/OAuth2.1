@@ -4,7 +4,7 @@ import admin from "./routes/admin";
 import auth from "./routes/auth";
 import { dynamicCors } from "./middleware/cors";
 import { requireAdmin } from "./middleware/admin-auth";
-import { adminRateLimit } from "./middleware/rate-limit";
+import { authRateLimit } from "./middleware/rate-limit";
 import { csrfProtection } from "./middleware/csrf";
 
 const app = new Hono();
@@ -48,7 +48,7 @@ app.use("*", async (c, next) => {
 });
 
 app.use("/api/admin/*", csrfProtection);
-app.use("/api/admin/*", adminRateLimit);
+app.use("/api/auth/*", authRateLimit);
 app.use("/api/admin/*", requireAdmin);
 
 app.get("/", (c) => c.json({ message: "Health check", status: "ok" }));

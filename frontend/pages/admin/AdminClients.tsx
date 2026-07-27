@@ -3,7 +3,7 @@ import { AdminLayout } from './AdminLayout';
 import { RegisterAppModal } from './RegisterAppModal';
 import { EditAppModal } from './EditAppModal';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -11,15 +11,7 @@ import { csrfHeaders } from '@/lib/csrf';
 import { toast } from 'sonner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
-interface OAuthClient {
-  client_id: string;
-  client_name: string;
-  redirect_uris: string[];
-  allowed_origins?: string[];
-  skip_consent: boolean;
-  enable_end_session: boolean;
-  disabled?: boolean;
-}
+import { useAdminStore, type OAuthClient } from '@/lib/adminStore';
 
 const JWKS_URL = import.meta.env.VITE_AUTH_URL
   ? `${import.meta.env.VITE_AUTH_URL}/.well-known/jwks.json`
@@ -28,28 +20,20 @@ const JWKS_URL = import.meta.env.VITE_AUTH_URL
 const AUTH_ISSUER = import.meta.env.VITE_AUTH_URL ?? 'https://auth.yourdomain.com';
 
 export const AdminClients: React.FC = () => {
-  const [clients, setClients] = useState<OAuthClient[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, loading } = useAdminStore((state) => state.clients);
+  const fetchClients = useAdminStore((state) => state.fetchClients);
+  const deleteClientLocal = useAdminStore((state) => state.deleteClientLocal);
+  const addClientLocal = useAdminStore((state) => state.addClientLocal);
+  const updateClientLocal = useAdminStore((state) => state.updateClientLocal);
+  
+  const clients = data || [];
+
   const [showRegister, setShowRegister] = useState(false);
   const [editClient, setEditClient] = useState<OAuthClient | null>(null);
   const [selectedClient, setSelectedClient] = useState<OAuthClient | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<OAuthClient | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-
-  const fetchClients = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/admin/clients', { credentials: 'include' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as OAuthClient[];
-      setClients(Array.isArray(data) ? data : []);
-    } catch (err) {
-      toast.error(String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   useEffect(() => { void fetchClients(); }, [fetchClients]);
 
@@ -64,7 +48,7 @@ export const AdminClients: React.FC = () => {
         },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setClients((c) => c.filter((x) => x.client_id !== client.client_id));
+      deleteClientLocal(client.client_id);
       if (selectedClient?.client_id === client.client_id) setSelectedClient(null);
       toast.success(`${client.client_name} has been deleted.`);
     } catch (err) {
@@ -118,7 +102,7 @@ export const AdminClients: React.FC = () => {
       </Dialog>
 
       <Card className="bg-card/50 backdrop-blur-md border-border/50 shadow-sm overflow-hidden">
-        {loading ? (
+        {loading && clients.length === 0 ? (
           <div className="px-6 py-16 text-center flex flex-col items-center justify-center text-muted-foreground">
             <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary/30 border-t-primary mb-4" />
             Loading applications...
@@ -255,14 +239,18 @@ const { payload } = await jwtVerify(token, JWKS, {
       {showRegister && (
         <RegisterAppModal
           onClose={() => setShowRegister(false)}
-          onSuccess={() => void fetchClients()}
+          onSuccess={(newClient) => {
+            if (newClient) addClientLocal(newClient);
+          }}
         />
       )}
       {editClient && (
         <EditAppModal
           client={editClient}
           onClose={() => setEditClient(null)}
-          onSuccess={() => void fetchClients()}
+          onSuccess={(updatedClient) => {
+            if (updatedClient) updateClientLocal(updatedClient);
+          }}
         />
       )}
     </AdminLayout>

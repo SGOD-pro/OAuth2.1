@@ -74,22 +74,26 @@ Goal: Redesign the existing React frontend to feel like a premium, enterprise-gr
 **Constraint:** Frontend route guards (AdminRoute.tsx) and API state management must remain intact. Only presentation and layout change.
 **Gate:** Frontend compiles, all existing API integrations still function, visual review confirms premium gradient/Cohere aesthetic.
 
-## Phase 3: Admin TOTP MFA Integration
+## Phase 3: Admin & Client App TOTP MFA Integration (Completed)
 
-Goal: Secure admin accounts with standard TOTP MFA.
+Goal: Secure admin accounts with standard TOTP MFA and verify the OIDC flow extends this to client apps.
 
-### 3a. Backend Plugin Enablement
+### 3a. Backend Plugin Enablement (Done)
 - Enable twoFactor plugin in Better Auth config (hono/src/utils/auth.ts).
 - Ensure backend endpoints for TOTP setup, verification, and backup codes are exposed.
 
-### 3b. Frontend MFA UI
-- Add "Enable 2FA" screen: QR code + manual key, confirm with 6-digit code, show backup codes once.
-- Add login-time TOTP prompt: after email/password, if 2FA enabled, show 6-digit input.
-- Add backup code fallback on login.
+### 3b. Frontend MFA UI Fixes & Enforcement (Done)
+- Fix the "Enable 2FA" loop: The setup must require typing a 6-digit code to finalize. The manual key/QR must be hidden permanently after successful setup.
+- Fix login flow: Admin must be blocked from dashboard access until 6-digit code is verified.
+- Backup code fallback must be functional.
 
-**Verify:** Admin can enable 2FA, scan QR with Google Authenticator, log in with 6-digit code. Verify backup code works once and is consumed.
+### 3c. Client App MFA Verification (Done)
+- Verify that if a user has TOTP enabled, logging into a registered OAuth client app via the centralized login screen forces the TOTP prompt before redirecting back to the client app.
+- No new code needed for this—it is an inherent benefit of the OIDC centralized auth architecture. Document this behavior in the README.
 
-## Phase 4: Ship and Document (Final Phase)
+**Gate:** Admin can enable 2FA (verifying a 6-digit code), log out, and cannot access the dashboard without a 6-digit code. Client app login inherits this MFA requirement automatically.
+
+## Phase 4: Ship and Document (Current Phase)
 
 Goal: The artifact is public and legible to someone evaluating it in an interview.
 

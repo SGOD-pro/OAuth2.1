@@ -1,14 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AdminLayout } from './AdminLayout';
-import { authClient } from '@/lib/auth-client';
+import { authClient, useSession } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
+import { QRCodeSVG } from 'qrcode.react';
 
-type SetupStep = 'idle' | 'qr' | 'backup-codes' | 'done';
+type SetupStep = 'idle' | 'qr' | 'backup-codes' | 'done' | 'disable-prompt';
 
 export const AdminSecurity: React.FC = () => {
+  const { data: session, refetch, isPending } = useSession();
+  const isTwoFactorEnabled = !!session?.user?.twoFactorEnabled;
+
   const [password, setPassword] = useState('');
   const [totpUri, setTotpUri] = useState('');
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
@@ -16,10 +20,22 @@ export const AdminSecurity: React.FC = () => {
   const [step, setStep] = useState<SetupStep>('idle');
   const [loading, setLoading] = useState(false);
 
+  // Strictly check status on mount and sync state
+  useEffect(() => {
+    if (isPending) return; // Wait for session to load
+    
+    if (isTwoFactorEnabled) {
+      setStep('done');
+    } else {
+      setStep('idle');
+    }
+  }, [isTwoFactorEnabled, isPending]);
+
   const handleEnable = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
+    // This gets the QR code and manual key
     const { data, error: err } = await authClient.twoFactor.enable({ password });
     if (err || !data) {
       toast.error(err?.message || 'Failed to start 2FA setup. Check your password.');
@@ -37,24 +53,58 @@ export const AdminSecurity: React.FC = () => {
     e.preventDefault();
     setLoading(true);
 
-    const { error: err } = await authClient.twoFactor.verifyTotp({ code: confirmCode });
-    if (err) {
-      toast.error(err.message || 'Invalid code. Make sure your device clock is accurate.');
+    // Call Better Auth verification endpoint to finalize setup
+    const response = await authClient.twoFactor.verifyTotp({ code: confirmCode });
+    
+    // Debugging Step
+    console.log('[DEBUG] 2FA Verify Response:', response);
+
+    if (response.error) {
+      toast.error(response.error.message || 'Invalid code. Make sure your device clock is accurate.');
       setLoading(false);
       return;
     }
 
     setStep('backup-codes');
     setLoading(false);
+    
+    // Refresh session so the UI updates to the "Enabled" state
+    await refetch();
   };
 
-  const qrImageUrl = totpUri
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(totpUri)}`
-    : '';
+  const handleDisable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+
+    const { error: err } = await authClient.twoFactor.disable({ password });
+    if (err) {
+      toast.error(err.message || 'Failed to disable 2FA. Check your password.');
+      setLoading(false);
+      return;
+    }
+
+    toast.success('Two-factor authentication disabled.');
+    setPassword('');
+    setStep('idle');
+    setLoading(false);
+    
+    await refetch();
+  };
 
   const manualKey = totpUri
     ? (new URLSearchParams(totpUri.split('?')[1] ?? '').get('secret') ?? '')
     : '';
+
+  // Show a loading state while fetching session
+  if (isPending) {
+    return (
+      <AdminLayout>
+        <div className="flex justify-center items-center h-40">
+          <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full"></div>
+        </div>
+      </AdminLayout>
+    );
+  }
 
   return (
     <AdminLayout>
@@ -100,7 +150,7 @@ export const AdminSecurity: React.FC = () => {
                     />
                   </div>
                   <Button type="submit" className="w-full rounded-full" disabled={loading}>
-                    {loading ? 'Starting setup…' : 'Set up Two-Factor Authentication'}
+                    {loading ? 'Generating...' : 'Set up Two-Factor Authentication'}
                   </Button>
                 </form>
               </div>
@@ -121,12 +171,11 @@ export const AdminSecurity: React.FC = () => {
                 </div>
 
                 <div className="mt-6 flex justify-center bg-white p-4 rounded-2xl max-w-fit mx-auto mb-6 shadow-sm border border-border">
-                  <img
-                    src={qrImageUrl}
-                    alt="TOTP QR code"
-                    width={180}
-                    height={180}
-                    className="rounded-lg"
+                  <QRCodeSVG
+                    value={totpUri}
+                    size={180}
+                    level="H"
+                    className="rounded-sm"
                   />
                 </div>
 
@@ -157,7 +206,7 @@ export const AdminSecurity: React.FC = () => {
                     />
                   </div>
                   <Button type="submit" className="w-full rounded-full" disabled={loading || confirmCode.length !== 6}>
-                    {loading ? 'Confirming…' : 'Verify Code'}
+                    {loading ? 'Confirming...' : 'Verify'}
                   </Button>
                 </form>
               </div>
@@ -188,7 +237,11 @@ export const AdminSecurity: React.FC = () => {
                   ))}
                 </div>
                 
-                <Button className="w-full rounded-full" onClick={() => setStep('done')}>
+                <Button className="w-full rounded-full" onClick={() => {
+                  setStep('done');
+                  setPassword('');
+                  setConfirmCode('');
+                }}>
                   I've saved my backup codes
                 </Button>
               </div>
@@ -200,9 +253,54 @@ export const AdminSecurity: React.FC = () => {
                   <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                 </div>
                 <h2 className="text-2xl font-semibold text-foreground mb-2">2FA is enabled</h2>
-                <p className="text-sm text-muted-foreground leading-relaxed">
+                <p className="text-sm text-muted-foreground leading-relaxed mb-6">
                   Your account now requires a code from your authenticator app at every login.
                 </p>
+                <Button variant="destructive" className="w-full rounded-full" onClick={() => { setPassword(''); setStep('disable-prompt'); }}>
+                  Disable 2FA
+                </Button>
+              </div>
+            )}
+
+            {step === 'disable-prompt' && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="h-12 w-12 rounded-2xl bg-destructive/10 flex items-center justify-center text-destructive">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">Disable 2FA</h2>
+                    <p className="text-sm text-muted-foreground">
+                      This will make your account less secure.
+                    </p>
+                  </div>
+                </div>
+                
+                <form onSubmit={handleDisable} className="space-y-4">
+                  <div className="space-y-2">
+                    <label htmlFor="disable-password" className="text-sm font-medium text-foreground">
+                      Confirm your password to disable
+                    </label>
+                    <Input
+                      id="disable-password"
+                      type="password"
+                      placeholder="••••••••"
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      disabled={loading}
+                      className="bg-background/50"
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <Button type="button" variant="outline" className="w-full rounded-full" disabled={loading} onClick={() => setStep('done')}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" variant="destructive" className="w-full rounded-full" disabled={loading}>
+                      {loading ? 'Disabling...' : 'Disable 2FA'}
+                    </Button>
+                  </div>
+                </form>
               </div>
             )}
 
@@ -212,3 +310,4 @@ export const AdminSecurity: React.FC = () => {
     </AdminLayout>
   );
 };
+
