@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import GlassSurface from '@/components/GlassSurface';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
@@ -161,16 +161,9 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/40 p-4" ref={overlayRef} onClick={handleBackdrop}>
-      <GlassSurface
-        width="100%"
-        height="auto"
-        borderRadius={22}
-        backgroundOpacity={0.16}
-        blur={12}
-        saturation={1.6}
-        className="w-full max-w-xl"
-      >
-        <div className="px-6 py-6 w-full text-left bg-muted/80 backdrop-blur-md rounded-2xl">
+      <div className="w-full max-w-xl mx-auto">
+        <div className="glass-card rounded-[22px] bg-card text-card-foreground border border-border shadow-lg overflow-hidden">
+          <div className="px-6 py-6 w-full text-left">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-foreground">
               {created ? 'Application Registered' : 'Register New Application'}
@@ -308,7 +301,8 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
             </form>
           )}
         </div>
-      </GlassSurface>
+        </div>
+      </div>
     </div>
   );
 };

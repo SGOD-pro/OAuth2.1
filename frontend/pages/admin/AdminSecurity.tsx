@@ -1,42 +1,28 @@
 import React, { useState } from 'react';
 import { AdminLayout } from './AdminLayout';
 import { authClient } from '@/lib/auth-client';
-import GlassSurface from '@/components/GlassSurface';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Card, CardContent } from '@/components/ui/card';
+import { toast } from 'sonner';
 
 type SetupStep = 'idle' | 'qr' | 'backup-codes' | 'done';
 
-/**
- * /admin/security — Enable / manage TOTP 2FA.
- *
- * Flow:
- *   1. Admin enters current password → twoFactor.enable() → returns totpURI + backupCodes
- *   2. Admin scans QR with Google/Microsoft Authenticator
- *   3. Admin enters 6-digit code to confirm → twoFactor.verifyTotp()
- *   4. Backup codes shown once; admin acknowledges
- *
- * No custom TOTP code. All crypto is owned by the Better Auth twoFactor plugin.
- * QR rendered via free qrserver.com API — no npm dependency needed.
- */
 export const AdminSecurity: React.FC = () => {
   const [password, setPassword] = useState('');
   const [totpUri, setTotpUri] = useState('');
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
   const [confirmCode, setConfirmCode] = useState('');
   const [step, setStep] = useState<SetupStep>('idle');
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // ── Step 1: enable 2FA ────────────────────────────────────────
   const handleEnable = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setError('');
 
     const { data, error: err } = await authClient.twoFactor.enable({ password });
     if (err || !data) {
-      setError(err?.message || 'Failed to start 2FA setup. Check your password.');
+      toast.error(err?.message || 'Failed to start 2FA setup. Check your password.');
       setLoading(false);
       return;
     }
@@ -47,15 +33,13 @@ export const AdminSecurity: React.FC = () => {
     setLoading(false);
   };
 
-  // ── Step 2: confirm with TOTP code ────────────────────────────
   const handleConfirm = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setError('');
 
     const { error: err } = await authClient.twoFactor.verifyTotp({ code: confirmCode });
     if (err) {
-      setError(err.message || 'Invalid code. Make sure your device clock is accurate.');
+      toast.error(err.message || 'Invalid code. Make sure your device clock is accurate.');
       setLoading(false);
       return;
     }
@@ -64,54 +48,45 @@ export const AdminSecurity: React.FC = () => {
     setLoading(false);
   };
 
-  // ── QR image URL (no npm dep, ponytail: free third-party API) ─
   const qrImageUrl = totpUri
     ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(totpUri)}`
     : '';
 
-  // ── Manual key (extract secret from URI) ──────────────────────
   const manualKey = totpUri
     ? (new URLSearchParams(totpUri.split('?')[1] ?? '').get('secret') ?? '')
     : '';
 
   return (
     <AdminLayout>
-      <div>
-        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Admin</p>
-        <h1 className="mt-2 text-2xl font-semibold text-foreground">Security</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Enable two-factor authentication for your admin account.
+      <div className="mb-8">
+        <h1 className="text-3xl font-semibold text-foreground font-heading">Security</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Enable and manage two-factor authentication for your admin account.
         </p>
       </div>
 
-      <div className="mt-6 max-w-lg">
-        <GlassSurface
-          width="100%"
-          height="auto"
-          borderRadius={24}
-          backgroundOpacity={0.1}
-          blur={10}
-          saturation={1.6}
-        >
-          <div className="px-6 py-6">
-
-            {/* ── idle: enter password to begin ── */}
+      <div className="max-w-xl">
+        <Card className="bg-card/50 backdrop-blur-md border-border/50 shadow-sm overflow-hidden">
+          <CardContent className="p-8">
+            
             {step === 'idle' && (
-              <>
-                <h2 className="text-base font-semibold text-foreground">Enable 2FA</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  You'll scan a QR code with Google Authenticator or Microsoft Authenticator.
-                  Enter your current password to start.
-                </p>
-                {error && (
-                  <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
-                    {error}
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
                   </div>
-                )}
-                <form onSubmit={handleEnable} className="mt-5 space-y-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">Enable 2FA</h2>
+                    <p className="text-sm text-muted-foreground">
+                      Enhance your account security with an authenticator app.
+                    </p>
+                  </div>
+                </div>
+                
+                <form onSubmit={handleEnable} className="space-y-4">
                   <div className="space-y-2">
                     <label htmlFor="sec-password" className="text-sm font-medium text-foreground">
-                      Current password
+                      Confirm your password to start
                     </label>
                     <Input
                       id="sec-password"
@@ -121,51 +96,51 @@ export const AdminSecurity: React.FC = () => {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       disabled={loading}
+                      className="bg-background/50"
                     />
                   </div>
-                  <Button type="submit" className="w-full" disabled={loading}>
-                    {loading ? 'Starting setup…' : 'Set up 2FA'}
+                  <Button type="submit" className="w-full rounded-full" disabled={loading}>
+                    {loading ? 'Starting setup…' : 'Set up Two-Factor Authentication'}
                   </Button>
                 </form>
-              </>
+              </div>
             )}
 
-            {/* ── qr: scan and confirm ── */}
             {step === 'qr' && (
-              <>
-                <h2 className="text-base font-semibold text-foreground">Scan with your authenticator</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Open Google Authenticator or Microsoft Authenticator, tap <strong>+</strong>, and scan this code.
-                </p>
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><rect x="7" y="7" width="10" height="10" rx="1" ry="1" /></svg>
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">Scan QR Code</h2>
+                    <p className="text-sm text-muted-foreground">
+                      Use Google or Microsoft Authenticator to scan this code.
+                    </p>
+                  </div>
+                </div>
 
-                <div className="mt-5 flex justify-center">
-                  {/* ponytail: QR via qrserver.com free API; replace with local render if privacy matters */}
+                <div className="mt-6 flex justify-center bg-white p-4 rounded-2xl max-w-fit mx-auto mb-6 shadow-sm border border-border">
                   <img
                     src={qrImageUrl}
                     alt="TOTP QR code"
-                    width={200}
-                    height={200}
-                    className="rounded-xl border border-white/10 bg-white p-2"
+                    width={180}
+                    height={180}
+                    className="rounded-lg"
                   />
                 </div>
 
                 {manualKey && (
-                  <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                    <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground mb-1">Manual entry key</p>
-                    <code className="text-sm font-mono text-foreground break-all">{manualKey}</code>
+                  <div className="rounded-xl border border-border/50 bg-muted/30 px-4 py-3 mb-6 text-center">
+                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Manual entry key</p>
+                    <code className="text-sm font-mono text-primary font-medium break-all">{manualKey}</code>
                   </div>
                 )}
 
-                {error && (
-                  <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
-                    {error}
-                  </div>
-                )}
-
-                <form onSubmit={handleConfirm} className="mt-5 space-y-4">
+                <form onSubmit={handleConfirm} className="space-y-4">
                   <div className="space-y-2">
                     <label htmlFor="totp-confirm" className="text-sm font-medium text-foreground">
-                      Enter the 6-digit code to confirm
+                      Enter the 6-digit code
                     </label>
                     <Input
                       id="totp-confirm"
@@ -178,58 +153,61 @@ export const AdminSecurity: React.FC = () => {
                       value={confirmCode}
                       onChange={(e) => setConfirmCode(e.target.value.trim())}
                       disabled={loading}
+                      className="text-center text-lg tracking-widest font-mono bg-background/50"
                     />
                   </div>
-                  <Button type="submit" className="w-full" disabled={loading || confirmCode.length !== 6}>
-                    {loading ? 'Confirming…' : 'Confirm and enable'}
+                  <Button type="submit" className="w-full rounded-full" disabled={loading || confirmCode.length !== 6}>
+                    {loading ? 'Confirming…' : 'Verify Code'}
                   </Button>
                 </form>
-              </>
+              </div>
             )}
 
-            {/* ── backup-codes: shown once ── */}
             {step === 'backup-codes' && (
-              <>
-                <h2 className="text-base font-semibold text-foreground">Save your backup codes</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Store these in a safe place. Each code works once. They cannot be shown again.
-                </p>
-                <div className="mt-5 grid grid-cols-2 gap-2">
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="h-12 w-12 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-foreground">Save your backup codes</h2>
+                    <p className="text-sm text-muted-foreground">
+                      Store these safely. Each code works once.
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3 mb-6 bg-muted/20 p-4 rounded-xl border border-border/50">
                   {backupCodes.map((code) => (
                     <code
                       key={code}
-                      className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-mono text-foreground text-center"
+                      className="rounded-lg border border-border/50 bg-background/50 px-3 py-2 text-sm font-mono text-foreground text-center shadow-sm"
                     >
                       {code}
                     </code>
                   ))}
                 </div>
-                <Button
-                  className="mt-6 w-full"
-                  onClick={() => setStep('done')}
-                >
+                
+                <Button className="w-full rounded-full" onClick={() => setStep('done')}>
                   I've saved my backup codes
                 </Button>
-              </>
+              </div>
             )}
 
-            {/* ── done ── */}
             {step === 'done' && (
-              <div className="text-center py-4">
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/10">
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
+              <div className="text-center py-8 animate-in zoom-in-95 duration-300">
+                <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 shadow-inner">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                 </div>
-                <h2 className="text-base font-semibold text-foreground">2FA is enabled</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
+                <h2 className="text-2xl font-semibold text-foreground mb-2">2FA is enabled</h2>
+                <p className="text-sm text-muted-foreground leading-relaxed">
                   Your account now requires a code from your authenticator app at every login.
                 </p>
               </div>
             )}
 
-          </div>
-        </GlassSurface>
+          </CardContent>
+        </Card>
       </div>
     </AdminLayout>
   );

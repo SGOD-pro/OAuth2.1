@@ -1,5 +1,5 @@
 import React from 'react';
-import GlassSurface from '@/components/GlassSurface';
+
 
 type Reason = 'missing_params' | 'invalid_client' | 'invalid_redirect';
 
@@ -35,17 +35,9 @@ export const InvalidRequest: React.FC<InvalidRequestProps> = ({ reason }) => {
 
   return (
     <div className="px-6 grid place-items-center min-h-dvh w-dvw">
-      <GlassSurface
-        width="100%"
-        height="auto"
-        borderRadius={28}
-        backgroundOpacity={0.12}
-        blur={12}
-        saturation={1.6}
-        className="w-full max-w-md mx-auto"
-      >
-        <div className="w-full px-8 py-10 text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/10">
+      <div className="w-full max-w-md mx-auto">
+        <div className="glass-card rounded-[22px] p-8 text-center relative overflow-hidden transition-all duration-300">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-destructive/20 bg-destructive/10 text-destructive mb-6 shadow-sm">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="24"
@@ -56,18 +48,17 @@ export const InvalidRequest: React.FC<InvalidRequestProps> = ({ reason }) => {
               strokeWidth="1.5"
               strokeLinecap="round"
               strokeLinejoin="round"
-              className="text-foreground"
             >
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
               <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
           </div>
-          <p className="mt-6 text-xs uppercase tracking-[0.18em] text-muted-foreground">SWYRA Auth</p>
-          <h1 className="mt-2 text-xl font-semibold text-chart-2">{title}</h1>
-          <p className="mt-3 text-sm text-muted-foreground leading-6">{message}</p>
+          <p className="mt-6 text-xs uppercase tracking-[0.18em] text-muted-foreground font-mono">NexusID</p>
+          <h1 className="mt-2 text-xl font-semibold text-foreground font-heading">{title}</h1>
+          <p className="mt-3 text-sm text-muted-foreground leading-relaxed">{message}</p>
         </div>
-      </GlassSurface>
+      </div>
     </div>
   );
 };

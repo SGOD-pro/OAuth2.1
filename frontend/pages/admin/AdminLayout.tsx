@@ -1,8 +1,10 @@
 import React, { useCallback } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { authClient, useSession } from '@/lib/auth-client';
-import GlassSurface from '@/components/GlassSurface';
 import { Button } from '@/components/ui/button';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { Toaster } from '@/components/ui/sonner';
 
 const navItems = [
   {
@@ -28,7 +30,7 @@ const navItems = [
   },
   {
     to: '/admin/logs',
-    label: 'Logs',
+    label: 'Audit Logs',
     end: false,
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -51,10 +53,6 @@ const navItems = [
   },
 ];
 
-/**
- * Shared layout for all /admin/* pages.
- * Sidebar navigation + top bar with signed-in user info.
- */
 export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { data: session } = useSession();
   const navigate = useNavigate();
@@ -65,30 +63,21 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [navigate]);
 
   return (
-    <div className="min-h-screen w-full grid grid-cols-[minmax(220px,260px)_1fr] gap-6 px-6 py-6">
-      <GlassSurface
-        width="100%"
-        height="100%"
-        borderRadius={24}
-        backgroundOpacity={0.12}
-        blur={12}
-        saturation={1.6}
-        className="h-full"
-      >
-        <aside className="flex h-full flex-col px-5 py-6">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl border border-white/10 bg-white/10 flex items-center justify-center">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              </svg>
+    <TooltipProvider>
+      <div className="min-h-screen w-full bg-background flex">
+        {/* Sidebar */}
+        <aside className="w-[280px] border-r border-border bg-card/40 backdrop-blur-md flex flex-col transition-colors">
+          <div className="p-6 flex items-center gap-3 border-b border-border/50">
+            <div className="h-10 w-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-sparkle"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /></svg>
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">SWYRA</p>
-              <p className="text-sm font-semibold text-foreground">Admin Console</p>
+              <p className="text-sm font-semibold font-heading text-foreground">NexusID</p>
+              <p className="text-xs uppercase tracking-widest text-muted-foreground font-mono">Enterprise</p>
             </div>
           </div>
 
-          <nav className="mt-8 flex flex-col gap-2">
+          <nav className="flex-1 px-4 py-6 flex flex-col gap-1">
             {navItems.map(({ to, label, end, icon }) => (
               <NavLink
                 key={to}
@@ -96,58 +85,63 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
                 end={end}
                 viewTransition
                 className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-2xl px-3 py-2 text-sm transition ${isActive
-                    ? 'bg-white/15 text-foreground'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-white/10'
+                  `flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition-all ${
+                    isActive
+                      ? 'bg-primary/10 text-primary dark:bg-primary/20'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   }`
                 }
               >
-                <span className="text-foreground/80">{icon}</span>
-                <span>{label}</span>
+                <span className="opacity-80">{icon}</span>
+                {label}
               </NavLink>
             ))}
           </nav>
 
-          <div className="mt-auto">
-            <NavLink
-              to="/admin/login"
-              viewTransition
-              className="flex items-center gap-3 rounded-2xl px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-white/10 transition"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="15 18 9 12 15 6" />
+          <div className="p-4 border-t border-border/50">
+            <div className="flex items-center justify-between px-2 mb-4">
+              <span className="text-xs font-medium text-muted-foreground">Theme</span>
+              <ThemeToggle />
+            </div>
+            <Button variant="ghost" className="w-full justify-start text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={handleSignOut}>
+              <svg className="mr-3 h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
               </svg>
-              <span>Exit Admin</span>
-            </NavLink>
+              Sign out
+            </Button>
           </div>
         </aside>
-      </GlassSurface>
 
-      <div className="flex flex-col gap-6">
-        <GlassSurface
-          width="100%"
-          height="auto"
-          borderRadius={24}
-          backgroundOpacity={0.12}
-          blur={12}
-          saturation={1.6}
-          className="w-full"
-        >
-          <header className="flex items-end justify-center px-6 py-4 flex-col w-full">
-            <div className="text-xs text-muted-foreground">Signed in <span className="text-sm text-foreground">
-              {(session?.user as { email?: string })?.email ?? ''}
-            </span></div>
-            <div className="flex items-center gap-4">
-
-              <Button variant="destructive" size="sm" onClick={handleSignOut} className="ml-auto text-sm">
-                Sign out
-              </Button>
-            </div>
-          </header>
-        </GlassSurface>
-
-        <main className="flex-1">{children}</main>
+        {/* Main Content Area */}
+        <div className="flex-1 flex flex-col min-h-screen bg-accent/30 overflow-hidden relative">
+           <header className="h-16 flex items-center justify-end px-8 border-b border-border/50 bg-background/50 backdrop-blur-sm z-10">
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <p className="text-sm font-medium text-foreground">
+                    {(session?.user as { name?: string })?.name || 'Administrator'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {(session?.user as { email?: string })?.email ?? ''}
+                  </p>
+                </div>
+                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs">
+                  {((session?.user as { name?: string })?.name || 'A')[0].toUpperCase()}
+                </div>
+              </div>
+           </header>
+           
+           <main className="flex-1 overflow-y-auto p-8 z-10 relative">
+             {children}
+           </main>
+           
+           {/* Subtle background decoration for the main area */}
+           <div className="fixed top-0 right-0 w-[800px] h-[800px] bg-primary/5 rounded-full blur-[100px] -z-0 pointer-events-none translate-x-1/2 -translate-y-1/2" />
+           <div className="fixed bottom-0 left-[280px] w-[600px] h-[600px] bg-ring/5 rounded-full blur-[100px] -z-0 pointer-events-none -translate-x-1/4 translate-y-1/4" />
+        </div>
       </div>
-    </div>
+      <Toaster />
+    </TooltipProvider>
   );
 };

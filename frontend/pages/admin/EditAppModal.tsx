@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import GlassSurface from '@/components/GlassSurface';
+
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -125,16 +125,9 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" ref={overlayRef} onClick={handleBackdrop}>
-      <GlassSurface
-        width="100%"
-        height="auto"
-        borderRadius={22}
-        backgroundOpacity={0.16}
-        blur={12}
-        saturation={1.6}
-        className="w-full max-w-xl"
-      >
-        <div className="px-6 py-6 text-left bg-muted/80 w-full">
+      <div className="w-full max-w-xl mx-auto">
+        <div className="glass-card rounded-[22px] bg-card text-card-foreground border border-border shadow-lg overflow-hidden">
+          <div className="px-6 py-6 text-left w-full">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-foreground">Edit {client.client_name}</h2>
             <button className="text-muted-foreground hover:text-foreground" onClick={onClose} aria-label="Close">×</button>
@@ -203,7 +196,8 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
             </Button>
           </form>
         </div>
-      </GlassSurface>
+        </div>
+      </div>
     </div>
   );
 };

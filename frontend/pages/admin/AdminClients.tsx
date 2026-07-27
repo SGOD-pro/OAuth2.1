@@ -2,9 +2,14 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { AdminLayout } from './AdminLayout';
 import { RegisterAppModal } from './RegisterAppModal';
 import { EditAppModal } from './EditAppModal';
-import GlassSurface from '@/components/GlassSurface';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { csrfHeaders } from '@/lib/csrf';
+import { toast } from 'sonner';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface OAuthClient {
   client_id: string;
@@ -22,13 +27,9 @@ const JWKS_URL = import.meta.env.VITE_AUTH_URL
 
 const AUTH_ISSUER = import.meta.env.VITE_AUTH_URL ?? 'https://auth.yourdomain.com';
 
-/**
- * /admin/clients — Registered Applications
- */
 export const AdminClients: React.FC = () => {
   const [clients, setClients] = useState<OAuthClient[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [showRegister, setShowRegister] = useState(false);
   const [editClient, setEditClient] = useState<OAuthClient | null>(null);
   const [selectedClient, setSelectedClient] = useState<OAuthClient | null>(null);
@@ -38,14 +39,13 @@ export const AdminClients: React.FC = () => {
 
   const fetchClients = useCallback(async () => {
     setLoading(true);
-    setError('');
     try {
       const res = await fetch('/api/admin/clients', { credentials: 'include' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as OAuthClient[];
       setClients(Array.isArray(data) ? data : []);
     } catch (err) {
-      setError(String(err));
+      toast.error(String(err));
     } finally {
       setLoading(false);
     }
@@ -66,204 +66,191 @@ export const AdminClients: React.FC = () => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setClients((c) => c.filter((x) => x.client_id !== client.client_id));
       if (selectedClient?.client_id === client.client_id) setSelectedClient(null);
-    } catch {
-      // keep list unchanged on error
+      toast.success(`${client.client_name} has been deleted.`);
+    } catch (err) {
+      toast.error(`Failed to delete client: ${String(err)}`);
     } finally {
       setDeletingId(null);
       setConfirmDelete(null);
     }
   }, [selectedClient]);
 
-  const copyClientId = useCallback(async (id: string) => {
+  const copyClientId = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
     await navigator.clipboard.writeText(id);
     setCopiedId(id);
+    toast.success('Client ID copied to clipboard');
     setTimeout(() => setCopiedId(null), 2000);
   }, []);
 
   return (
     <AdminLayout>
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
         <div>
-          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Admin</p>
-          <h1 className="mt-2 text-2xl font-semibold text-foreground">Registered applications</h1>
+          <h1 className="text-3xl font-semibold text-foreground font-heading">Applications</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Manage OAuth 2.1 clients and integrations.</p>
         </div>
-        <Button onClick={() => setShowRegister(true)}>+ Register new app</Button>
+        <Button onClick={() => setShowRegister(true)} className="rounded-full shadow-sm">
+          <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+          Register New App
+        </Button>
       </div>
 
-      {error && (
-        <div className="mt-6 flex items-center gap-4 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          <span>{error}</span>
-          <Button size="sm" variant="outline" className="ml-auto" onClick={() => void fetchClients()}>
-            Retry
-          </Button>
-        </div>
-      )}
-
-      {confirmDelete && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
-          <GlassSurface
-            width="100%"
-            height="auto"
-            borderRadius={20}
-            backgroundOpacity={0.18}
-            blur={12}
-            saturation={1.6}
-            className="w-full max-w-sm"
-          >
-            <div className="px-6 py-6 text-left">
-              <h3 className="text-lg font-semibold text-foreground">Delete {confirmDelete.client_name}?</h3>
-              <p className="mt-2 text-sm text-muted-foreground">This cannot be undone.</p>
-              <div className="mt-6 flex gap-3">
-                <Button
-                  className="flex-1"
-                  variant="destructive"
-                  disabled={deletingId === confirmDelete.client_id}
-                  onClick={() => void handleDelete(confirmDelete)}
-                >
-                  {deletingId === confirmDelete.client_id ? 'Deleting...' : 'Delete'}
-                </Button>
-                <Button className="flex-1" variant="outline" onClick={() => setConfirmDelete(null)}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          </GlassSurface>
-        </div>
-      )}
-
-      {loading ? (
-        <GlassSurface
-          width="100%"
-          height="auto"
-          borderRadius={20}
-          backgroundOpacity={0.1}
-          blur={10}
-          saturation={1.6}
-          className="mt-6 w-full"
-        >
-          <div className="px-6 py-10 text-center">
-            <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-          </div>
-        </GlassSurface>
-      ) : clients.length === 0 ? (
-        <GlassSurface
-          width="100%"
-          height="auto"
-          borderRadius={20}
-          backgroundOpacity={0.1}
-          blur={10}
-          saturation={1.6}
-          className="mt-6 w-full"
-        >
-          <div className="px-6 py-10 text-center">
-            <p className="text-sm text-muted-foreground">No applications registered yet.</p>
-            <Button className="mt-6" onClick={() => setShowRegister(true)}>
-              Register new app
+      <Dialog open={!!confirmDelete} onOpenChange={(open) => !open && setConfirmDelete(null)}>
+        <DialogContent className="sm:max-w-md border-border bg-card/80 backdrop-blur-xl">
+          <DialogHeader>
+            <DialogTitle>Delete Application</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <span className="font-semibold text-foreground">{confirmDelete?.client_name}</span>? This action cannot be undone and will break existing integrations.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+            <Button 
+              variant="destructive" 
+              onClick={() => confirmDelete && void handleDelete(confirmDelete)}
+              disabled={deletingId === confirmDelete?.client_id}
+            >
+              {deletingId === confirmDelete?.client_id ? 'Deleting...' : 'Confirm Delete'}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Card className="bg-card/50 backdrop-blur-md border-border/50 shadow-sm overflow-hidden">
+        {loading ? (
+          <div className="px-6 py-16 text-center flex flex-col items-center justify-center text-muted-foreground">
+            <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary/30 border-t-primary mb-4" />
+            Loading applications...
           </div>
-        </GlassSurface>
-      ) : (
-        <GlassSurface
-          width="100%"
-          height="auto"
-          borderRadius={20}
-          backgroundOpacity={0.1}
-          blur={10}
-          saturation={1.6}
-          className="mt-6 w-full"
-        >
-          <div className="overflow-x-auto w-full">
-            <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                <tr>
-                  <th className="px-6 py-4">App name</th>
-                  <th className="px-6 py-4">Client ID</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+        ) : clients.length === 0 ? (
+          <div className="px-6 py-16 text-center flex flex-col items-center justify-center">
+            <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center text-primary mb-4">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /></svg>
+            </div>
+            <h3 className="text-lg font-medium text-foreground mb-1">No applications yet</h3>
+            <p className="text-sm text-muted-foreground mb-6">Register your first application to get started.</p>
+            <Button onClick={() => setShowRegister(true)} className="rounded-full">Register Application</Button>
+          </div>
+        ) : (
+          <div className="w-full">
+            <Table>
+              <TableHeader className="bg-muted/50">
+                <TableRow className="border-border/50 hover:bg-transparent">
+                  <TableHead className="w-[30%]">App Name</TableHead>
+                  <TableHead className="w-[30%]">Client ID</TableHead>
+                  <TableHead className="w-[20%]">Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {clients.map((c) => (
-                  <tr
+                  <TableRow 
                     key={c.client_id}
-                    className={`border-t border-white/5 transition ${
-                      selectedClient?.client_id === c.client_id ? 'bg-white/10' : 'hover:bg-white/5'
-                    }`}
+                    className={`cursor-pointer transition-colors border-border/50 ${selectedClient?.client_id === c.client_id ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-muted/50'}`}
                     onClick={() => setSelectedClient((s) => (s?.client_id === c.client_id ? null : c))}
                   >
-                    <td className="px-6 py-4 font-medium text-foreground">{c.client_name}</td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <code className="text-xs text-muted-foreground">
-                          {c.client_id.slice(0, 8)}...
-                        </code>
-                        <button
-                          type="button"
-                          className="rounded-full border border-white/10 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-                          title={copiedId === c.client_id ? 'Copied!' : 'Copy Client ID'}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void copyClientId(c.client_id);
-                          }}
-                        >
-                          {copiedId === c.client_id ? 'Copied' : 'Copy'}
-                        </button>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary font-bold text-xs uppercase">
+                          {c.client_name.substring(0, 2)}
+                        </div>
+                        {c.client_name}
                       </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`rounded-full px-2 py-1 text-xs ${
-                          c.disabled
-                            ? 'bg-rose-500/15 text-rose-200'
-                            : 'bg-emerald-500/15 text-emerald-200'
-                        }`}
-                      >
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <code className="text-xs bg-muted px-2 py-1 rounded-md text-muted-foreground">
+                          {c.client_id.slice(0, 8)}...{c.client_id.slice(-4)}
+                        </code>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-6 w-6 rounded-md hover:bg-background" onClick={(e) => copyClientId(c.client_id, e)}>
+                              {copiedId === c.client_id ? (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-500"><polyline points="20 6 9 17 4 12" /></svg>
+                              ) : (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">Copy full ID</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={c.disabled ? 'destructive' : 'default'} className={c.disabled ? 'bg-destructive/10 text-destructive hover:bg-destructive/20 border-destructive/20' : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 border-emerald-500/20'}>
                         {c.disabled ? 'Inactive' : 'Active'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="outline" onClick={() => setEditClient(c)}>
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="outline" className="h-8" onClick={() => setEditClient(c)}>
                           Edit
                         </Button>
-                        <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(c)}>
+                        <Button size="sm" variant="ghost" className="h-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => setConfirmDelete(c)}>
                           Delete
                         </Button>
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </TableBody>
+            </Table>
+            
+            {selectedClient && (
+              <div className="border-t border-border/50 bg-muted/20 px-6 py-6 animate-in slide-in-from-top-2">
+                <h3 className="text-sm font-semibold text-foreground uppercase tracking-widest mb-4 flex items-center gap-2">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
+                  Integration Guide
+                </h3>
+                
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div>
+                    <p className="text-sm text-muted-foreground mb-2">
+                      Add to your consuming app's <code className="text-xs bg-muted px-1 py-0.5 rounded">.env</code>:
+                    </p>
+                    <div className="relative group">
+                      <pre className="rounded-lg bg-black/80 dark:bg-black/40 p-4 text-xs text-green-400 font-mono overflow-x-auto border border-border/50 shadow-inner">
+{`JWKS_URL=${JWKS_URL}
+AUTH_ISSUER=${AUTH_ISSUER}
+CLIENT_ID=${selectedClient.client_id}`}
+                      </pre>
+                      <Button
+                        size="icon"
+                        variant="secondary"
+                        className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(`JWKS_URL=${JWKS_URL}\nAUTH_ISSUER=${AUTH_ISSUER}\nCLIENT_ID=${selectedClient.client_id}`);
+                          toast.success('Environment variables copied');
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                      </Button>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground mb-2">Verify tokens (Node.js):</p>
+                    <div className="relative group">
+                      <pre className="rounded-lg bg-black/80 dark:bg-black/40 p-4 text-xs text-sky-300 font-mono overflow-x-auto border border-border/50 shadow-inner">
+{`import { createRemoteJWKSet, jwtVerify } from 'jose'
 
-          {selectedClient && (
-            <div className="border-t border-white/5 px-6 py-6">
-              <h3 className="text-lg font-semibold text-foreground">
-                Integrate {selectedClient.client_name}
-              </h3>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Add to your consuming app's <code>.env</code>:
-              </p>
-              <pre className="mt-4 rounded-2xl bg-black/30 p-4 text-xs text-foreground/80">{`JWKS_URL=${JWKS_URL}\nAUTH_ISSUER=${AUTH_ISSUER}\nCLIENT_ID=${selectedClient.client_id}`}</pre>
-              <Button
-                size="sm"
-                variant="outline"
-                className="mt-3"
-                onClick={() => {
-                  void navigator.clipboard.writeText(
-                    `JWKS_URL=${JWKS_URL}\nAUTH_ISSUER=${AUTH_ISSUER}\nCLIENT_ID=${selectedClient.client_id}`,
-                  );
-                }}
-              >
-                Copy .env block
-              </Button>
-              <p className="mt-6 text-sm text-muted-foreground">Verify tokens (Node.js):</p>
-              <pre className="mt-3 rounded-2xl bg-black/30 p-4 text-xs text-foreground/80">{`import { createRemoteJWKSet, jwtVerify } from 'jose'\nconst JWKS = createRemoteJWKSet(new URL(process.env.JWKS_URL))\nconst { payload } = await jwtVerify(token, JWKS, {\n  issuer: process.env.AUTH_ISSUER,\n  audience: process.env.CLIENT_ID\n})`}</pre>
-            </div>
-          )}
-        </GlassSurface>
-      )}
+const JWKS = createRemoteJWKSet(
+  new URL(process.env.JWKS_URL)
+)
+
+const { payload } = await jwtVerify(token, JWKS, {
+  issuer: process.env.AUTH_ISSUER,
+  audience: process.env.CLIENT_ID
+})`}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
 
       {showRegister && (
         <RegisterAppModal
