@@ -1,66 +1,41 @@
-# Session Memory
 
-## Who This Is For
+# Memory
 
+## Who this is for
 Future sessions picking this project back up. Read this before re-deriving decisions.
 
-## Builder Context
-
-- Final-year MSc CS student, KIIT, India. Needs to earn ASAP, so job applications run in parallel.
+## Builder context
+- Final-year MSc CS student, KIIT, India. Needs to earn ASAP — job applications run in parallel.
 - Portfolio artifact, not a startup. No monetization path.
 
-## Settled Decisions
-
+## Settled decisions — do not re-litigate
 - Self-hosted, single-tenant-per-deployment model.
-- MongoDB stays. No Postgres migration.
-- NestJS backend deleted.
-- DynamoDB replaced by MongoDB TTL collections, which makes "deploy anywhere" true.
-- Multi-platform deploy via Hono adapters. Cloudflare Workers is a documented limitation.
-- Admin MFA uses Better Auth `twoFactor` plugin (TOTP + backup codes). It replaces email OTP. Standard Google and Microsoft Authenticator apps work via QR code scan.
-- Client-data-in-consumer-DB is satisfied by standard OIDC. No sync service.
+- MongoDB stays. DynamoDB completely replaced by MongoDB TTL collections for portability.
+- **Identity Engine**: Better Auth v1.x via npm. Implements OAuth 2.1/OIDC, session management, and TOTP MFA.
+- Multi-platform deploy via Hono adapters (`lambda.ts`, `vercel.ts`, `node-server.ts`).
+- Admin MFA uses the Better Auth TOTP plugin. QR codes generated locally via `qrcode.react` to prevent secret leakage.
+- App Admin Provisioning uses OIDC roles (user is created with `role: "admin"` and tied to `oauthClient` doc). No multi-tenancy.
 - Data protection uses hashing, TLS, and infrastructure at-rest encryption. No hand-rolled encryption.
 - Security scan remediation: M10 fixed, H4b resolved by TOTP, L2 documented, client-secret hashing verified.
 
-## Stable Facts About the Existing System
-
+## Stable facts about the existing system
 - Admin access is server-side role-gated.
-- CORS is dynamic, with exact origin matching.
-- CSRF protection uses a double-submit cookie/header.
-- Admin logs and stats are read views over session and user collections.
-- Phase 0 is completed. Security scan re-audit #2 is completed with 0 Critical and 0 High open.
+- CORS is dynamic, exact origin matching, cached in MongoDB TTL collection.
+- Rate limiting targets `/api/auth/*` exclusively (10 req/min) to allow smooth `/api/admin/*` navigation.
+- Frontend uses Zustand with a 30s TTL cache for admin dashboard data.
+- Phase 0, 1, 2, and 3 are COMPLETED. E2E security tests (7 points) pass successfully.
 
-## Working Rules for Future Sessions
-
+## Working rules for future sessions
 - Start from the nearest concrete file or runtime behavior.
 - Prefer the smallest verified change over a broad refactor.
 - Do not widen scope toward multi-tenancy, multi-DB support, or SaaS features.
-- Do not add hand-rolled encryption, custom TOTP code, or email OTP.
+- Identity Engine: Better Auth v1.x via npm. Implements OAuth 2.1/OIDC, session management, and TOTP MFA.
+- Do not use external APIs for QR code generation.
 
-## Open Items
-
-### Phase 1: Portability and Security Hardening (Completed)
-- 1a: MongoDB TTL migration. Replaced DynamoDB state access with MongoDB TTL collections, removed DynamoDB from config.
-- 1c: Security scan remediation (M10, client-secret hashing, L2 docs).
-- 1d: Multi-platform entry points + `.env.example` + deploy notes.
-- 1e: Config-only self-host verification.
-
-### Phase 2: Frontend Premium Redesign (Completed)
-- Integrated the "Cohere" premium design system across all public and admin pages (glassmorphism, mesh gradients, noise/grain).
-- Implemented `next-themes` ThemeProvider for flawless light/dark mode toggling across the application.
-- Added `zustand` based state management with a 30s TTL cache and optimistic UI updates for Admin Dashboard, Clients, and Logs.
-- Standardized forms using `react-hook-form`, `@hookform/resolvers`, and `zod`.
-- Replaced legacy notifications with `sonner` toasts.
-- Refined backend rate limiting to specifically target `/api/auth/*` while keeping `/api/admin/*` smooth for authenticated use.
-
-### Phase 3: Admin & Client App TOTP MFA Integration (Completed)
-- **3a:** Enabled `twoFactor` plugin in backend via Better Auth.
-- **3b:** Fixed frontend MFA setup UI loop in `AdminSecurity.tsx`. Setup now correctly finalizes after 6-digit confirmation, and shows a "Disable 2FA" button thereafter. Fixed login flows in `SignIn.tsx` and `AdminLogin.tsx` to properly catch 2FA required status without showing generic errors. Additionally fixed state hallucination in setup page by strictly checking `isPending` state before evaluating `twoFactorEnabled`, preventing auto-generation of QR codes.
-- **3c:** Verified that client app logins natively inherit the 2FA requirement.
-
-### Phase 4: Ship and Document (In Progress)
-- Needs public repository push, markdown doc verification.
-- Needs public write-up post on engineering decisions.
-- Needs resume/LinkedIn addition.
-
-### Deferred
-- Email verification at signup stays off until a real mailer is wired.
+## Open items (update as resolved)
+- **Phase 4 In Progress**: Deployment documentation, public repo push, and public writeup.
+  - 4a: Write detailed `README.md` deployment guides for MongoDB, Frontend, and 3 backend targets (Railway, Vercel, AWS Lambda).
+  - 4b: Finalize markdown files and push to GitHub.
+  - 4c: Write the public LinkedIn/Blog post.
+  - 4d: Add to resume/LinkedIn.
+- **Deferred**: Email verification at signup stays off until a real mailer is wired.
