@@ -30,6 +30,7 @@
 - **No DB Sync to Clients**: The auth service does not push data to consuming-app databases. Standard OIDC claims via tokens and `/userinfo` are the only mechanism.
 - **No Direct `process.env` Reads**: All environment access goes through the composition root (`hono/src/config/index.ts`). Entry points and route handlers use the frozen `config` object.
 - **App Admin Provisioning Limit**: When provisioning an admin for a client app, the user is created in the standard `user` collection with `role: "admin"`. Their `adminUserId` and `adminEmail` are saved on the `oauthClient` document for reference. This is a loose coupling, not a separate multi-tenant admin table.
+- **No Per-Client Admin Scoping**: The `adminUserId` and `adminEmail` fields on the `oauthClient` document are strictly for informational reference. There is no concept of an admin scoped to a specific client app. A user is either a global admin (`role: "admin"`) or a standard user. Client apps must authorize their own admin panels by checking the `role` claim in the JWT, not by querying the Auth Server's client document.
 
 ## Data Ownership
 - **The Auth Server** owns user/session/OAuth-client metadata — this is the only data model in the system.

@@ -94,3 +94,8 @@
 - Decision: To provide administrators for registered client apps, the Auth Server admin uses a "Provision App Admin" feature. This creates a standard user in the Auth Server DB with `role: "admin"` and saves their `adminUserId`/`adminEmail` on the specific `oauthClient` document for reference.
 - Rationale: Client apps do not configure their own admins. When the provisioned admin logs into the client app via OIDC, the `admin` role is included in their JWT token. The client app reads this claim to grant admin panel access. This avoids multi-tenancy while solving the client app admin requirement.
 - Consequences: The `oauthClient` schema is extended to include `adminUserId` and `adminEmail`. Client apps must check the `role` claim in the JWT to authorize their own admin panels.
+
+## ADR 015: App Admin Provisioning is Informational Only
+- Status: Accepted
+- Decision: The 'Provision App Admin' feature saves the user's ID and email on the `oauthClient` document for reference only. It does not create a per-client scoped role.
+- Rationale: Introducing per-client scoped admin roles would constitute multi-tenancy, which is permanently out of boundary. Client apps receive a standard JWT containing the global `role` claim; they are responsible for their own internal authorization based on that claim.

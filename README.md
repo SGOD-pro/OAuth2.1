@@ -15,7 +15,7 @@ This is a complete, self-hosted OAuth 2.1 / OpenID Connect identity provider. Cl
    - [Option A: Railway / Render / Fly.io (Long-Lived Container)](#option-a-railway--render--flyio-long-lived-container)
    - [Option B: Vercel / Netlify (Serverless Functions)](#option-b-vercel--netlify-serverless-functions)
    - [Option C: AWS Lambda via SAM](#option-c-aws-lambda-via-sam)
-5. [Admin Promotion](#5-admin-promotion)
+5. [Admin Setup & Provisioning](#5-admin-setup--provisioning)
 6. [Building a Custom Frontend (Scenario B)](#6-building-a-custom-frontend-scenario-b)
 7. [Documentation & Architecture](#7-documentation--architecture)
 
@@ -270,15 +270,15 @@ During `sam deploy --guided`, you will be prompted to provide the parameters def
 
 ---
 
-## 5. Admin Promotion
+## 5. Admin Setup & Provisioning
 
-The first user to register on your auth server is a standard user with no elevated privileges. You must manually promote them to `admin` using the provided script.
+The first user to register on your auth server is a standard user with no elevated privileges. You must manually promote the *very first* user to `admin` using the provided script so they can access the dashboard.
 
 ### Step 1 — Register an account
 
 Navigate to your deployed frontend and create an account with the email address you want to be the administrator.
 
-### Step 2 — Promote to admin
+### Step 2 — Promote the first admin
 
 Run the following command locally, with your production `MONGO_URI` set in `hono/.env`:
 
@@ -303,6 +303,12 @@ Are you sure you want to promote your-email@example.com to admin? Type YES to co
 Once promoted, log out and log back in. The admin dashboard will appear in the navigation.
 
 > **Note:** This script reads `MONGO_URI` from `hono/.env`. Ensure that file points to your **production** database before running.
+
+### Step 3 — Provision additional admins via UI
+
+Once the first admin is logged in, they can provision additional admins (for the central Auth Server or for specific client apps) directly from the Admin Dashboard UI using the "Provision App Admin" feature. Any user provisioned this way receives `role: "admin"` and is tied to the selected OAuth Client for reference.
+
+**Note:** The `adminUserId` and `adminEmail` saved on the OAuth Client document are for informational reference only (so the Auth Server admin knows who owns the app). Authorization for the client app's admin panel must be done by checking the `role: "admin"` claim in the JWT.
 
 ---
 
@@ -364,14 +370,13 @@ cd frontend && npm run dev
 
 ## Security Checklist
 
-Before going live, work through [`DEPLOY_CHECKLIST.md`](./DEPLOY_CHECKLIST.md). Key items:
-
-  - [ ] `BETTER_AUTH_SECRET` is at least 32 characters and stored as a secret, not in source control
-  - [ ] `AUTH_PUBLIC_SIGNUP_ENABLED` is set to `false` (unless you explicitly want open signups)
-  - [ ] `TRUSTED_PROXY_CIDRS` matches your actual proxy/load-balancer CIDR ranges
+- [ ] `BETTER_AUTH_SECRET` is at least 32 characters and stored as a secret, not in source control
+- [ ] `AUTH_PUBLIC_SIGNUP_ENABLED` is set to `false` (unless you explicitly want open signups)
+- [ ] `TRUSTED_PROXY_CIDRS` matches your actual proxy/load-balancer CIDR ranges
 - [ ] MongoDB network access is restricted to your server's IP (not `0.0.0.0/0`)
 - [ ] `ReservedConcurrency` (Lambda) or connection pool size is within your Atlas tier's limit
 - [ ] At least one account has been promoted to `admin` before locking down sign-ups
+- [ ] **Client App Authorization:** Client apps must verify the user's role by checking the `role: "admin"` claim inside the JWT issued by this Auth Server. Do not hardcode admin emails in the client app's environment variables.
 
 ---
 
