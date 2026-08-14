@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { csrfHeaders } from '@/lib/csrf';
 import { toast } from 'sonner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { apiFetch } from '@/lib/api';
 
 import { useAdminStore, type OAuthClient } from '@/lib/adminStore';
 
@@ -42,9 +43,8 @@ export const AdminClients: React.FC = () => {
   const handleDelete = useCallback(async (client: OAuthClient) => {
     setDeletingId(client.client_id);
     try {
-      const res = await fetch(`/api/admin/clients/${client.client_id}`, {
+      const res = await apiFetch(`/api/admin/clients/${client.client_id}`, {
         method: 'DELETE',
-        credentials: 'include',
         headers: {
           ...csrfHeaders(),
         },

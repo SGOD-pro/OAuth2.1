@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { toast } from 'sonner';
+import { apiFetch } from './api';
 
 export interface Stats {
   totalClients: number;
@@ -77,7 +78,7 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
 
     set({ stats: { ...get().stats, loading: true } });
     try {
-      const res = await fetch('/api/admin/stats', { credentials: 'include' });
+      const res = await apiFetch('/api/admin/stats');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: Stats = await res.json();
       set({ stats: { data, lastFetched: Date.now(), loading: false } });
@@ -93,7 +94,7 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
 
     set({ clients: { ...get().clients, loading: true } });
     try {
-      const res = await fetch('/api/admin/clients', { credentials: 'include' });
+      const res = await apiFetch('/api/admin/clients');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: OAuthClient[] = await res.json();
       set({ clients: { data, lastFetched: Date.now(), loading: false } });
@@ -109,7 +110,7 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
 
     set({ logs: { ...get().logs, loading: true } });
     try {
-      const res = await fetch('/api/admin/logs', { credentials: 'include' });
+      const res = await apiFetch('/api/admin/logs');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: LogEntry[] = await res.json();
       set({ logs: { data, lastFetched: Date.now(), loading: false } });
@@ -125,7 +126,7 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
 
     set({ users: { ...get().users, loading: true } });
     try {
-      const res = await fetch('/api/admin/users', { credentials: 'include' });
+      const res = await apiFetch('/api/admin/users');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: User[] = await res.json();
       set({ users: { data, lastFetched: Date.now(), loading: false } });

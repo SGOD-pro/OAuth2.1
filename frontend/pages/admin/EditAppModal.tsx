@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { csrfHeaders } from '@/lib/csrf';
 import { validateUri } from '@/lib/security';
+import { apiFetch } from '@/lib/api';
 
 interface OAuthClient {
   client_id: string;
@@ -92,9 +93,8 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
     setSuccess(false);
 
     try {
-      const res = await fetch(`/api/admin/clients/${client.client_id}`, {
+      const res = await apiFetch(`/api/admin/clients/${client.client_id}`, {
         method: 'PATCH',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           ...csrfHeaders(),

@@ -6,6 +6,7 @@ import { Separator } from '@/components/ui/separator';
 import { Checkbox } from '@/components/ui/checkbox';
 import { csrfHeaders } from '@/lib/csrf';
 import { validateUri } from '@/lib/security';
+import { apiFetch } from '@/lib/api';
 
 interface RegisterAppModalProps {
   onClose: () => void;
@@ -129,9 +130,8 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
     setError('');
 
     try {
-      const res = await fetch('/api/admin/clients', {
+      const res = await apiFetch('/api/admin/clients', {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           ...csrfHeaders(),

@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useSession } from '../lib/auth-client';
+import { apiFetch } from '../lib/api';
 
 
 const LoadingSpinner: React.FC = () => (
@@ -29,10 +30,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
 
   useEffect(() => {
     if (!isAdmin) return;
-    fetch('/api/admin/stats', {
-      credentials: 'include',
-      method: 'GET',
-    }).catch(() => {
+    apiFetch('/api/admin/stats').catch(() => {
       // Silent fail - mutations will still be blocked if session is invalid.
     });
   }, [isAdmin]);
