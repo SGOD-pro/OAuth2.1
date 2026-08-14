@@ -34,7 +34,7 @@ export function validateRedirectUris(uris: string[]): string | null {
 }
 
 export function isStrongPassword(password: string): boolean {
-  if (password.length < 12 || password.length > 128) return false;
+  if (password.length < 8 || password.length > 128) return false;
   return (
     /[a-z]/.test(password) &&
     /[A-Z]/.test(password) &&

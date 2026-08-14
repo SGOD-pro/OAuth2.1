@@ -13,7 +13,8 @@
     "publish": "aws lambda publish-version --function-name hello --region us-east-1",
     "deploy": "run-s build zip update publish",
     "dev": "tsx --env-file=.env watch src/dev.ts",
-    "security:self-check": "tsx --env-file=.env scripts/security-self-check.ts"
+    "security:self-check": "tsx --env-file=.env scripts/security-self-check.ts",
+    "admin:create": "tsx --env-file=.env scripts/create-admin.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

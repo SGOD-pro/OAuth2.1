@@ -61,7 +61,12 @@ export const AdminLogin: React.FC = () => {
       }
       toast.error(authError.message || 'Invalid credentials');
       setLoading(false);
+      return;
     }
+
+    toast.success('Signed in successfully');
+    navigate('/admin', { replace: true, viewTransition: true });
+    setLoading(false);
   };
 
   const handleSignOut = async () => {
