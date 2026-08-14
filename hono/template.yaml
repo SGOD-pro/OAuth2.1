@@ -3,12 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: OAuth 2.1 / OIDC provider — Hono + Better Auth + MongoDB, single Lambda
 
 Parameters:
-  ReservedConcurrency:
-    Type: Number
-    Default: 10
-    Description: >-
-      Max concurrent Lambda execution environments. Must not exceed your
-      MongoDB Atlas tier's connection limit. See architecture.md.
   MongoUri:
     Type: String
     NoEcho: true
@@ -28,7 +22,7 @@ Parameters:
 Globals:
   Function:
     Timeout: 30
-    Runtime: nodejs20.x
+    Runtime: nodejs24.x
 
 Resources:
   ApiFunction:
@@ -37,7 +31,7 @@ Resources:
       Handler: index.handler
       CodeUri: dist/
       MemorySize: 256
-      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+
       Environment:
         Variables:
           NODE_ENV: production

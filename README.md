@@ -304,11 +304,7 @@ Once promoted, log out and log back in. The admin dashboard will appear in the n
 
 > **Note:** This script reads `MONGO_URI` from `hono/.env`. Ensure that file points to your **production** database before running.
 
-### Step 3 — Provision additional admins via UI
 
-Once the first admin is logged in, they can provision additional admins (for the central Auth Server or for specific client apps) directly from the Admin Dashboard UI using the "Provision App Admin" feature. Any user provisioned this way receives `role: "admin"` and is tied to the selected OAuth Client for reference.
-
-**Note:** The `adminUserId` and `adminEmail` saved on the OAuth Client document are for informational reference only (so the Auth Server admin knows who owns the app). Authorization for the client app's admin panel must be done by checking the `role: "admin"` claim in the JWT.
 
 ---
 
@@ -376,7 +372,7 @@ cd frontend && npm run dev
 - [ ] MongoDB network access is restricted to your server's IP (not `0.0.0.0/0`)
 - [ ] `ReservedConcurrency` (Lambda) or connection pool size is within your Atlas tier's limit
 - [ ] At least one account has been promoted to `admin` before locking down sign-ups
-- [ ] **Client App Authorization:** Client apps must verify the user's role by checking the `role: "admin"` claim inside the JWT issued by this Auth Server. Do not hardcode admin emails in the client app's environment variables.
+
 
 ---
 

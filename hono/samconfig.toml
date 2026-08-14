@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "oauth"
+resolve_s3 = true
+s3_prefix = "oauth"
+profile = "aws"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "BetterAuthUrl=\"https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/api/auth\" GoogleClientId=\"851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com\" FrontendUrl=\"https://oauth21.vercel.app\""
+image_repositories = []
+
+[default.global.parameters]
+region = "ap-south-1"

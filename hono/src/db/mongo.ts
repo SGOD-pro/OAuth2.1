@@ -7,11 +7,12 @@ import { config }
   from "../config";
 
 const client = new MongoClient(config.mongo.uri);
+export const database = client.db();
 
 let db: Db | null = null;
 
 const connectPromise: Promise<Db> = client.connect().then(() => {
-  db = client.db();
+  db = database;
   console.log("Mongo connected");
   return db;
 });

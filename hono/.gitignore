@@ -1,7 +1,7 @@
 # prod
 dist/
 lambda.zip
-
+.aws-sam
 # dev
 .yarn/
 !.yarn/releases

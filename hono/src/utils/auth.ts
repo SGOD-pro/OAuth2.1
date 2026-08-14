@@ -3,14 +3,12 @@ import { betterAuth } from "better-auth";
 import { admin, jwt, twoFactor } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
-import { getDb, client } from "../db/mongo";
+import { client, database } from "../db/mongo";
 import { isStrongPassword } from "./security";
 
 
 export const AUTH_INSTANCE = Symbol("AUTH_INSTANCE");
 export type AuthInstance = ReturnType<typeof betterAuth>;
-
-const database = await getDb();
 
 export const authProvider = betterAuth({
     appName: "SWYRA Auth", // TOTP issuer label shown in authenticator apps

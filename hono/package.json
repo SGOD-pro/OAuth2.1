@@ -1,18 +1,19 @@
 {
   "name": "hono",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=esm ./src/lambda.ts",
-    "build:node": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=esm ./src/node-server.ts",
-    "build:vercel": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=esm ./src/vercel.ts",
-    "build:netlify": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=esm ./src/netlify.ts",
-    "db:setup": "tsx scripts/db-setup.ts",
+    "build": "rm -rf dist && esbuild --bundle --outfile=./dist/index.cjs --platform=node --target=node20 --format=cjs ./src/lambda.ts",
+    "build:node": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=cjs ./src/node-server.ts",
+    "build:vercel": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=cjs ./src/vercel.ts",
+    "build:netlify": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=cjs ./src/netlify.ts",
+    "db:setup": "tsx --env-file=.env scripts/db-setup.ts",
     "zip": "zip -j lambda.zip dist/index.js",
     "update": "aws lambda update-function-code --zip-file fileb://lambda.zip --function-name hello --region us-east-1",
     "publish": "aws lambda publish-version --function-name hello --region us-east-1",
     "deploy": "run-s build zip update publish",
-    "dev": "tsx watch src/dev.ts",
-    "security:self-check": "tsx scripts/security-self-check.ts"
+    "dev": "tsx --env-file=.env watch src/dev.ts",
+    "security:self-check": "tsx --env-file=.env scripts/security-self-check.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

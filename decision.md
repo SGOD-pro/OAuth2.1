@@ -99,3 +99,7 @@
 - Status: Accepted
 - Decision: The 'Provision App Admin' feature saves the user's ID and email on the `oauthClient` document for reference only. It does not create a per-client scoped role.
 - Rationale: Introducing per-client scoped admin roles would constitute multi-tenancy, which is permanently out of boundary. Client apps receive a standard JWT containing the global `role` claim; they are responsible for their own internal authorization based on that claim.
+
+## ADR 016: Auth Flags Enforced Unconditionally
+- Status: Accepted
+- Decision: `AUTH_PUBLIC_SIGNUP_ENABLED` and `AUTH_EMAIL_VERIFICATION_ENABLED` are unconditionally enforced by design. Gating a security control behind an unrelated environment label was rejected as an implicit coupling risk.

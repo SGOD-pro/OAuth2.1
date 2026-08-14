@@ -1,4 +1,3 @@
-import 'dotenv/config'
 
 import { env } from 'hono/adapter'
 import type { Context } from 'hono'
