@@ -29,6 +29,7 @@ const signUpSchema = z.object({
 export const SignIn: React.FC = () => {
   const [tab, setTab] = useState('sign-in');
   const [loading, setLoading] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
   const signupEnabled = useMemo(() => isPublicSignupEnabled(), []);
@@ -82,12 +83,14 @@ export const SignIn: React.FC = () => {
         const msg = authError.message || 'Invalid email or password. Please verify your credentials.';
         setError(msg);
         toast.error(msg);
+        setLoading(false);
+      } else {
+        setRedirecting(true);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Network error communicating with authentication service.';
       setError(msg);
       toast.error(msg);
-    } finally {
       setLoading(false);
     }
   };
@@ -112,18 +115,21 @@ export const SignIn: React.FC = () => {
         const msg = authError.message || 'Registration failed. Please check your details.';
         setError(msg);
         toast.error(msg);
+        setLoading(false);
+      } else {
+        setRedirecting(true);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Network error during registration.';
       setError(msg);
       toast.error(msg);
-    } finally {
       setLoading(false);
     }
   };
 
   const handleGoogleSignIn = async () => {
     setLoading(true);
+    setRedirecting(true);
     setError(null);
     try {
       await authClient.signIn.social({
@@ -135,6 +141,7 @@ export const SignIn: React.FC = () => {
       setError(msg);
       toast.error(msg);
       setLoading(false);
+      setRedirecting(false);
     }
   };
 
@@ -181,7 +188,29 @@ export const SignIn: React.FC = () => {
 
       <div className="w-full min-w-0 flex items-center justify-center p-6 sm:p-12 lg:p-12.5">
         <div className="w-full max-w-[500px]">
-          <Card className="w-full" watermark="SWYRA">
+          <Card className="w-full relative overflow-hidden" watermark="SWYRA">
+            {redirecting && (
+              <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-card/95 backdrop-blur-md p-8 text-center animate-in fade-in duration-300">
+                <div className="relative mb-6">
+                  <div className="h-16 w-16 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
+                    <svg className="h-8 w-8 text-primary animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                  </div>
+                  <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                </div>
+                <h3 className="font-heading text-2xl font-normal text-foreground mb-2">
+                  Identity Verified
+                </h3>
+                <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground max-w-xs mb-4">
+                  Establishing authorized token session & redirecting...
+                </p>
+                <div className="flex items-center gap-2 text-xs font-mono text-primary/90 bg-primary/10 px-3 py-1.5 rounded-full border border-primary/20">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                  <span>OAuth 2.1 Handshake In Progress</span>
+                </div>
+              </div>
+            )}
             <CardContent className="p-8 sm:p-lg w-full">
               <div className="mb-8">
                 <div className="flex items-center justify-between mb-2">
