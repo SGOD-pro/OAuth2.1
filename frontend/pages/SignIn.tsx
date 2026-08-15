@@ -38,8 +38,7 @@ export const SignIn: React.FC = () => {
     if (explicit) return explicit;
 
     if (searchParams.get('client_id') && searchParams.get('redirect_uri')) {
-      const issuer = import.meta.env.VITE_AUTH_URL || '';
-      return `${issuer}/api/auth/oauth2/authorize?${searchParams.toString()}`;
+      return `/api/auth/oauth2/authorize?${searchParams.toString()}`;
     }
 
     return undefined;
