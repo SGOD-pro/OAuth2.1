@@ -27,8 +27,10 @@ admin.get("/clients", async (c) => {
       disabled: client.disabled || false,
       skip_consent: client.skipConsent || false,
       enable_end_session: client.enableEndSession ?? true,
+      is_dev: Boolean(client.isDev || client.metadata?.isDev || false),
       metadata: {
         allowedOrigins: client.allowedOrigins || [],
+        isDev: Boolean(client.isDev || client.metadata?.isDev || false),
       },
       adminUserId: client.adminUserId,
       adminEmail: client.adminEmail,
@@ -73,6 +75,7 @@ admin.post("/clients", async (c) => {
   const allowedOrigins = Array.isArray(body.allowed_origins)
     ? (body.allowed_origins as string[])
     : [];
+  const isDev = Boolean(body.is_dev);
 
   if (redirectUris.length === 0) {
     return c.json({ error: "At least one redirect_uri is required" }, 400);
@@ -82,17 +85,17 @@ admin.post("/clients", async (c) => {
     return c.json({ error: "At least one allowed_origin is required" }, 400);
   }
 
-  const invalidRedirectUri = validateRedirectUris(redirectUris);
+  const invalidRedirectUri = validateRedirectUris(redirectUris, { isDev });
   if (invalidRedirectUri) {
     return c.json({ error: `Invalid redirect_uri: ${invalidRedirectUri}` }, 400);
   }
 
-  const invalidAllowedOrigin = validateRedirectUris(allowedOrigins);
+  const invalidAllowedOrigin = validateRedirectUris(allowedOrigins, { isDev });
   if (invalidAllowedOrigin) {
     return c.json({ error: `Invalid redirect_uri: ${invalidAllowedOrigin}` }, 400);
   }
 
-  const result = await authProvider.api.adminCreateOAuthClient({
+  const result = (await authProvider.api.adminCreateOAuthClient({
     headers: getHeaders(c),
     body: {
       client_name: body.client_name as string,
@@ -101,12 +104,12 @@ admin.post("/clients", async (c) => {
       skip_consent: (body.skip_consent as boolean) ?? false,
       enable_end_session: (body.enable_end_session as boolean) ?? true,
     },
-  });
+  })) as unknown as { client_id: string };
 
   const database = await getDb();
   await database.collection("oauthClient").updateOne(
     { clientId: result.client_id },
-    { $set: { allowedOrigins } },
+    { $set: { allowedOrigins, isDev } },
   );
 
   await clearOriginCache();
@@ -128,6 +131,12 @@ admin.patch("/clients/:id", async (c) => {
     return c.json({ error: "Invalid request body" }, 400);
   }
 
+  const database = await getDb();
+  const existingClient = await database.collection("oauthClient").findOne({ clientId: id });
+  if (!existingClient) {
+    return c.json({ error: "Client not found" }, 404);
+  }
+
   const redirectUris = Array.isArray(body.redirect_uris)
     ? (body.redirect_uris as string[])
     : null;
@@ -143,18 +152,18 @@ admin.patch("/clients/:id", async (c) => {
     return c.json({ error: "At least one allowed_origin is required" }, 400);
   }
 
-  if (redirectUris) {
-    const invalidRedirectUri = validateRedirectUris(redirectUris);
-    if (invalidRedirectUri) {
-      return c.json({ error: `Invalid redirect_uri: ${invalidRedirectUri}` }, 400);
-    }
+  const targetIsDev = typeof body.is_dev === "boolean" ? body.is_dev : Boolean(existingClient.isDev);
+  const targetRedirectUris = redirectUris || (existingClient.redirectUris as string[]) || [];
+  const targetAllowedOrigins = allowedOrigins || (existingClient.allowedOrigins as string[]) || [];
+
+  const invalidRedirectUri = validateRedirectUris(targetRedirectUris, { isDev: targetIsDev });
+  if (invalidRedirectUri) {
+    return c.json({ error: `Invalid redirect_uri: ${invalidRedirectUri}` }, 400);
   }
 
-  if (allowedOrigins) {
-    const invalidAllowedOrigin = validateRedirectUris(allowedOrigins);
-    if (invalidAllowedOrigin) {
-      return c.json({ error: `Invalid redirect_uri: ${invalidAllowedOrigin}` }, 400);
-    }
+  const invalidAllowedOrigin = validateRedirectUris(targetAllowedOrigins, { isDev: targetIsDev });
+  if (invalidAllowedOrigin) {
+    return c.json({ error: `Invalid redirect_uri: ${invalidAllowedOrigin}` }, 400);
   }
 
   const result = await authProvider.api.adminUpdateOAuthClient({
@@ -173,11 +182,14 @@ admin.patch("/clients/:id", async (c) => {
     },
   });
 
-  if (allowedOrigins !== null) {
-    const database = await getDb();
+  const updateFields: Record<string, unknown> = {};
+  if (allowedOrigins !== null) updateFields.allowedOrigins = allowedOrigins;
+  if (typeof body.is_dev === "boolean") updateFields.isDev = body.is_dev;
+
+  if (Object.keys(updateFields).length > 0) {
     await database.collection("oauthClient").updateOne(
       { clientId: id },
-      { $set: { allowedOrigins } },
+      { $set: updateFields },
     );
   }
 

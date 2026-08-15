@@ -1,11 +1,31 @@
 import { config } from "../config";
 
 /**
+ * True if hostname is strictly a local loopback interface (localhost, 127.0.0.1, ::1).
+ * RFC 8252 permits loopback redirect URIs for local application development.
+ */
+export function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host.endsWith(".localhost")
+  );
+}
+
+/**
  * Validate an OAuth redirect URI (or allowed origin URL) before persistence.
  * Rejects non-http(s), wildcards, credentials-in-URL, and private-network
  * hosts in production (see boundaries.md / projectrequirement.md).
+ *
+ * If isDev is true in production, loopback addresses (localhost/127.0.0.1)
+ * are permitted per RFC 8252, while intranet/private IPs remain blocked.
  */
-export function validateRedirectUri(uri: string): boolean {
+export function validateRedirectUri(
+  uri: string,
+  options: { isDev?: boolean; env?: string } = {},
+): boolean {
   try {
     const url = new URL(uri);
 
@@ -15,9 +35,19 @@ export function validateRedirectUri(uri: string): boolean {
     if (url.username || url.password) return false;
     if (!url.hostname) return false;
 
-    if (config.env === "production") {
-      if (url.protocol !== "https:") return false;
-      if (isPrivateOrLocalHost(url.hostname)) return false;
+    const currentEnv = options.env ?? config.env;
+
+    if (currentEnv === "production") {
+      if (options.isDev) {
+        const isLoopback = isLoopbackHost(url.hostname);
+        if (!isLoopback) {
+          if (url.protocol !== "https:") return false;
+          if (isPrivateOrLocalHost(url.hostname)) return false;
+        }
+      } else {
+        if (url.protocol !== "https:") return false;
+        if (isPrivateOrLocalHost(url.hostname)) return false;
+      }
     }
 
     return true;
@@ -26,9 +56,12 @@ export function validateRedirectUri(uri: string): boolean {
   }
 }
 
-export function validateRedirectUris(uris: string[]): string | null {
+export function validateRedirectUris(
+  uris: string[],
+  options: { isDev?: boolean; env?: string } = {},
+): string | null {
   for (const uri of uris) {
-    if (!validateRedirectUri(uri)) return uri;
+    if (!validateRedirectUri(uri, options)) return uri;
   }
   return null;
 }

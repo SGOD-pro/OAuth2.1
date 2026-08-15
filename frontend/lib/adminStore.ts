@@ -15,8 +15,10 @@ export interface OAuthClient {
   client_secret: string;
   redirect_uris: string[];
   disabled: boolean;
+  is_dev?: boolean;
   metadata?: {
     allowedOrigins?: string[];
+    isDev?: boolean;
   };
   adminUserId?: string;
   adminEmail?: string;

@@ -10,6 +10,7 @@ process.env.FRONTEND_URL = "http://localhost:5173";
 
 const {
   getTrustedClientIp,
+  isLoopbackHost,
   isPrivateOrLocalHost,
   isStrongPassword,
   originMatchesRedirectUri,
@@ -23,6 +24,24 @@ assert.equal(originMatchesRedirectUri("https://app.example.com", "https://app.ex
 assert.equal(validateRedirectUri("https://user:pass@app.example.com/cb"), false);
 assert.equal(validateRedirectUri("javascript:alert(1)"), false);
 assert.equal(validateRedirectUri("https://app.example.com/cb"), true);
+
+assert.equal(isLoopbackHost("localhost"), true);
+assert.equal(isLoopbackHost("127.0.0.1"), true);
+assert.equal(isLoopbackHost("::1"), true);
+assert.equal(isLoopbackHost("app.localhost"), true);
+assert.equal(isLoopbackHost("192.168.1.1"), false);
+assert.equal(isLoopbackHost("169.254.169.254"), false);
+
+// Production mode with isDev: true (allows localhost loopback, blocks private networks)
+assert.equal(validateRedirectUri("http://localhost:3001/api/auth/callback", { isDev: true, env: "production" }), true);
+assert.equal(validateRedirectUri("http://127.0.0.1:3001/api/auth/callback", { isDev: true, env: "production" }), true);
+assert.equal(validateRedirectUri("http://192.168.1.1/api/auth/callback", { isDev: true, env: "production" }), false);
+assert.equal(validateRedirectUri("http://169.254.169.254/cb", { isDev: true, env: "production" }), false);
+assert.equal(validateRedirectUri("https://app.example.com/cb", { isDev: true, env: "production" }), true);
+
+// Production mode with isDev: false (strictly HTTPS, blocks localhost and private networks)
+assert.equal(validateRedirectUri("http://localhost:3001/api/auth/callback", { isDev: false, env: "production" }), false);
+assert.equal(validateRedirectUri("https://app.example.com/cb", { isDev: false, env: "production" }), true);
 
 assert.equal(isPrivateOrLocalHost("localhost"), true);
 assert.equal(isPrivateOrLocalHost("169.254.169.254"), true);

@@ -191,9 +191,17 @@ export const AdminClients: React.FC = () => {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={c.disabled ? 'destructive' : 'success'}>
-                              {c.disabled ? 'SUSPENDED' : 'ACTIVE'}
-                            </Badge>
+                            <div className="flex items-center gap-2">
+                              <Badge variant={c.disabled ? 'destructive' : 'success'}>
+                                {c.disabled ? 'SUSPENDED' : 'ACTIVE'}
+                              </Badge>
+                              <Badge 
+                                variant="outline" 
+                                className={c.is_dev ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 font-mono text-[10px]' : 'bg-blue-500/10 text-blue-400 border-blue-500/30 font-mono text-[10px]'}
+                              >
+                                {c.is_dev ? 'DEV' : 'PROD'}
+                              </Badge>
+                            </div>
                           </TableCell>
                           <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                             <div className="flex justify-end gap-2">

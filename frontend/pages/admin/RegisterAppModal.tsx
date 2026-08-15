@@ -11,6 +11,7 @@ interface FormState {
   clientName: string;
   redirectUris: string[];
   allowedOrigins: string[];
+  isDev: boolean;
   skipConsent: boolean;
   enableEndSession: boolean;
 }
@@ -92,6 +93,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
     clientName: '',
     redirectUris: [],
     allowedOrigins: [],
+    isDev: false,
     skipConsent: false,
     enableEndSession: true,
   });
@@ -128,6 +130,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
           client_name: form.clientName.trim(),
           redirect_uris: form.redirectUris,
           allowed_origins: form.allowedOrigins,
+          is_dev: form.isDev,
           skip_consent: form.skipConsent,
           enable_end_session: form.enableEndSession,
         }),
@@ -251,6 +254,26 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
             </div>
 
             <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-4 space-y-3">
+              <label className="flex items-start justify-between gap-4 cursor-pointer">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-sans text-xs font-medium text-foreground block">
+                      Development Mode
+                    </span>
+                    <span className="rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 font-mono text-[9px]">
+                      DEV / LOCALHOST
+                    </span>
+                  </div>
+                  <span className="font-sans text-[11px] text-muted-foreground">
+                    Allows loopback URLs (http://localhost, http://127.0.0.1) for local testing.
+                  </span>
+                </div>
+                <Checkbox
+                  checked={form.isDev}
+                  onCheckedChange={(checked) => setForm((f) => ({ ...f, isDev: checked === true }))}
+                />
+              </label>
+
               <label className="flex items-start justify-between gap-4 cursor-pointer">
                 <div>
                   <span className="font-sans text-xs font-medium text-foreground block">

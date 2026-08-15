@@ -158,7 +158,8 @@ export const authProvider = betterAuth({
             client: {
                 fields: {
                     adminUserId: { type: "string", required: false },
-                    adminEmail: { type: "string", required: false }
+                    adminEmail: { type: "string", required: false },
+                    isDev: { type: "boolean", required: false }
                 }
             }
         }),

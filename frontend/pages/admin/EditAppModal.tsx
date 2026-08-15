@@ -12,6 +12,7 @@ interface OAuthClient {
   client_name: string;
   redirect_uris: string[];
   allowed_origins?: string[];
+  is_dev?: boolean;
   skip_consent: boolean;
   enable_end_session: boolean;
   disabled?: boolean;
@@ -75,6 +76,7 @@ const TagInput: React.FC<{
 export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onSuccess }) => {
   const [redirectUris, setRedirectUris] = useState<string[]>(client.redirect_uris ?? []);
   const [allowedOrigins, setAllowedOrigins] = useState<string[]>(client.allowed_origins ?? []);
+  const [isDev, setIsDev] = useState(client.is_dev ?? false);
   const [skipConsent, setSkipConsent] = useState(client.skip_consent);
   const [enableEndSession, setEnableEndSession] = useState(client.enable_end_session);
   const [isActive, setIsActive] = useState(!client.disabled);
@@ -98,6 +100,7 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
         body: JSON.stringify({
           redirect_uris: redirectUris,
           allowed_origins: allowedOrigins,
+          is_dev: isDev,
           skip_consent: skipConsent,
           enable_end_session: enableEndSession,
           is_active: isActive,
@@ -170,6 +173,26 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
           </div>
 
           <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-4 space-y-3">
+            <label className="flex items-start justify-between gap-4 cursor-pointer">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-sans text-xs font-medium text-foreground block">
+                    Development Mode
+                  </span>
+                  <span className="rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 font-mono text-[9px]">
+                    DEV / LOCALHOST
+                  </span>
+                </div>
+                <span className="font-sans text-[11px] text-muted-foreground">
+                  Allows loopback URLs (http://localhost, http://127.0.0.1) for local testing.
+                </span>
+              </div>
+              <Checkbox
+                checked={isDev}
+                onCheckedChange={(checked) => setIsDev(checked === true)}
+              />
+            </label>
+
             <label className="flex items-start justify-between gap-4 cursor-pointer">
               <div>
                 <span className="font-sans text-xs font-medium text-foreground block">
