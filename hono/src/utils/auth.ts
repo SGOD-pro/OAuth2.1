@@ -44,7 +44,7 @@ export const authProvider = betterAuth({
             httpOnly: true,
             secure: config.env === "production",
             sameSite: config.env === "production" ? "none" : "lax",
-            partitioned: config.env === "production",
+            partitioned: false,
         },
         ipAddress: {
             trustedProxies: config.trustedProxyCidrs,

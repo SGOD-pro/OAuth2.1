@@ -20,8 +20,12 @@ export default defineConfig({
   server: {
     host: '0.0.0.0', // IMPORTANT
     port: 5174,
-
     allowedHosts: true,
+
+    watch: {
+      usePolling: true,
+      interval: 100,
+    },
 
 
     proxy: {
