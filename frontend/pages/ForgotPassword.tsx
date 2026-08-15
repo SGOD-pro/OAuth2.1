@@ -4,6 +4,7 @@ import { authClient } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -44,76 +45,93 @@ export const ForgotPassword: React.FC = () => {
   };
 
   return (
-    <div className="w-full max-w-md px-4 mx-auto">
-      <div className="glass-card rounded-[22px] p-8 w-full transition-all duration-300 relative overflow-hidden">
-        <div className="text-left z-10 relative">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="h-10 w-10 rounded-2xl border border-white/10 bg-black/10 dark:bg-white/10 flex items-center justify-center backdrop-blur-md">
-              <span className="text-sm font-semibold">SW</span>
+    <div className="min-h-screen w-full flex items-center justify-center p-6 sm:p-12">
+      <div className="w-full max-w-[460px]">
+        <Card className="w-full">
+          <CardContent className="p-8 sm:p-[34px]">
+            <div className="mb-8">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+                  <span className="text-foreground font-medium">SWYRA //</span> M Auth Recovery
+                </span>
+                <span className="font-mono text-[10px] uppercase text-accent border border-accent/30 rounded-pill px-2 py-0.5">
+                  Protocol 2.1
+                </span>
+              </div>
+              <h1 className="font-heading text-[34px] leading-[1.2] tracking-[-0.02em] font-normal text-foreground">
+                Recover Key
+              </h1>
             </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground font-mono">Recovery</p>
-              <h1 className="text-xl font-semibold text-foreground font-heading">Reset Password</h1>
-            </div>
-          </div>
 
-          {success ? (
-            <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-               <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
-                 <div className="mx-auto h-12 w-12 rounded-full bg-emerald-500/20 flex items-center justify-center mb-4">
-                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-500"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
-                 </div>
-                 <h3 className="text-lg font-semibold text-emerald-600 dark:text-emerald-400 mb-2">Check your inbox</h3>
-                 <p className="text-sm text-emerald-600/80 dark:text-emerald-400/80 leading-relaxed">
-                   We've sent a password reset link to <br/>
-                   <strong className="font-medium">{submittedEmail}</strong>
-                 </p>
-               </div>
-            </div>
-          ) : (
-            <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
-                Enter your email address and we'll send you a link to reset your password.
-              </p>
-              <Form {...form}>
-                <form onSubmit={form.handleSubmit(handleReset)} className="space-y-4">
-                  <FormField
-                    control={form.control}
-                    name="email"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Email address</FormLabel>
-                        <FormControl>
-                          <Input placeholder="name@example.com" {...field} disabled={loading} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <Button type="submit" className="w-full rounded-full mt-2" disabled={loading}>
-                    {loading ? 'Sending link...' : 'Send reset link'}
-                  </Button>
-                </form>
-              </Form>
-            </div>
-          )}
+            {success ? (
+              <div className="animate-in fade-in duration-300 space-y-6">
+                <div className="rounded-[16px] border border-accent/30 bg-accent/5 p-[21px] text-center backdrop-blur-md">
+                  <div className="mx-auto size-10 rounded-full bg-accent/10 flex items-center justify-center text-accent mb-3">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                      <polyline points="22 4 12 14.01 9 11.01" />
+                    </svg>
+                  </div>
+                  <h3 className="font-sans text-sm font-medium text-foreground mb-1">
+                    Telemetry Dispatch Sent
+                  </h3>
+                  <p className="font-sans text-xs text-muted-foreground leading-relaxed">
+                    A cryptographic recovery link has been dispatched to <br />
+                    <span className="font-mono text-foreground font-medium">{submittedEmail}</span>
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="animate-in fade-in duration-300">
+                <p className="font-sans text-sm text-muted-foreground mb-6 leading-relaxed">
+                  Provide your verified pilot address. SWYRA M Auth will generate and transmit a secure recovery link.
+                </p>
 
-          <div className="my-6 flex items-center gap-4">
-            <Separator className="flex-1" />
-            <span className="text-xs uppercase tracking-widest text-muted-foreground font-mono">or</span>
-            <Separator className="flex-1" />
-          </div>
+                <Form {...form}>
+                  <form onSubmit={form.handleSubmit(handleReset)} className="space-y-[21px]">
+                    <FormField
+                      control={form.control}
+                      name="email"
+                      render={({ field }) => (
+                        <FormItem className="space-y-1">
+                          <FormLabel>Email Address</FormLabel>
+                          <FormControl>
+                            <Input 
+                              type="email" 
+                              placeholder="pilot@swyra.com" 
+                              {...field} 
+                              disabled={loading} 
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
-          <Link to="/auth" viewTransition className="block w-full text-center">
-            <Button variant="outline" className="w-full rounded-full bg-white/50 dark:bg-black/20 hover:bg-white/80 dark:hover:bg-black/40 border-white/20 backdrop-blur-sm">
-               Back to login
+                    <Button type="submit" className="w-full mt-4" disabled={loading}>
+                      {loading ? 'Transmitting...' : 'Send Recovery Link'}
+                    </Button>
+                  </form>
+                </Form>
+              </div>
+            )}
+
+            <div className="my-[21px] flex items-center gap-4">
+              <Separator className="flex-1" />
+              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                NAVIGATION
+              </span>
+              <Separator className="flex-1" />
+            </div>
+
+            <Button asChild variant="outline" className="w-full">
+              <Link to="/auth" viewTransition>
+                Return to Authenticate
+              </Link>
             </Button>
-          </Link>
-        </div>
+          </CardContent>
+        </Card>
       </div>
-      <p className="text-center mt-6 text-xs text-foreground/50 font-mono tracking-widest uppercase">
-        Protected by Nexus Security Policies
-      </p>
     </div>
   );
 };

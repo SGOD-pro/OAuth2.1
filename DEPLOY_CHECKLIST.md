@@ -1,39 +1,36 @@
 # Deployment Checklist
 
-## Pre-Deploy
-- Confirm environment variables are present and pass schema validation.
-- Confirm Better Auth secret material is set for the target environment.
-- Confirm MongoDB connectivity.
-- Confirm Google OAuth client credentials are present.
-- Confirm frontend URL and auth base URL are aligned.
+## 1. Pre-Deployment
+- [ ] MongoDB Atlas cluster is created.
+- [ ] MongoDB Atlas Network Access has `0.0.0.0/0` allowed (required for dynamic AWS Lambda egress IPs).
+- [ ] `hono/.env` has `MONGO_URI` and 32+ character `BETTER_AUTH_SECRET`.
+- [ ] Run `cd hono && npm run db:setup` to initialize TTL indexes in MongoDB.
+- [ ] Google Cloud Console OAuth 2.0 Client ID and Secret created (if Google Auth is desired).
 
-## Security Checks
-- Confirm redirect URI validation is active.
-- Confirm dynamic CORS only allows registered origins.
-- Confirm admin routes require a valid session and admin role.
-- Confirm CSRF protection is enabled for admin mutations.
-- Confirm security headers are present at the API edge.
+## 2. Backend Deployment (AWS Lambda via SAM)
+- [ ] Run `cd hono && ./deploy.sh` (or `sam deploy --guided --profile aws`).
+- [ ] Confirm stack deployment succeeds.
+- [ ] Copy the generated **Lambda Function URL** (e.g., `https://<id>.lambda-url.<region>.on.aws/`).
+- [ ] Verify backend health check by calling `curl https://<id>.lambda-url.<region>.on.aws/` (should return `{"message": "Health check", "status": "ok"}`).
 
-## Build Checks
-- Build the Hono Lambda bundle.
-- Build the frontend production bundle.
-- Confirm the frontend can talk to the API through the intended public origin.
-- Confirm the health check endpoint responds successfully.
+## 3. Frontend Deployment (Vercel)
+- [ ] Connect repo to Vercel with Root Directory set to `frontend`.
+- [ ] Set `VITE_AUTH_URL` environment variable in Vercel to the Lambda Function URL (`https://<id>.lambda-url.<region>.on.aws`).
+- [ ] Ensure `vercel.json` rewrite rules are present in `frontend/vercel.json`.
+- [ ] Deploy and copy the production frontend URL (e.g., `https://oauth21.vercel.app`).
 
-## Local Release Checks
-- Confirm Docker Compose starts API, frontend, and Nginx cleanly.
-- Confirm sign-in, consent, callback, and admin login routes load.
-- Confirm admin client CRUD works with cache invalidation.
-- Confirm logs and stats endpoints return expected data.
+## 4. Cloud & OAuth Configuration Alignment
+- [ ] In Google Cloud Console:
+  - **Authorized JavaScript origins**: `https://<frontend-domain>`
+  - **Authorized redirect URIs**: `https://<lambda-url>/api/auth/callback/google`
+- [ ] In `hono/samconfig.toml`:
+  - `BetterAuthUrl` set to `https://<lambda-url>/api/auth`
+  - `FrontendUrl` set to `https://<frontend-domain>` (strict origin, no trailing paths).
+- [ ] Run `cd hono && ./deploy.sh` to apply parameter updates to AWS Lambda.
 
-## Production Release Checks
-- Confirm Lambda deployment package is ready.
-- Confirm S3 + CloudFront assets are published.
-- Confirm TLS and reverse proxy configuration is correct if Nginx is still in path.
-- Confirm monitoring and rollback notes exist.
-
-## Post-Deploy
-- Re-run auth flows.
-- Re-run admin access checks.
-- Re-check CORS behavior from an allowed and a disallowed origin.
-- Re-check token issuance and introspection paths.
+## 5. Admin Account Provisioning & Verification
+- [ ] Run `cd hono && npm run admin:create -- "admin@example.com" "YourStrongPassword@123!" "Admin Name"`.
+- [ ] Visit `https://<frontend-domain>/admin/login` and sign in.
+- [ ] Verify Admin Dashboard loads overview stats and client tables without 401/404 errors.
+- [ ] Test creating an OAuth 2.1 client in Admin Console.
+- [ ] Test TOTP 2FA setup in Admin Security tab.

@@ -6,12 +6,6 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 import { AppSidebar } from "@/components/app-sidebar"
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-} from "@/components/ui/breadcrumb"
 import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
@@ -27,50 +21,52 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
     await authClient.signOut();
     navigate('/admin/login', { viewTransition: true });
   }, [navigate]);
+
   return (
     <TooltipProvider>
       <SidebarProvider
         style={
           {
-            "--sidebar-width": "19rem",
+            "--sidebar-width": "260px",
           } as React.CSSProperties
         }
       >
         <AppSidebar />
-        <SidebarInset>
-          <header className="flex h-16 shrink-0 items-center gap-2 px-4 border-b border-border/50 bg-background/50 backdrop-blur-sm z-50 sticky top-0">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger className="-ml-1" />
-              <Separator
-                orientation="vertical"
-                className="mr-2 h-4"
-              />
-              <Breadcrumb>
-                <BreadcrumbList>
-                  <BreadcrumbItem>
-                    <BreadcrumbPage className="font-semibold text-foreground">NexusID Admin</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </BreadcrumbList>
-              </Breadcrumb>
+        <SidebarInset className="bg-background min-h-screen flex flex-col">
+          <header className="flex h-16 shrink-0 items-center justify-between gap-2 px-6 border-b border-border/50 bg-background/80 backdrop-blur-md sticky top-0 z-40">
+            <div className="flex items-center gap-3">
+              <SidebarTrigger className="-ml-1 text-muted-foreground hover:text-foreground" />
+              <Separator orientation="vertical" className="h-4" />
+              <span className="font-heading text-sm font-medium text-foreground tracking-tight">
+                <span className="text-muted-foreground font-mono text-xs mr-1">SWYRA //</span> M Telemetry Hub
+              </span>
             </div>
-            <div className="ml-auto flex items-center gap-4">
+
+            <div className="flex items-center gap-4">
               <ThemeToggle />
               <Separator orientation="vertical" className="h-6 hidden md:block" />
               <div className="flex items-center gap-3">
                 <div className="text-right hidden sm:block">
-                  <p className="text-sm font-medium text-foreground">
+                  <p className="font-sans text-xs font-medium text-foreground">
                     {(session?.user as { name?: string })?.name || 'Administrator'}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="font-mono text-[10px] text-muted-foreground">
                     {(session?.user as { email?: string })?.email ?? ''}
                   </p>
                 </div>
-                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs">
+                <div className="size-8 rounded-full border border-border bg-secondary flex items-center justify-center font-mono text-xs text-foreground font-semibold">
                   {((session?.user as { name?: string })?.name || 'A')[0].toUpperCase()}
                 </div>
               </div>
-              <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={handleSignOut} title="Sign out">
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+
+              <Button 
+                variant="ghost" 
+                size="icon-sm" 
+                className="text-muted-foreground hover:text-destructive hover:bg-destructive/10" 
+                onClick={handleSignOut} 
+                title="Sign out"
+              >
+                <svg className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
                   <polyline points="16 17 21 12 16 7" />
                   <line x1="21" y1="12" x2="9" y2="12" />
@@ -78,14 +74,18 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
               </Button>
             </div>
           </header>
-          <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
-            <main className="flex-1 p-8 z-10 relative flex flex-col">
-              {children}
-            </main>
 
-            <div className="fixed top-0 right-0 w-[800px] h-[800px] bg-primary/5 rounded-full blur-[100px] -z-0 pointer-events-none translate-x-1/2 -translate-y-1/2" />
-            <div className="fixed bottom-0 left-[280px] w-[600px] h-[600px] bg-ring/5 rounded-full blur-[100px] -z-0 pointer-events-none -translate-x-1/4 translate-y-1/4" />
-          </div>
+          <main className="flex-1 p-6 sm:p-8 lg:p-[34px] relative flex flex-col">
+            {/* Subtle telemetry grid */}
+            <div 
+              className="absolute inset-0 pointer-events-none opacity-[0.015] -z-10"
+              style={{
+                backgroundImage: `radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0)`,
+                backgroundSize: '24px 24px'
+              }}
+            />
+            {children}
+          </main>
           <Toaster />
         </SidebarInset>
       </SidebarProvider>

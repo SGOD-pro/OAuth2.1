@@ -1,18 +1,12 @@
 import * as React from "react"
-
+import { NavLink } from "react-router-dom"
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { LayoutBottomIcon } from "@hugeicons/core-free-icons"
-import { NavLink } from "react-router-dom"
-
 
 const navItems = [
   {
@@ -51,7 +45,7 @@ const navItems = [
   },
   {
     to: '/admin/security',
-    label: 'Security',
+    label: 'Security & 2FA',
     end: false,
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -60,29 +54,27 @@ const navItems = [
     ),
   },
 ];
+
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
-    <Sidebar variant="floating" {...props}>
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
-              <a href="#">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                  <HugeiconsIcon icon={LayoutBottomIcon} strokeWidth={2} className="size-4" />
-                </div>
-                <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="font-medium">Documentation</span>
-                  <span className="">v1.0.0</span>
-                </div>
-              </a>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+    <Sidebar className="w-[260px] border-r border-border/50 bg-background" {...props}>
+      <SidebarHeader className="h-16 flex items-center px-6 border-b border-border/50">
+        <div className="flex items-center gap-3">
+          <div className="flex h-3.5 gap-0.5 items-center">
+            <div className="w-[3px] h-3.5 bg-[#0066B1] -skew-x-12" />
+            <div className="w-[3px] h-3.5 bg-[#1C69D4] -skew-x-12" />
+            <div className="w-[3px] h-3.5 bg-[#E22718] -skew-x-12" />
+          </div>
+          <div className="flex flex-col">
+            <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">SWYRA</span>
+            <span className="font-heading font-normal text-base tracking-tight text-foreground leading-tight">M Auth Console</span>
+          </div>
+        </div>
       </SidebarHeader>
-      <SidebarContent>
+
+      <SidebarContent className="p-4">
         <SidebarGroup>
-          <SidebarMenu className="gap-2">
+          <SidebarMenu className="gap-1.5">
             {navItems.map(({ to, label, end, icon }) => (
               <NavLink
                 key={to}
@@ -90,10 +82,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 end={end}
                 viewTransition
                 className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition-all ${
+                  `flex items-center gap-3 px-4 py-3 rounded-md text-sm font-sans transition-all duration-200 ${
                     isActive
-                      ? 'bg-primary/10 text-primary dark:bg-primary/20'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                      ? 'border-l-[3px] border-[#0066B1] bg-secondary/60 text-foreground font-medium pl-[13px]'
+                      : 'text-muted-foreground hover:bg-secondary/40 hover:text-foreground'
                   }`
                 }
               >

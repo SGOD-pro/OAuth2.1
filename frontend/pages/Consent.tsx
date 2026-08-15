@@ -2,33 +2,33 @@ import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
+import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 
 export const Consent: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
 
-  const clientId = searchParams.get('client_id') || 'Unknown App';
+  const clientId = searchParams.get('client_id') || 'Client Application';
   const rawScope = searchParams.get('scope') || 'openid profile email';
   const scopes = rawScope.split(' ').filter(Boolean);
 
-  const scopeDescriptions: Record<string, { label: string; icon: React.ReactNode }> = {
+  const scopeDescriptions: Record<string, { label: string; tag: string }> = {
     openid: { 
-      label: 'Verify your identity', 
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+      label: 'Cryptographic identity attestation and token verification', 
+      tag: 'OPENID' 
     },
     profile: { 
-      label: 'Access your basic profile information', 
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+      label: 'Read telemetry profile (name, avatar, locale preference)', 
+      tag: 'PROFILE' 
     },
     email: { 
-      label: 'Read your email address', 
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
+      label: 'Read primary verified pilot email address', 
+      tag: 'EMAIL' 
     },
     offline_access: { 
-      label: 'Maintain access when you are not active', 
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><path d="M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0" /><path d="M12 6v6l4 2" /></svg>
+      label: 'Maintain background refresh telemetry token', 
+      tag: 'REFRESH' 
     },
   };
 
@@ -52,82 +52,87 @@ export const Consent: React.FC = () => {
   };
 
   return (
-    <div className="w-full max-w-md px-4 mx-auto">
-      <div className="glass-card rounded-[22px] p-8 w-full transition-all duration-300 relative overflow-hidden">
-        <div className="text-left z-10 relative">
-          <div className="flex flex-col items-center justify-center text-center mb-8">
-            <div className="flex items-center gap-4 mb-6">
-               <div className="h-16 w-16 rounded-2xl bg-card border border-border shadow-sm flex items-center justify-center">
-                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground"><rect x="2" y="3" width="20" height="14" rx="2" ry="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
-               </div>
-               <div className="flex flex-col gap-1 items-center justify-center">
-                 <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/30" />
-                 <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" />
-                 <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/80" />
-               </div>
-               <div className="h-16 w-16 rounded-2xl border border-white/10 bg-black/10 dark:bg-white/10 flex items-center justify-center backdrop-blur-md">
-                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-foreground"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
-               </div>
+    <div className="min-h-screen w-full flex items-center justify-center p-6 sm:p-12">
+      <div className="w-full max-w-[520px]">
+        <Card className="w-full">
+          <CardContent className="p-8 sm:p-[34px]">
+            <div className="flex items-center justify-between mb-6">
+              <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+                <span className="text-foreground font-medium">SWYRA //</span> M Telemetry Grant
+              </span>
+              <span className="font-mono text-[10px] uppercase text-accent border border-accent/30 rounded-pill px-2.5 py-0.5">
+                OAuth 2.1
+              </span>
             </div>
-            
-            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground font-mono mb-2">Authorization Request</p>
-            <h1 className="text-2xl font-semibold text-foreground font-heading leading-tight">
-              <span className="text-primary font-bold">{clientId}</span> wants to access your account
-            </h1>
-          </div>
 
-          <div className="rounded-2xl border border-border/50 bg-muted/20 p-5 mb-8">
-            <p className="text-sm font-medium text-foreground mb-4">This application will be able to:</p>
-            <ul className="space-y-4 text-sm text-foreground">
-              {scopes.map((scope) => {
-                const desc = scopeDescriptions[scope] || { 
-                  label: scope, 
-                  icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><polyline points="10 9 9 9 8 9" /></svg> 
-                };
-                return (
-                  <li key={scope} className="flex items-start gap-4">
-                    <div className="mt-0.5 opacity-80">{desc.icon}</div>
-                    <span className="text-muted-foreground leading-relaxed">{desc.label}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+            <div className="mb-8">
+              <h1 className="font-heading text-[34px] leading-[1.2] tracking-[-0.02em] font-normal text-foreground">
+                Authorize Client
+              </h1>
+              <p className="font-sans text-sm text-muted-foreground mt-2">
+                Application <span className="font-mono text-foreground font-medium px-1.5 py-0.5 rounded bg-secondary/80">{clientId}</span> is requesting delegated telemetry scopes:
+              </p>
+            </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full rounded-full bg-white/50 dark:bg-black/20 hover:bg-white/80 dark:hover:bg-black/40 border-white/20 backdrop-blur-sm"
-              onClick={() => handleConsent(false)}
-              disabled={loading}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              className="w-full rounded-full"
-              onClick={() => handleConsent(true)}
-              disabled={loading}
-            >
-              {loading ? 'Processing...' : 'Authorize'}
-            </Button>
-          </div>
+            <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-5 mb-8 space-y-4">
+              <div className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+                Requested Scopes:
+              </div>
 
-          <div className="my-6 flex items-center gap-4">
-            <Separator className="flex-1" />
-            <span className="text-xs uppercase tracking-widest text-muted-foreground font-mono">notice</span>
-            <Separator className="flex-1" />
-          </div>
+              <div className="space-y-3">
+                {scopes.map((scope) => {
+                  const info = scopeDescriptions[scope] || {
+                    label: `Custom telemetry permission (${scope})`,
+                    tag: scope.toUpperCase(),
+                  };
 
-          <p className="text-xs text-muted-foreground text-center px-4 leading-relaxed">
-            You can manage or revoke access at any time from your account settings.
-          </p>
-        </div>
+                  return (
+                    <div key={scope} className="flex items-start gap-3">
+                      <div className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[3px] border border-accent bg-accent/10 text-accent">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-medium text-foreground tracking-wide">
+                            {info.tag}
+                          </span>
+                        </div>
+                        <p className="font-sans text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                          {info.label}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => handleConsent(false)}
+                disabled={loading}
+              >
+                Deny Access
+              </Button>
+              <Button
+                type="button"
+                onClick={() => handleConsent(true)}
+                disabled={loading}
+              >
+                {loading ? 'Authorizing...' : 'Authorize'}
+              </Button>
+            </div>
+
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground text-center mt-6">
+              SWYRA M-Series Cryptographic Session Enforcement
+            </p>
+          </CardContent>
+        </Card>
       </div>
-      <p className="text-center mt-6 text-xs text-foreground/50 font-mono tracking-widest uppercase">
-        Protected by Nexus Security Policies
-      </p>
     </div>
   );
 };

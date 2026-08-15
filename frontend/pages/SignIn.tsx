@@ -6,8 +6,9 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
+import { Card, CardContent } from '@/components/ui/card';
 import { isPublicSignupEnabled, safeCallbackURL } from '@/lib/security';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -54,6 +55,8 @@ export const SignIn: React.FC = () => {
     },
   });
 
+  const signUpPassword = useWatch({ control: signUpForm.control, name: 'password' }) || '';
+
   const handleSignIn = async (values: z.infer<typeof signInSchema>) => {
     setLoading(true);
     const { error: authError } = await authClient.signIn.email({
@@ -64,7 +67,6 @@ export const SignIn: React.FC = () => {
 
     if (authError) {
       if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
-        // Handled by the auth-client plugin redirect.
         return;
       }
       toast.error(authError.message || 'Sign in failed. Please try again.');
@@ -101,184 +103,260 @@ export const SignIn: React.FC = () => {
   };
 
   return (
-    <div className="w-full max-w-md px-4 mx-auto">
-      <div className="glass-card rounded-[22px] p-8 w-full transition-all duration-300 relative overflow-hidden">
-        <div className="text-left z-10 relative">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="h-10 w-10 rounded-2xl border border-white/10 bg-black/10 dark:bg-white/10 flex items-center justify-center backdrop-blur-md">
-              <span className="text-sm font-semibold">SW</span>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground font-mono">SWYRA</p>
-              <h1 className="text-xl font-semibold text-foreground font-heading">Welcome back</h1>
-            </div>
+    <div className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2">
+      {/* Left (38.2%): Monumental Space Grotesk Headline & Telemetry */}
+      <div className="w-full min-w-0 flex flex-col justify-center p-8 sm:p-12 lg:p-xl border-b lg:border-b-0 lg:border-r border-border/40 bg-background/50 backdrop-blur-sm relative">
+        
+
+        <div className="my-12 lg:my-0">
+          <div className="flex items-center gap-3">
+          <div className="flex h-4 gap-1 items-center">
+            <div className="w-0.5 h-3 bg-[#0066B1] -skew-x-12" />
+            <div className="w-0.5 h-3 bg-[#1C69D4] -skew-x-12" />
+            <div className="w-0.5 h-3 bg-[#E22718] -skew-x-12" />
           </div>
-          
-          <Tabs value={tab} onValueChange={setTab} className="w-full">
-            <TabsList className={`w-full grid ${signupEnabled ? 'grid-cols-2' : 'grid-cols-1'} mb-6`}>
-              <TabsTrigger value="sign-in">Sign in</TabsTrigger>
-              {signupEnabled && <TabsTrigger value="sign-up">Sign up</TabsTrigger>}
-            </TabsList>
+          <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
+            SWYRA // M Telemetry System v2.1
+          </span>
+        </div>
+          <h1 className="font-heading text-5xl sm:text-6xl lg:text-[90px] leading-[1] tracking-[-0.04em] font-normal text-foreground">
+            Digital<br />Telemetry.
+          </h1>
+          <p className="mt-6 font-mono text-xs uppercase tracking-[0.05em] text-muted-foreground leading-relaxed max-w-[380px] w-full">
+            SWYRA high-performance authorization engine. Precision identity token exchange and cryptographic verification.
+          </p>
+        </div>
 
-            <TabsContent value="sign-in" className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <Form {...signInForm}>
-                <form onSubmit={signInForm.handleSubmit(handleSignIn)} className="space-y-4">
-                  <FormField
-                    control={signInForm.control}
-                    name="email"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Email address</FormLabel>
-                        <FormControl>
-                          <Input placeholder="name@example.com" {...field} disabled={loading} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={signInForm.control}
-                    name="password"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Password</FormLabel>
-                        <FormControl>
-                          <Input type="password" placeholder="••••••••" {...field} disabled={loading} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  
-                  <div className="flex items-center justify-between text-sm">
-                    <FormField
-                      control={signInForm.control}
-                      name="remember"
-                      render={({ field }) => (
-                        <FormItem className="flex flex-row items-center space-x-2 space-y-0">
-                          <FormControl>
-                            <Checkbox
-                              checked={field.value}
-                              onCheckedChange={field.onChange}
-                              disabled={loading}
-                            />
-                          </FormControl>
-                          <FormLabel className="font-normal text-muted-foreground">
-                            Remember me
-                          </FormLabel>
-                        </FormItem>
-                      )}
-                    />
-                    <Link to="/forgot-password" viewTransition className="text-ring hover:underline font-medium text-xs">
-                      Forgot password?
-                    </Link>
-                  </div>
+        <div className="space-y-2 pt-6 border-t border-border/30 absolute bottom-4 lg:bottom-8 w-[80%] m-auto">
+          <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+            <span>Protocol</span>
+            <span className="text-foreground">OAuth 2.1 RFC-6749</span>
+          </div>
+          <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+            <span>Auth Service</span>
+            <span className="text-accent flex items-center gap-1.5">
+              <span className="inline-block size-1.5 rounded-full bg-accent animate-ping" />
+              SWYRA M Auth
+            </span>
+          </div>
+        </div>
 
-                  <Button type="submit" className="w-full rounded-full mt-2" disabled={loading}>
-                    {loading ? 'Signing in...' : 'Sign in'}
-                  </Button>
-                </form>
-              </Form>
-              
-              <div className="my-6 flex items-center gap-4">
-                <Separator className="flex-1" />
-                <span className="text-xs uppercase tracking-widest text-muted-foreground font-mono">or</span>
-                <Separator className="flex-1" />
+      </div>
+
+      <div className="w-full min-w-0 flex items-center justify-center p-6 sm:p-12 lg:p-12.5">
+        <div className="w-full max-w-[500px]">
+          <Card className="w-full" watermark="SWYRA">
+            <CardContent className="p-8 sm:p-lg w-full">
+              <div className="mb-8">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+                    SWYRA // M Auth
+                  </span>
+                  <span className="font-mono text-[10px] uppercase text-accent border border-accent/30 rounded-pill px-2 py-0.5">
+                    Secured
+                  </span>
+                </div>
+                <h2 className="font-heading text-[34px] leading-[1.2] tracking-[-0.02em] font-normal text-foreground">
+                  {tab === 'sign-in' ? 'Authenticate' : 'Register Pilot'}
+                </h2>
               </div>
 
-              <Button type="button" variant="outline" className="w-full rounded-full bg-white/50 dark:bg-black/20 hover:bg-white/80 dark:hover:bg-black/40 border-white/20 backdrop-blur-sm" onClick={handleGoogleSignIn} disabled={loading}>
-                <svg className="h-4 w-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
-                  <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
-                  <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z" />
-                  <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />
-                  <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z" />
-                </svg>
-                Continue with Google
-              </Button>
-            </TabsContent>
+              <Tabs value={tab} onValueChange={setTab} className="w-full">
+                <TabsList className={`w-full grid ${signupEnabled ? 'grid-cols-2' : 'grid-cols-1'} mb-8`}>
+                  <TabsTrigger value="sign-in">Sign In</TabsTrigger>
+                  {signupEnabled && <TabsTrigger value="sign-up">Sign Up</TabsTrigger>}
+                </TabsList>
 
-            {signupEnabled && (
-              <TabsContent value="sign-up" className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <Form {...signUpForm}>
-                  <form onSubmit={signUpForm.handleSubmit(handleSignUp)} className="space-y-4">
-                    <FormField
-                      control={signUpForm.control}
-                      name="name"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Full name</FormLabel>
-                          <FormControl>
-                            <Input placeholder="John Doe" {...field} disabled={loading} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={signUpForm.control}
-                      name="email"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Email address</FormLabel>
-                          <FormControl>
-                            <Input placeholder="name@example.com" {...field} disabled={loading} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={signUpForm.control}
-                      name="password"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Password</FormLabel>
-                          <FormControl>
-                            <Input type="password" placeholder="••••••••" {...field} disabled={loading} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    
-                    {/* Visual password strength indicator */}
-                    {signUpForm.watch('password').length > 0 && (
-                      <div className="w-full flex gap-1 mt-2">
-                        <div className={`h-1 flex-1 rounded-full ${signUpForm.watch('password').length > 0 ? 'bg-destructive' : 'bg-border'} transition-colors`} />
-                        <div className={`h-1 flex-1 rounded-full ${signUpForm.watch('password').length >= 6 ? 'bg-orange-400' : 'bg-border'} transition-colors`} />
-                        <div className={`h-1 flex-1 rounded-full ${signUpForm.watch('password').length >= 12 ? 'bg-ring' : 'bg-border'} transition-colors`} />
+                <TabsContent value="sign-in" className="animate-in fade-in duration-300">
+                  <Form {...signInForm}>
+                    <form onSubmit={signInForm.handleSubmit(handleSignIn)} className="space-y-[21px]">
+                      <FormField
+                        control={signInForm.control}
+                        name="email"
+                        render={({ field }) => (
+                          <FormItem className="space-y-1">
+                            <FormLabel>Email Address</FormLabel>
+                            <FormControl>
+                              <Input 
+                                type="email" 
+                                placeholder="pilot@swyra.com" 
+                                {...field} 
+                                disabled={loading} 
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={signInForm.control}
+                        name="password"
+                        render={({ field }) => (
+                          <FormItem className="space-y-1">
+                            <FormLabel>Password</FormLabel>
+                            <FormControl>
+                              <Input 
+                                type="password" 
+                                placeholder="••••••••••••" 
+                                {...field} 
+                                disabled={loading} 
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <div className="flex items-center justify-between pt-1">
+                        <FormField
+                          control={signInForm.control}
+                          name="remember"
+                          render={({ field }) => (
+                            <FormItem className="flex flex-row items-center space-x-2 space-y-0">
+                              <FormControl>
+                                <Checkbox
+                                  checked={field.value}
+                                  onCheckedChange={field.onChange}
+                                  disabled={loading}
+                                />
+                              </FormControl>
+                              <FormLabel className="font-mono text-xs lowercase text-muted-foreground font-normal cursor-pointer">
+                                Remember session
+                              </FormLabel>
+                            </FormItem>
+                          )}
+                        />
+                        <Link 
+                          to="/forgot-password" 
+                          viewTransition 
+                          className="font-mono text-xs uppercase tracking-wider text-accent hover:underline"
+                        >
+                          Recover Key
+                        </Link>
                       </div>
-                    )}
 
-                    <Button type="submit" className="w-full rounded-full mt-4" disabled={loading}>
-                      {loading ? 'Creating account...' : 'Create account'}
+                      <Button type="submit" className="w-full mt-4" disabled={loading}>
+                        {loading ? 'Authenticating...' : 'Authenticate'}
+                      </Button>
+                    </form>
+                  </Form>
+
+                  <div className="my-[21px] flex items-center gap-4">
+                    <Separator className="flex-1" />
+                    <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                      OR
+                    </span>
+                    <Separator className="flex-1" />
+                  </div>
+
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    className="w-full" 
+                    onClick={handleGoogleSignIn} 
+                    disabled={loading}
+                  >
+                    <svg className="h-4 w-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
+                      <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
+                      <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z" />
+                      <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />
+                      <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z" />
+                    </svg>
+                    Continue with Google
+                  </Button>
+                </TabsContent>
+
+                {signupEnabled && (
+                  <TabsContent value="sign-up" className="animate-in fade-in duration-300">
+                    <Form {...signUpForm}>
+                      <form onSubmit={signUpForm.handleSubmit(handleSignUp)} className="space-y-[21px]">
+                        <FormField
+                          control={signUpForm.control}
+                          name="name"
+                          render={({ field }) => (
+                            <FormItem className="space-y-1">
+                              <FormLabel>Pilot Name</FormLabel>
+                              <FormControl>
+                                <Input placeholder="Alex Vance" {...field} disabled={loading} />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={signUpForm.control}
+                          name="email"
+                          render={({ field }) => (
+                            <FormItem className="space-y-1">
+                              <FormLabel>Email Address</FormLabel>
+                              <FormControl>
+                                <Input type="email" placeholder="driver@bmw-m.com" {...field} disabled={loading} />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={signUpForm.control}
+                          name="password"
+                          render={({ field }) => (
+                            <FormItem className="space-y-1">
+                              <FormLabel>Access Password</FormLabel>
+                              <FormControl>
+                                <Input type="password" placeholder="••••••••••••" {...field} disabled={loading} />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        {signUpPassword.length > 0 && (
+                          <div className="w-full flex gap-1 pt-1">
+                            <div className={`h-[2px] flex-1 rounded-full ${signUpPassword.length > 0 ? 'bg-destructive' : 'bg-border'} transition-colors`} />
+                            <div className={`h-[2px] flex-1 rounded-full ${signUpPassword.length >= 6 ? 'bg-amber-500' : 'bg-border'} transition-colors`} />
+                            <div className={`h-[2px] flex-1 rounded-full ${signUpPassword.length >= 12 ? 'bg-accent' : 'bg-border'} transition-colors`} />
+                          </div>
+                        )}
+
+                        <Button type="submit" className="w-full mt-4" disabled={loading}>
+                          {loading ? 'Registering...' : 'Register Pilot'}
+                        </Button>
+                      </form>
+                    </Form>
+
+                    <div className="my-[21px] flex items-center gap-4">
+                      <Separator className="flex-1" />
+                      <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                        OR
+                      </span>
+                      <Separator className="flex-1" />
+                    </div>
+
+                    <Button 
+                      type="button" 
+                      variant="outline" 
+                      className="w-full" 
+                      onClick={handleGoogleSignIn} 
+                      disabled={loading}
+                    >
+                      <svg className="h-4 w-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
+                        <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
+                        <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z" />
+                        <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />
+                        <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z" />
+                      </svg>
+                      Continue with Google
                     </Button>
-                  </form>
-                </Form>
-                
-                <div className="my-6 flex items-center gap-4">
-                  <Separator className="flex-1" />
-                  <span className="text-xs uppercase tracking-widest text-muted-foreground font-mono">or</span>
-                  <Separator className="flex-1" />
-                </div>
-
-                <Button type="button" variant="outline" className="w-full rounded-full bg-white/50 dark:bg-black/20 hover:bg-white/80 dark:hover:bg-black/40 border-white/20 backdrop-blur-sm" onClick={handleGoogleSignIn} disabled={loading}>
-                  <svg className="h-4 w-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
-                    <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
-                    <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z" />
-                    <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />
-                    <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z" />
-                  </svg>
-                  Continue with Google
-                </Button>
-              </TabsContent>
-            )}
-          </Tabs>
+                  </TabsContent>
+                )}
+              </Tabs>
+            </CardContent>
+          </Card>
         </div>
       </div>
-      <p className="text-center mt-6 text-xs text-foreground/50 font-mono tracking-widest uppercase">
-        Protected by Nexus Security Policies
-      </p>
     </div>
   );
 };

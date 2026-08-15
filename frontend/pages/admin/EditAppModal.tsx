@@ -1,9 +1,8 @@
-import React, { useRef, useState } from 'react';
-
+import React, { useState } from 'react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Separator } from '@/components/ui/separator';
 import { csrfHeaders } from '@/lib/csrf';
 import { validateUri } from '@/lib/security';
 import { apiFetch } from '@/lib/api';
@@ -21,7 +20,7 @@ interface OAuthClient {
 interface EditAppModalProps {
   client: OAuthClient;
   onClose: () => void;
-  onSuccess: (client: any) => void;
+  onSuccess: (client: OAuthClient) => void;
 }
 
 const TagInput: React.FC<{
@@ -37,7 +36,7 @@ const TagInput: React.FC<{
   const add = () => {
     const val = input.trim();
     if (!val) return;
-    if (!validate(val)) { setErr('Enter a valid http(s) URL without wildcards or credentials'); return; }
+    if (!validate(val)) { setErr('Enter a valid URL without wildcards or credentials'); return; }
     if (tags.includes(val)) { setErr('Already added'); return; }
     onAdd(val);
     setInput('');
@@ -54,15 +53,15 @@ const TagInput: React.FC<{
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
         />
-        <Button type="button" variant="outline" onClick={add}>Add</Button>
+        <Button type="button" variant="outline" size="sm" onClick={add}>Add</Button>
       </div>
-      {err && <p className="mt-1 text-xs text-destructive">{err}</p>}
+      {err && <p className="mt-1 font-mono text-xs text-destructive">{err}</p>}
       {tags.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
           {tags.map((t) => (
-            <span key={t} className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs text-foreground">
+            <span key={t} className="flex items-center gap-1.5 rounded-pill bg-secondary/80 border border-border px-2.5 py-0.5 font-mono text-xs text-foreground">
               {t}
-              <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => onRemove(t)} aria-label={`Remove ${t}`}>
+              <button type="button" className="text-muted-foreground hover:text-foreground ml-1" onClick={() => onRemove(t)} aria-label={`Remove ${t}`}>
                 ×
               </button>
             </span>
@@ -82,9 +81,6 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
-  const overlayRef = useRef<HTMLDivElement>(null);
-
-  const handleBackdrop = (e: React.MouseEvent) => { if (e.target === overlayRef.current) onClose(); };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,7 +112,7 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
       const updatedClient = await res.json();
       setSuccess(true);
       onSuccess(updatedClient);
-      setTimeout(() => onClose(), 1500);
+      setTimeout(() => onClose(), 1200);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -125,80 +121,110 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" ref={overlayRef} onClick={handleBackdrop}>
-      <div className="w-full max-w-xl mx-auto">
-        <div className="glass-card rounded-[22px] bg-card text-card-foreground border border-border shadow-lg overflow-hidden">
-          <div className="px-6 py-6 text-left w-full">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-foreground">Edit {client.client_name}</h2>
-            <button className="text-muted-foreground hover:text-foreground" onClick={onClose} aria-label="Close">×</button>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Edit {client.client_name}</DialogTitle>
+          <DialogDescription>
+            Modify OAuth 2.1 client endpoints, active status, and CORS parameters.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={submit} className="space-y-4 py-2">
+          {error && (
+            <div className="rounded-[16px] border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-mono text-xs text-destructive">
+              {error}
+            </div>
+          )}
+          {success && (
+            <div className="rounded-[16px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 font-mono text-xs text-emerald-400">
+              Telemetry configuration updated.
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+              Redirect URIs
+            </label>
+            <TagInput
+              tags={redirectUris}
+              placeholder="https://app.domain.com/auth/callback"
+              validate={validateUri}
+              onAdd={(v) => setRedirectUris((u) => [...u, v])}
+              onRemove={(v) => setRedirectUris((u) => u.filter((r) => r !== v))}
+            />
           </div>
 
-          <form onSubmit={submit} className="mt-6 space-y-5">
-            {error && (
-              <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {error}
+          <div className="space-y-1">
+            <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+              Allowed CORS Origins
+            </label>
+            <TagInput
+              tags={allowedOrigins}
+              placeholder="https://app.domain.com"
+              validate={validateUri}
+              onAdd={(v) => setAllowedOrigins((o) => [...o, v])}
+              onRemove={(v) => setAllowedOrigins((o) => o.filter((r) => r !== v))}
+            />
+          </div>
+
+          <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-4 space-y-3">
+            <label className="flex items-start justify-between gap-4 cursor-pointer">
+              <div>
+                <span className="font-sans text-xs font-medium text-foreground block">
+                  Application Active
+                </span>
+                <span className="font-sans text-[11px] text-muted-foreground">
+                  Disable to reject token requests immediately.
+                </span>
               </div>
-            )}
-            {success && (
-              <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-                Saved! Closing...
+              <Checkbox
+                checked={isActive}
+                onCheckedChange={(checked) => setIsActive(checked === true)}
+              />
+            </label>
+
+            <label className="flex items-start justify-between gap-4 cursor-pointer">
+              <div>
+                <span className="font-sans text-xs font-medium text-foreground block">
+                  Bypass Consent Screen
+                </span>
+                <span className="font-sans text-[11px] text-muted-foreground">
+                  Skip scope approval for first-party clients.
+                </span>
               </div>
-            )}
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">
-                Client ID <span className="text-xs text-muted-foreground">(read-only)</span>
-              </label>
-              <Input type="text" value={client.client_id} readOnly className="opacity-60" />
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Redirect URIs</label>
-              <TagInput
-                tags={redirectUris}
-                placeholder="https://yourapp.com/auth/callback"
-                validate={validateUri}
-                onAdd={(v) => setRedirectUris((r) => [...r, v])}
-                onRemove={(v) => setRedirectUris((r) => r.filter((x) => x !== v))}
+              <Checkbox
+                checked={skipConsent}
+                onCheckedChange={(checked) => setSkipConsent(checked === true)}
               />
-            </div>
+            </label>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Allowed origins</label>
-              <TagInput
-                tags={allowedOrigins}
-                placeholder="https://yourapp.com"
-                validate={validateUri}
-                onAdd={(v) => setAllowedOrigins((o) => [...o, v])}
-                onRemove={(v) => setAllowedOrigins((o) => o.filter((x) => x !== v))}
+            <label className="flex items-start justify-between gap-4 cursor-pointer">
+              <div>
+                <span className="font-sans text-xs font-medium text-foreground block">
+                  Allow Remote End-Session
+                </span>
+                <span className="font-sans text-[11px] text-muted-foreground">
+                  Allow RP-initiated logout triggers.
+                </span>
+              </div>
+              <Checkbox
+                checked={enableEndSession}
+                onCheckedChange={(checked) => setEnableEndSession(checked === true)}
               />
-            </div>
+            </label>
+          </div>
 
-            <div className="rounded-2xl border border-border/60 bg-background/40 p-4 space-y-4">
-              <label className="flex items-center justify-between gap-4 text-sm text-foreground">
-                <span>Skip consent screen</span>
-                <Checkbox checked={skipConsent} onCheckedChange={(checked) => setSkipConsent(checked === true)} />
-              </label>
-              <label className="flex items-center justify-between gap-4 text-sm text-foreground">
-                <span>Allow remote logout</span>
-                <Checkbox checked={enableEndSession} onCheckedChange={(checked) => setEnableEndSession(checked === true)} />
-              </label>
-              <label className="flex items-center justify-between gap-4 text-sm text-foreground">
-                <span>Active</span>
-                <Checkbox checked={isActive} onCheckedChange={(checked) => setIsActive(checked === true)} />
-              </label>
-            </div>
-
-            <Separator />
-
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Saving...' : 'Save changes'}
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
+              Cancel
             </Button>
-          </form>
-        </div>
-        </div>
-      </div>
-    </div>
+            <Button type="submit" disabled={loading}>
+              {loading ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };

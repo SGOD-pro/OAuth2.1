@@ -4,13 +4,14 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const alertVariants = cva(
-  "group/alert relative grid w-full gap-0.5 rounded-lg border px-4 py-3 text-left text-sm has-data-[slot=alert-action]:relative has-data-[slot=alert-action]:pr-18 has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2.5 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
+  "relative flex items-start gap-4 overflow-hidden rounded-[16px] border p-[21px] backdrop-blur-md animate-in fade-in slide-in-from-right-full duration-500 text-left text-sm",
   {
     variants: {
       variant: {
-        default: "bg-card text-card-foreground",
+        default:
+          "border-accent/30 bg-accent/5 text-foreground [&>svg]:text-accent",
         destructive:
-          "bg-card text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current",
+          "border-destructive/30 bg-destructive/5 text-foreground [&>svg]:text-destructive",
       },
     },
     defaultVariants: {
@@ -21,7 +22,8 @@ const alertVariants = cva(
 
 function Alert({
   className,
-  variant,
+  variant = "default",
+  children,
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
   return (
@@ -30,7 +32,16 @@ function Alert({
       role="alert"
       className={cn(alertVariants({ variant }), className)}
       {...props}
-    />
+    >
+      <div 
+        aria-hidden="true" 
+        className={cn(
+          "absolute left-0 top-0 h-full w-1",
+          variant === "destructive" ? "bg-destructive" : "bg-accent"
+        )} 
+      />
+      {children}
+    </div>
   )
 }
 
@@ -38,10 +49,7 @@ function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="alert-title"
-      className={cn(
-        "font-medium group-has-[>svg]/alert:col-start-2 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
-        className
-      )}
+      className={cn("font-sans text-sm font-medium text-foreground tracking-tight", className)}
       {...props}
     />
   )
@@ -54,10 +62,7 @@ function AlertDescription({
   return (
     <div
       data-slot="alert-description"
-      className={cn(
-        "text-sm text-balance text-muted-foreground md:text-pretty [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground [&_p:not(:last-child)]:mb-4",
-        className
-      )}
+      className={cn("font-sans text-sm text-muted-foreground mt-1 leading-[1.5]", className)}
       {...props}
     />
   )

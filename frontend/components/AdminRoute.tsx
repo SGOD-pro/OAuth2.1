@@ -2,17 +2,7 @@ import React, { useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useSession } from '../lib/auth-client';
 import { apiFetch } from '../lib/api';
-
-
-const LoadingSpinner: React.FC = () => (
-  <div className="w-full h-dvh px-6 grid place-items-center">
-    <div className="w-full max-w-md mx-auto">
-      <div className="glass-card rounded-[22px] p-12 text-center flex justify-center">
-        <div className="h-9 w-9 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      </div>
-    </div>
-  </div>
-);
+import { RouteLoader } from './RouteLoader';
 
 interface AdminRouteProps {
   children: React.ReactNode;
@@ -35,7 +25,7 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
     });
   }, [isAdmin]);
 
-  if (isPending) return <LoadingSpinner />;
+  if (isPending) return <RouteLoader />;
   
   if (!session?.user) {
     return <Navigate to="/admin/login" replace />;
