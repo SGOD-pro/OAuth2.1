@@ -13,35 +13,72 @@ export const AdminTwoFactor: React.FC = () => {
   const [code, setCode] = useState('');
   const [mode, setMode] = useState<Mode>('totp');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [failedAttempts, setFailedAttempts] = useState(0);
   const navigate = useNavigate();
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!code) return;
     setLoading(true);
+    setError(null);
 
-    if (mode === 'totp') {
-      const { error: err } = await authClient.twoFactor.verifyTotp({ code });
-      if (err) {
-        toast.error(err.message || 'Invalid code. Check your authenticator app.');
-        setLoading(false);
-        return;
+    try {
+      if (mode === 'totp') {
+        const { error: err } = await authClient.twoFactor.verifyTotp({ code });
+        if (err) {
+          const errMsg = err.message || 'Invalid 6-digit TOTP token. Check your authenticator app.';
+          setError(errMsg);
+          toast.error(errMsg);
+          const nextFail = failedAttempts + 1;
+          setFailedAttempts(nextFail);
+          
+          if (nextFail >= 3 || err.status === 401 || err.status === 403 || errMsg.toLowerCase().includes('session')) {
+            toast.error('Authentication session invalidated. Please re-enter your credentials.');
+            setTimeout(() => {
+              navigate('/admin/login?error=mfa_failed', { replace: true, viewTransition: true });
+            }, 1200);
+          }
+          return;
+        }
+      } else {
+        const { error: err } = await authClient.twoFactor.verifyBackupCode({ code });
+        if (err) {
+          const errMsg = err.message || 'Invalid emergency backup key.';
+          setError(errMsg);
+          toast.error(errMsg);
+          const nextFail = failedAttempts + 1;
+          setFailedAttempts(nextFail);
+          
+          if (nextFail >= 3 || err.status === 401 || err.status === 403 || errMsg.toLowerCase().includes('session')) {
+            toast.error('Authentication session invalidated. Please re-enter your credentials.');
+            setTimeout(() => {
+              navigate('/admin/login?error=mfa_failed', { replace: true, viewTransition: true });
+            }, 1200);
+          }
+          return;
+        }
       }
-    } else {
-      const { error: err } = await authClient.twoFactor.verifyBackupCode({ code });
-      if (err) {
-        toast.error(err.message || 'Invalid backup code.');
-        setLoading(false);
-        return;
-      }
+
+      toast.success('Telemetry authorization verified');
+      navigate('/admin', { replace: true, viewTransition: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error validating token';
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setLoading(false);
     }
-
-    toast.success('Telemetry authorization verified');
-    navigate('/admin', { replace: true, viewTransition: true });
   };
 
   const toggleMode = () => {
     setCode('');
+    setError(null);
     setMode((m) => (m === 'totp' ? 'backup' : 'totp'));
+  };
+
+  const handleBackToLogin = () => {
+    navigate('/admin/login', { viewTransition: true });
   };
 
   return (
@@ -80,6 +117,15 @@ export const AdminTwoFactor: React.FC = () => {
               </p>
             </div>
 
+            {error && (
+              <div className="mb-6 rounded-[16px] border border-destructive/30 bg-destructive/10 p-3.5 font-mono text-xs text-destructive flex items-center gap-2.5 animate-in fade-in zoom-in-95">
+                <svg className="size-4 shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>{error}</span>
+              </div>
+            )}
+
             <form onSubmit={handleVerify} className="space-y-[21px]">
               <div className="space-y-1">
                 <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
@@ -93,7 +139,10 @@ export const AdminTwoFactor: React.FC = () => {
                   maxLength={mode === 'totp' ? 6 : 20}
                   required
                   value={code}
-                  onChange={(e) => setCode(e.target.value.trim())}
+                  onChange={(e) => {
+                    setError(null);
+                    setCode(e.target.value.trim());
+                  }}
                   disabled={loading}
                   className={mode === 'totp' ? 'text-center font-mono text-xl tracking-[0.3em]' : 'font-mono text-sm'}
                 />
@@ -120,6 +169,16 @@ export const AdminTwoFactor: React.FC = () => {
             >
               {mode === 'totp' ? 'Use Emergency Backup Key' : 'Use Authenticator TOTP App'}
             </Button>
+
+            <div className="mt-6 pt-4 border-t border-border/40 text-center">
+              <button
+                type="button"
+                onClick={handleBackToLogin}
+                className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                ← Return to Admin Sign In
+              </button>
+            </div>
           </CardContent>
         </Card>
       </div>

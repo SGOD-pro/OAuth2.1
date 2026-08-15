@@ -18,6 +18,7 @@ const adminLoginSchema = z.object({
 
 export const AdminLogin: React.FC = () => {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -32,8 +33,11 @@ export const AdminLogin: React.FC = () => {
   });
 
   useEffect(() => {
-    if (searchParams.get('error') === 'access_denied') {
-      toast.error('Your account does not have admin access.');
+    const err = searchParams.get('error');
+    if (err === 'access_denied') {
+      toast.error('Access denied: Your account does not have admin privileges.');
+    } else if (err === 'mfa_failed' || err === 'mfa_expired') {
+      toast.error('2FA verification failed or session expired. Please re-enter your credentials.');
     }
   }, [searchParams]);
 
@@ -48,25 +52,40 @@ export const AdminLogin: React.FC = () => {
 
   const handleSignIn = async (values: z.infer<typeof adminLoginSchema>) => {
     setLoading(true);
+    setError(null);
 
-    const { error: authError } = await authClient.signIn.email({
-      email: values.email,
-      password: values.password,
-      callbackURL: '/admin',
-    });
+    try {
+      const res = await authClient.signIn.email({
+        email: values.email,
+        password: values.password,
+        callbackURL: '/admin',
+      });
 
-    if (authError) {
-      if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
+      if (res?.error) {
+        if (res.error.message?.toLowerCase().includes("two factor") || res.error.status === 403) {
+          navigate('/admin/two-factor', { viewTransition: true });
+          return;
+        }
+        const msg = res.error.message || 'Invalid administrator credentials';
+        setError(msg);
+        toast.error(msg);
         return;
       }
-      toast.error(authError.message || 'Invalid credentials');
-      setLoading(false);
-      return;
-    }
 
-    toast.success('Signed in successfully');
-    navigate('/admin', { replace: true, viewTransition: true });
-    setLoading(false);
+      if ((res?.data as { twoFactorRedirect?: boolean })?.twoFactorRedirect) {
+        navigate('/admin/two-factor', { viewTransition: true });
+        return;
+      }
+
+      toast.success('Signed in successfully');
+      navigate('/admin', { replace: true, viewTransition: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error communicating with authentication service';
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSignOut = async () => {
@@ -132,6 +151,15 @@ export const AdminLogin: React.FC = () => {
             ) : (
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(handleSignIn)} className="space-y-[21px]">
+                  {error && (
+                    <div className="rounded-[16px] border border-destructive/30 bg-destructive/10 p-3.5 font-mono text-xs text-destructive flex items-center gap-2.5 animate-in fade-in zoom-in-95">
+                      <svg className="size-4 shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span>{error}</span>
+                    </div>
+                  )}
+
                   <FormField
                     control={form.control}
                     name="email"

@@ -29,6 +29,7 @@ const signUpSchema = z.object({
 export const SignIn: React.FC = () => {
   const [tab, setTab] = useState('sign-in');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
   const signupEnabled = useMemo(() => isPublicSignupEnabled(), []);
 
@@ -59,17 +60,27 @@ export const SignIn: React.FC = () => {
 
   const handleSignIn = async (values: z.infer<typeof signInSchema>) => {
     setLoading(true);
-    const { error: authError } = await authClient.signIn.email({
-      email: values.email,
-      password: values.password,
-      callbackURL,
-    });
+    setError(null);
+    try {
+      const { error: authError } = await authClient.signIn.email({
+        email: values.email,
+        password: values.password,
+        callbackURL,
+      });
 
-    if (authError) {
-      if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
-        return;
+      if (authError) {
+        if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
+          return;
+        }
+        const msg = authError.message || 'Invalid email or password. Please verify your credentials.';
+        setError(msg);
+        toast.error(msg);
       }
-      toast.error(authError.message || 'Sign in failed. Please try again.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error communicating with authentication service.';
+      setError(msg);
+      toast.error(msg);
+    } finally {
       setLoading(false);
     }
   };
@@ -81,44 +92,62 @@ export const SignIn: React.FC = () => {
     }
 
     setLoading(true);
-    const { error: authError } = await authClient.signUp.email({
-      email: values.email,
-      password: values.password,
-      name: values.name,
-      callbackURL,
-    });
+    setError(null);
+    try {
+      const { error: authError } = await authClient.signUp.email({
+        email: values.email,
+        password: values.password,
+        name: values.name,
+        callbackURL,
+      });
 
-    if (authError) {
-      toast.error(authError.message || 'Sign up failed. Please try again.');
+      if (authError) {
+        const msg = authError.message || 'Registration failed. Please check your details.';
+        setError(msg);
+        toast.error(msg);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error during registration.';
+      setError(msg);
+      toast.error(msg);
+    } finally {
       setLoading(false);
     }
   };
 
   const handleGoogleSignIn = async () => {
     setLoading(true);
-    await authClient.signIn.social({
-      provider: 'google',
-      callbackURL,
-    });
+    setError(null);
+    try {
+      await authClient.signIn.social({
+        provider: 'google',
+        callbackURL,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Social authentication unavailable.';
+      setError(msg);
+      toast.error(msg);
+      setLoading(false);
+    }
   };
 
   return (
     <div className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2">
       {/* Left (38.2%): Monumental Space Grotesk Headline & Telemetry */}
       <div className="w-full min-w-0 flex flex-col justify-center p-8 sm:p-12 lg:p-xl border-b lg:border-b-0 lg:border-r border-border/40 bg-background/50 backdrop-blur-sm relative">
-        
+
 
         <div className="my-12 lg:my-0">
           <div className="flex items-center gap-3">
-          <div className="flex h-4 gap-1 items-center">
-            <div className="w-0.5 h-3 bg-[#0066B1] -skew-x-12" />
-            <div className="w-0.5 h-3 bg-[#1C69D4] -skew-x-12" />
-            <div className="w-0.5 h-3 bg-[#E22718] -skew-x-12" />
+            <div className="flex h-4 gap-1 items-center">
+              <div className="w-0.5 h-3 bg-[#0066B1] -skew-x-12" />
+              <div className="w-0.5 h-3 bg-[#1C69D4] -skew-x-12" />
+              <div className="w-0.5 h-3 bg-[#E22718] -skew-x-12" />
+            </div>
+            <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
+              SWYRA // M Telemetry System v2.1
+            </span>
           </div>
-          <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
-            SWYRA // M Telemetry System v2.1
-          </span>
-        </div>
           <h1 className="font-heading text-5xl sm:text-6xl lg:text-[90px] leading-[1] tracking-[-0.04em] font-normal text-foreground">
             Digital<br />Telemetry.
           </h1>
@@ -170,6 +199,15 @@ export const SignIn: React.FC = () => {
                 <TabsContent value="sign-in" className="animate-in fade-in duration-300">
                   <Form {...signInForm}>
                     <form onSubmit={signInForm.handleSubmit(handleSignIn)} className="space-y-[21px]">
+                      {error && (
+                        <div className="rounded-[16px] border border-destructive/30 bg-destructive/10 p-3.5 font-mono text-xs text-destructive flex items-center gap-2.5 animate-in fade-in zoom-in-95">
+                          <svg className="size-4 shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <span>{error}</span>
+                        </div>
+                      )}
+
                       <FormField
                         control={signInForm.control}
                         name="email"
@@ -177,11 +215,11 @@ export const SignIn: React.FC = () => {
                           <FormItem className="space-y-1">
                             <FormLabel>Email Address</FormLabel>
                             <FormControl>
-                              <Input 
-                                type="email" 
-                                placeholder="pilot@swyra.com" 
-                                {...field} 
-                                disabled={loading} 
+                              <Input
+                                type="email"
+                                placeholder="pilot@swyra.com"
+                                {...field}
+                                disabled={loading}
                               />
                             </FormControl>
                             <FormMessage />
@@ -196,11 +234,11 @@ export const SignIn: React.FC = () => {
                           <FormItem className="space-y-1">
                             <FormLabel>Password</FormLabel>
                             <FormControl>
-                              <Input 
-                                type="password" 
-                                placeholder="••••••••••••" 
-                                {...field} 
-                                disabled={loading} 
+                              <Input
+                                type="password"
+                                placeholder="••••••••••••"
+                                {...field}
+                                disabled={loading}
                               />
                             </FormControl>
                             <FormMessage />
@@ -227,9 +265,9 @@ export const SignIn: React.FC = () => {
                             </FormItem>
                           )}
                         />
-                        <Link 
-                          to="/forgot-password" 
-                          viewTransition 
+                        <Link
+                          to="/forgot-password"
+                          viewTransition
                           className="font-mono text-xs uppercase tracking-wider text-accent hover:underline"
                         >
                           Recover Key
@@ -250,11 +288,11 @@ export const SignIn: React.FC = () => {
                     <Separator className="flex-1" />
                   </div>
 
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    className="w-full" 
-                    onClick={handleGoogleSignIn} 
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleGoogleSignIn}
                     disabled={loading}
                   >
                     <svg className="h-4 w-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
@@ -271,6 +309,15 @@ export const SignIn: React.FC = () => {
                   <TabsContent value="sign-up" className="animate-in fade-in duration-300">
                     <Form {...signUpForm}>
                       <form onSubmit={signUpForm.handleSubmit(handleSignUp)} className="space-y-[21px]">
+                        {error && (
+                          <div className="rounded-[16px] border border-destructive/30 bg-destructive/10 p-3.5 font-mono text-xs text-destructive flex items-center gap-2.5 animate-in fade-in zoom-in-95">
+                            <svg className="size-4 shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span>{error}</span>
+                          </div>
+                        )}
+
                         <FormField
                           control={signUpForm.control}
                           name="name"
@@ -292,7 +339,7 @@ export const SignIn: React.FC = () => {
                             <FormItem className="space-y-1">
                               <FormLabel>Email Address</FormLabel>
                               <FormControl>
-                                <Input type="email" placeholder="driver@bmw-m.com" {...field} disabled={loading} />
+                                <Input type="email" placeholder="pilot@swyra.com" {...field} disabled={loading} />
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -335,11 +382,11 @@ export const SignIn: React.FC = () => {
                       <Separator className="flex-1" />
                     </div>
 
-                    <Button 
-                      type="button" 
-                      variant="outline" 
-                      className="w-full" 
-                      onClick={handleGoogleSignIn} 
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      onClick={handleGoogleSignIn}
                       disabled={loading}
                     >
                       <svg className="h-4 w-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
