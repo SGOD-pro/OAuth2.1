@@ -88,7 +88,7 @@ export const AdminClients: React.FC = () => {
         </div>
 
         <Dialog open={!!confirmDelete} onOpenChange={(open) => !open && setConfirmDelete(null)}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="sm:max-w-[480px] w-full">
             <DialogHeader>
               <DialogTitle>Revoke Application</DialogTitle>
               <DialogDescription>

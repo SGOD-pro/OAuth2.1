@@ -46,7 +46,7 @@ export const ProvisionAdminModal: React.FC<ProvisionAdminModalProps> = ({ client
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-[500px] w-full">
         <form onSubmit={handleSubmit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Provision Application Admin</DialogTitle>

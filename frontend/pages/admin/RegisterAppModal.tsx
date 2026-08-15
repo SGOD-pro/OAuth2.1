@@ -149,7 +149,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-[620px] w-full">
         <DialogHeader>
           <DialogTitle>
             {created ? 'Application Credentials Generated' : 'Register OAuth 2.1 Application'}
@@ -216,7 +216,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
                 Application Name <span className="text-destructive">*</span>
               </label>
               <Input
-                placeholder="BMW Telemetry App"
+                placeholder="SWYRA Telemetry App"
                 required
                 value={form.clientName}
                 onChange={(e) => setForm((f) => ({ ...f, clientName: e.target.value }))}

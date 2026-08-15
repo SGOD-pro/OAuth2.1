@@ -87,7 +87,7 @@ export const AdminSecurity: React.FC = () => {
 
   return (
     <AdminLayout>
-      <div className="flex flex-col flex-1 max-w-3xl">
+      <div className="flex flex-col flex-1 max-w-[900px] w-full">
         <div className="mb-8">
           <span className="font-mono text-xs uppercase tracking-[0.2em] text-accent mb-1 block">
             Cryptographic Authentication
