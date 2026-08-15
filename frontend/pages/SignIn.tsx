@@ -33,10 +33,17 @@ export const SignIn: React.FC = () => {
   const [searchParams] = useSearchParams();
   const signupEnabled = useMemo(() => isPublicSignupEnabled(), []);
 
-  const callbackURL = useMemo(
-    () => safeCallbackURL(searchParams.get('callbackURL')),
-    [searchParams]
-  );
+  const callbackURL = useMemo(() => {
+    const explicit = safeCallbackURL(searchParams.get('callbackURL'));
+    if (explicit) return explicit;
+
+    if (searchParams.get('client_id') && searchParams.get('redirect_uri')) {
+      const issuer = import.meta.env.VITE_AUTH_URL || '';
+      return `${issuer}/api/auth/oauth2/authorize?${searchParams.toString()}`;
+    }
+
+    return undefined;
+  }, [searchParams]);
 
   const signInForm = useForm<z.infer<typeof signInSchema>>({
     resolver: zodResolver(signInSchema),

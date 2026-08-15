@@ -34,5 +34,5 @@ export function isStrongPassword(password: string): boolean {
 }
 
 export function isPublicSignupEnabled(): boolean {
-  return !import.meta.env.PROD || import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED === 'true';
+  return import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED !== 'false';
 }
