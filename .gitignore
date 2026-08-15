@@ -21,3 +21,8 @@ examples
 hono/rate-limit-test.cjs
 hono/test2.cjs
 skills-lock.json
+.next
+.dist
+dist
+
+test

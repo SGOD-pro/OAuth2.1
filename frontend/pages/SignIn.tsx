@@ -61,6 +61,7 @@ export const SignIn: React.FC = () => {
   const handleSignIn = async (values: z.infer<typeof signInSchema>) => {
     setLoading(true);
     setError(null);
+
     try {
       const { error: authError } = await authClient.signIn.email({
         email: values.email,

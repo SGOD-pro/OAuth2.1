@@ -106,15 +106,16 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error((body as { message?: string }).message || `HTTP ${res.status}`);
+        const msg = (body as { error?: string; message?: string }).error || (body as { error?: string; message?: string }).message || `Server returned HTTP ${res.status}`;
+        throw new Error(msg);
       }
 
       const updatedClient = await res.json();
       setSuccess(true);
       onSuccess(updatedClient);
       setTimeout(() => onClose(), 1200);
-    } catch (err) {
-      setError(String(err));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
