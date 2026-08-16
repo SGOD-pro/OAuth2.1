@@ -28,6 +28,7 @@ admin.get("/clients", async (c) => {
       skip_consent: client.skipConsent || false,
       enable_end_session: client.enableEndSession ?? true,
       is_dev: Boolean(client.isDev || client.metadata?.isDev || false),
+      is_public_client: Boolean(client.isPublicClient),
       metadata: {
         allowedOrigins: client.allowedOrigins || [],
         isDev: Boolean(client.isDev || client.metadata?.isDev || false),
@@ -95,6 +96,8 @@ admin.post("/clients", async (c) => {
     return c.json({ error: `Invalid redirect_uri: ${invalidAllowedOrigin}` }, 400);
   }
 
+  const isPublicClient = Boolean(body.public_client);
+
   const result = (await authProvider.api.adminCreateOAuthClient({
     headers: getHeaders(c),
     body: {
@@ -107,14 +110,22 @@ admin.post("/clients", async (c) => {
   })) as unknown as { client_id: string };
 
   const database = await getDb();
+  const mongoUpdate: Record<string, unknown> = { allowedOrigins, isDev };
+
+  // Public client: remove client secret so token endpoint skips secret validation
+  if (isPublicClient) {
+    mongoUpdate.clientSecret = null;
+    mongoUpdate.isPublicClient = true;
+  }
+
   await database.collection("oauthClient").updateOne(
     { clientId: result.client_id },
-    { $set: { allowedOrigins, isDev } },
+    { $set: mongoUpdate },
   );
 
   await clearOriginCache();
 
-  return c.json(result, 201);
+  return c.json({ ...result, is_public_client: isPublicClient }, 201);
 });
 
 admin.patch("/clients/:id", async (c) => {
@@ -185,6 +196,19 @@ admin.patch("/clients/:id", async (c) => {
   const updateFields: Record<string, unknown> = {};
   if (allowedOrigins !== null) updateFields.allowedOrigins = allowedOrigins;
   if (typeof body.is_dev === "boolean") updateFields.isDev = body.is_dev;
+
+  // Toggle public client: null out or restore the client secret
+  if (typeof body.public_client === "boolean") {
+    updateFields.isPublicClient = body.public_client;
+    if (body.public_client) {
+      // Backup original secret and null it so token endpoint skips secret validation
+      const existing = await database.collection("oauthClient").findOne({ clientId: id });
+      if (existing?.clientSecret) {
+        updateFields._clientSecretBackup = existing.clientSecret;
+      }
+      updateFields.clientSecret = null;
+    }
+  }
 
   if (Object.keys(updateFields).length > 0) {
     await database.collection("oauthClient").updateOne(

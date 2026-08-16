@@ -36,13 +36,20 @@ export const Consent: React.FC = () => {
     setLoading(true);
 
     try {
-      const { error: consentError } = await authClient.oauth2.consent({
+      const oauth_query = searchParams.get('oauth_query') || undefined;
+      const res = await authClient.oauth2.consent({
         accept,
         scope: accept ? rawScope : undefined,
+        oauth_query,
       });
 
-      if (consentError) {
-        toast.error(consentError.message || 'Consent failed.');
+      if (res?.error) {
+        toast.error(res.error.message || 'Consent failed.');
+        setLoading(false);
+      } else if (res?.data?.url) {
+        window.location.href = res.data.url;
+      } else if (res?.data?.redirect) {
+        // Better Auth redirect
         setLoading(false);
       }
     } catch {
