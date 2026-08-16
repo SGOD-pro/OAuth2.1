@@ -70,27 +70,25 @@ export const SignIn: React.FC = () => {
     setError(null);
 
     try {
-      const { error: authError, data } = await authClient.signIn.email({
+      const { error: authError } = await authClient.signIn.email({
         email: values.email,
         password: values.password,
-        // Do NOT pass callbackURL here — letting Better Auth redirect internally
-        // causes a full page navigation even on error. We redirect manually below.
+        callbackURL,
       });
 
       if (authError) {
         if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
-          // Better Auth will have already navigated to 2FA page
           return;
         }
         const msg = authError.message || 'Invalid email or password. Please verify your credentials.';
         setError(msg);
         toast.error(msg);
         setLoading(false);
-      } else if (data) {
-        // Successfully authenticated — now forward through OAuth authorize flow
+      } else {
+        // Better Auth SDK handles the redirect to callbackURL internally.
+        // If there is no callbackURL (direct visit), just show a success message.
         if (callbackURL) {
           setRedirecting(true);
-          window.location.href = callbackURL;
         } else {
           setLoading(false);
           toast.success("Successfully authenticated.");
@@ -113,11 +111,11 @@ export const SignIn: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const { error: authError, data } = await authClient.signUp.email({
+      const { error: authError } = await authClient.signUp.email({
         email: values.email,
         password: values.password,
         name: values.name,
-        // Do NOT pass callbackURL — prevents page reload masking duplicate-email errors
+        callbackURL,
       });
 
       if (authError) {
@@ -125,11 +123,10 @@ export const SignIn: React.FC = () => {
         setError(msg);
         toast.error(msg);
         setLoading(false);
-      } else if (data) {
-        // Registered successfully — forward through OAuth authorize flow
+      } else {
+        // Better Auth SDK handles redirect to callbackURL internally.
         if (callbackURL) {
           setRedirecting(true);
-          window.location.href = callbackURL;
         } else {
           setLoading(false);
           toast.success("Account created successfully! Please sign in.");
