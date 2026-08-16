@@ -13,7 +13,13 @@ export type AuthInstance = ReturnType<typeof betterAuth>;
 export const authProvider = betterAuth({
     appName: "SWYRA Auth", // TOTP issuer label shown in authenticator apps
     baseURL: config.auth.baseURL,
-    trustedOrigins: [config.frontendUrl],
+    trustedOrigins: [
+        config.frontendUrl,
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:5173",
+        "https://oauth21.vercel.app"
+    ],
     secret: config.auth.secret,
 
     emailAndPassword: {
@@ -39,7 +45,7 @@ export const authProvider = betterAuth({
     advanced: {
         useSecureCookies: config.env === "production",
         disableCSRFCheck: false,
-        disableOriginCheck: false,
+        disableOriginCheck: true,
         defaultCookieAttributes: {
             httpOnly: true,
             secure: config.env === "production",
