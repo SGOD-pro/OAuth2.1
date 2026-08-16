@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { authClient, useSession } from '@/lib/auth-client';
+import { authClient } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -30,11 +30,9 @@ export const SignIn: React.FC = () => {
   const [tab, setTab] = useState('sign-in');
   const [loading, setLoading] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
-  const [switchingAccount, setSwitchingAccount] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
   const signupEnabled = useMemo(() => isPublicSignupEnabled(), []);
-  const { data: session } = useSession();
 
   const callbackURL = useMemo(() => {
     const explicit = safeCallbackURL(searchParams.get('callbackURL'));
@@ -224,65 +222,15 @@ export const SignIn: React.FC = () => {
                   </span>
                 </div>
                 <h2 className="font-heading text-[34px] leading-[1.2] tracking-[-0.02em] font-normal text-foreground">
-                  {session?.user && !switchingAccount ? 'Active Session' : tab === 'sign-in' ? 'Authenticate' : 'Register Pilot'}
+                  {tab === 'sign-in' ? 'Authenticate' : 'Register Pilot'}
                 </h2>
               </div>
 
-              {session?.user && !switchingAccount ? (
-                <div className="space-y-6 animate-in fade-in duration-300">
-                  <div className="flex items-center gap-3.5 p-4 rounded-xl border border-primary/20 bg-primary/5">
-                    <div className="size-11 rounded-lg bg-primary/20 border border-primary/30 flex items-center justify-center font-mono font-bold text-primary text-base">
-                      {(session.user.name || session.user.email || 'U')[0].toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-foreground truncate">
-                          {session.user.name || 'Active Pilot'}
-                        </span>
-                        <span className="text-[9px] font-mono uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded-full font-semibold">
-                          Active Session
-                        </span>
-                      </div>
-                      <p className="text-xs font-mono text-muted-foreground truncate mt-0.5">
-                        {session.user.email}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <Button
-                      type="button"
-                      className="w-full bg-[#0066B1] hover:bg-[#1C69D4] text-white font-mono text-xs uppercase tracking-wider py-5 cursor-pointer shadow-md"
-                      onClick={() => {
-                        setRedirecting(true);
-                        if (callbackURL) {
-                          window.location.href = callbackURL;
-                        }
-                      }}
-                    >
-                      <span>Continue as {session.user.name?.split(' ')[0] || session.user.email}</span>
-                      <span aria-hidden="true" className="ml-1">→</span>
-                    </Button>
-
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full font-mono text-xs uppercase tracking-wider py-5 border-border/40 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 cursor-pointer"
-                      onClick={async () => {
-                        setSwitchingAccount(true);
-                        await authClient.signOut();
-                      }}
-                    >
-                      <span>Sign In with Different Account</span>
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <Tabs value={tab} onValueChange={setTab} className="w-full">
-                  <TabsList className={`w-full grid ${signupEnabled ? 'grid-cols-2' : 'grid-cols-1'} mb-8`}>
-                    <TabsTrigger value="sign-in">Sign In</TabsTrigger>
-                    {signupEnabled && <TabsTrigger value="sign-up">Sign Up</TabsTrigger>}
-                  </TabsList>
+              <Tabs value={tab} onValueChange={setTab} className="w-full">
+                <TabsList className={`w-full grid ${signupEnabled ? 'grid-cols-2' : 'grid-cols-1'} mb-8`}>
+                  <TabsTrigger value="sign-in">Sign In</TabsTrigger>
+                  {signupEnabled && <TabsTrigger value="sign-up">Sign Up</TabsTrigger>}
+                </TabsList>
 
                   <TabsContent value="sign-in" className="animate-in fade-in duration-300">
                     <Form {...signInForm}>
@@ -524,7 +472,6 @@ export const SignIn: React.FC = () => {
                     </TabsContent>
                   )}
                 </Tabs>
-              )}
             </CardContent>
           </Card>
         </div>
