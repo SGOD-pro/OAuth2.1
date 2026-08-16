@@ -85,7 +85,13 @@ export const SignIn: React.FC = () => {
         toast.error(msg);
         setLoading(false);
       } else {
-        setRedirecting(true);
+        if (callbackURL) {
+          setRedirecting(true);
+          window.location.href = callbackURL;
+        } else {
+          setLoading(false);
+          toast.success("Successfully authenticated.");
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Network error communicating with authentication service.';
@@ -117,7 +123,14 @@ export const SignIn: React.FC = () => {
         toast.error(msg);
         setLoading(false);
       } else {
-        setRedirecting(true);
+        if (callbackURL) {
+          setRedirecting(true);
+          window.location.href = callbackURL;
+        } else {
+          setLoading(false);
+          toast.success("Account created successfully! Please sign in.");
+          setTab('sign-in');
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Network error during registration.';

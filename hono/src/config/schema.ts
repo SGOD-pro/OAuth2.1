@@ -18,7 +18,7 @@ export const envSchema = z.object({
     GOOGLE_CLIENT_SECRET: z.string(),
     FRONTEND_URL: z.string(),
     TRUSTED_PROXY_CIDRS: z.string().default(''),
-    AUTH_PUBLIC_SIGNUP_ENABLED: z.string().default('false'),
+    AUTH_PUBLIC_SIGNUP_ENABLED: z.string().default('true'),
     AUTH_EMAIL_VERIFICATION_ENABLED: z.string().default('false'),
 
     VITE_CLIENT_ID: z.string().optional(),

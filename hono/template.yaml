@@ -41,6 +41,7 @@ Resources:
           GOOGLE_CLIENT_ID: !Ref GoogleClientId
           GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret
           FRONTEND_URL: !Ref FrontendUrl
+          AUTH_PUBLIC_SIGNUP_ENABLED: "true"
       FunctionUrlConfig:
         AuthType: NONE
 
