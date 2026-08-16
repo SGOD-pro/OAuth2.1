@@ -30,6 +30,11 @@ export const config = Object.freeze({
 
     frontendUrl: parsedEnv.FRONTEND_URL,
 
+    app: {
+        clientId: parsedEnv.VITE_CLIENT_ID,
+        publicKey: parsedEnv.PUBLIC_KEY,
+    },
+
     trustedProxyCidrs:
         parsedEnv.TRUSTED_PROXY_CIDRS
             .split(',')

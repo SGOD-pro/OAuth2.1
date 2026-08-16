@@ -20,6 +20,9 @@ export const envSchema = z.object({
     TRUSTED_PROXY_CIDRS: z.string().default(''),
     AUTH_PUBLIC_SIGNUP_ENABLED: z.string().default('false'),
     AUTH_EMAIL_VERIFICATION_ENABLED: z.string().default('false'),
+
+    VITE_CLIENT_ID: z.string().optional(),
+    PUBLIC_KEY: z.string().optional(),
 })
 
 export type Env = z.infer<typeof envSchema>

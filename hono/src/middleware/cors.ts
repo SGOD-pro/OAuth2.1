@@ -6,7 +6,7 @@ import {
   setCachedOrigin,
 } from "../cache/origin-cache";
 import { getDb } from "../db/mongo";
-import { normalizeOrigin, originMatchesRedirectUri } from "../utils/security";
+import { isLoopbackHost, normalizeOrigin, originMatchesRedirectUri } from "../utils/security";
 
 const CORS_ALLOW_HEADERS =
   "Content-Type,Authorization,X-CSRF-Token,x-csrf-token";
@@ -70,7 +70,9 @@ export async function dynamicCors(c: Context, next: Next) {
   const normalizedOrigin = origin ? normalizeOrigin(origin) : null;
 
   // Allow internal frontend (and same-origin / non-browser requests without Origin)
-  if (!normalizedOrigin || normalizedOrigin === ownFrontend) {
+  // In development, also permit local loopback origins (localhost / 127.0.0.1)
+  const isDevLoopback = config.env !== "production" && normalizedOrigin && isLoopbackHost(new URL(normalizedOrigin).hostname);
+  if (!normalizedOrigin || normalizedOrigin === ownFrontend || isDevLoopback) {
     applyCorsHeaders(c, normalizedOrigin || ownFrontend);
 
     if (c.req.method === "OPTIONS") {

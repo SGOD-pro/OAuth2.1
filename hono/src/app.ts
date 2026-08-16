@@ -55,6 +55,5 @@ app.get("/", (c) => c.json({ message: "Health check", status: "ok" }));
 app.route("/api/admin", admin);  // all /api/admin/* routes
 app.route("/api/auth", auth);    // all /api/auth/* routes
 
-import testRoute from "./routes/test";
-app.route("/api/test", testRoute);
 export default app;
+
