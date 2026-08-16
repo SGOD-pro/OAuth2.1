@@ -202,7 +202,7 @@ export const SignIn: React.FC = () => {
                 <h3 className="font-heading text-2xl font-normal text-foreground mb-2">
                   Identity Verified
                 </h3>
-                <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground max-w-xs mb-4">
+                <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground text-center mb-4">
                   Establishing authorized token session & redirecting...
                 </p>
                 <div className="flex items-center gap-2 text-xs font-mono text-primary/90 bg-primary/10 px-3 py-1.5 rounded-full border border-primary/20">
