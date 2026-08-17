@@ -73,10 +73,10 @@ export const SignIn: React.FC = () => {
       const { error: authError } = await authClient.signIn.email({
         email: values.email,
         password: values.password,
-        callbackURL,
       });
 
       if (authError) {
+        setRedirecting(false);
         if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
           return;
         }
@@ -85,16 +85,16 @@ export const SignIn: React.FC = () => {
         toast.error(msg);
         setLoading(false);
       } else {
-        // Better Auth SDK handles the redirect to callbackURL internally.
-        // If there is no callbackURL (direct visit), just show a success message.
         if (callbackURL) {
           setRedirecting(true);
+          window.location.replace(callbackURL);
         } else {
           setLoading(false);
           toast.success("Successfully authenticated.");
         }
       }
     } catch (err: unknown) {
+      setRedirecting(false);
       const msg = err instanceof Error ? err.message : 'Network error communicating with authentication service.';
       setError(msg);
       toast.error(msg);
@@ -109,24 +109,27 @@ export const SignIn: React.FC = () => {
     }
 
     setLoading(true);
+    setRedirecting(false);
     setError(null);
     try {
       const { error: authError } = await authClient.signUp.email({
         email: values.email,
         password: values.password,
         name: values.name,
-        callbackURL,
       });
 
       if (authError) {
-        const msg = authError.message || 'Registration failed. Please check your details.';
+        setRedirecting(false);
+        const msg = authError.message?.toLowerCase().includes('already exists')
+          ? 'An account with this email already exists. Please sign in instead.'
+          : (authError.message || 'Registration failed. Please check your details.');
         setError(msg);
         toast.error(msg);
         setLoading(false);
       } else {
-        // Better Auth SDK handles redirect to callbackURL internally.
         if (callbackURL) {
           setRedirecting(true);
+          window.location.replace(callbackURL);
         } else {
           setLoading(false);
           toast.success("Account created successfully! Please sign in.");
@@ -134,6 +137,7 @@ export const SignIn: React.FC = () => {
         }
       }
     } catch (err: unknown) {
+      setRedirecting(false);
       const msg = err instanceof Error ? err.message : 'Network error during registration.';
       setError(msg);
       toast.error(msg);
