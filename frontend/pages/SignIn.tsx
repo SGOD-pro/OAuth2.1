@@ -112,13 +112,15 @@ export const SignIn: React.FC = () => {
     setRedirecting(false);
     setError(null);
     try {
-      const { error: authError } = await authClient.signUp.email({
+      const res = await authClient.signUp.email({
         email: values.email,
         password: values.password,
         name: values.name,
         // callbackURL,
       });
-      console.log("authError:", authError);
+      console.log("res:", res);
+      const { error: authError } = res
+      console.log("authError:", error);
       if (authError) {
         setRedirecting(false);
         const msg = authError.message?.toLowerCase().includes('already exists')
