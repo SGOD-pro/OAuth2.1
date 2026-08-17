@@ -115,11 +115,8 @@ export const SignIn: React.FC = () => {
         email: values.email,
         password: values.password,
         name: values.name,
-        callbackURL,
       });
-      console.log("res:", res);
-      const { error: authError } = res
-      console.log("authError:", error);
+      const { error: authError } = res;
       if (authError) {
         setRedirecting(false);
         const msg = authError.message?.toLowerCase().includes('already exists')
@@ -128,13 +125,30 @@ export const SignIn: React.FC = () => {
         setError(msg);
         toast.error(msg);
         setLoading(false);
+        return;
+      }
+
+      // Explicitly sign the user in after registration to establish a session
+      // (in production, Better Auth autoSignIn is disabled, so no session is created on signUp alone)
+      const { error: signInError } = await authClient.signIn.email({
+        email: values.email,
+        password: values.password,
+        callbackURL,
+      });
+
+      if (signInError) {
+        setRedirecting(false);
+        setLoading(false);
+        toast.success("Account created successfully! Please sign in with your credentials.");
+        signInForm.setValue('email', values.email);
+        setTab('sign-in');
       } else {
         if (callbackURL) {
           setRedirecting(true);
+          // window.location.href = callbackURL;
         } else {
           setLoading(false);
-          toast.success("Account created successfully! Please sign in.");
-          setTab('sign-in');
+          toast.success("Account created and signed in successfully!");
         }
       }
     } catch (err: unknown) {

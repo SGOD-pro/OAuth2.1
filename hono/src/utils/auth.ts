@@ -48,7 +48,7 @@ export const authProvider = betterAuth({
     advanced: {
         useSecureCookies: config.env === "production",
         disableCSRFCheck: false,
-        disableOriginCheck: true,
+        disableOriginCheck: false,
         defaultCookieAttributes: {
             httpOnly: true,
             secure: config.env === "production",
