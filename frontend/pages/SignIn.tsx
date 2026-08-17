@@ -73,6 +73,7 @@ export const SignIn: React.FC = () => {
       const { error: authError } = await authClient.signIn.email({
         email: values.email,
         password: values.password,
+        callbackURL,
       });
 
       if (authError) {
@@ -87,7 +88,6 @@ export const SignIn: React.FC = () => {
       } else {
         if (callbackURL) {
           setRedirecting(true);
-          window.location.replace(callbackURL);
         } else {
           setLoading(false);
           toast.success("Successfully authenticated.");
@@ -116,6 +116,7 @@ export const SignIn: React.FC = () => {
         email: values.email,
         password: values.password,
         name: values.name,
+        callbackURL,
       });
 
       if (authError) {
@@ -129,7 +130,6 @@ export const SignIn: React.FC = () => {
       } else {
         if (callbackURL) {
           setRedirecting(true);
-          window.location.replace(callbackURL);
         } else {
           setLoading(false);
           toast.success("Account created successfully! Please sign in.");
