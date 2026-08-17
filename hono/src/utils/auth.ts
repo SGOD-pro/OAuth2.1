@@ -163,7 +163,7 @@ export const authProvider = betterAuth({
                 revoke: { window: 60, max: 30 },
                 userinfo: { window: 60, max: 60 },
             },
-            
+
             client: {
                 fields: {
                     adminUserId: { type: "string", required: false },
@@ -182,8 +182,8 @@ export function validateAuthPasswordBoundary(path: string, body: unknown): strin
         path.endsWith("/sign-up/email")
             ? (body as { password?: unknown }).password
             : path.endsWith("/reset-password")
-              ? (body as { newPassword?: unknown }).newPassword
-              : null;
+                ? (body as { newPassword?: unknown }).newPassword
+                : null;
 
     if (candidate === null) return null;
     if (typeof candidate !== "string" || !isStrongPassword(candidate)) {

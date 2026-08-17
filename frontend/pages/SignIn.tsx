@@ -107,7 +107,6 @@ export const SignIn: React.FC = () => {
       toast.error('Public sign-up is disabled.');
       return;
     }
-    console.log("handleSignUp called with callbackURL:", callbackURL);
     setLoading(true);
     setRedirecting(false);
     setError(null);
@@ -116,7 +115,7 @@ export const SignIn: React.FC = () => {
         email: values.email,
         password: values.password,
         name: values.name,
-        // callbackURL,
+        callbackURL,
       });
       console.log("res:", res);
       const { error: authError } = res
