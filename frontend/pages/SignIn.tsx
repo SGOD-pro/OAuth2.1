@@ -116,7 +116,7 @@ export const SignIn: React.FC = () => {
         email: values.email,
         password: values.password,
         name: values.name,
-        callbackURL,
+        // callbackURL,
       });
       console.log("authError:", authError);
       if (authError) {
