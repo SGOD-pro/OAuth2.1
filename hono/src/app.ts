@@ -54,6 +54,7 @@ app.use("/api/admin/*", requireAdmin);
 app.get("/", (c) => c.json({ message: "Health check", status: "ok" }));
 app.route("/api/admin", admin);  // all /api/admin/* routes
 app.route("/api/auth", auth);    // all /api/auth/* routes
+app.route("/.well-known", auth); // all /.well-known/* routes (JWKS, OIDC Discovery)
 
 export default app;
 

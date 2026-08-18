@@ -5,6 +5,10 @@
       "destination": "https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/api/:path*"
     },
     {
+      "source": "/.well-known/:path*",
+      "destination": "https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/.well-known/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

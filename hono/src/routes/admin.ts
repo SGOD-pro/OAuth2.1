@@ -103,10 +103,13 @@ admin.post("/clients", async (c) => {
     body: {
       client_name: body.client_name as string,
       redirect_uris: redirectUris,
-      allowed_origins: allowedOrigins,
       skip_consent: (body.skip_consent as boolean) ?? false,
       enable_end_session: (body.enable_end_session as boolean) ?? true,
-    },
+      metadata: {
+        allowedOrigins,
+        isDev,
+      },
+    } as any,
   })) as unknown as { client_id: string };
 
   const database = await getDb();
@@ -344,7 +347,7 @@ admin.post("/users", async (c) => {
     // 2. Update the user document to set role: "admin"
     const database = await getDb();
     await database.collection("user").updateOne(
-      { _id: userId },
+      { $or: [{ id: userId }, { _id: userId }] } as any,
       { $set: { role: "admin" } }
     );
 

@@ -38,7 +38,7 @@ Never expose refresh tokens to JavaScript.
 5. XSS (Cross-Site Scripting)
 
 Risk: Malicious JavaScript steals data.
-
+does the server have xml scripting protection..??
 Never store sensitive tokens in LocalStorage.
 Escape user-generated content.
 Enable Content Security Policy (CSP).

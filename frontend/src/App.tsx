@@ -17,6 +17,9 @@ const Consent = lazy(() => import('@/pages/Consent').then((module) => ({ default
 const AuthCallback = lazy(() =>
   import('@/pages/AuthCallback').then((module) => ({ default: module.AuthCallback }))
 );
+const SignOut = lazy(() =>
+  import('@/pages/SignOut').then((module) => ({ default: module.SignOut }))
+);
 const NotFound = lazy(() =>
   import('@/pages/NotFound').then((module) => ({ default: module.NotFound }))
 );
@@ -52,6 +55,7 @@ const router = createBrowserRouter([
   { path: '/reset-password', element: withLayout(<ResetPassword />) },
   { path: '/consent', element: withLayout(<Consent />) },
   { path: '/callback', element: withLayout(<AuthCallback />) },
+  { path: '/signout', element: <SignOut /> },
 
   // ── Admin panel (role-gated) ───────────────────────────────────
   { path: '/admin/login', element: withSuspense(<AdminLogin />) },
