@@ -22,7 +22,7 @@ admin.get("/clients", async (c) => {
       id: String(client._id),
       client_id: client.clientId,
       client_name: client.name,
-      client_secret: client.clientSecret,
+      // client_secret intentionally omitted — secrets are only returned at creation (POST /clients)
       redirect_uris: client.redirectUris || [],
       disabled: client.disabled || false,
       skip_consent: client.skipConsent || false,
@@ -52,9 +52,14 @@ admin.get("/clients/:id", async (c) => {
   const result = await authProvider.api.getOAuthClient({
     headers: getHeaders(c),
     query: { client_id: id },
-  });
+  }) as Record<string, unknown> | null;
 
-  return c.json(result);
+  if (!result) return c.json({ error: "Client not found" }, 404);
+
+  // Strip client_secret — only returned once at creation time (POST /clients)
+  const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
+
+  return c.json(safeResult);
 });
 
 admin.post("/clients", async (c) => {
@@ -220,6 +225,20 @@ admin.patch("/clients/:id", async (c) => {
     );
   }
 
+  // Revoke all active tokens when a client is being disabled (P1-6)
+  const isBeingDisabled =
+    (typeof body.disabled === "boolean" && body.disabled === true) ||
+    (typeof body.is_active === "boolean" && body.is_active === false);
+
+  if (isBeingDisabled) {
+    await Promise.all([
+      database.collection("oauthAccessToken").deleteMany({ clientId: id }),
+      database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
+      database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
+    ]);
+    console.info({ event: "tokens_revoked_on_disable", clientId: id });
+  }
+
   await clearOriginCache();
 
   return c.json(result);
@@ -228,16 +247,19 @@ admin.patch("/clients/:id", async (c) => {
 admin.delete("/clients/:id", async (c) => {
   try {
     const id = c.req.param("id");
-    console.log("Delete client requested for id:", id);
     const database = await getDb();
-    
+
+    // Revoke all active OAuth tokens for this client before deleting (P1-6)
+    await Promise.all([
+      database.collection("oauthAccessToken").deleteMany({ clientId: id }),
+      database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
+      // Better Auth oauth-provider may use "oauthAuthorizationCode" for pending codes
+      database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
+    ]);
+
     const result = await database.collection("oauthClient").deleteOne({ clientId: id });
-    console.log("Delete client result:", result);
-    
+
     if (result.deletedCount === 0) {
-      // Try to find if the client exists to debug
-      const client = await database.collection("oauthClient").findOne({ clientId: id });
-      console.log("Found client with this id?", !!client);
       return c.json({ error: "Client not found" }, 404);
     }
 
@@ -375,5 +397,12 @@ admin.post("/users", async (c) => {
     return c.json({ error: "Failed to provision app admin", details: error instanceof Error ? error.message : String(error) }, 500);
   }
 });
+
+// P1-7: Catch-all for unknown /api/admin/* paths.
+// Note: requireAdmin in app.ts runs BEFORE route matching, so unauthenticated
+// requests to any /api/admin/* path still return 401 (auth gate wins, which is
+// correct — we don't leak whether specific sub-routes exist to attackers).
+// Authenticated non-admin users reaching this handler get 404.
+admin.all("*", (c) => c.json({ error: "Not found" }, 404));
 
 export default admin;

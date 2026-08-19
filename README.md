@@ -1,47 +1,92 @@
-# Self-Hosted OAuth 2.1 / OIDC Identity Provider
+# SWYRA Auth — Self-Hosted OAuth 2.1 / OIDC Identity Provider
 
-> A pre-written, config-only auth service you deploy once and own forever — with zero always-on infrastructure costs.
+> A production-ready, config-only OAuth 2.1 / OpenID Connect identity provider you deploy once and own forever — with zero always-on infrastructure costs.
 
-This is a complete, self-hosted OAuth 2.1 / OpenID Connect identity provider. Point it at a MongoDB database and deploy it anywhere — from serverless AWS Lambda to long-lived containers. Built with **Hono**, **MongoDB**, and the **Better Auth** identity engine. Includes a full-featured Admin Dashboard for managing OAuth clients, configuring dynamic CORS, and provisioning App Admin accounts.
+Built with **Hono**, **MongoDB Atlas**, and the **Better Auth** identity engine. Includes a high-aesthetic Admin Console for managing OAuth clients, configuring dynamic CORS, and provisioning App Admin accounts with built-in multi-tenant app isolation.
 
 ---
 
-## Quick Deployment & Setup Guide (Turnkey 5-Step Process)
+## System Architecture
 
-Follow these exact steps to get your backend and frontend live and connected with zero errors.
+```mermaid
+flowchart TD
+    subgraph Clients["Consumer Applications"]
+        NextApp["Next.js App (BFF)<br/>Port: 3001"]
+        ReactApp["React SPA<br/>Port: 5175"]
+        ExpressApp["Express API Backend<br/>Port: 4000"]
+    end
+
+    subgraph Gateway["SWYRA Auth Gateway (Port: 5174 / Production CDN)"]
+        ViteProxy["Vite / Vercel SPA Reverse Proxy<br/>Routes /api/* and /.well-known/*"]
+        AuthUI["Auth & Consent UI<br/>/auth, /admin, /consent"]
+    end
+
+    subgraph Core["Auth Service Core (Port: 3000 / AWS Lambda)"]
+        HonoApp["Hono Server / Better Auth Engine"]
+        AppIsolation["App Isolation Guard<br/>(user_app_registrations)"]
+        JWKSEndpoint["OIDC Discovery & JWKS<br/>/.well-known/jwks.json"]
+    end
+
+    subgraph Data["Storage Layer"]
+        MongoDB[("MongoDB Atlas<br/>user, account, session,<br/>oauthClient, user_app_registrations")]
+    end
+
+    NextApp -- "1. OAuth 2.1 Code Flow" --> Gateway
+    ReactApp -- "1. OAuth 2.1 Code Flow" --> Gateway
+    Gateway --> HonoApp
+    HonoApp --> AppIsolation
+    AppIsolation --> MongoDB
+    ExpressApp -- "2. Offline RS256 Verification / Introspection" --> JWKSEndpoint
+    NextApp -- "2. Verify JWT via JWKS" --> JWKSEndpoint
+```
+
+---
+
+## Key Architectural Principles
+
+1. **Strict Multi-Tenant App Isolation**:
+   - Users are registered on a per-client basis via `user_app_registrations`.
+   - A user registered on App A cannot authenticate or authorize on App B without explicitly completing registration for App B.
+   - Access tokens are cryptographically bound to the issuing `client_id`, preventing cross-application token replay attacks.
+2. **Unified Single-Origin Gateway**:
+   - In local development, the frontend dev server (`http://localhost:5174`) reverse-proxies `/api/*` and `/.well-known/*` to the Hono backend (`http://localhost:3000`), matching production CDN / Vercel behavior.
+   - All consumer apps configure `AUTH_ISSUER=http://localhost:5174`.
+3. **Plaintext Client Secret Rule**:
+   - Better Auth stores client secrets in MongoDB as encrypted/hashed ciphertext (`oauthClient` collection).
+   - Consumer application `.env` files must always contain the original **plaintext client secret** issued upon client creation in the Admin Dashboard.
+
+---
+
+## Turnkey 5-Step Deployment Guide
+
+Follow these steps to deploy your backend (AWS Lambda) and frontend (Vercel) with zero configuration errors.
 
 ```mermaid
 flowchart LR
     A[1. MongoDB Atlas<br/>Allow 0.0.0.0/0] --> B[2. Deploy Backend<br/>AWS Lambda via SAM]
     B --> C[3. Deploy Frontend<br/>Vercel SPA + VITE_AUTH_URL]
-    C --> D[4. Config OAuth & SAM<br/>GCP Console + samconfig.toml]
+    C --> D[4. Align OAuth & SAM<br/>GCP Console + samconfig.toml]
     D --> E[5. Provision Admin<br/>npm run admin:create]
 ```
 
----
-
 ### Step 1 — Database Setup (MongoDB Atlas)
-
-1. Sign up at [mongodb.com/atlas](https://www.mongodb.com/atlas) and create a free **M0 cluster**.
+1. Sign up at [mongodb.com/atlas](https://www.mongodb.com/atlas) and create an **M0 (Free)** cluster.
 2. Under **Database Access**, create a user with **Read and Write** privileges.
 3. Under **Network Access**, click **+ Add IP Address** → **ALLOW ACCESS FROM ANYWHERE** (`0.0.0.0/0`).
    > ⚠️ **Critical for Serverless (AWS Lambda):** Because AWS Lambda uses dynamic outbound IPs, you must allow `0.0.0.0/0` in Atlas or Lambda will time out with `MongoServerSelectionError`.
 4. Copy your connection string:
    ```text
-   mongodb+srv://<user>:<password>@cluster0.abc123.mongodb.net/oauth?retryWrites=true&w=majority
+   mongodb+srv://<user>:<password>@cluster0.abc123.mongodb.net/oauthservice?retryWrites=true&w=majority
    ```
 5. Initialize database indexes:
    ```bash
    cd hono
    cp .env.example .env
-   # Add your MONGO_URI and BETTER_AUTH_SECRET to hono/.env
+   # Set MONGO_URI and BETTER_AUTH_SECRET in hono/.env
    npm run db:setup
    ```
 
----
-
 ### Step 2 — Backend Deployment (AWS Lambda via SAM)
-
 The backend is pre-configured to bundle into CommonJS (`dist/index.cjs`) for clean AWS Lambda Node.js runtime execution.
 
 1. Install dependencies in `hono/`:
@@ -56,10 +101,7 @@ The backend is pre-configured to bundle into CommonJS (`dist/index.cjs`) for cle
    *(Or if running for the first time without a config: `sam deploy --guided --profile aws`)*
 3. Note the **Lambda Function URL** output at the end of deployment (e.g. `https://<lambda-id>.lambda-url.<region>.on.aws/`).
 
----
-
 ### Step 3 — Frontend Deployment (Vercel)
-
 1. Connect your repository to [Vercel](https://vercel.com).
 2. Set the **Root Directory** to `frontend` (or repository root; `vercel.json` rewrite rules are provided in both locations).
 3. Set the Environment Variable in Vercel:
@@ -68,12 +110,7 @@ The backend is pre-configured to bundle into CommonJS (`dist/index.cjs`) for cle
    ```
 4. Deploy the frontend and copy your production URL (e.g., `https://oauth21.vercel.app`).
 
----
-
 ### Step 4 — Align OAuth & Cloud Configurations
-
-Now that both frontend and backend URLs exist:
-
 #### A. Google Cloud Console (if using Google OAuth)
 In your GCP OAuth 2.0 Client ID settings:
 - **Authorized JavaScript origins**: `https://<your-frontend-domain>` (e.g., `https://oauth21.vercel.app`)
@@ -91,10 +128,7 @@ Redeploy the backend configuration:
 ./deploy.sh
 ```
 
----
-
 ### Step 5 — Provision Your Admin Account
-
 Because public registration is disabled by default in production (`AUTH_PUBLIC_SIGNUP_ENABLED=false`), use the admin provisioning CLI script:
 
 ```bash
@@ -111,177 +145,192 @@ https://<your-frontend-domain>/admin/login
 
 ---
 
-## Troubleshooting & Key Deployment Rules
+## Local Development & Ports Overview
 
-| Issue / Symptom | Root Cause | Solution |
+| Service | Port | Description |
 |---|---|---|
-| **502 Bad Gateway / Lambda Timeout** | MongoDB Atlas firewall is blocking Lambda's dynamic IP address. | Add `0.0.0.0/0` in MongoDB Atlas under **Network Access**. |
-| **404 NOT_FOUND on Vercel sub-routes** (`/admin/login`, `/consent`) | Vercel searches for static files for non-root routes. | Ensure `vercel.json` with SPA rewrite rules (`"source": "/(.*)", "destination": "/index.html"`) is pushed to git. |
-| **"Invalid Request" on `/auth`** | `FrontendUrl` had `/auth` appended or did not match browser `Origin`. | Set `FrontendUrl="https://your-domain.com"` (origin only, no trailing path) in `samconfig.toml`. |
-| **401 Unauthorized on `/api/admin/stats`** | Cross-domain cookies missing `SameSite=None` or API requests missing base URL. | Backend uses `SameSite=None; Secure; Partitioned` in production. Frontend uses `apiFetch()` helper from `frontend/lib/api.ts` to attach credentials and `VITE_AUTH_URL`. |
-| **401 on Admin Sign-In** | User record missing `account` credential or password length < 12 characters. | Use `npm run admin:create` which provisions both `user` and `account` collections with correct `ObjectId` links. |
+| **SWYRA Auth Gateway (Frontend)** | `http://localhost:5174` | Unified Auth UI, Consent, Admin Console, and API Reverse Proxy |
+| **SWYRA Auth API (Backend)** | `http://localhost:3000` | Hono Core Identity Engine, Token Endpoint, JWKS |
+| **Next.js Demo App** | `http://localhost:3001` | Full-stack Next.js 14 App Router OAuth 2.1 client |
+| **Express Backend Demo** | `http://localhost:4000` | Resource server with offline RS256 JWKS verification |
+| **React Frontend Demo** | `http://localhost:5175` | React SPA client consuming Express protected telemetry |
 
----
-
-## Repository Structure
-
-```text
-├── frontend/                   # React 18 + Vite + TailwindCSS Admin & Auth UI
-│   ├── components/             # Reusable UI components & route guards
-│   ├── lib/
-│   │   ├── api.ts              # API client with VITE_AUTH_URL and credentials
-│   │   ├── auth-client.ts      # Better Auth client SDK
-│   │   └── adminStore.ts       # Zustand store for admin state management
-│   ├── pages/                  # Auth, Consent, and Admin views
-│   └── vercel.json             # SPA rewrites & API reverse proxy configuration
-│
-├── hono/                       # Backend API & Identity Engine
-│   ├── src/
-│   │   ├── config/             # Zod environment schema & validated config
-│   │   ├── db/                 # MongoDB client & connection lifecycle
-│   │   ├── middleware/         # Dynamic CORS, CSRF protection, rate limiting
-│   │   ├── routes/             # /api/auth/* and /api/admin/* endpoints
-│   │   ├── utils/              # Better Auth engine setup, password & URI security
-│   │   └── lambda.ts           # AWS Lambda entry point
-│   ├── scripts/
-│   │   ├── create-admin.ts     # CLI script to provision/update admin accounts
-│   │   └── db-setup.ts         # Database TTL index initializer
-│   ├── deploy.sh               # One-step AWS SAM bundle & deploy script
-│   ├── samconfig.toml          # AWS SAM deployment parameters
-│   └── template.yaml           # AWS CloudFormation Serverless template
-```
-
----
-
-## Backend Deployment Options
-
-### Option A: AWS Lambda (via SAM) — *Recommended Serverless*
+### Starting All Services Locally
 
 ```bash
+# 1. Start Auth Core (Backend)
 cd hono
-./deploy.sh
-```
+npm run dev
 
-### Option B: Railway / Render / Fly.io (Long-Lived Container)
+# 2. Start Auth Gateway (Frontend)
+cd frontend
+npm run dev
 
-```bash
-cd hono
-npm run build:node
-node dist/index.js
-```
+# 3. Start Next.js Demo App (Optional)
+cd test/next-app
+npm run dev
 
-### Option C: Vercel / Netlify (Serverless Functions)
-
-```bash
-cd hono
-npm run build:vercel    # For Vercel
-npm run build:netlify   # For Netlify
+# 4. Start React-Express Demo App (Optional)
+cd test/react-express-app/backend && npm run dev
+cd test/react-express-app/frontend && npm run dev
 ```
 
 ---
-
-## Local Development
-
-Run the full stack locally:
-
-```bash
-# Terminal 1 — Backend
-cd hono && npm run dev
-
-# Terminal 2 — Frontend
-cd frontend && npm run dev
-```
-
-Local URLs:
-- Frontend: `http://localhost:5174`
-- Backend: `http://localhost:3000`
-- Health check: `http://localhost:3000/`
-
----
-
-## Documentation & Architecture
-
-| Document | Description |
-|---|---|
-| [`architecture.md`](./architecture.md) | System shape, identity engine overview, deployment topology, and connection budget |
-| [`boundaries.md`](./boundaries.md) | Hard constraints and security boundaries |
-| [`decision.md`](./decision.md) | Architectural Decision Records (ADRs) |
-| [`DEPLOY_CHECKLIST.md`](./DEPLOY_CHECKLIST.md) | Comprehensive pre/post-deployment verification checklist |
 
 ## Consumer Application Integration Guide
 
-All consumer applications (clients) communicate with the Auth Server using standard OAuth 2.1 / OIDC. Consuming applications only need to configure the Auth Gateway and their client credentials.
+All consumer applications communicate with the Auth Server using standard **OAuth 2.1 (PKCE + Authorization Code Flow)**.
 
-### Overview of Configuration Variables
+### Environment Variable Reference for Consumer Apps
 
-| Variable | Description | Example (Local Dev) | Example (Production) |
+| Variable | Description | Local Value | Production Value |
 |---|---|---|---|
-| `AUTH_ISSUER` | Public URL of the Auth Server | `http://localhost:5174` | `https://oauth21.vercel.app` |
-| `JWKS_URL` | Cryptographic public keys for RS256 token verification | `http://localhost:5174/.well-known/jwks.json` | `https://oauth21.vercel.app/.well-known/jwks.json` |
-| `CLIENT_ID` | Issued Client ID from the Admin Dashboard | `your_client_id` | `your_client_id` |
-| `CLIENT_SECRET` | Issued Client Secret (keep private on backend only) | `your_client_secret` | `your_client_secret` |
-| `REDIRECT_URI` | Whitelisted callback URL of the consumer app | `http://localhost:3001/api/auth/callback` | `https://app.example.com/api/auth/callback` |
+| `AUTH_ISSUER` | Base URL of the Auth Gateway | `http://localhost:5174` | `https://oauth21.vercel.app` |
+| `JWKS_URL` | Public keys for offline RS256 JWT validation | `http://localhost:5174/.well-known/jwks.json` | `https://oauth21.vercel.app/.well-known/jwks.json` |
+| `CLIENT_ID` | OAuth Client ID from Admin Dashboard | `your_client_id` | `your_client_id` |
+| `CLIENT_SECRET` | Plaintext Client Secret (backend only) | `your_plaintext_secret` | `your_plaintext_secret` |
+| `REDIRECT_URI` | Whitelisted callback route | `http://localhost:3001/api/auth/callback` | `https://app.example.com/api/auth/callback` |
 
 ---
 
-### Use Case 1: Full-Stack App (Next.js / Remix / SvelteKit)
-*Frontend and backend run in the same project on a single server (Confidential Client).*
+### Use Case 1: Full-Stack Next.js Application (BFF Pattern)
+*Located in [`test/next-app/`](file:///d:/WORK/OAuth2.1/test/next-app)*
 
-**`.env.local` / `.env`:**
+**1. Register the Client in Admin Console (`/admin/dashboard`):**
+- **Client Name**: `Next.js Consumer`
+- **Redirect URIs**: `http://localhost:3001/api/auth/callback`
+- **Allowed Origins**: `http://localhost:3001`
+- **Client Type**: Confidential (Server-Side)
+
+**2. Configure `test/next-app/.env`:**
 ```env
 AUTH_ISSUER=http://localhost:5174
 JWKS_URL=http://localhost:5174/.well-known/jwks.json
-CLIENT_ID=your_client_id
-CLIENT_SECRET=your_client_secret
+CLIENT_ID=qMoXkZwvWnZJRmFhpiTyzLMozZYrwvlF
+CLIENT_SECRET=HQEFWhArRpYvjySBrzSbtBBlOpeZDpHY
 REDIRECT_URI=http://localhost:3001/api/auth/callback
+PORT=3001
 ```
-* **Frontend**: Redirects user to `${AUTH_ISSUER}/auth?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=openid+profile+email`.
-* **Backend API Route (`/api/auth/callback`)**: Receives the `code`, exchanges it at `${AUTH_ISSUER}/api/auth/oauth2/token` using `CLIENT_ID` + `CLIENT_SECRET`, and verifies the returned JWT with `JWKS_URL`.
+
+**3. Architectural Flow:**
+- User clicks "Sign In with SWYRA M Auth" $\rightarrow$ redirects to `${AUTH_ISSUER}/auth?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=openid+profile+email`.
+- Next.js API Route (`/api/auth/callback`) receives authorization `code`.
+- Next.js exchanges code with Basic Auth at `${AUTH_ISSUER}/api/auth/oauth2/token`.
+- Access tokens and user profiles are stored in secure `HttpOnly` session cookies.
+- Server-side routes fetch protected telemetry with Bearer tokens.
 
 ---
 
-### Use Case 2: Separated Architecture (React SPA + Express/Node Backend)
-*Frontend runs in the browser; Backend runs on a separate API server.*
+### Use Case 2: Decoupled React SPA + Express API Backend
+*Located in [`test/react-express-app/`](file:///d:/WORK/OAuth2.1/test/react-express-app)*
 
-**A. React Frontend (`.env`):**
-```env
-VITE_AUTH_ISSUER=http://localhost:5174
-VITE_CLIENT_ID=your_client_id
-VITE_REDIRECT_URI=http://localhost:5173/callback
-VITE_BACKEND_URL=http://localhost:4000
-```
+**1. Register the Client in Admin Console (`/admin/dashboard`):**
+- **Client Name**: `React Express Suite`
+- **Redirect URIs**: `http://localhost:4000/auth/callback`, `http://localhost:5175`
+- **Allowed Origins**: `http://localhost:5175`, `http://localhost:4000`
+- **Client Type**: Confidential / BFF
 
-**B. Express Backend (`.env`):**
+**2. Configure Express Backend (`test/react-express-app/backend/.env`):**
 ```env
 PORT=4000
 AUTH_ISSUER=http://localhost:5174
 JWKS_URL=http://localhost:5174/.well-known/jwks.json
-CLIENT_ID=your_client_id
-CLIENT_SECRET=your_client_secret
-REDIRECT_URI=http://localhost:5173/callback
+CLIENT_ID=VyhlDhjmztsAsFphQjBsmXiSXjfpFoug
+CLIENT_SECRET=HSqJGpkNCkMJqUicZLFIoNdDyCsNOABI
+REDIRECT_URI=http://localhost:4000/auth/callback
+FRONTEND_URL=http://localhost:5175
 ```
-* **Flow**: React initiates login with PKCE $\rightarrow$ passes authorization `code` to Express backend $\rightarrow$ Express exchanges code for JWT tokens $\rightarrow$ Express verifies Bearer tokens on protected routes via `JWKS_URL`.
+
+**3. Configure React Frontend (`test/react-express-app/frontend/.env`):**
+```env
+VITE_AUTH_ISSUER=http://localhost:5174
+VITE_CLIENT_ID=VyhlDhjmztsAsFphQjBsmXiSXjfpFoug
+VITE_BACKEND_URL=http://localhost:4000
+```
+
+**4. Express Token Verification Middleware:**
+Express verifies incoming Bearer tokens or session cookies offline using `jose` and `JWKS_URL`:
+```typescript
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+const jwks = createRemoteJWKSet(new URL(process.env.JWKS_URL!));
+
+export async function requireAuth(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '') || req.cookies?.app_session?.access_token;
+  if (!token) return res.status(401).json({ error: 'unauthorized' });
+
+  try {
+    const { payload } = await jwtVerify(token, jwks);
+
+    // Enforce Audience & Client ID binding (Prevent cross-app token replay)
+    const tokenClientId = payload.client_id || payload.azp || payload.aud;
+    if (tokenClientId && tokenClientId !== process.env.CLIENT_ID) {
+      return res.status(403).json({ error: 'forbidden', message: 'Token not issued for this client' });
+    }
+
+    req.user = payload;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+}
+```
 
 ---
 
 ### Use Case 3: Standalone React Frontend (Adding a Backend in Future)
 
-1. **Today (Frontend Only)**:
-   * Create an OAuth Client in the Admin Dashboard with PKCE enabled.
-   * In React `.env`:
-     ```env
-     VITE_AUTH_ISSUER=http://localhost:5174
-     VITE_CLIENT_ID=your_client_id
-     VITE_REDIRECT_URI=http://localhost:5173/callback
-     ```
-   * React handles PKCE exchange directly with the IDP and stores the RS256 Access Token.
-
-2. **In the Future (When you build your Backend)**:
-   * Your new backend needs **only 1 variable**:
+1. **Phase 1 (Frontend Only with PKCE)**:
+   - Configure React SPA with `VITE_AUTH_ISSUER` and `VITE_CLIENT_ID`.
+   - React exchanges authorization codes directly with PKCE code verifier.
+2. **Phase 2 (When Backend is Built)**:
+   - The new backend requires **only 1 environment variable**:
      ```env
      JWKS_URL=http://localhost:5174/.well-known/jwks.json
      ```
-   * The backend validates incoming `Authorization: Bearer <token>` headers offline against `JWKS_URL` using public keys (via `jose` or `jsonwebtoken`), with **zero database coupling**.
+   - Validates Bearer tokens offline via public RS256 keys with **zero database coupling**.
+
+---
+
+## Security Specifications & Boundary Checklist
+
+| Security Feature | Implementation Details |
+|---|---|
+| **OAuth 2.1 Compliance** | Disallows Implicit Flow and Resource Owner Password Credentials. Requires PKCE for all authorization code exchanges. |
+| **Password Boundary** | Enforced 12–128 character policy with uppercase, lowercase, digit, and symbol validation. |
+| **Multi-Tenant App Isolation** | Tracks user registrations per `client_id`. Blocks cross-app authorization and token replay. |
+| **Cookie Hardening** | `SameSite=None; Secure; HttpOnly; Partitioned` across all session tokens. |
+| **XXE / XML Protection** | Exclusively parses `application/json` and `application/x-www-form-urlencoded`. No XML parsers loaded. |
+| **CSRF & Rate Limiting** | Custom CSRF middleware on admin routes; MongoDB-backed sliding window rate limiter on auth routes. |
+| **CORS Protection** | Dynamic origin reflection against registered OAuth client whitelists. |
+
+---
+
+## Database Management & Maintenance
+
+### Creating / Resetting Admin Accounts
+```bash
+cd hono
+npm run admin:create -- "admin@example.com" "SecurePassword@2026!" "System Admin"
+```
+
+### Initializing MongoDB TTL Indexes
+```bash
+cd hono
+npm run db:setup
+```
+
+---
+
+## Troubleshooting Guide
+
+| Symptom | Root Cause | Solution |
+|---|---|---|
+| **"Invalid client secret" during token exchange** | Stored hashed secret in consumer app `.env`. | Place the raw **plaintext client secret** in the consumer `.env`, not the hash from MongoDB. |
+| **"User is not registered for this application"** | Strict App Isolation guard triggered. | Switch to the **Sign Up** tab on the Auth UI to register the user for that specific `client_id`. |
+| **502 Bad Gateway / Lambda Timeout** | MongoDB Atlas IP whitelist blocking Lambda. | Add `0.0.0.0/0` under Network Access in MongoDB Atlas. |
+| **404 NOT_FOUND on Vercel sub-routes** | Missing SPA rewrite rules. | Verify `vercel.json` contains `"source": "/(.*)", "destination": "/index.html"`. |
+| **`EADDRINUSE: :::3000`** | Previous Node/WSL process holding port. | Run `taskkill /F /PID <pid>` (Windows) or `fuser -k 3000/tcp` (WSL). |
 
 ---
 

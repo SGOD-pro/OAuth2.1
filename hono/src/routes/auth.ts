@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { setCookie } from "hono/cookie";
 import { authProvider, validateAuthPasswordBoundary } from "../utils/auth";
 import { database } from "../db/mongo";
+import { config } from "../config";
 
 const auth = new Hono();
 
@@ -209,6 +210,17 @@ auth.get("/oauth2/authorize", async (c) => {
     const url = new URL(c.req.url);
     const clientId = url.searchParams.get("client_id");
 
+    // P1-10: Require state parameter to prevent OAuth CSRF / session injection.
+    // PKCE prevents code theft but not session injection — state is the correct guard.
+    // Per OAuth 2.1 §4.1.1, state is strongly recommended; we enforce it here.
+    const state = url.searchParams.get("state");
+    if (!state || state.trim().length === 0) {
+        const configUrl = config.frontendUrl || "http://localhost:5174";
+        return c.redirect(
+            `${configUrl}/auth?${url.searchParams.toString()}&error=state_required&error_description=The+state+parameter+is+required+to+prevent+CSRF+attacks`,
+        );
+    }
+
     if (clientId) {
         const session = await authProvider.api.getSession({ headers: c.req.raw.headers });
         if (session) {
@@ -221,7 +233,7 @@ auth.get("/oauth2/authorize", async (c) => {
             });
 
             if (!isRegistered) {
-                const configUrl = process.env.FRONTEND_URL || "http://localhost:5174";
+                const configUrl = config.frontendUrl || "http://localhost:5174";
                 return c.redirect(`${configUrl}/auth?${url.searchParams.toString()}&error=not_registered`);
             }
         }
@@ -230,7 +242,31 @@ auth.get("/oauth2/authorize", async (c) => {
     return authProvider.handler(c.req.raw);
 });
 
-// 5. Fallback handler for all other Better Auth endpoints (session, oauth callbacks, etc.)
+// 5. P0-5: UserInfo Interceptor (RFC 6750 §3.1 compliance)
+// When Better Auth encounters malformed JWTs (alg=none, wrong key, corrupt payload),
+// JOSE throws ERR_JOSE_NOT_SUPPORTED and Better Auth returns 500.
+// RFC 6750 §3.1 strictly requires HTTP 401 with WWW-Authenticate: Bearer error="invalid_token".
+auth.get("/oauth2/userinfo", async (c) => {
+    try {
+        const response = await authProvider.handler(c.req.raw);
+        if (response.status === 500) {
+            return c.json(
+                { error: "invalid_token", error_description: "Invalid or unsupported access token" },
+                401,
+                { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid or unsupported access token"' }
+            );
+        }
+        return response;
+    } catch {
+        return c.json(
+            { error: "invalid_token", error_description: "Token validation failed" },
+            401,
+            { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Token validation failed"' }
+        );
+    }
+});
+
+// 6. Fallback handler for all other Better Auth endpoints (session, oauth callbacks, etc.)
 auth.all("/*", async (c) => {
     if (c.req.method === "POST") {
         const body = await c.req.raw.clone().json().catch(() => null);

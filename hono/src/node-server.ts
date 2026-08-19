@@ -1,10 +1,11 @@
 import { serve } from "@hono/node-server";
 import app, { appBootTime } from "./app";
+import { config } from "./config";
 
 const initMs = Date.now() - appBootTime;
 console.log(`Node server init in ${initMs}ms`);
 
-const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const port = config.port || 3000;
 console.log(`Starting server on port ${port}`);
 
 serve({

@@ -12,7 +12,8 @@ export interface Stats {
 export interface OAuthClient {
   client_id: string;
   client_name: string;
-  client_secret: string;
+  // client_secret is intentionally NOT included — secrets are only returned once at creation
+  // time (POST /clients response) and should never be fetched via list/detail endpoints.
   redirect_uris: string[];
   disabled: boolean;
   is_dev?: boolean;

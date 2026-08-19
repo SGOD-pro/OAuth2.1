@@ -3,6 +3,7 @@ import { RouterProvider, createBrowserRouter, Navigate } from 'react-router-dom'
 import { AdminRoute } from '@/components/AdminRoute';
 import { Layout } from '@/components/Layout';
 import { RouteLoader } from '@/components/RouteLoader';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import './index.css';
 import './App.css';
 
@@ -97,7 +98,11 @@ const router = createBrowserRouter([
 ]);
 
 function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <ErrorBoundary>
+      <RouterProvider router={router} />
+    </ErrorBoundary>
+  );
 }
 
 export default App;

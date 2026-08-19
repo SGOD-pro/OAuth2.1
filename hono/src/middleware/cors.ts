@@ -6,7 +6,7 @@ import {
   setCachedOrigin,
 } from "../cache/origin-cache";
 import { getDb } from "../db/mongo";
-import { isLoopbackHost, normalizeOrigin, originMatchesRedirectUri } from "../utils/security";
+import { isLoopbackHost, normalizeOrigin, originMatchesRedirectUri, getTrustedClientIp } from "../utils/security";
 
 const CORS_ALLOW_HEADERS =
   "Content-Type,Authorization,X-CSRF-Token,x-csrf-token";
@@ -64,6 +64,24 @@ function applyCorsHeadersToResponse(c: Context, origin: string) {
   c.res.headers.set("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
 }
 
+// P1-8: In-memory rate limit for novel CORS origin DB lookups.
+// Prevents an attacker from spraying unique Origin headers to force unbounded MongoDB queries.
+// Limit: 30 novel uncached origin lookups per IP per 60 seconds.
+const CORS_LOOKUP_LIMIT = 30;
+const CORS_LOOKUP_WINDOW_MS = 60_000;
+const corsLookupBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function checkCorsLookupRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const bucket = corsLookupBuckets.get(ip);
+  if (!bucket || now > bucket.resetAt) {
+    corsLookupBuckets.set(ip, { count: 1, resetAt: now + CORS_LOOKUP_WINDOW_MS });
+    return true; // allowed
+  }
+  bucket.count++;
+  return bucket.count <= CORS_LOOKUP_LIMIT;
+}
+
 export async function dynamicCors(c: Context, next: Next) {
   const origin = c.req.header("origin");
   const ownFrontend = config.frontendUrl;
@@ -87,6 +105,13 @@ export async function dynamicCors(c: Context, next: Next) {
   let allowed = await getCachedOrigin(normalizedOrigin);
 
   if (allowed === null) {
+    // P1-8: Only perform the DB lookup if the IP hasn't exceeded the novel-origin rate limit
+    const clientIp = getTrustedClientIp(c.req.raw.headers);
+    if (!checkCorsLookupRateLimit(clientIp)) {
+      // Treat as not allowed without hitting DB
+      return c.json({ error: "Too many requests" }, 429);
+    }
+
     try {
       allowed = await isOriginAllowed(normalizedOrigin);
       await setCachedOrigin(normalizedOrigin, allowed);

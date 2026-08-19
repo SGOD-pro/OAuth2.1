@@ -67,7 +67,8 @@ export function validateRedirectUris(
 }
 
 export function isStrongPassword(password: string): boolean {
-  if (password.length < 8 || password.length > 128) return false;
+  // Minimum 12 chars — must match emailAndPassword.minPasswordLength in auth.ts
+  if (password.length < 12 || password.length > 128) return false;
   return (
     /[a-z]/.test(password) &&
     /[A-Z]/.test(password) &&

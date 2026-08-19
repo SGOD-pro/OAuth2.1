@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { useSession } from '../lib/auth-client';
 import { apiFetch } from '../lib/api';
 import { RouteLoader } from './RouteLoader';
+import { ErrorBoundary } from './ErrorBoundary';
 
 interface AdminRouteProps {
   children: React.ReactNode;
@@ -35,5 +36,5 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
     return <Navigate to="/admin/login?error=access_denied" replace />;
   }
 
-  return <>{children}</>;
+  return <ErrorBoundary fallbackTitle="Admin Panel Error">{children}</ErrorBoundary>;
 };
