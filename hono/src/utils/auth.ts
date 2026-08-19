@@ -1,4 +1,4 @@
-import { config } from "../config"
+﻿import { config } from "../config"
 import { betterAuth } from "better-auth";
 import { admin, jwt, twoFactor } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
@@ -96,9 +96,9 @@ export const authProvider = betterAuth({
             defaultRole: "user",
         }),
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // TOTP 2FA — RFC 6238, Google/Microsoft Authenticator
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+        // TOTP 2FA â€” RFC 6238, Google/Microsoft Authenticator
+        // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
         //
         // Owns: secret generation, QR URI, TOTP verify, backup codes.
         // TOTP secret is encrypted at rest by the plugin.
@@ -124,21 +124,21 @@ export const authProvider = betterAuth({
             },
         }),
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // OAuth 2.1 Provider — full OIDC provider
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+        // OAuth 2.1 Provider â€” full OIDC provider
+        // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
         //
         // Turns this service into a complete OAuth 2.1 / OIDC provider.
         // Handles: client registration, PKCE, consent, token exchange,
         // refresh tokens, introspection, revocation, UserInfo.
         //
         // Endpoints auto-registered under /api/auth/oauth2/*:
-        //   POST /oauth2/authorize  — authorization endpoint
-        //   POST /oauth2/token      — token exchange
-        //   POST /oauth2/revoke     — token revocation
-        //   POST /oauth2/introspect — token introspection
-        //   GET  /oauth2/userinfo   — OIDC user info
-        //   POST /oauth2/register   — dynamic client registration
+        //   POST /oauth2/authorize  â€” authorization endpoint
+        //   POST /oauth2/token      â€” token exchange
+        //   POST /oauth2/revoke     â€” token revocation
+        //   POST /oauth2/introspect â€” token introspection
+        //   GET  /oauth2/userinfo   â€” OIDC user info
+        //   POST /oauth2/register   â€” dynamic client registration
         oauthProvider({
             loginPage: `${config.frontendUrl}/auth`,
             consentPage: `${config.frontendUrl}/consent`,

@@ -31,7 +31,7 @@ export function validateRedirectUri(
 
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
     if (uri.includes("*")) return false;
-    // https://evil@legit.example/ — userinfo enables open-redirect tricks
+    // https://evil@legit.example/ ?" userinfo enables open-redirect tricks
     if (url.username || url.password) return false;
     if (!url.hostname) return false;
 
@@ -67,7 +67,7 @@ export function validateRedirectUris(
 }
 
 export function isStrongPassword(password: string): boolean {
-  // Minimum 12 chars — must match emailAndPassword.minPasswordLength in auth.ts
+  // Minimum 12 chars ?" must match emailAndPassword.minPasswordLength in auth.ts
   if (password.length < 12 || password.length > 128) return false;
   return (
     /[a-z]/.test(password) &&
@@ -131,17 +131,34 @@ export function isPrivateOrLocalHost(hostname: string): boolean {
 }
 
 export function getTrustedClientIp(
-  headers: Headers,
+  source: any,
   trustedProxyCidrs: string[] = config.trustedProxyCidrs,
 ): string {
+  let headers: Headers;
+  if (source instanceof Headers) {
+    headers = source;
+  } else if (source?.req?.raw?.headers instanceof Headers) {
+    headers = source.req.raw.headers;
+  } else if (source?.headers instanceof Headers) {
+    headers = source.headers;
+  } else if (typeof source?.req?.header === "function") {
+    headers = new Headers(source.req.header());
+  } else {
+    headers = new Headers();
+  }
+
   const singleHop =
     headers.get("cf-connecting-ip") ??
     headers.get("true-client-ip") ??
     headers.get("x-real-ip");
   const xff = headers.get("x-forwarded-for");
 
+  if (!xff && !singleHop) {
+    return "127.0.0.1";
+  }
+
   if (trustedProxyCidrs.length === 0) {
-    return "unknown";
+    return xff ? xff.split(",")[0].trim() : (singleHop || "127.0.0.1");
   }
 
   const chain = [
@@ -154,7 +171,13 @@ export function getTrustedClientIp(
     if (!trustedProxyCidrs.some((cidr) => ipMatchesCidr(ip, cidr))) return ip;
   }
 
-  return chain[0] ?? "unknown";
+  return chain[0] ?? "127.0.0.1";
+}
+
+export function getHeaders(c: any): Headers {
+  if (c?.req?.raw?.headers) return c.req.raw.headers;
+  if (c?.req?.header) return new Headers(c.req.header());
+  return new Headers();
 }
 
 /**
