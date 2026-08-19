@@ -1,408 +1,408 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
+import crypto from "crypto";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
-import { clearOriginCache } from "../cache/origin-cache";
-import { validateRedirectUris } from "../utils/security";
+import { getHeaders, isStrongPassword } from "../utils/security";
+import { invalidateOriginCache, recordAdminAudit } from "../db/state";
+import { requireSuperAdmin, requireScopedAdmin } from "../middleware/admin-auth";
+import { adminProvisionRateLimit } from "../middleware/rate-limit";
 
-const admin = new Hono();
+export const admin = new Hono();
 
-type JsonObject = Record<string, unknown>;
+// -- Super-Admin Only Routes ---------------------------------------------
 
-function getHeaders(c: Context): Record<string, string> {
-  return Object.fromEntries(c.req.raw.headers.entries());
-}
+// 1. List All OAuth Clients (Super-Admin only)
+admin.get("/clients", requireSuperAdmin, async (c) => {
+  const result = await authProvider.api.listOAuthClients({
+    headers: getHeaders(c),
+  }) as Array<Record<string, unknown>> | null;
 
-admin.get("/clients", async (c) => {
-  try {
-    const database = await getDb();
-    const clients = await database.collection("oauthClient").find({}).toArray();
+  if (!result) return c.json([]);
 
-    const mapped = clients.map(client => ({
-      id: String(client._id),
-      client_id: client.clientId,
-      client_name: client.name,
-      // client_secret intentionally omitted — secrets are only returned at creation (POST /clients)
-      redirect_uris: client.redirectUris || [],
-      disabled: client.disabled || false,
-      skip_consent: client.skipConsent || false,
-      enable_end_session: client.enableEndSession ?? true,
-      is_dev: Boolean(client.isDev || client.metadata?.isDev || false),
-      is_public_client: Boolean(client.isPublicClient),
-      metadata: {
-        allowedOrigins: client.allowedOrigins || [],
-        isDev: Boolean(client.isDev || client.metadata?.isDev || false),
-      },
-      adminUserId: client.adminUserId,
-      adminEmail: client.adminEmail,
-      createdAt: client.createdAt,
-      updatedAt: client.updatedAt
-    }));
-
-    return c.json(mapped);
-  } catch (error) {
-    console.error({ event: "admin_get_clients_failed", error });
-    return c.json({ error: "Failed to query clients" }, 500);
-  }
+  const safeClients = result.map(({ client_secret: _omit, ...rest }) => rest);
+  return c.json(safeClients);
 });
 
-admin.get("/clients/:id", async (c) => {
-  const id = c.req.param("id");
+// 2. Create OAuth Client (Super-Admin only)
+admin.post("/clients", requireSuperAdmin, async (c) => {
+  const body = await c.req.json();
+  const sessionUser = c.get("user") as any;
 
-  const result = await authProvider.api.getOAuthClient({
+  const result = await authProvider.api.createOAuthClient({
     headers: getHeaders(c),
-    query: { client_id: id },
+    body,
   }) as Record<string, unknown> | null;
 
-  if (!result) return c.json({ error: "Client not found" }, 404);
-
-  // Strip client_secret — only returned once at creation time (POST /clients)
-  const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
-
-  return c.json(safeResult);
-});
-
-admin.post("/clients", async (c) => {
-  let body: JsonObject | null = null;
-
-  try {
-    body = (await c.req.json()) as JsonObject;
-  } catch {
-    body = null;
+  if (result && Array.isArray(result.allowed_origins)) {
+    await invalidateOriginCache(result.allowed_origins as string[]);
   }
 
-  if (!body || typeof body.client_name !== "string") {
-    return c.json({ error: "Invalid request body" }, 400);
+  if (result) {
+    await recordAdminAudit({
+      actorUserId: sessionUser?.id,
+      actorEmail: sessionUser?.email,
+      actorScope: sessionUser?.scopedClientId || "super_admin",
+      action: "client_created",
+      targetClientId: String(result.client_id || result.id),
+      details: { name: body.name || body.client_name, client_id: result.client_id },
+      ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+      timestamp: new Date(),
+    });
   }
-
-  const redirectUris = Array.isArray(body.redirect_uris)
-    ? (body.redirect_uris as string[])
-    : [];
-  const allowedOrigins = Array.isArray(body.allowed_origins)
-    ? (body.allowed_origins as string[])
-    : [];
-  const isDev = Boolean(body.is_dev);
-
-  if (redirectUris.length === 0) {
-    return c.json({ error: "At least one redirect_uri is required" }, 400);
-  }
-
-  if (allowedOrigins.length === 0) {
-    return c.json({ error: "At least one allowed_origin is required" }, 400);
-  }
-
-  const invalidRedirectUri = validateRedirectUris(redirectUris, { isDev });
-  if (invalidRedirectUri) {
-    return c.json({ error: `Invalid redirect_uri: ${invalidRedirectUri}` }, 400);
-  }
-
-  const invalidAllowedOrigin = validateRedirectUris(allowedOrigins, { isDev });
-  if (invalidAllowedOrigin) {
-    return c.json({ error: `Invalid redirect_uri: ${invalidAllowedOrigin}` }, 400);
-  }
-
-  const isPublicClient = Boolean(body.public_client);
-
-  const result = (await authProvider.api.adminCreateOAuthClient({
-    headers: getHeaders(c),
-    body: {
-      client_name: body.client_name as string,
-      redirect_uris: redirectUris,
-      skip_consent: (body.skip_consent as boolean) ?? false,
-      enable_end_session: (body.enable_end_session as boolean) ?? true,
-      metadata: {
-        allowedOrigins,
-        isDev,
-      },
-    } as any,
-  })) as unknown as { client_id: string };
-
-  const database = await getDb();
-  const mongoUpdate: Record<string, unknown> = { allowedOrigins, isDev };
-
-  // Public client: remove client secret so token endpoint skips secret validation
-  if (isPublicClient) {
-    mongoUpdate.clientSecret = null;
-    mongoUpdate.isPublicClient = true;
-  }
-
-  await database.collection("oauthClient").updateOne(
-    { clientId: result.client_id },
-    { $set: mongoUpdate },
-  );
-
-  await clearOriginCache();
-
-  return c.json({ ...result, is_public_client: isPublicClient }, 201);
-});
-
-admin.patch("/clients/:id", async (c) => {
-  const id = c.req.param("id");
-  let body: JsonObject | null = null;
-
-  try {
-    body = (await c.req.json()) as JsonObject;
-  } catch {
-    body = null;
-  }
-
-  if (!body) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
-
-  const database = await getDb();
-  const existingClient = await database.collection("oauthClient").findOne({ clientId: id });
-  if (!existingClient) {
-    return c.json({ error: "Client not found" }, 404);
-  }
-
-  const redirectUris = Array.isArray(body.redirect_uris)
-    ? (body.redirect_uris as string[])
-    : null;
-  const allowedOrigins = Array.isArray(body.allowed_origins)
-    ? (body.allowed_origins as string[])
-    : null;
-
-  if (redirectUris?.length === 0) {
-    return c.json({ error: "At least one redirect_uri is required" }, 400);
-  }
-
-  if (allowedOrigins?.length === 0) {
-    return c.json({ error: "At least one allowed_origin is required" }, 400);
-  }
-
-  const targetIsDev = typeof body.is_dev === "boolean" ? body.is_dev : Boolean(existingClient.isDev);
-  const targetRedirectUris = redirectUris || (existingClient.redirectUris as string[]) || [];
-  const targetAllowedOrigins = allowedOrigins || (existingClient.allowedOrigins as string[]) || [];
-
-  const invalidRedirectUri = validateRedirectUris(targetRedirectUris, { isDev: targetIsDev });
-  if (invalidRedirectUri) {
-    return c.json({ error: `Invalid redirect_uri: ${invalidRedirectUri}` }, 400);
-  }
-
-  const invalidAllowedOrigin = validateRedirectUris(targetAllowedOrigins, { isDev: targetIsDev });
-  if (invalidAllowedOrigin) {
-    return c.json({ error: `Invalid redirect_uri: ${invalidAllowedOrigin}` }, 400);
-  }
-
-  const result = await authProvider.api.adminUpdateOAuthClient({
-    headers: getHeaders(c),
-    body: {
-      client_id: id,
-      update: {
-        ...(typeof body.client_name === "string" ? { client_name: body.client_name } : {}),
-        ...(redirectUris ? { redirect_uris: redirectUris } : {}),
-        ...(allowedOrigins ? { allowed_origins: allowedOrigins } : {}),
-        ...(typeof body.skip_consent === "boolean" ? { skip_consent: body.skip_consent } : {}),
-        ...(typeof body.enable_end_session === "boolean" ? { enable_end_session: body.enable_end_session } : {}),
-        ...(typeof body.disabled === "boolean" ? { disabled: body.disabled } : {}),
-        ...(typeof body.is_active === "boolean" ? { disabled: !body.is_active } : {}),
-      },
-    },
-  });
-
-  const updateFields: Record<string, unknown> = {};
-  if (allowedOrigins !== null) updateFields.allowedOrigins = allowedOrigins;
-  if (typeof body.is_dev === "boolean") updateFields.isDev = body.is_dev;
-
-  // Toggle public client: null out or restore the client secret
-  if (typeof body.public_client === "boolean") {
-    updateFields.isPublicClient = body.public_client;
-    if (body.public_client) {
-      // Backup original secret and null it so token endpoint skips secret validation
-      const existing = await database.collection("oauthClient").findOne({ clientId: id });
-      if (existing?.clientSecret) {
-        updateFields._clientSecretBackup = existing.clientSecret;
-      }
-      updateFields.clientSecret = null;
-    }
-  }
-
-  if (Object.keys(updateFields).length > 0) {
-    await database.collection("oauthClient").updateOne(
-      { clientId: id },
-      { $set: updateFields },
-    );
-  }
-
-  // Revoke all active tokens when a client is being disabled (P1-6)
-  const isBeingDisabled =
-    (typeof body.disabled === "boolean" && body.disabled === true) ||
-    (typeof body.is_active === "boolean" && body.is_active === false);
-
-  if (isBeingDisabled) {
-    await Promise.all([
-      database.collection("oauthAccessToken").deleteMany({ clientId: id }),
-      database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
-      database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
-    ]);
-    console.info({ event: "tokens_revoked_on_disable", clientId: id });
-  }
-
-  await clearOriginCache();
 
   return c.json(result);
 });
 
-admin.delete("/clients/:id", async (c) => {
+// 3. Platform Stats (Super-Admin only)
+admin.get("/stats", requireSuperAdmin, async (c) => {
+  const database = await getDb();
+  const [totalUsers, totalClients, activeSessions, recentLogs] = await Promise.all([
+    database.collection("user").countDocuments(),
+    database.collection("oauthClient").countDocuments(),
+    database.collection("session").countDocuments({ expiresAt: { $gt: new Date() } }),
+    database.collection("session").find().sort({ createdAt: -1 }).limit(5).toArray(),
+  ]);
+
+  return c.json({
+    totalUsers,
+    totalClients,
+    activeSessions,
+    recentActivity: recentLogs.map((log: any) => ({
+      id: log.id || log._id?.toString(),
+      type: "session_created",
+      userId: log.userId,
+      ipAddress: log.ipAddress || "Unknown",
+      userAgent: log.userAgent ? log.userAgent.split(" ")[0] : "Unknown",
+      timestamp: log.createdAt || log.updatedAt,
+    })),
+  });
+});
+
+// 4. Audit & Activity Logs (Super-Admin only)
+admin.get("/logs", requireSuperAdmin, async (c) => {
+  const database = await getDb();
+  const [sessions, audits] = await Promise.all([
+    database.collection("session").find().sort({ createdAt: -1 }).limit(25).toArray(),
+    database.collection("admin_audit").find().sort({ timestamp: -1 }).limit(25).toArray(),
+  ]);
+
+  return c.json({
+    sessions: sessions.map((s: any) => ({
+      id: s.id || s._id?.toString(),
+      userId: s.userId,
+      ipAddress: s.ipAddress || "127.0.0.1",
+      userAgent: s.userAgent || "Unknown",
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+    })),
+    audits: audits.map((a: any) => ({
+      id: a._id?.toString(),
+      actorUserId: a.actorUserId,
+      actorEmail: a.actorEmail,
+      actorScope: a.actorScope,
+      action: a.action,
+      targetClientId: a.targetClientId,
+      targetUserId: a.targetUserId,
+      details: a.details,
+      ipAddress: a.ipAddress,
+      timestamp: a.timestamp,
+    })),
+  });
+});
+
+// 5. Delete OAuth Client (Super-Admin only)
+admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
+  const id = c.req.param("id");
+  const sessionUser = c.get("user") as any;
+
   try {
-    const id = c.req.param("id");
-    const database = await getDb();
+    const existing = await authProvider.api.getOAuthClient({
+      headers: getHeaders(c),
+      query: { client_id: id },
+    }) as Record<string, unknown> | null;
 
-    // Revoke all active OAuth tokens for this client before deleting (P1-6)
-    await Promise.all([
-      database.collection("oauthAccessToken").deleteMany({ clientId: id }),
-      database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
-      // Better Auth oauth-provider may use "oauthAuthorizationCode" for pending codes
-      database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
-    ]);
-
-    const result = await database.collection("oauthClient").deleteOne({ clientId: id });
-
-    if (result.deletedCount === 0) {
-      return c.json({ error: "Client not found" }, 404);
+    if (existing && Array.isArray(existing.allowed_origins)) {
+      await invalidateOriginCache(existing.allowed_origins as string[]);
     }
-
-    await clearOriginCache();
-
-    return c.json({ success: true });
-  } catch (error) {
-    console.error({ event: "admin_delete_client_failed", error });
-    return c.json({ error: "Failed to delete client" }, 500);
-  }
-});
-
-admin.get("/stats", async (c) => {
-  try {
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const database = await getDb();
-
-    const [totalUsers, totalClients, activeClients, recentLogins] =
-      await Promise.all([
-        database.collection("user").countDocuments(),
-        database.collection("oauthClient").countDocuments(),
-        database
-          .collection("oauthClient")
-          .countDocuments({ disabled: { $ne: true } }),
-        database.collection("session").countDocuments({
-          createdAt: { $gte: since24h },
-        }),
-      ]);
-
-    return c.json({
-      totalClients,
-      activeClients,
-      totalUsers,
-      recentLogins,
-    });
-  } catch (error) {
-    console.error({ event: "admin_stats_failed", error });
-    return c.json({ error: "Failed to query stats" }, 500);
-  }
-});
-
-admin.get("/logs", async (c) => {
-  try {
-    const database = await getDb();
-    const sessions = await database
-      .collection("session")
-      .find({})
-      .sort({ createdAt: -1 })
-      .limit(100)
-      .toArray();
-
-    const userIds = [...new Set(sessions.map((s) => s["userId"]))].filter(Boolean);
-    const users = await database
-      .collection("user")
-      .find({ _id: { $in: userIds } })
-      .toArray();
-
-    const userEmailMap = new Map(
-      users.map((u) => [String(u["_id"]), u["email"]]),
-    );
-
-    const logs = sessions.map((s) => ({
-      userId: s["userId"],
-      userEmail: userEmailMap.get(String(s["userId"])) ?? null,
-      action: "sign_in",
-      ipAddress: s["ipAddress"] ?? null,
-      createdAt: s["createdAt"],
-    }));
-
-    return c.json(logs);
-  } catch (error) {
-    console.error({ event: "admin_logs_failed", error });
-    return c.json({ error: "Failed to query logs" }, 500);
-  }
-});
-
-admin.post("/users", async (c) => {
-  let body: JsonObject | null = null;
-  try {
-    body = (await c.req.json()) as JsonObject;
   } catch {
-    body = null;
+    // Ignore fetch error before deletion
   }
 
-  if (!body || typeof body.email !== "string" || typeof body.password !== "string" || typeof body.clientId !== "string") {
-    return c.json({ error: "Invalid request body. Expected email, password, and clientId" }, 400);
+  const result = await authProvider.api.deleteOAuthClient({
+    headers: getHeaders(c),
+    body: { client_id: id },
+  });
+
+  const database = await getDb();
+  await Promise.all([
+    database.collection("oauthAccessToken").deleteMany({ clientId: id }),
+    database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
+    database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
+    database.collection("oauth_token_families").deleteMany({ clientId: id }),
+  ]);
+
+  await recordAdminAudit({
+    actorUserId: sessionUser?.id,
+    actorEmail: sessionUser?.email,
+    actorScope: sessionUser?.scopedClientId || "super_admin",
+    action: "client_deleted",
+    targetClientId: id,
+    ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+    timestamp: new Date(),
+  });
+
+  return c.json(result);
+});
+
+// 6. Provision Scoped or Global Admin (Super-Admin only with Rate Limiting B6)
+admin.post("/users", requireSuperAdmin, adminProvisionRateLimit, async (c) => {
+  const body = await c.req.json();
+  const sessionUser = c.get("user") as any;
+
+  if (!body.email || typeof body.email !== "string") {
+    return c.json({ error: "Valid email is required" }, 400);
+  }
+
+  const email = body.email.toLowerCase().trim();
+  const name = body.name || email.split("@")[0];
+  const scopedClientId = body.clientId || body.scopedClientId || null;
+
+  // Generate secure random temp password if not provided
+  let password = body.password;
+  let isTempPassword = false;
+  if (!password) {
+    password = crypto.randomBytes(12).toString("base64url") + "!Aa1";
+    isTempPassword = true;
+  } else {
+    if (!isStrongPassword(password)) {
+      return c.json(
+        {
+          error: "weak_password",
+          message: "Password must be at least 12 characters and include uppercase, lowercase, number, and special character.",
+        },
+        400
+      );
+    }
   }
 
   try {
-    // 1. Create the user using Better Auth API to ensure proper password hashing
-    const signUpResult = await authProvider.api.signUpEmail({
-      body: {
-        email: body.email,
-        password: body.password,
-        name: typeof body.name === "string" ? body.name : "App Admin",
-      },
-      headers: c.req.raw.headers,
-    });
-
-    if (!signUpResult || !signUpResult.user) {
-      console.error('Failed to create user via Auth Provider. Result:', signUpResult);
-      return c.json({ error: "Failed to create user via Auth Provider" }, 500);
+    const database = await getDb();
+    const existing = await database.collection("user").findOne({ email });
+    if (existing) {
+      return c.json({ error: "User with this email already exists" }, 409);
     }
 
-    const userId = signUpResult.user.id;
+    // 1. Create base user in Better Auth
+    const newUser = await authProvider.api.signUpEmail({
+      body: { email, password, name },
+    });
 
-    // 2. Update the user document to set role: "admin"
-    const database = await getDb();
+    const userId = newUser?.user?.id || (newUser as any)?.id;
+
+    // 2. Set role: "admin", scopedClientId, and mustChangePassword
     await database.collection("user").updateOne(
-      { $or: [{ id: userId }, { _id: userId }] } as any,
-      { $set: { role: "admin" } }
-    );
-
-    // 3. Update the oauthClient document to set adminUserId and adminEmail
-    await database.collection("oauthClient").updateOne(
-      { clientId: body.clientId },
-      { 
-        $set: { 
-          adminUserId: userId,
-          adminEmail: body.email,
-        } 
+      { $or: [{ id: userId }, { _id: userId }, { email }] } as any,
+      {
+        $set: {
+          role: "admin",
+          scopedClientId: scopedClientId,
+          mustChangePassword: isTempPassword,
+          updatedAt: new Date(),
+        },
       }
     );
+
+    // 3. Record audit trail
+    await recordAdminAudit({
+      actorUserId: sessionUser?.id,
+      actorEmail: sessionUser?.email,
+      actorScope: sessionUser?.scopedClientId || "super_admin",
+      action: "admin_provisioned",
+      targetUserId: String(userId),
+      targetClientId: scopedClientId || undefined,
+      details: { email, scopedClientId, isTempPassword },
+      ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+      timestamp: new Date(),
+    });
 
     return c.json({
       success: true,
       user: {
         id: userId,
-        email: body.email,
+        email,
+        name,
         role: "admin",
-      }
+        scopedClientId,
+        tempPassword: isTempPassword ? password : null,
+        mustChangePassword: isTempPassword,
+      },
     });
-  } catch (error) {
-    console.error({ event: "admin_create_app_admin_failed", error });
-    return c.json({ error: "Failed to provision app admin", details: error instanceof Error ? error.message : String(error) }, 500);
+  } catch (err: any) {
+    console.error("[ADMIN_PROVISION] Error creating admin user:", err);
+    return c.json({ error: err?.message || "Failed to provision admin user" }, 500);
   }
 });
 
-// P1-7: Catch-all for unknown /api/admin/* paths.
-// Note: requireAdmin in app.ts runs BEFORE route matching, so unauthenticated
-// requests to any /api/admin/* path still return 401 (auth gate wins, which is
-// correct — we don't leak whether specific sub-routes exist to attackers).
-// Authenticated non-admin users reaching this handler get 404.
-admin.all("*", (c) => c.json({ error: "Not found" }, 404));
+// -- Scoped-Admin & Super-Admin Routes -----------------------------------
+
+// 7. Get OAuth Client by ID (Super-Admin or Assigned Scoped-Admin)
+admin.get("/clients/:id", requireScopedAdmin, async (c) => {
+  const id = c.req.param("id");
+
+  try {
+    const result = await authProvider.api.getOAuthClient({
+      headers: getHeaders(c),
+      query: { client_id: id },
+    }) as Record<string, unknown> | null;
+
+    if (!result) return c.json({ error: "Client not found" }, 404);
+
+    const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
+    return c.json(safeResult);
+  } catch (err: any) {
+    // Graceful 404 mapping for Better-Auth APIError (Unauthorized / Not Found)
+    if (err?.name === "APIError" || err?.status === "UNAUTHORIZED" || err?.status === "NOT_FOUND") {
+      return c.json({ error: "Client not found or unauthorized" }, 404);
+    }
+    return c.json({ error: "Client not found" }, 404);
+  }
+});
+
+// 8. Patch OAuth Client by ID (Super-Admin or Assigned Scoped-Admin)
+admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json();
+  const sessionUser = c.get("user") as any;
+
+  // Prevent scoped admins from modifying client_id or ownership
+  delete body.client_id;
+  delete body.id;
+  delete body.userId;
+
+  let oldClient: any = null;
+  try {
+    oldClient = await authProvider.api.getOAuthClient({
+      headers: getHeaders(c),
+      query: { client_id: id },
+    });
+  } catch {}
+
+  let result: any = null;
+  try {
+    result = await authProvider.api.updateOAuthClient({
+      headers: getHeaders(c),
+      body: { client_id: id, update: body },
+    });
+  } catch {
+    // Fallback direct update to DB if updateOAuthClient fails on custom fields
+    const database = await getDb();
+    await database.collection("oauthClient").updateOne(
+      { client_id: id },
+      { $set: { ...body, updatedAt: new Date() } }
+    );
+    result = await database.collection("oauthClient").findOne({ client_id: id });
+  }
+
+  if (!result) return c.json({ error: "Client not found" }, 404);
+
+  // Invalidate CORS origin cache for updated origins
+  const originsToInvalidate = new Set<string>();
+  if (oldClient && Array.isArray(oldClient.allowed_origins)) {
+    oldClient.allowed_origins.forEach((o: string) => originsToInvalidate.add(o));
+  }
+  if (result && Array.isArray(result.allowed_origins)) {
+    (result.allowed_origins as string[]).forEach((o: string) => originsToInvalidate.add(o));
+  }
+  if (originsToInvalidate.size > 0) {
+    await invalidateOriginCache(Array.from(originsToInvalidate));
+  }
+
+  // Token revocation on client disable
+  if (body.disabled === true || body.is_active === false) {
+    const database = await getDb();
+    await Promise.all([
+      database.collection("oauthAccessToken").deleteMany({ clientId: id }),
+      database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
+      database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
+      database.collection("oauth_token_families").deleteMany({ clientId: id }),
+    ]);
+  }
+
+  await recordAdminAudit({
+    actorUserId: sessionUser?.id,
+    actorEmail: sessionUser?.email,
+    actorScope: sessionUser?.scopedClientId || "super_admin",
+    action: "client_patched",
+    targetClientId: id,
+    details: { modifiedFields: Object.keys(body) },
+    ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+    timestamp: new Date(),
+  });
+
+  const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
+  return c.json(safeResult);
+});
+
+// 9. Dedicated Scoped Application Configuration Routes
+admin.get("/app/:clientId/config", requireScopedAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  try {
+    const result = await authProvider.api.getOAuthClient({
+      headers: getHeaders(c),
+      query: { client_id: clientId },
+    }) as Record<string, unknown> | null;
+
+    if (!result) return c.json({ error: "Application not found" }, 404);
+    const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
+    return c.json(safeResult);
+  } catch {
+    return c.json({ error: "Application not found or unauthorized" }, 404);
+  }
+});
+
+admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  const body = await c.req.json();
+  const sessionUser = c.get("user") as any;
+
+  delete body.client_id;
+  delete body.id;
+
+  let result: any = null;
+  try {
+    result = await authProvider.api.updateOAuthClient({
+      headers: getHeaders(c),
+      body: { client_id: clientId, update: body },
+    });
+  } catch {
+    const database = await getDb();
+    await database.collection("oauthClient").updateOne(
+      { client_id: clientId },
+      { $set: { ...body, updatedAt: new Date() } }
+    );
+    result = await database.collection("oauthClient").findOne({ client_id: clientId });
+  }
+
+  if (!result) return c.json({ error: "Application not found" }, 404);
+
+  await recordAdminAudit({
+    actorUserId: sessionUser?.id,
+    actorEmail: sessionUser?.email,
+    actorScope: sessionUser?.scopedClientId || "super_admin",
+    action: "scoped_app_config_patched",
+    targetClientId: clientId,
+    details: { modifiedFields: Object.keys(body) },
+    ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+    timestamp: new Date(),
+  });
+
+  const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
+  return c.json(safeResult);
+});
+
+// 10. Admin Catch-All 404 Handler
+admin.all("*", (c) => {
+  return c.json({ error: "Endpoint not found" }, 404);
+});
 
 export default admin;

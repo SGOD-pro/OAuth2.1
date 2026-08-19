@@ -1,100 +1,74 @@
 import { Hono } from "hono";
-import { setCookie } from "hono/cookie";
-import { authProvider, validateAuthPasswordBoundary } from "../utils/auth";
-import { database } from "../db/mongo";
+import { getCookie, setCookie } from "hono/cookie";
+import { HTTPException } from "hono/http-exception";
+import crypto from "crypto";
+import { authProvider } from "../utils/auth";
+import { getDb } from "../db/mongo";
+import { getOriginCache, putOriginCache, registerTokenFamily, verifyAndRotateTokenFamily } from "../db/state";
+import { getTrustedClientIp } from "../utils/security";
 import { config } from "../config";
 
-const auth = new Hono();
+export const auth = new Hono();
 
-auth.get("/", (c) => c.json({ status: "ok" }));
+// Helper to extract clientId from various locations
+function extractClientId(c: any, body?: any): string | null {
+    const query = c.req.query("client_id");
+    if (query) return query;
 
-/**
- * Standard client ID extraction from request context:
- * Checks query string, body, callbackURL, or HTTP Referer header
- */
-function extractClientId(c: any, body: any): string | null {
-    try {
-        const url = new URL(c.req.url);
-        const queryCid = url.searchParams.get("client_id") || c.req.query("client_id");
-        if (queryCid) return queryCid;
-    } catch {}
-
-    if (body?.client_id) return body.client_id;
     if (body?.clientId) return body.clientId;
+    if (body?.client_id) return body.client_id;
 
-    if (body?.callbackURL) {
-        try {
-            const parsed = new URL(body.callbackURL, "http://dummy");
-            const cid = parsed.searchParams.get("client_id");
-            if (cid) return cid;
-        } catch {}
-    }
-
-    const referer = c.req.header("referer") || c.req.header("Referer");
-    if (referer) {
-        try {
-            const parsed = new URL(referer);
-            const cid = parsed.searchParams.get("client_id");
-            if (cid) return cid;
-        } catch {}
-    }
+    const cookieVal = getCookie(c, "current_client_id");
+    if (cookieVal) return cookieVal;
 
     return null;
 }
 
-// 0. Standard OIDC JWKS Endpoints
-auth.get("/jwks.json", async (c) => {
-    const jwks = await authProvider.api.getJwks({
-        headers: Object.fromEntries(c.req.raw.headers.entries()),
+// Constant-time dummy hash computation to prevent login timing enumeration (Fix B10)
+async function executeDummyHash(): Promise<void> {
+    return new Promise((resolve) => {
+        crypto.scrypt("DummyPassword@123!", "dummy_salt_constant_time_98234", 64, { N: 16384, r: 8, p: 1 }, () => {
+            resolve();
+        });
     });
-    return c.json(jwks);
-});
+}
 
-auth.get("/jwks", async (c) => {
-    const jwks = await authProvider.api.getJwks({
-        headers: Object.fromEntries(c.req.raw.headers.entries()),
-    });
-    return c.json(jwks);
-});
+// 1. Initiate OAuth Flow
+auth.get("/oauth/initiate", async (c) => {
+    const clientId = c.req.query("client_id");
+    const redirect_uri = c.req.query("redirect_uri") || "/";
 
-// 1. RP-Initiated / Secure Client Logout
-auth.post("/sign-out-client", async (c) => {
-    const { client_id, redirect_uri } = await c.req.json().catch(() => ({}));
-    const client = await database.collection("oauthClient").findOne({ clientId: client_id });
-    if (!client || !client.redirectUris.includes(redirect_uri)) {
-        return c.json({ error: "Invalid redirect URI" }, 400);
+    if (clientId) {
+        setCookie(c, "current_client_id", clientId, {
+            path: "/",
+            httpOnly: true,
+            secure: config.env === "production",
+            sameSite: "Lax",
+            maxAge: 60 * 10,
+        });
     }
-
-    const session = await authProvider.api.getSession({ headers: c.req.raw.headers });
-    if (session) {
-        await database.collection("session").deleteOne({ token: session.session.token });
-    }
-
-    setCookie(c, "better-auth.session_token", "", {
-        path: "/",
-        httpOnly: true,
-        secure: true,
-        sameSite: "None",
-        maxAge: 0,
-    });
 
     return c.json({ success: true, redirect_uri });
 });
 
-// 2. Sign-In App-Isolation Check
+// 2. Sign-In App-Isolation Check + Constant-Time Protection (Fix B10)
 auth.post("/sign-in/email", async (c) => {
     const body = await c.req.raw.clone().json().catch(() => null);
     const clientId = extractClientId(c, body);
+    const database = await getDb();
 
-    if (clientId && body?.email) {
-        const user = await database.collection("user").findOne({ email: body.email.toLowerCase() });
-        if (user) {
+    if (body?.email) {
+        const user = await database.collection("user").findOne({ email: body.email.toLowerCase().trim() });
+        if (!user) {
+            // Equalize CPU timing with real password verification (Fix B10)
+            await executeDummyHash();
+        } else if (clientId) {
             const reg = await database.collection("user_app_registrations").findOne({
                 $or: [
                     { userId: String(user._id), clientId },
                     { userId: user._id, clientId },
-                    ...(user.id ? [{ userId: user.id, clientId }] : [])
-                ]
+                    ...(user.id ? [{ userId: user.id, clientId }] : []),
+                ],
             });
 
             if (!reg) {
@@ -103,7 +77,7 @@ auth.post("/sign-in/email", async (c) => {
                         status: false,
                         message: "User is not registered for this application. Please register first.",
                     },
-                    400,
+                    400
                 );
             }
         }
@@ -116,166 +90,177 @@ auth.post("/sign-in/email", async (c) => {
 auth.post("/sign-up/email", async (c) => {
     const body = await c.req.raw.clone().json().catch(() => null);
     const clientId = extractClientId(c, body);
+    const database = await getDb();
 
     if (body?.email) {
-        const user = await database.collection("user").findOne({ email: body.email.toLowerCase() });
+        const email = body.email.toLowerCase().trim();
+        const existingUser = await database.collection("user").findOne({ email });
 
-        // If user already exists globally
-        if (user) {
-            const userId = user.id || String(user._id);
+        if (existingUser && clientId) {
+            const reg = await database.collection("user_app_registrations").findOne({
+                $or: [
+                    { userId: String(existingUser._id), clientId },
+                    { userId: existingUser._id, clientId },
+                    ...(existingUser.id ? [{ userId: existingUser.id, clientId }] : []),
+                ],
+            });
 
-            // Check if user is ALREADY registered for this specific application
-            if (clientId) {
-                const existingReg = await database.collection("user_app_registrations").findOne({
-                    $or: [
-                        { userId: String(user._id), clientId },
-                        { userId: user._id, clientId },
-                        ...(user.id ? [{ userId: user.id, clientId }] : [])
-                    ]
-                });
-
-                if (existingReg) {
-                    return c.json(
-                        {
-                            status: false,
-                            message: "An account with this email is already registered for this application. Please sign in instead.",
-                        },
-                        400,
-                    );
-                }
-            }
-
-            // User exists globally but NOT registered for this application -> verify credentials & register for app
-            try {
-                const signInRes = await authProvider.api.signInEmail({
-                    body: { email: body.email, password: body.password },
-                    headers: c.req.raw.headers,
-                    asResponse: true,
-                });
-
-                if (signInRes.ok) {
-                    if (clientId) {
-                        await database.collection("user_app_registrations").updateOne(
-                            { userId, clientId },
-                            { $setOnInsert: { userId, clientId, createdAt: new Date() } },
-                            { upsert: true },
-                        );
-                    }
-                    return signInRes;
-                } else {
-                    return c.json(
-                        {
-                            status: false,
-                            message: "An account with this email already exists with a different password. Please check your credentials.",
-                        },
-                        400,
-                    );
-                }
-            } catch {
+            if (reg) {
                 return c.json(
                     {
                         status: false,
-                        message: "An account with this email already exists with a different password. Please check your credentials.",
+                        message: "User is already registered for this application. Please login instead.",
                     },
-                    400,
+                    400
                 );
             }
-        }
-    }
 
-    // Password policy check
-    const passwordError = validateAuthPasswordBoundary(c.req.path, body);
-    if (passwordError) {
-        return c.json({ error: passwordError }, 400);
-    }
-
-    // Standard new user sign up
-    const response = await authProvider.handler(c.req.raw);
-    if (response.ok && body?.email) {
-        const newUser = await database.collection("user").findOne({ email: body.email.toLowerCase() });
-        if (newUser && clientId) {
-            const userId = newUser.id || String(newUser._id);
-            await database.collection("user_app_registrations").updateOne(
-                { userId, clientId },
-                { $setOnInsert: { userId, clientId, createdAt: new Date() } },
-                { upsert: true },
-            );
-        }
-    }
-    return response;
-});
-
-// 4. OAuth Authorize Interceptor
-auth.get("/oauth2/authorize", async (c) => {
-    const url = new URL(c.req.url);
-    const clientId = url.searchParams.get("client_id");
-
-    // P1-10: Require state parameter to prevent OAuth CSRF / session injection.
-    // PKCE prevents code theft but not session injection — state is the correct guard.
-    // Per OAuth 2.1 §4.1.1, state is strongly recommended; we enforce it here.
-    const state = url.searchParams.get("state");
-    if (!state || state.trim().length === 0) {
-        const configUrl = config.frontendUrl || "http://localhost:5174";
-        return c.redirect(
-            `${configUrl}/auth?${url.searchParams.toString()}&error=state_required&error_description=The+state+parameter+is+required+to+prevent+CSRF+attacks`,
-        );
-    }
-
-    if (clientId) {
-        const session = await authProvider.api.getSession({ headers: c.req.raw.headers });
-        if (session) {
-            const sessUserId = session.user.id || (session.user as any)._id;
-            const isRegistered = await database.collection("user_app_registrations").findOne({
-                $or: [
-                    { userId: String(sessUserId), clientId },
-                    ...(sessUserId ? [{ userId: sessUserId, clientId }] : [])
-                ]
+            // Register existing user for new application
+            await database.collection("user_app_registrations").insertOne({
+                userId: String(existingUser.id || existingUser._id),
+                clientId,
+                registeredAt: new Date(),
             });
 
-            if (!isRegistered) {
-                const configUrl = config.frontendUrl || "http://localhost:5174";
-                return c.redirect(`${configUrl}/auth?${url.searchParams.toString()}&error=not_registered`);
-            }
+            return c.json({
+                status: true,
+                message: "Existing user linked to new application successfully. Please login.",
+                linked: true,
+            });
         }
+    }
+
+    const res = await authProvider.handler(c.req.raw);
+
+    if (res.status >= 200 && res.status < 300 && clientId && body?.email) {
+        try {
+            const email = body.email.toLowerCase().trim();
+            const createdUser = await database.collection("user").findOne({ email });
+            if (createdUser) {
+                await database.collection("user_app_registrations").insertOne({
+                    userId: String(createdUser.id || createdUser._id),
+                    clientId,
+                    registeredAt: new Date(),
+                });
+            }
+        } catch (err) {
+            console.error("[SIGNUP] Failed to record app registration:", err);
+        }
+    }
+
+    return res;
+});
+
+// 4. OAuth Authorize Endpoint (Mandatory State + PKCE)
+auth.get("/oauth2/authorize", async (c) => {
+    const state = c.req.query("state");
+    const clientId = c.req.query("client_id");
+    const redirectUri = c.req.query("redirect_uri");
+
+    if (!state || state.trim() === "") {
+        const errorRedirect = new URL(`${config.frontendUrl}/auth`);
+        if (clientId) errorRedirect.searchParams.set("client_id", clientId);
+        if (redirectUri) errorRedirect.searchParams.set("redirect_uri", redirectUri);
+        errorRedirect.searchParams.set("response_type", c.req.query("response_type") || "code");
+        errorRedirect.searchParams.set("error", "state_required");
+        errorRedirect.searchParams.set("error_description", "The state parameter is required to prevent CSRF attacks");
+        return c.redirect(errorRedirect.toString(), 302);
     }
 
     return authProvider.handler(c.req.raw);
 });
 
-// 5. P0-5: UserInfo Interceptor (RFC 6750 §3.1 compliance)
-// When Better Auth encounters malformed JWTs (alg=none, wrong key, corrupt payload),
-// JOSE throws ERR_JOSE_NOT_SUPPORTED and Better Auth returns 500.
-// RFC 6750 §3.1 strictly requires HTTP 401 with WWW-Authenticate: Bearer error="invalid_token".
+// 5. OAuth Token Endpoint with Multi-Generational Family Revocation (Fix B2)
+auth.post("/oauth2/token", async (c) => {
+    const rawBodyText = await c.req.raw.clone().text().catch(() => "");
+    const params = new URLSearchParams(rawBodyText);
+    const grantType = params.get("grant_type");
+    const refreshToken = params.get("refresh_token");
+    const clientId = params.get("client_id") || "";
+
+    // -- B2: Token Rotation & Theft Detection ---------------------------
+    if (grantType === "refresh_token" && refreshToken) {
+        const incomingHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
+
+        // Forward to Better Auth for rotation
+        const res = await authProvider.handler(c.req.raw);
+
+        if (res.status === 200) {
+            const tokenData = await res.clone().json().catch(() => null);
+            if (tokenData && tokenData.refresh_token) {
+                const newHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
+                const rotationResult = await verifyAndRotateTokenFamily(incomingHash, newHash);
+
+                if (rotationResult.replayed) {
+                    // Theft Detected: Cascade-revoke and return 401
+                    return c.json(
+                        {
+                            error: "invalid_grant",
+                            error_description: "Refresh token has been revoked due to replay detection",
+                        },
+                        401
+                    );
+                }
+            }
+        } else {
+            // Check if failure was due to replaying an already consumed token
+            const check = await verifyAndRotateTokenFamily(incomingHash, "dummy");
+            if (check.replayed) {
+                return c.json(
+                    {
+                        error: "invalid_grant",
+                        error_description: "Refresh token has been revoked due to replay detection",
+                    },
+                    401
+                );
+            }
+        }
+
+        return res;
+    }
+
+    // Initial Token Issuance (grant_type=authorization_code)
+    const res = await authProvider.handler(c.req.raw);
+
+    if (res.status === 200 && grantType === "authorization_code") {
+        try {
+            const tokenData = await res.clone().json().catch(() => null);
+            if (tokenData && tokenData.refresh_token) {
+                const initialHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
+                const familyId = crypto.randomUUID();
+                await registerTokenFamily(familyId, clientId, undefined, initialHash);
+            }
+        } catch (err) {
+            console.error("[TOKEN_FAMILY] Error registering initial family:", err);
+        }
+    }
+
+    return res;
+});
+
+// 6. UserInfo Interceptor (RFC 6750 �3.1 HTTP 401 Normalization)
 auth.get("/oauth2/userinfo", async (c) => {
     try {
-        const response = await authProvider.handler(c.req.raw);
-        if (response.status === 500) {
+        const res = await authProvider.handler(c.req.raw);
+        if (res.status >= 500) {
             return c.json(
                 { error: "invalid_token", error_description: "Invalid or unsupported access token" },
                 401,
                 { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid or unsupported access token"' }
             );
         }
-        return response;
+        return res;
     } catch {
         return c.json(
-            { error: "invalid_token", error_description: "Token validation failed" },
+            { error: "invalid_token", error_description: "Invalid or unsupported access token" },
             401,
-            { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Token validation failed"' }
+            { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid or unsupported access token"' }
         );
     }
 });
 
-// 6. Fallback handler for all other Better Auth endpoints (session, oauth callbacks, etc.)
+// Catch-all delegate to Better Auth
 auth.all("/*", async (c) => {
-    if (c.req.method === "POST") {
-        const body = await c.req.raw.clone().json().catch(() => null);
-        const passwordError = validateAuthPasswordBoundary(c.req.path, body);
-        if (passwordError) {
-            return c.json({ error: passwordError }, 400);
-        }
-    }
-
     return authProvider.handler(c.req.raw);
 });
 

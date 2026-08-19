@@ -1,4 +1,4 @@
-import { z } from 'zod'
+﻿import { z } from 'zod'
 
 export const envSchema = z.object({
     NODE_ENV: z.enum([
@@ -23,6 +23,11 @@ export const envSchema = z.object({
 
     VITE_CLIENT_ID: z.string().optional(),
     PUBLIC_KEY: z.string().optional(),
+
+    UPSTASH_REDIS_REST_URL: z.string().optional(),
+    UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
+    REDIS_URL: z.string().optional(),
+    REDIS_TOKEN: z.string().optional(),
 })
 
 export type Env = z.infer<typeof envSchema>

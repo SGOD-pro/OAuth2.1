@@ -2,42 +2,72 @@ import { getEnv } from './env'
 
 const parsedEnv = getEnv()
 
-export const config = Object.freeze({
-    env: parsedEnv.NODE_ENV,
+export const config = {
+    get env() {
+        return process.env.NODE_ENV || parsedEnv.NODE_ENV
+    },
 
-    port: parsedEnv.PORT,
+    get port() {
+        return Number(process.env.PORT) || parsedEnv.PORT
+    },
 
     mongo: {
-        uri: parsedEnv.MONGO_URI,
+        get uri() {
+            return process.env.MONGO_URI || parsedEnv.MONGO_URI
+        },
+    },
+
+    redis: {
+        get url() {
+            return process.env.UPSTASH_REDIS_REST_URL || process.env.REDIS_URL || parsedEnv.UPSTASH_REDIS_REST_URL || parsedEnv.REDIS_URL
+        },
+        get token() {
+            return process.env.UPSTASH_REDIS_REST_TOKEN || process.env.REDIS_TOKEN || parsedEnv.UPSTASH_REDIS_REST_TOKEN || parsedEnv.REDIS_TOKEN
+        },
     },
 
     auth: {
-        secret: parsedEnv.BETTER_AUTH_SECRET,
-        baseURL: parsedEnv.BETTER_AUTH_URL,
-        publicSignupEnabled:
-            parsedEnv.AUTH_PUBLIC_SIGNUP_ENABLED === 'true',
-        emailVerificationEnabled:
-            parsedEnv.AUTH_EMAIL_VERIFICATION_ENABLED === 'true',
+        get secret() {
+            return process.env.BETTER_AUTH_SECRET || parsedEnv.BETTER_AUTH_SECRET
+        },
+        get baseURL() {
+            return process.env.BETTER_AUTH_URL || parsedEnv.BETTER_AUTH_URL
+        },
+        get publicSignupEnabled() {
+            return (process.env.AUTH_PUBLIC_SIGNUP_ENABLED || parsedEnv.AUTH_PUBLIC_SIGNUP_ENABLED) === 'true'
+        },
+        get emailVerificationEnabled() {
+            return (process.env.AUTH_EMAIL_VERIFICATION_ENABLED || parsedEnv.AUTH_EMAIL_VERIFICATION_ENABLED) === 'true'
+        },
     },
 
     google: {
-        clientId:
-            parsedEnv.GOOGLE_CLIENT_ID,
-
-        clientSecret:
-            parsedEnv.GOOGLE_CLIENT_SECRET,
+        get clientId() {
+            return process.env.GOOGLE_CLIENT_ID || parsedEnv.GOOGLE_CLIENT_ID
+        },
+        get clientSecret() {
+            return process.env.GOOGLE_CLIENT_SECRET || parsedEnv.GOOGLE_CLIENT_SECRET
+        },
     },
 
-    frontendUrl: parsedEnv.FRONTEND_URL,
+    get frontendUrl() {
+        return process.env.FRONTEND_URL || parsedEnv.FRONTEND_URL
+    },
 
     app: {
-        clientId: parsedEnv.VITE_CLIENT_ID,
-        publicKey: parsedEnv.PUBLIC_KEY,
+        get clientId() {
+            return process.env.VITE_CLIENT_ID || parsedEnv.VITE_CLIENT_ID
+        },
+        get publicKey() {
+            return process.env.PUBLIC_KEY || parsedEnv.PUBLIC_KEY
+        },
     },
 
-    trustedProxyCidrs:
-        parsedEnv.TRUSTED_PROXY_CIDRS
+    get trustedProxyCidrs() {
+        const raw = process.env.TRUSTED_PROXY_CIDRS ?? parsedEnv.TRUSTED_PROXY_CIDRS ?? ''
+        return raw
             .split(',')
             .map((value) => value.trim())
-            .filter(Boolean),
-})
+            .filter(Boolean)
+    },
+}
