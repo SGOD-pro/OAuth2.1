@@ -9,6 +9,7 @@
     "build:vercel": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=cjs ./src/vercel.ts",
     "build:netlify": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=cjs ./src/netlify.ts",
     "db:setup": "tsx --env-file=.env scripts/db-setup.ts",
+    "db:seed": "tsx --env-file=.env scripts/db-seed.ts",
     "zip": "zip -j lambda.zip dist/index.js",
     "update": "aws lambda update-function-code --zip-file fileb://lambda.zip --function-name hello --region us-east-1",
     "publish": "aws lambda publish-version --function-name hello --region us-east-1",

@@ -30,8 +30,13 @@ export const SignIn: React.FC = () => {
   const [tab, setTab] = useState('sign-in');
   const [loading, setLoading] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
+  const initialError = searchParams.get('error_description') || searchParams.get('error');
+  const [error, setError] = useState<string | null>(
+    initialError && initialError !== 'login_required' && initialError !== 'consent_required'
+      ? initialError.replace(/\+/g, ' ')
+      : null
+  );
   const signupEnabled = useMemo(() => isPublicSignupEnabled(), []);
 
   const callbackURL = useMemo(() => {
