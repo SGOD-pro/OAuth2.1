@@ -17,7 +17,7 @@ examples
 .env
 *.env.local
 
-# scratch/test scripts
+# scratch/test scripts and results
 hono/rate-limit-test.cjs
 hono/test2.cjs
 skills-lock.json
@@ -25,5 +25,9 @@ skills-lock.json
 .dist
 dist
 
-
-
+# Test outputs & suites
+tests/
+hono/tests/
+*.test.log
+test-results/
+.system_generated/

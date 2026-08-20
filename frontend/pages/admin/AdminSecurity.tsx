@@ -41,9 +41,11 @@ export const AdminSecurity: React.FC = () => {
       return;
     }
 
-    setTotpUri(data.totpURI);
-    setBackupCodes(data.backupCodes);
-    setStep('qr');
+    if ('totpURI' in data) {
+      setTotpUri(data.totpURI);
+      setBackupCodes(data.backupCodes || []);
+      setStep('qr');
+    }
     setLoading(false);
   };
 

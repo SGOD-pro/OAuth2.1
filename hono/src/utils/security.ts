@@ -158,7 +158,7 @@ export function getTrustedClientIp(
   }
 
   if (trustedProxyCidrs.length === 0) {
-    return xff ? xff.split(",")[0].trim() : (singleHop || "127.0.0.1");
+    return "unknown";
   }
 
   const chain = [

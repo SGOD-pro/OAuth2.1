@@ -250,7 +250,43 @@ export const AdminClients: React.FC = () => {
                                 </div>
 
                                 <div className="grid lg:grid-cols-2 gap-6 pt-2">
-                                  <div className="space-y-3">
+                                  <div className="space-y-2">
+                                    <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground block">
+                                      Redirect URIs ({ (c.redirect_uris ?? c.redirectUris ?? []).length })
+                                    </span>
+                                    <div className="flex flex-wrap gap-1.5 p-3 rounded-lg bg-background/80 border border-border min-h-[44px]">
+                                      {(c.redirect_uris ?? c.redirectUris ?? []).length > 0 ? (
+                                        (c.redirect_uris ?? c.redirectUris ?? []).map((uri) => (
+                                          <code key={uri} className="font-mono text-xs bg-secondary/80 px-2 py-0.5 rounded text-foreground border border-border/50">
+                                            {uri}
+                                          </code>
+                                        ))
+                                      ) : (
+                                        <span className="font-sans text-xs text-muted-foreground italic">No redirect URIs configured</span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground block">
+                                      Allowed CORS Origins ({ (c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).length })
+                                    </span>
+                                    <div className="flex flex-wrap gap-1.5 p-3 rounded-lg bg-background/80 border border-border min-h-[44px]">
+                                      {(c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).length > 0 ? (
+                                        (c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).map((origin) => (
+                                          <code key={origin} className="font-mono text-xs bg-secondary/80 px-2 py-0.5 rounded text-accent border border-accent/20">
+                                            {origin}
+                                          </code>
+                                        ))
+                                      ) : (
+                                        <span className="font-sans text-xs text-muted-foreground italic">No allowed origins configured</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="grid lg:grid-cols-2 gap-6 pt-1">
+                                  <div className="space-y-2">
                                     <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground block">
                                       1. Authorize Endpoint URL:
                                     </span>
@@ -259,7 +295,7 @@ export const AdminClients: React.FC = () => {
                                     </pre>
                                   </div>
 
-                                  <div className="space-y-3">
+                                  <div className="space-y-2">
                                     <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground block">
                                       2. Token Exchange Endpoint:
                                     </span>

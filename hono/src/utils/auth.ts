@@ -1,4 +1,4 @@
-﻿import { config } from "../config"
+import { config } from "../config"
 import { betterAuth } from "better-auth";
 import { admin, jwt, twoFactor } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
@@ -61,17 +61,10 @@ export const authProvider = betterAuth({
         },
     },
 
+    // Rate limiting is handled upstream by Hono Redis + Mongo TTL middleware
+    // (authRateLimit for IP-level + credentialStuffingTarget for email-level).
     rateLimit: {
-        enabled: true,
-        storage: "database",
-        window: 60,
-        max: 100,
-        customRules: {
-            "/sign-in/email": { window: 60, max: 10 },
-            "/sign-up/email": { window: 60, max: 5 },
-            "/request-password-reset": { window: 60, max: 5 },
-            "/reset-password": { window: 60, max: 5 },
-        },
+        enabled: false,
     },
 
     socialProviders: {
@@ -168,7 +161,8 @@ export const authProvider = betterAuth({
                 fields: {
                     adminUserId: { type: "string", required: false },
                     adminEmail: { type: "string", required: false },
-                    isDev: { type: "boolean", required: false }
+                    isDev: { type: "boolean", required: false },
+                    is_dev: { type: "boolean", required: false }
                 }
             }
         }),

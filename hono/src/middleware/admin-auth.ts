@@ -3,13 +3,22 @@ import { authProvider } from "../utils/auth";
 import { getHeaders } from "../utils/security";
 import { getDb } from "../db/mongo";
 
-export const requireAdmin = createMiddleware(async (c, next) => {
+/**
+ * Helper to fetch session and user document once per request and cache on context `c`
+ */
+async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any } | null> {
+  const existingUser = c.get("user");
+  const existingSession = c.get("session");
+  if (existingUser && existingSession) {
+    return { user: existingUser, session: existingSession };
+  }
+
   const session = await authProvider.api.getSession({
     headers: getHeaders(c),
   });
 
   if (!session || !session.user) {
-    return c.json({ error: "Authentication required" }, 401);
+    return null;
   }
 
   const database = await getDb();
@@ -17,13 +26,25 @@ export const requireAdmin = createMiddleware(async (c, next) => {
     $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
   });
 
-  const role = userDoc?.role || session.user.role;
+  const fullUser = { ...session.user, ...userDoc };
+  c.set("user", fullUser);
+  c.set("session", session.session);
+
+  return { user: fullUser, session: session.session };
+}
+
+export const requireAdmin = createMiddleware(async (c, next) => {
+  const auth = await getAuthenticatedUser(c);
+
+  if (!auth) {
+    return c.json({ error: "Authentication required" }, 401);
+  }
+
+  const role = auth.user?.role;
   if (role !== "admin") {
     return c.json({ error: "Admin access required" }, 403);
   }
 
-  c.set("user", { ...session.user, ...userDoc });
-  c.set("session", session.session);
   return next();
 });
 
@@ -31,25 +52,18 @@ export const requireAdmin = createMiddleware(async (c, next) => {
  * Super-Admin Middleware: Global operations only (client creation, user provisioning, global stats/logs)
  */
 export const requireSuperAdmin = createMiddleware(async (c, next) => {
-  const session = await authProvider.api.getSession({
-    headers: getHeaders(c),
-  });
+  const auth = await getAuthenticatedUser(c);
 
-  if (!session || !session.user) {
+  if (!auth) {
     return c.json({ error: "Authentication required" }, 401);
   }
 
-  const database = await getDb();
-  const userDoc = await database.collection("user").findOne({
-    $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
-  });
-
-  const role = userDoc?.role || session.user.role;
+  const role = auth.user?.role;
   if (role !== "admin") {
     return c.json({ error: "Admin access required" }, 403);
   }
 
-  const scopedClientId = userDoc?.scopedClientId ?? (session.user as any).scopedClientId;
+  const scopedClientId = auth.user?.scopedClientId;
   if (scopedClientId !== null && scopedClientId !== undefined && scopedClientId !== "") {
     return c.json(
       {
@@ -60,8 +74,6 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
     );
   }
 
-  c.set("user", { ...session.user, ...userDoc });
-  c.set("session", session.session);
   return next();
 });
 
@@ -69,26 +81,19 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
  * Scoped-Admin Middleware: App-level operations only (managing own client config)
  */
 export const requireScopedAdmin = createMiddleware(async (c, next) => {
-  const session = await authProvider.api.getSession({
-    headers: getHeaders(c),
-  });
+  const auth = await getAuthenticatedUser(c);
 
-  if (!session || !session.user) {
+  if (!auth) {
     return c.json({ error: "Authentication required" }, 401);
   }
 
-  const database = await getDb();
-  const userDoc = await database.collection("user").findOne({
-    $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
-  });
-
-  const role = userDoc?.role || session.user.role;
+  const role = auth.user?.role;
   if (role !== "admin") {
     return c.json({ error: "Admin access required" }, 403);
   }
 
   // Enforce mandatory password change for freshly provisioned temporary accounts
-  if (userDoc?.mustChangePassword === true || (session.user as any).mustChangePassword === true) {
+  if (auth.user?.mustChangePassword === true) {
     return c.json(
       {
         error: "password_change_required",
@@ -98,7 +103,7 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
     );
   }
 
-  const scopedClientId = userDoc?.scopedClientId ?? (session.user as any).scopedClientId;
+  const scopedClientId = auth.user?.scopedClientId;
   const targetClientId = c.req.param("id") || c.req.param("clientId");
 
   // If user is scoped to a specific application, enforce strict boundary
@@ -112,8 +117,6 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
     );
   }
 
-  c.set("user", { ...session.user, ...userDoc });
-  c.set("session", session.session);
   c.set("scopedClientId", scopedClientId || null);
   return next();
 });

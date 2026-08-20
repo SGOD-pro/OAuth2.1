@@ -24,6 +24,9 @@ export const config = {
         get token() {
             return process.env.UPSTASH_REDIS_REST_TOKEN || process.env.REDIS_TOKEN || parsedEnv.UPSTASH_REDIS_REST_TOKEN || parsedEnv.REDIS_TOKEN
         },
+        get enabled(): boolean {
+            return Boolean(this.url && this.token)
+        },
     },
 
     auth: {

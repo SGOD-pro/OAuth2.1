@@ -4,7 +4,8 @@ import { HTTPException } from "hono/http-exception";
 import crypto from "crypto";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
-import { getOriginCache, putOriginCache, registerTokenFamily, verifyAndRotateTokenFamily } from "../db/state";
+import { getOriginCache, putOriginCache, registerTokenFamily, verifyAndRotateTokenFamily, incrementRateLimit } from "../db/state";
+import { rateLimiters, checkRateLimit } from "../cache/redis";
 import { getTrustedClientIp } from "../utils/security";
 import { config } from "../config";
 
@@ -25,11 +26,19 @@ function extractClientId(c: any, body?: any): string | null {
 }
 
 // Constant-time dummy hash computation to prevent login timing enumeration (Fix B10)
+// Uses exact Better-Auth scrypt parameters: N=16384, r=16, p=1, dkLen=64, maxmem=67108864
 async function executeDummyHash(): Promise<void> {
-    return new Promise((resolve) => {
-        crypto.scrypt("DummyPassword@123!", "dummy_salt_constant_time_98234", 64, { N: 16384, r: 8, p: 1 }, () => {
-            resolve();
-        });
+    return new Promise((resolve, reject) => {
+        crypto.scrypt(
+            "DummyPassword@123!".normalize("NFKC"),
+            "dummy_salt_constant_time_98234",
+            64,
+            { N: 16384, r: 16, p: 1, maxmem: 128 * 16384 * 16 * 2 },
+            (err) => {
+                if (err) reject(err);
+                else resolve();
+            }
+        );
     });
 }
 
@@ -51,14 +60,46 @@ auth.get("/oauth/initiate", async (c) => {
     return c.json({ success: true, redirect_uri });
 });
 
-// 2. Sign-In App-Isolation Check + Constant-Time Protection (Fix B10)
+// 2. Sign-In App-Isolation Check + Target-Keyed Rate Limit + Constant-Time Protection (Fix B10 & Part 2)
 auth.post("/sign-in/email", async (c) => {
     const body = await c.req.raw.clone().json().catch(() => null);
     const clientId = extractClientId(c, body);
     const database = await getDb();
 
-    if (body?.email) {
-        const user = await database.collection("user").findOne({ email: body.email.toLowerCase().trim() });
+    if (body?.email && typeof body.email === "string") {
+        const normalizedEmail = body.email.toLowerCase().trim();
+
+        // 1. Target-Keyed Rate Limiting (IP-Rotation Resistant Defense)
+        if (rateLimiters?.credentialStuffingTarget) {
+            const targetResult = await checkRateLimit(
+                rateLimiters.credentialStuffingTarget,
+                `email:${normalizedEmail}`
+            );
+            if (targetResult.remaining !== -1 && !targetResult.allowed) {
+                return c.json(
+                    {
+                        error: "too_many_requests",
+                        message: "Too many sign-in attempts for this account. Please try again later.",
+                    },
+                    429
+                );
+            }
+        } else {
+            // MongoDB fallback (graceful degradation)
+            const targetKey = `TARGET#${crypto.createHash("sha256").update(normalizedEmail).digest("hex")}`;
+            const entry = await incrementRateLimit(targetKey, Date.now(), 300 * 1000);
+            if (entry.count > 15) {
+                return c.json(
+                    {
+                        error: "too_many_requests",
+                        message: "Too many sign-in attempts for this account. Please try again later.",
+                    },
+                    429
+                );
+            }
+        }
+
+        const user = await database.collection("user").findOne({ email: normalizedEmail });
         if (!user) {
             // Equalize CPU timing with real password verification (Fix B10)
             await executeDummyHash();
@@ -238,7 +279,7 @@ auth.post("/oauth2/token", async (c) => {
     return res;
 });
 
-// 6. UserInfo Interceptor (RFC 6750 §3.1 HTTP 401 Normalization)
+// 6. UserInfo Interceptor (RFC 6750 Section 3.1 HTTP 401 Normalization)
 auth.get("/oauth2/userinfo", async (c) => {
     try {
         const res = await authProvider.handler(c.req.raw);

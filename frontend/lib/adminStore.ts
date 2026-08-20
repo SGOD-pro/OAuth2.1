@@ -15,11 +15,17 @@ export interface OAuthClient {
   // client_secret is intentionally NOT included — secrets are only returned once at creation
   // time (POST /clients response) and should never be fetched via list/detail endpoints.
   redirect_uris: string[];
+  redirectUris?: string[];
+  allowed_origins?: string[];
+  allowedOrigins?: string[];
   disabled: boolean;
   is_dev?: boolean;
+  isDev?: boolean;
   metadata?: {
     allowedOrigins?: string[];
+    allowed_origins?: string[];
     isDev?: boolean;
+    is_dev?: boolean;
   };
   adminUserId?: string;
   adminEmail?: string;

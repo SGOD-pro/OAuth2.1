@@ -2,20 +2,29 @@ import { Hono } from "hono";
 import crypto from "crypto";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
-import { getHeaders, isStrongPassword } from "../utils/security";
+import { getHeaders, isStrongPassword, validateRedirectUris } from "../utils/security";
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
 import { requireSuperAdmin, requireScopedAdmin } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 
-export const admin = new Hono();
+// Helper accessor for Better Auth dynamic plugin APIs
+const authApi = authProvider.api as any;
+
+export const admin = new Hono<{
+  Variables: {
+    user: any;
+    session: any;
+    scopedClientId: string | null;
+  };
+}>();
 
 // -- Super-Admin Only Routes ---------------------------------------------
 
 // 1. List All OAuth Clients (Super-Admin only)
 admin.get("/clients", requireSuperAdmin, async (c) => {
-  const result = await authProvider.api.listOAuthClients({
+  const result = (await authApi.listOAuthClients({
     headers: getHeaders(c),
-  }) as Array<Record<string, unknown>> | null;
+  })) as Array<Record<string, unknown>> | null;
 
   if (!result) return c.json([]);
 
@@ -28,10 +37,32 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
   const body = await c.req.json();
   const sessionUser = c.get("user") as any;
 
-  const result = await authProvider.api.createOAuthClient({
+  const isDev = Boolean(body.isDev || body.is_dev);
+
+  if (Array.isArray(body.redirect_uris || body.redirectUris)) {
+    const uris = (body.redirect_uris || body.redirectUris) as string[];
+    const invalidUri = validateRedirectUris(uris, { isDev });
+    if (invalidUri) {
+      return c.json({
+        error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
+      }, 400);
+    }
+  }
+
+  if (Array.isArray(body.allowed_origins || body.allowedOrigins)) {
+    const origins = (body.allowed_origins || body.allowedOrigins) as string[];
+    const invalidOrigin = validateRedirectUris(origins, { isDev });
+    if (invalidOrigin) {
+      return c.json({
+        error: `Invalid allowed origin: "${invalidOrigin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
+      }, 400);
+    }
+  }
+
+  const result = (await authApi.createOAuthClient({
     headers: getHeaders(c),
     body,
-  }) as Record<string, unknown> | null;
+  })) as Record<string, unknown> | null;
 
   if (result && Array.isArray(result.allowed_origins)) {
     await invalidateOriginCache(result.allowed_origins as string[]);
@@ -116,10 +147,10 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
   const sessionUser = c.get("user") as any;
 
   try {
-    const existing = await authProvider.api.getOAuthClient({
+    const existing = (await authApi.getOAuthClient({
       headers: getHeaders(c),
       query: { client_id: id },
-    }) as Record<string, unknown> | null;
+    })) as Record<string, unknown> | null;
 
     if (existing && Array.isArray(existing.allowed_origins)) {
       await invalidateOriginCache(existing.allowed_origins as string[]);
@@ -128,7 +159,7 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
     // Ignore fetch error before deletion
   }
 
-  const result = await authProvider.api.deleteOAuthClient({
+  const result = await authApi.deleteOAuthClient({
     headers: getHeaders(c),
     body: { client_id: id },
   });
@@ -155,7 +186,7 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
 });
 
 // 6. Provision Scoped or Global Admin (Super-Admin only with Rate Limiting B6)
-admin.post("/users", requireSuperAdmin, adminProvisionRateLimit, async (c) => {
+admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
   const body = await c.req.json();
   const sessionUser = c.get("user") as any;
 
@@ -193,7 +224,7 @@ admin.post("/users", requireSuperAdmin, adminProvisionRateLimit, async (c) => {
     }
 
     // 1. Create base user in Better Auth
-    const newUser = await authProvider.api.signUpEmail({
+    const newUser = await authApi.signUpEmail({
       body: { email, password, name },
     });
 
@@ -250,10 +281,10 @@ admin.get("/clients/:id", requireScopedAdmin, async (c) => {
   const id = c.req.param("id");
 
   try {
-    const result = await authProvider.api.getOAuthClient({
+    const result = (await authApi.getOAuthClient({
       headers: getHeaders(c),
       query: { client_id: id },
-    }) as Record<string, unknown> | null;
+    })) as Record<string, unknown> | null;
 
     if (!result) return c.json({ error: "Client not found" }, 404);
 
@@ -281,15 +312,37 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
 
   let oldClient: any = null;
   try {
-    oldClient = await authProvider.api.getOAuthClient({
+    oldClient = await authApi.getOAuthClient({
       headers: getHeaders(c),
       query: { client_id: id },
     });
   } catch {}
 
+  const isDev = Boolean(body.isDev ?? body.is_dev ?? oldClient?.isDev ?? oldClient?.is_dev);
+
+  if (Array.isArray(body.redirect_uris || body.redirectUris)) {
+    const uris = (body.redirect_uris || body.redirectUris) as string[];
+    const invalidUri = validateRedirectUris(uris, { isDev });
+    if (invalidUri) {
+      return c.json({
+        error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
+      }, 400);
+    }
+  }
+
+  if (Array.isArray(body.allowed_origins || body.allowedOrigins)) {
+    const origins = (body.allowed_origins || body.allowedOrigins) as string[];
+    const invalidOrigin = validateRedirectUris(origins, { isDev });
+    if (invalidOrigin) {
+      return c.json({
+        error: `Invalid allowed origin: "${invalidOrigin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
+      }, 400);
+    }
+  }
+
   let result: any = null;
   try {
-    result = await authProvider.api.updateOAuthClient({
+    result = await authApi.updateOAuthClient({
       headers: getHeaders(c),
       body: { client_id: id, update: body },
     });
@@ -347,10 +400,10 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
 admin.get("/app/:clientId/config", requireScopedAdmin, async (c) => {
   const clientId = c.req.param("clientId");
   try {
-    const result = await authProvider.api.getOAuthClient({
+    const result = (await authApi.getOAuthClient({
       headers: getHeaders(c),
       query: { client_id: clientId },
-    }) as Record<string, unknown> | null;
+    })) as Record<string, unknown> | null;
 
     if (!result) return c.json({ error: "Application not found" }, 404);
     const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
@@ -370,7 +423,7 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
 
   let result: any = null;
   try {
-    result = await authProvider.api.updateOAuthClient({
+    result = await authApi.updateOAuthClient({
       headers: getHeaders(c),
       body: { client_id: clientId, update: body },
     });

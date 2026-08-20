@@ -10,12 +10,24 @@ import { apiFetch } from '@/lib/api';
 interface OAuthClient {
   client_id: string;
   client_name: string;
-  redirect_uris: string[];
+  redirect_uris?: string[];
+  redirectUris?: string[];
   allowed_origins?: string[];
+  allowedOrigins?: string[];
   is_dev?: boolean;
-  skip_consent: boolean;
-  enable_end_session: boolean;
+  isDev?: boolean;
+  metadata?: {
+    allowedOrigins?: string[];
+    allowed_origins?: string[];
+    isDev?: boolean;
+    is_dev?: boolean;
+  };
+  skip_consent?: boolean;
+  skipConsent?: boolean;
+  enable_end_session?: boolean;
+  enableEndSession?: boolean;
   disabled?: boolean;
+  is_active?: boolean;
 }
 
 interface EditAppModalProps {
@@ -74,18 +86,43 @@ const TagInput: React.FC<{
 };
 
 export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onSuccess }) => {
-  const [redirectUris, setRedirectUris] = useState<string[]>(client.redirect_uris ?? []);
-  const [allowedOrigins, setAllowedOrigins] = useState<string[]>(client.allowed_origins ?? []);
-  const [isDev, setIsDev] = useState(client.is_dev ?? false);
-  const [skipConsent, setSkipConsent] = useState(client.skip_consent);
-  const [enableEndSession, setEnableEndSession] = useState(client.enable_end_session);
-  const [isActive, setIsActive] = useState(!client.disabled);
+  const initialRedirectUris = client.redirect_uris ?? client.redirectUris ?? [];
+  const initialAllowedOrigins =
+    client.allowed_origins ??
+    client.allowedOrigins ??
+    client.metadata?.allowedOrigins ??
+    client.metadata?.allowed_origins ??
+    [];
+
+  const [redirectUris, setRedirectUris] = useState<string[]>(initialRedirectUris);
+  const [allowedOrigins, setAllowedOrigins] = useState<string[]>(initialAllowedOrigins);
+  const [isDev, setIsDev] = useState<boolean>(
+    client.is_dev ?? client.isDev ?? client.metadata?.isDev ?? client.metadata?.is_dev ?? false
+  );
+  const [skipConsent, setSkipConsent] = useState<boolean>(
+    client.skip_consent ?? client.skipConsent ?? false
+  );
+  const [enableEndSession, setEnableEndSession] = useState<boolean>(
+    client.enable_end_session ?? client.enableEndSession ?? false
+  );
+  const [isActive, setIsActive] = useState<boolean>(
+    client.is_active ?? !client.disabled
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (redirectUris.length === 0) {
+      setError('At least one redirect URI is required.');
+      return;
+    }
+    if (allowedOrigins.length === 0) {
+      setError('At least one allowed CORS origin is required.');
+      return;
+    }
+
     setLoading(true);
     setError('');
     setSuccess(false);
@@ -99,11 +136,17 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
         },
         body: JSON.stringify({
           redirect_uris: redirectUris,
+          redirectUris: redirectUris,
           allowed_origins: allowedOrigins,
+          allowedOrigins: allowedOrigins,
           is_dev: isDev,
+          isDev: isDev,
           skip_consent: skipConsent,
+          skipConsent: skipConsent,
           enable_end_session: enableEndSession,
+          enableEndSession: enableEndSession,
           is_active: isActive,
+          disabled: !isActive,
         }),
       });
 
@@ -147,9 +190,14 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
           )}
 
           <div className="space-y-1">
-            <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-              Redirect URIs
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+                Redirect URIs
+              </label>
+              <span className="font-sans text-[11px] text-muted-foreground">
+                OAuth callback endpoints
+              </span>
+            </div>
             <TagInput
               tags={redirectUris}
               placeholder="https://app.domain.com/auth/callback"
@@ -160,9 +208,14 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
           </div>
 
           <div className="space-y-1">
-            <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-              Allowed CORS Origins
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+                Allowed CORS Origins
+              </label>
+              <span className="font-sans text-[11px] text-muted-foreground">
+                Web app origin(s) permitted for browser requests
+              </span>
+            </div>
             <TagInput
               tags={allowedOrigins}
               placeholder="https://app.domain.com"
@@ -170,6 +223,11 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
               onAdd={(v) => setAllowedOrigins((o) => [...o, v])}
               onRemove={(v) => setAllowedOrigins((o) => o.filter((r) => r !== v))}
             />
+            {allowedOrigins.length === 0 && (
+              <p className="font-sans text-[11px] text-amber-400/90 mt-1">
+                Notice: At least one allowed origin is required for SPAs and browser-based clients to make cross-origin token requests.
+              </p>
+            )}
           </div>
 
           <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-4 space-y-3">

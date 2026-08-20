@@ -5,6 +5,7 @@
   "scripts": {
     "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && esbuild --bundle --outfile=./dist/index.cjs --platform=node --target=node20 --format=cjs ./src/lambda.ts",
     "build:node": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=cjs ./src/node-server.ts",
+    "start": "node dist/index.js",
     "build:vercel": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=cjs ./src/vercel.ts",
     "build:netlify": "esbuild --bundle --outfile=./dist/index.js --platform=node --target=node20 --format=cjs ./src/netlify.ts",
     "db:setup": "tsx --env-file=.env scripts/db-setup.ts",
