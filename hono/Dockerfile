@@ -22,8 +22,8 @@ ENV UV_THREADPOOL_SIZE=16
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-COPY --from=builder /app/dist/index.js ./dist/index.js
+COPY --from=builder /app/dist/index.cjs ./dist/index.cjs
 
 EXPOSE 3000
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/index.cjs"]

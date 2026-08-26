@@ -94,13 +94,13 @@ For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux
    cd hono
    npm install
    npm run build:node
-   # Produces standalone dist/index.js powered by @hono/node-server
+   # Produces standalone dist/index.cjs powered by @hono/node-server
    ```
 2. **Run with PM2 Cluster & Threadpool Scaling**:
    ```bash
    npm install -g pm2
    # Start with 16 worker threads per process for maximum scrypt hashing throughput:
-   UV_THREADPOOL_SIZE=16 PORT=3000 NODE_ENV=production pm2 start dist/index.js --name "swyra-auth" -i max
+   UV_THREADPOOL_SIZE=16 PORT=3000 NODE_ENV=production pm2 start dist/index.cjs --name "swyra-auth" -i max
    pm2 save
    pm2 startup
    ```
@@ -141,7 +141,7 @@ For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux
    - Create a new project on [railway.app](https://railway.app) connected to your GitHub repository.
    - **Root Directory**: `hono`
    - **Build Command**: `npm install && npm run build:node`
-   - **Start Command**: `npm start` (runs `node dist/index.js`)
+   - **Start Command**: `npm start` (runs `node dist/index.cjs`)
    - Add environment variables in the Railway dashboard (`MONGO_URI`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `FRONTEND_URL`, `UV_THREADPOOL_SIZE=16`).
 2. **Deploying on Render**:
    - Create a **Web Service** on [render.com](https://render.com).
@@ -199,7 +199,7 @@ For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux
      --env-vars "NODE_ENV=production" "UV_THREADPOOL_SIZE=16" "MONGO_URI=secretref:mongo-uri" "BETTER_AUTH_SECRET=secretref:auth-secret" "BETTER_AUTH_URL=https://<app-fqdn>/api/auth" "FRONTEND_URL=https://auth.domain.com"
    ```
 2. **Azure App Service (Linux Node.js 20)**:
-   - Set Startup Command in Azure Portal: `node dist/index.js`
+   - Set Startup Command in Azure Portal: `node dist/index.cjs` (or `npm start`)
    - Set Application Settings matching the Environment Variables Reference table.
 
 ---

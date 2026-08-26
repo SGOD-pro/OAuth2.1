@@ -39,7 +39,7 @@ export const redisEnabled = config.redis.enabled;
  * a slow Redis instance would otherwise become a request-latency DoS vector
  * in its own right, independent of whether Redis is technically "up".
  */
-const REDIS_CALL_TIMEOUT_MS = 400;
+const REDIS_CALL_TIMEOUT_MS = 2000;
 
 export const redis = redisEnabled
   ? new Redis({

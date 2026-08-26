@@ -58,6 +58,7 @@ app.get('/auth/login', (req, res) => {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
+    path: '/',
     maxAge: 10 * 60 * 1000, // 10 mins
   });
 
@@ -65,6 +66,7 @@ app.get('/auth/login', (req, res) => {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
+    path: '/',
     maxAge: 10 * 60 * 1000,
   });
 
@@ -103,7 +105,7 @@ app.get('/auth/callback', async (req, res) => {
   try {
     const basicAuth = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
 
-    // 3. Exchange code for tokens
+    // 3. Exchange code for tokens (using Authorization: Basic per OAuth 2.1 RFC)
     const tokenRes = await fetch(`${AUTH_ISSUER}/api/auth/oauth2/token`, {
       method: 'POST',
       headers: {
@@ -115,8 +117,6 @@ app.get('/auth/callback', async (req, res) => {
         grant_type: 'authorization_code',
         code: String(code),
         redirect_uri: CALLBACK_URL,
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
         code_verifier: codeVerifier,
       }).toString(),
     });
@@ -152,11 +152,12 @@ app.get('/auth/callback', async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
+      path: '/',
       maxAge: (tokens.expires_in || 3600) * 1000,
     });
 
-    res.clearCookie('oauth_verifier');
-    res.clearCookie('oauth_state');
+    res.clearCookie('oauth_verifier', { path: '/' });
+    res.clearCookie('oauth_state', { path: '/' });
 
     res.redirect(CLIENT_ORIGIN);
   } catch (err: unknown) {
@@ -177,9 +178,9 @@ app.get('/auth/me', requireAuth, (req: AuthenticatedRequest, res) => {
 
 // 4. Logout Session
 app.post('/auth/logout', (req, res) => {
-  res.clearCookie('app_session');
-  res.clearCookie('oauth_verifier');
-  res.clearCookie('oauth_state');
+  res.clearCookie('app_session', { path: '/' });
+  res.clearCookie('oauth_verifier', { path: '/' });
+  res.clearCookie('oauth_state', { path: '/' });
   res.json({ success: true, message: 'Logged out successfully' });
 });
 

@@ -19,6 +19,23 @@ function extractClientId(c: any, body?: any): string | null {
     if (body?.clientId) return body.clientId;
     if (body?.client_id) return body.client_id;
 
+    if (body?.callbackURL && typeof body.callbackURL === "string") {
+        try {
+            const url = new URL(body.callbackURL, "http://localhost");
+            const cid = url.searchParams.get("client_id");
+            if (cid) return cid;
+        } catch {}
+    }
+
+    const callbackQuery = c.req.query("callbackURL");
+    if (callbackQuery) {
+        try {
+            const url = new URL(callbackQuery, "http://localhost");
+            const cid = url.searchParams.get("client_id");
+            if (cid) return cid;
+        } catch {}
+    }
+
     const cookieVal = getCookie(c, "current_client_id");
     if (cookieVal) return cookieVal;
 
@@ -103,7 +120,7 @@ auth.post("/sign-in/email", async (c) => {
         if (!user) {
             // Equalize CPU timing with real password verification (Fix B10)
             await executeDummyHash();
-        } else if (clientId) {
+        } else if (clientId && user.role !== "admin") {
             const reg = await database.collection("user_app_registrations").findOne({
                 $or: [
                     { userId: String(user._id), clientId },
@@ -218,13 +235,44 @@ auth.post("/oauth2/token", async (c) => {
     const grantType = params.get("grant_type");
     const refreshToken = params.get("refresh_token");
     const clientId = params.get("client_id") || "";
+    const clientSecret = params.get("client_secret");
+
+    // Ensure strictly ONE client authentication method is forwarded to Better Auth
+    let reqToForward = c.req.raw;
+    if (!c.req.header("authorization") && clientId && clientSecret) {
+        // Adapt client_secret_post to client_secret_basic
+        const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+        const headers = new Headers(c.req.raw.headers);
+        headers.set("Authorization", `Basic ${basicAuth}`);
+        
+        params.delete("client_secret");
+        params.delete("client_id");
+        const updatedBody = params.toString();
+
+        reqToForward = new Request(c.req.raw.url, {
+            method: c.req.raw.method,
+            headers,
+            body: updatedBody,
+        });
+    } else if (c.req.header("authorization") && (params.has("client_secret") || params.has("client_id"))) {
+        // Client provided Authorization header: strip body credentials to prevent dual-auth rejection
+        params.delete("client_secret");
+        params.delete("client_id");
+        const updatedBody = params.toString();
+
+        reqToForward = new Request(c.req.raw.url, {
+            method: c.req.raw.method,
+            headers: c.req.raw.headers,
+            body: updatedBody,
+        });
+    }
 
     // -- B2: Token Rotation & Theft Detection ---------------------------
     if (grantType === "refresh_token" && refreshToken) {
         const incomingHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
 
         // Forward to Better Auth for rotation
-        const res = await authProvider.handler(c.req.raw);
+        const res = await authProvider.handler(reqToForward);
 
         if (res.status === 200) {
             const tokenData = await res.clone().json().catch(() => null);
@@ -261,7 +309,7 @@ auth.post("/oauth2/token", async (c) => {
     }
 
     // Initial Token Issuance (grant_type=authorization_code)
-    const res = await authProvider.handler(c.req.raw);
+    const res = await authProvider.handler(reqToForward);
 
     if (res.status === 200 && grantType === "authorization_code") {
         try {

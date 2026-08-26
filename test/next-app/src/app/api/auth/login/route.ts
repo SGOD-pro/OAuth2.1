@@ -1,3 +1,4 @@
+import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 import { generateCodeVerifier, generateCodeChallenge, generateState } from '@/lib/oauth';
 
@@ -20,10 +21,10 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set('code_challenge_method', 'S256');
   authUrl.searchParams.set('prompt', 'login');
 
-  const response = NextResponse.redirect(authUrl.toString());
+  const cookieStore = await cookies();
 
   // Store verifier and state in temporary cookies for PKCE validation in callback
-  response.cookies.set('oauth_verifier', codeVerifier, {
+  cookieStore.set('oauth_verifier', codeVerifier, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
@@ -31,6 +32,22 @@ export async function GET(request: NextRequest) {
     maxAge: 600, // 10 minutes
   });
 
+  cookieStore.set('oauth_state', state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 600,
+  });
+
+  const response = NextResponse.redirect(authUrl.toString());
+  response.cookies.set('oauth_verifier', codeVerifier, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 600,
+  });
   response.cookies.set('oauth_state', state, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',

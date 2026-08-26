@@ -14,21 +14,21 @@ export const Consent: React.FC = () => {
   const scopes = rawScope.split(' ').filter(Boolean);
 
   const scopeDescriptions: Record<string, { label: string; tag: string }> = {
-    openid: { 
-      label: 'Cryptographic identity attestation and token verification', 
-      tag: 'OPENID' 
+    openid: {
+      label: 'Cryptographic identity attestation and token verification',
+      tag: 'OPENID'
     },
-    profile: { 
-      label: 'Read telemetry profile (name, avatar, locale preference)', 
-      tag: 'PROFILE' 
+    profile: {
+      label: 'Read telemetry profile (name, avatar, locale preference)',
+      tag: 'PROFILE'
     },
-    email: { 
-      label: 'Read primary verified pilot email address', 
-      tag: 'EMAIL' 
+    email: {
+      label: 'Read primary verified pilot email address',
+      tag: 'EMAIL'
     },
-    offline_access: { 
-      label: 'Maintain background refresh telemetry token', 
-      tag: 'REFRESH' 
+    offline_access: {
+      label: 'Maintain background refresh telemetry token',
+      tag: 'REFRESH'
     },
   };
 

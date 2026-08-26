@@ -4,7 +4,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { useAdminStore } from '@/lib/adminStore';
+import { useAdminStore, type LogEntry } from '@/lib/adminStore';
 
 const PAGE_SIZE = 20;
 
@@ -27,7 +27,17 @@ export const AdminLogs: React.FC = () => {
   const { data, loading } = useAdminStore((state) => state.logs);
   const fetchLogs = useAdminStore((state) => state.fetchLogs);
   
-  const logs = useMemo(() => data || [], [data]);
+  const logs: LogEntry[] = useMemo(() => {
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object') {
+      const d = data as any;
+      if (Array.isArray(d.logs)) return d.logs;
+      if (Array.isArray(d.sessions) || Array.isArray(d.audits)) {
+        return [...(d.sessions || []), ...(d.audits || [])];
+      }
+    }
+    return [];
+  }, [data]);
   
   const [filtered, setFiltered] = useState(logs);
   const [page, setPage] = useState(0);

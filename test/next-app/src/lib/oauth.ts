@@ -31,13 +31,12 @@ export async function exchangeCodeForTokens(
   const clientSecret = process.env.CLIENT_SECRET || '';
 
   const tokenEndpoint = `${issuer}/api/auth/oauth2/token`;
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri,
-    client_id: clientId,
-    client_secret: clientSecret,
     code_verifier: codeVerifier,
   });
 
@@ -45,6 +44,7 @@ export async function exchangeCodeForTokens(
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': `Basic ${basicAuth}`,
       Accept: 'application/json',
     },
     body: body.toString(),

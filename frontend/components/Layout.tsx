@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLocation } from 'react-router-dom';
 import { useOAuthParams } from '../hooks/useOAuthParams';
 import { InvalidRequest } from '../components/InvalidRequest';
 import { ThemeToggle } from './ThemeToggle';
@@ -6,9 +7,12 @@ import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 export const Layout = ({ children }: { children: React.ReactNode }) => {
+  const location = useLocation();
   const { isValid } = useOAuthParams();
 
-  if (!isValid) {
+  const isStrictOAuthEntry = location.pathname === '/auth';
+
+  if (isStrictOAuthEntry && !isValid) {
     return <InvalidRequest reason="missing_params" />;
   }
 

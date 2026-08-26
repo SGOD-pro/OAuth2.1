@@ -93,7 +93,6 @@ export const SignIn: React.FC = () => {
       } else {
         if (callbackURL) {
           setRedirecting(true);
-          // window.location.href = callbackURL;
         } else {
           setLoading(false);
           toast.success("Successfully authenticated.");
@@ -150,7 +149,6 @@ export const SignIn: React.FC = () => {
       } else {
         if (callbackURL) {
           setRedirecting(true);
-          // window.location.href = callbackURL;
         } else {
           setLoading(false);
           toast.success("Account created and signed in successfully!");

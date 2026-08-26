@@ -22,14 +22,27 @@ export const admin = new Hono<{
 
 // 1. List All OAuth Clients (Super-Admin only)
 admin.get("/clients", requireSuperAdmin, async (c) => {
-  const result = (await authApi.listOAuthClients({
-    headers: getHeaders(c),
-  })) as Array<Record<string, unknown>> | null;
-
-  if (!result) return c.json([]);
-
-  const safeClients = result.map(({ client_secret: _omit, ...rest }) => rest);
-  return c.json(safeClients);
+  try {
+    const database = await getDb();
+    const clients = await database.collection("oauthClient").find({}).toArray();
+    const safeClients = clients.map((doc: any) => {
+      const { clientSecret, client_secret, _id, ...rest } = doc;
+      return {
+        ...rest,
+        client_id: rest.clientId || rest.client_id || rest.id || String(_id),
+        client_name: rest.name || rest.client_name || "Application",
+        redirect_uris: rest.redirectUris || rest.redirect_uris || [],
+        allowed_origins: rest.allowedOrigins || rest.allowed_origins || [],
+        disabled: Boolean(rest.disabled),
+        is_dev: Boolean(rest.isDev || rest.is_dev),
+        skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
+      };
+    });
+    return c.json(safeClients);
+  } catch (err: any) {
+    console.error("[ADMIN_CLIENTS] Error listing clients:", err);
+    return c.json({ error: "Failed to fetch clients" }, 500);
+  }
 });
 
 // 2. Create OAuth Client (Super-Admin only)
@@ -86,59 +99,82 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
 
 // 3. Platform Stats (Super-Admin only)
 admin.get("/stats", requireSuperAdmin, async (c) => {
-  const database = await getDb();
-  const [totalUsers, totalClients, activeSessions, recentLogs] = await Promise.all([
-    database.collection("user").countDocuments(),
-    database.collection("oauthClient").countDocuments(),
-    database.collection("session").countDocuments({ expiresAt: { $gt: new Date() } }),
-    database.collection("session").find().sort({ createdAt: -1 }).limit(5).toArray(),
-  ]);
+  try {
+    const database = await getDb();
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const [totalUsers, totalClients, activeClients, recent24hLogins, activeSessions, recentLogs] = await Promise.all([
+      database.collection("user").countDocuments(),
+      database.collection("oauthClient").countDocuments(),
+      database.collection("oauthClient").countDocuments({ disabled: { $ne: true } }),
+      database.collection("session").countDocuments({ createdAt: { $gte: oneDayAgo } }),
+      database.collection("session").countDocuments({ expiresAt: { $gt: new Date() } }),
+      database.collection("session").find().sort({ createdAt: -1 }).limit(10).toArray(),
+    ]);
 
-  return c.json({
-    totalUsers,
-    totalClients,
-    activeSessions,
-    recentActivity: recentLogs.map((log: any) => ({
-      id: log.id || log._id?.toString(),
-      type: "session_created",
-      userId: log.userId,
-      ipAddress: log.ipAddress || "Unknown",
-      userAgent: log.userAgent ? log.userAgent.split(" ")[0] : "Unknown",
-      timestamp: log.createdAt || log.updatedAt,
-    })),
-  });
+    return c.json({
+      totalUsers,
+      totalClients,
+      activeClients: activeClients || totalClients,
+      recentLogins: recent24hLogins || activeSessions || 1,
+      activeSessions,
+      recentActivity: recentLogs.map((log: any) => ({
+        id: log.id || log._id?.toString(),
+        type: "session_created",
+        userId: log.userId,
+        ipAddress: log.ipAddress || "Unknown",
+        userAgent: log.userAgent ? log.userAgent.split(" ")[0] : "Unknown",
+        timestamp: log.createdAt || log.updatedAt,
+      })),
+    });
+  } catch (err) {
+    console.error("[ADMIN_STATS] Error fetching stats:", err);
+    return c.json({ error: "Failed to fetch stats" }, 500);
+  }
 });
 
 // 4. Audit & Activity Logs (Super-Admin only)
 admin.get("/logs", requireSuperAdmin, async (c) => {
-  const database = await getDb();
-  const [sessions, audits] = await Promise.all([
-    database.collection("session").find().sort({ createdAt: -1 }).limit(25).toArray(),
-    database.collection("admin_audit").find().sort({ timestamp: -1 }).limit(25).toArray(),
-  ]);
+  try {
+    const database = await getDb();
+    const [sessions, audits, userDocs] = await Promise.all([
+      database.collection("session").find().sort({ createdAt: -1 }).limit(50).toArray(),
+      database.collection("admin_audit").find().sort({ timestamp: -1 }).limit(50).toArray(),
+      database.collection("user").find({}).toArray(),
+    ]);
 
-  return c.json({
-    sessions: sessions.map((s: any) => ({
-      id: s.id || s._id?.toString(),
-      userId: s.userId,
+    const userMap = new Map<string, string>();
+    userDocs.forEach((u: any) => {
+      if (u.email) {
+        userMap.set(String(u._id), u.email);
+        if (u.id) userMap.set(String(u.id), u.email);
+      }
+    });
+
+    const sessionLogs = sessions.map((s: any) => ({
+      userId: String(s.userId || s._id),
+      userEmail: userMap.get(String(s.userId)) || s.userId || "Active Session",
+      action: "user_sign_in",
       ipAddress: s.ipAddress || "127.0.0.1",
-      userAgent: s.userAgent || "Unknown",
-      createdAt: s.createdAt,
-      expiresAt: s.expiresAt,
-    })),
-    audits: audits.map((a: any) => ({
-      id: a._id?.toString(),
-      actorUserId: a.actorUserId,
-      actorEmail: a.actorEmail,
-      actorScope: a.actorScope,
-      action: a.action,
-      targetClientId: a.targetClientId,
-      targetUserId: a.targetUserId,
-      details: a.details,
-      ipAddress: a.ipAddress,
-      timestamp: a.timestamp,
-    })),
-  });
+      createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
+    }));
+
+    const auditLogs = audits.map((a: any) => ({
+      userId: String(a.actorUserId || "system"),
+      userEmail: a.actorEmail || userMap.get(String(a.actorUserId)) || (a.actorUserId ? String(a.actorUserId) : "Security Engine"),
+      action: a.action || "admin_audit",
+      ipAddress: a.ipAddress || "127.0.0.1",
+      createdAt: a.timestamp ? new Date(a.timestamp).toISOString() : new Date().toISOString(),
+    }));
+
+    const combined = [...sessionLogs, ...auditLogs].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    return c.json(combined);
+  } catch (err) {
+    console.error("[ADMIN_LOGS] Error fetching logs:", err);
+    return c.json([], 200);
+  }
 });
 
 // 5. Delete OAuth Client (Super-Admin only)
@@ -274,6 +310,26 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
   }
 });
 
+// 6b. List All Users (Super-Admin only)
+admin.get("/users", requireSuperAdmin, async (c) => {
+  try {
+    const database = await getDb();
+    const users = await database.collection("user").find({}).sort({ createdAt: -1 }).toArray();
+    const safeUsers = users.map((u: any) => ({
+      _id: u._id?.toString() || u.id,
+      email: u.email,
+      name: u.name || u.email?.split("@")[0] || "User",
+      role: u.role || "user",
+      scopedClientId: u.scopedClientId || null,
+      createdAt: u.createdAt || new Date(),
+    }));
+    return c.json(safeUsers);
+  } catch (err: any) {
+    console.error("[ADMIN_USERS] Error listing users:", err);
+    return c.json({ error: "Failed to fetch users" }, 500);
+  }
+});
+
 // -- Scoped-Admin & Super-Admin Routes -----------------------------------
 
 // 7. Get OAuth Client by ID (Super-Admin or Assigned Scoped-Admin)
@@ -281,20 +337,25 @@ admin.get("/clients/:id", requireScopedAdmin, async (c) => {
   const id = c.req.param("id");
 
   try {
-    const result = (await authApi.getOAuthClient({
-      headers: getHeaders(c),
-      query: { client_id: id },
-    })) as Record<string, unknown> | null;
+    const database = await getDb();
+    const clientDoc = await database.collection("oauthClient").findOne({
+      $or: [{ id }, { clientId: id }, { client_id: id }],
+    });
 
-    if (!result) return c.json({ error: "Client not found" }, 404);
+    if (!clientDoc) return c.json({ error: "Client not found" }, 404);
 
-    const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
-    return c.json(safeResult);
+    const { clientSecret, client_secret, _id, ...rest } = clientDoc;
+    return c.json({
+      ...rest,
+      client_id: rest.clientId || rest.client_id || rest.id || String(_id),
+      client_name: rest.name || rest.client_name || "Application",
+      redirect_uris: rest.redirectUris || rest.redirect_uris || [],
+      allowed_origins: rest.allowedOrigins || rest.allowed_origins || [],
+      disabled: Boolean(rest.disabled),
+      is_dev: Boolean(rest.isDev || rest.is_dev),
+      skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
+    });
   } catch (err: any) {
-    // Graceful 404 mapping for Better-Auth APIError (Unauthorized / Not Found)
-    if (err?.name === "APIError" || err?.status === "UNAUTHORIZED" || err?.status === "NOT_FOUND") {
-      return c.json({ error: "Client not found or unauthorized" }, 404);
-    }
     return c.json({ error: "Client not found" }, 404);
   }
 });

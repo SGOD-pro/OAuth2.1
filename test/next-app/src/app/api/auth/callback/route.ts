@@ -1,3 +1,4 @@
+import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeCodeForTokens, getUserInfo } from '@/lib/oauth';
 
@@ -16,10 +17,12 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const storedState = request.cookies.get('oauth_state')?.value;
-  const codeVerifier = request.cookies.get('oauth_verifier')?.value;
+  const cookieStore = await cookies();
+  const storedState = cookieStore.get('oauth_state')?.value || request.cookies.get('oauth_state')?.value;
+  const codeVerifier = cookieStore.get('oauth_verifier')?.value || request.cookies.get('oauth_verifier')?.value;
 
-  if (!state || state !== storedState) {
+  if (!state || !storedState || state !== storedState) {
+    console.error(`[OAuth State Mismatch] Received state: "${state}", Stored state: "${storedState}"`);
     return NextResponse.redirect(
       new URL('/?error=Invalid+OAuth+state+mismatch', request.url)
     );
@@ -41,10 +44,7 @@ export async function GET(request: NextRequest) {
       createdAt: Date.now(),
     };
 
-    const response = NextResponse.redirect(new URL('/dashboard', request.url));
-
-    // Save session in encrypted/base64 HTTP-only cookie
-    response.cookies.set('auth_session', JSON.stringify(sessionPayload), {
+    cookieStore.set('auth_session', JSON.stringify(sessionPayload), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -52,7 +52,17 @@ export async function GET(request: NextRequest) {
       maxAge: tokens.expires_in || 3600,
     });
 
-    // Clear one-time OAuth handshake cookies
+    cookieStore.delete('oauth_verifier');
+    cookieStore.delete('oauth_state');
+
+    const response = NextResponse.redirect(new URL('/dashboard', request.url));
+    response.cookies.set('auth_session', JSON.stringify(sessionPayload), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: tokens.expires_in || 3600,
+    });
     response.cookies.delete('oauth_verifier');
     response.cookies.delete('oauth_state');
 
