@@ -6,10 +6,15 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
+import { BrandMark } from '@/components/BrandMark';
+import { usePageTitle } from '@/hooks/usePageTitle';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 type Mode = 'totp' | 'backup';
 
 export const AdminTwoFactor: React.FC = () => {
+  usePageTitle('Two-factor authentication');
+
   const [code, setCode] = useState('');
   const [mode, setMode] = useState<Mode>('totp');
   const [loading, setLoading] = useState(false);
@@ -27,16 +32,16 @@ export const AdminTwoFactor: React.FC = () => {
       if (mode === 'totp') {
         const { error: err } = await authClient.twoFactor.verifyTotp({ code });
         if (err) {
-          const errMsg = err.message || 'Invalid 6-digit TOTP token. Check your authenticator app.';
+          const errMsg = err.message || 'Invalid 6-digit code. Check your authenticator app.';
           setError(errMsg);
           toast.error(errMsg);
           const nextFail = failedAttempts + 1;
           setFailedAttempts(nextFail);
           
           if (nextFail >= 3 || err.status === 401 || err.status === 403 || errMsg.toLowerCase().includes('session')) {
-            toast.error('Authentication session invalidated. Please re-enter your credentials.');
+            toast.error('Session expired. Please sign in again.');
             setTimeout(() => {
-              navigate('/admin/login?error=mfa_failed', { replace: true, viewTransition: true });
+              navigate('/admin/login?error=mfa_failed', { replace: true });
             }, 1200);
           }
           return;
@@ -44,26 +49,26 @@ export const AdminTwoFactor: React.FC = () => {
       } else {
         const { error: err } = await authClient.twoFactor.verifyBackupCode({ code });
         if (err) {
-          const errMsg = err.message || 'Invalid emergency backup key.';
+          const errMsg = err.message || 'Invalid backup code.';
           setError(errMsg);
           toast.error(errMsg);
           const nextFail = failedAttempts + 1;
           setFailedAttempts(nextFail);
           
           if (nextFail >= 3 || err.status === 401 || err.status === 403 || errMsg.toLowerCase().includes('session')) {
-            toast.error('Authentication session invalidated. Please re-enter your credentials.');
+            toast.error('Session expired. Please sign in again.');
             setTimeout(() => {
-              navigate('/admin/login?error=mfa_failed', { replace: true, viewTransition: true });
+              navigate('/admin/login?error=mfa_failed', { replace: true });
             }, 1200);
           }
           return;
         }
       }
 
-      toast.success('Telemetry authorization verified');
-      navigate('/admin', { replace: true, viewTransition: true });
+      toast.success('Two-factor authentication verified');
+      navigate('/admin', { replace: true });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Network error validating token';
+      const msg = err instanceof Error ? err.message : 'Network error validating code';
       setError(msg);
       toast.error(msg);
     } finally {
@@ -78,65 +83,53 @@ export const AdminTwoFactor: React.FC = () => {
   };
 
   const handleBackToLogin = () => {
-    navigate('/admin/login', { viewTransition: true });
+    navigate('/admin/login');
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-6 sm:p-12 bg-background relative selection:bg-accent selection:text-accent-foreground">
-      {/* Subtle telemetry grid */}
-      <div 
-        className="fixed inset-0 pointer-events-none opacity-[0.02] -z-10"
-        style={{
-          backgroundImage: `radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0)`,
-          backgroundSize: '24px 24px'
-        }}
-      />
+    <div className="min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-background relative">
+      <div className="fixed top-4 right-4 z-50">
+        <ThemeToggle />
+      </div>
 
-      <div className="w-full max-w-[460px]">
-        <Card className="w-full">
-          <CardContent className="p-8 sm:p-[34px]">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="flex h-3.5 gap-0.5 items-center">
-                <div className="w-[3px] h-3.5 bg-[#0066B1] -skew-x-12" />
-                <div className="w-[3px] h-3.5 bg-[#1C69D4] -skew-x-12" />
-                <div className="w-[3px] h-3.5 bg-[#E22718] -skew-x-12" />
-              </div>
-              <span className="font-mono text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                <span className="text-foreground font-medium">SWYRA //</span> M Second Factor
-              </span>
+      <div className="w-full max-w-[420px]">
+        <Card className="w-full border border-border bg-card shadow-sm">
+          <CardContent className="p-6 sm:p-8">
+            <div className="mb-6">
+              <BrandMark />
             </div>
 
-            <div className="mb-8">
-              <h1 className="font-heading text-[34px] leading-[1.2] tracking-[-0.02em] font-normal text-foreground">
-                {mode === 'totp' ? 'MFA Validation' : 'Emergency Key'}
+            <div className="mb-6">
+              <h1 className="font-heading text-2xl font-semibold text-foreground tracking-tight">
+                {mode === 'totp' ? 'Two-factor authentication' : 'Recovery code'}
               </h1>
-              <p className="font-sans text-sm text-muted-foreground mt-2">
+              <p className="font-sans text-xs text-muted-foreground mt-1">
                 {mode === 'totp'
-                  ? 'Input the active 6-digit TOTP key generated by your authenticator.'
-                  : 'Input one of your saved emergency single-use backup keys.'}
+                  ? 'Enter the 6-digit code generated by your authenticator app.'
+                  : 'Enter one of your saved single-use recovery codes.'}
               </p>
             </div>
 
             {error && (
-              <div className="mb-6 rounded-[16px] border border-destructive/30 bg-destructive/10 p-3.5 font-mono text-xs text-destructive flex items-center gap-2.5 animate-in fade-in zoom-in-95">
-                <svg className="size-4 shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+                <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <span>{error}</span>
               </div>
             )}
 
-            <form onSubmit={handleVerify} className="space-y-[21px]">
-              <div className="space-y-1">
-                <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-                  {mode === 'totp' ? '6-Digit TOTP Token' : 'Emergency Backup Key'}
+            <form onSubmit={handleVerify} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="font-sans text-xs font-medium text-foreground">
+                  {mode === 'totp' ? 'Verification Code' : 'Recovery Code'}
                 </label>
                 <Input
                   type="text"
                   inputMode={mode === 'totp' ? 'numeric' : 'text'}
                   autoComplete="one-time-code"
                   placeholder={mode === 'totp' ? '000000' : 'xxxxxxxx-xxxx'}
-                  maxLength={mode === 'totp' ? 6 : 20}
+                  maxLength={mode === 'totp' ? 6 : 24}
                   required
                   value={code}
                   onChange={(e) => {
@@ -144,19 +137,19 @@ export const AdminTwoFactor: React.FC = () => {
                     setCode(e.target.value.trim());
                   }}
                   disabled={loading}
-                  className={mode === 'totp' ? 'text-center font-mono text-xl tracking-[0.3em]' : 'font-mono text-sm'}
+                  className={mode === 'totp' ? 'text-center font-mono text-lg tracking-widest h-11' : 'font-mono text-sm h-10'}
                 />
               </div>
 
-              <Button type="submit" className="w-full mt-4" disabled={loading || !code}>
-                {loading ? 'Validating Token...' : 'Verify Identity'}
+              <Button type="submit" className="w-full h-10 font-medium mt-2" disabled={loading || !code}>
+                {loading ? 'Verifying...' : 'Verify'}
               </Button>
             </form>
 
-            <div className="my-[21px] flex items-center gap-4">
+            <div className="my-5 flex items-center gap-3">
               <Separator className="flex-1" />
-              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                ALTERNATE
+              <span className="font-sans text-[11px] text-muted-foreground">
+                or
               </span>
               <Separator className="flex-1" />
             </div>
@@ -165,18 +158,18 @@ export const AdminTwoFactor: React.FC = () => {
               type="button"
               variant="outline"
               onClick={toggleMode}
-              className="w-full"
+              className="w-full h-10 text-xs"
             >
-              {mode === 'totp' ? 'Use Emergency Backup Key' : 'Use Authenticator TOTP App'}
+              {mode === 'totp' ? 'Use a recovery code instead' : 'Use authenticator app'}
             </Button>
 
-            <div className="mt-6 pt-4 border-t border-border/40 text-center">
+            <div className="mt-6 pt-4 border-t border-border text-center">
               <button
                 type="button"
                 onClick={handleBackToLogin}
-                className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                className="font-sans text-xs text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1 cursor-pointer"
               >
-                ← Return to Admin Sign In
+                ← Back to sign in
               </button>
             </div>
           </CardContent>

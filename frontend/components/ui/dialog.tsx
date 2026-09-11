@@ -50,11 +50,11 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
-  showTricolor = true,
+  accent = "none",
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
-  showTricolor?: boolean
+  accent?: "motorsport" | "none"
 }) {
   return (
     <DialogPortal>
@@ -62,24 +62,28 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-6 overflow-hidden rounded-[26px] border border-border bg-card/80 p-8 text-sm text-card-foreground shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] backdrop-blur-2xl duration-200 outline-none sm:max-w-[540px] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-5 overflow-hidden rounded-[14px] border border-border bg-card p-6 text-sm text-card-foreground shadow-lg duration-200 outline-none sm:max-w-[500px] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}
       >
-        {showTricolor && (
+        {accent === "motorsport" && (
           <div 
             aria-hidden="true" 
-            className="absolute left-0 right-0 top-0 h-[3px] w-full bg-[linear-gradient(to_right,#0066B1_0%,#0066B1_33.3%,#1C69D4_33.3%,#1C69D4_66.6%,#E22718_66.6%,#E22718_100%)] z-20 pointer-events-none" 
-          />
+            className="absolute left-0 right-0 top-0 h-[2.5px] w-full flex z-20 pointer-events-none" 
+          >
+            <div className="w-1/3 h-full bg-[#0066B1]" />
+            <div className="w-1/3 h-full bg-[#1C69D4]" />
+            <div className="w-1/3 h-full bg-[#E22718]" />
+          </div>
         )}
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
             <Button
               variant="ghost"
-              className="absolute top-5 right-5 h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-              size="icon-sm"
+              className="absolute top-4 right-4 h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/60"
+              size="icon-xs"
             >
               <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
               <span className="sr-only">Close</span>

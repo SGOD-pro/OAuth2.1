@@ -61,16 +61,17 @@ const TagInput: React.FC<{
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+          className="h-9"
         />
-        <Button type="button" variant="outline" size="sm" onClick={add}>
+        <Button type="button" variant="outline" size="sm" onClick={add} className="h-9 px-3">
           Add
         </Button>
       </div>
-      {err && <p className="mt-1 font-mono text-xs text-destructive">{err}</p>}
+      {err && <p className="mt-1 font-sans text-xs text-destructive">{err}</p>}
       {tags.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <div className="mt-2 flex flex-wrap gap-1.5">
           {tags.map((t) => (
-            <span key={t} className="flex items-center gap-1.5 rounded-pill bg-secondary/80 border border-border px-2.5 py-0.5 font-mono text-xs text-foreground">
+            <span key={t} className="flex items-center gap-1.5 rounded-md bg-secondary border border-border px-2.5 py-0.5 font-mono text-xs text-foreground">
               {t}
               <button 
                 type="button" 
@@ -112,7 +113,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.clientName.trim()) { setError('App name is required.'); return; }
+    if (!form.clientName.trim()) { setError('Application name is required.'); return; }
     if (form.redirectUris.length === 0) { setError('At least one redirect URI is required.'); return; }
     if (form.allowedOrigins.length === 0) { setError('At least one allowed origin is required.'); return; }
 
@@ -153,118 +154,122 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-[620px] w-full">
+      <DialogContent 
+        className="sm:max-w-[620px] w-full"
+        accent={created ? "motorsport" : "none"}
+      >
         <DialogHeader>
           <DialogTitle>
-            {created ? 'Application Credentials Generated' : 'Register OAuth 2.1 Application'}
+            {created ? 'Application credentials generated' : 'Register application'}
           </DialogTitle>
           <DialogDescription>
             {created
-              ? 'Save your client secret securely. It cannot be retrieved again.'
+              ? 'Save your client secret securely. It will not be shown again.'
               : 'Register an identity client to issue OAuth 2.1 authorization codes and access tokens.'}
           </DialogDescription>
         </DialogHeader>
 
         {created ? (
           <div className="space-y-4 py-2">
-            <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-4">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+            <div className="rounded-[12px] border border-border bg-secondary/40 p-4">
+              <span className="font-sans text-xs font-medium text-muted-foreground block mb-1.5">
                 Client ID
               </span>
               <div className="flex items-center justify-between gap-3">
                 <code className="font-mono text-xs text-foreground break-all">{created.client_id}</code>
-                <Button size="xs" variant="outline" onClick={() => void copy(created.client_id, 'id')}>
+                <Button size="sm" variant="outline" className="h-8 px-2.5 text-xs shrink-0 rounded-md" onClick={() => void copy(created.client_id, 'id')}>
                   {copied === 'id' ? 'Copied' : 'Copy'}
                 </Button>
               </div>
             </div>
 
-            <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-4">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground block mb-1">
+            <div className="rounded-[12px] border border-border bg-secondary/40 p-4">
+              <span className="font-sans text-xs font-medium text-muted-foreground block mb-1.5">
                 Client Secret
               </span>
               <div className="flex items-center justify-between gap-3">
                 <code className="font-mono text-xs text-foreground break-all">
                   {secretCopied ? "••••••••••••••••••••••••••••••••" : created.client_secret}
                 </code>
-                <Button size="xs" variant="outline" onClick={() => void copy(created.client_secret, 'secret')}>
-                  {copied === 'secret' ? 'Copied' : 'Copy Secret'}
+                <Button size="sm" variant="outline" className="h-8 px-2.5 text-xs shrink-0 rounded-md" onClick={() => void copy(created.client_secret, 'secret')}>
+                  {copied === 'secret' ? 'Copied' : 'Copy secret'}
                 </Button>
               </div>
             </div>
 
-            <div className="rounded-[16px] border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-200">
-              <strong>Cryptographic Notice:</strong> The client secret is stored as a one-way argon2 hash and cannot be recovered once this modal is closed.
+            <div className="rounded-[12px] border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-500 dark:text-amber-300">
+              <strong>Security notice:</strong> Client secrets are hashed at rest and cannot be retrieved once you close this dialog.
             </div>
 
             <DialogFooter className="mt-4">
               <Button
-                className="w-full"
+                className="w-full h-9 rounded-md"
                 disabled={!secretCopied}
                 onClick={() => { onSuccess(created); onClose(); }}
               >
-                {secretCopied ? 'Finish Registration' : 'Copy Secret to Proceed'}
+                {secretCopied ? 'Done' : 'Copy secret to proceed'}
               </Button>
             </DialogFooter>
           </div>
         ) : (
           <form onSubmit={submit} className="space-y-4 py-2">
             {error && (
-              <div className="rounded-[16px] border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-mono text-xs text-destructive">
+              <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-sans text-xs text-destructive">
                 {error}
               </div>
             )}
 
-            <div className="space-y-1">
-              <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+            <div className="space-y-1.5">
+              <label className="font-sans text-xs font-medium text-foreground">
                 Application Name <span className="text-destructive">*</span>
               </label>
               <Input
-                placeholder="SWYRA Telemetry App"
+                placeholder="e.g. Customer Portal"
                 required
                 value={form.clientName}
                 onChange={(e) => setForm((f) => ({ ...f, clientName: e.target.value }))}
+                className="h-9"
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+            <div className="space-y-1.5">
+              <label className="font-sans text-xs font-medium text-foreground">
                 Redirect URIs <span className="text-destructive">*</span>
               </label>
               <TagInput
                 tags={form.redirectUris}
-                placeholder="https://app.domain.com/auth/callback"
+                placeholder="https://app.example.com/auth/callback"
                 validate={validateUri}
                 onAdd={(v) => setForm((f) => ({ ...f, redirectUris: [...f.redirectUris, v] }))}
                 onRemove={(v) => setForm((f) => ({ ...f, redirectUris: f.redirectUris.filter((r) => r !== v) }))}
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+            <div className="space-y-1.5">
+              <label className="font-sans text-xs font-medium text-foreground">
                 Allowed CORS Origins <span className="text-destructive">*</span>
               </label>
               <TagInput
                 tags={form.allowedOrigins}
-                placeholder="https://app.domain.com"
+                placeholder="https://app.example.com"
                 validate={validateUri}
                 onAdd={(v) => setForm((f) => ({ ...f, allowedOrigins: [...f.allowedOrigins, v] }))}
                 onRemove={(v) => setForm((f) => ({ ...f, allowedOrigins: f.allowedOrigins.filter((o) => o !== v) }))}
               />
             </div>
 
-            <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-4 space-y-3">
+            <div className="rounded-[12px] border border-border bg-secondary/30 p-4 space-y-3">
               <label className="flex items-start justify-between gap-4 cursor-pointer">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-sans text-xs font-medium text-foreground block">
                       Development Mode
                     </span>
-                    <span className="rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 font-mono text-[9px]">
-                      DEV / LOCALHOST
+                    <span className="rounded bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 px-1.5 py-0.2 font-sans text-[10px] font-medium">
+                      Dev
                     </span>
                   </div>
-                  <span className="font-sans text-[11px] text-muted-foreground">
+                  <span className="font-sans text-xs text-muted-foreground">
                     Allows loopback URLs (http://localhost, http://127.0.0.1) for local testing.
                   </span>
                 </div>
@@ -277,9 +282,9 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
               <label className="flex items-start justify-between gap-4 cursor-pointer">
                 <div>
                   <span className="font-sans text-xs font-medium text-foreground block">
-                    Bypass Consent Screen
+                    Skip User Consent
                   </span>
-                  <span className="font-sans text-[11px] text-muted-foreground">
+                  <span className="font-sans text-xs text-muted-foreground">
                     Automatically grant requested scopes for first-party applications.
                   </span>
                 </div>
@@ -292,10 +297,10 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
               <label className="flex items-start justify-between gap-4 cursor-pointer">
                 <div>
                   <span className="font-sans text-xs font-medium text-foreground block">
-                    Allow Remote End-Session
+                    Allow Remote Sign-Out
                   </span>
-                  <span className="font-sans text-[11px] text-muted-foreground">
-                    Enables OIDC RP-initiated logout requests.
+                  <span className="font-sans text-xs text-muted-foreground">
+                    Enables OIDC RP-initiated sign-out requests.
                   </span>
                 </div>
                 <Checkbox
@@ -306,11 +311,11 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
             </div>
 
             <DialogFooter className="mt-4">
-              <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
+              <Button type="button" variant="outline" onClick={onClose} disabled={loading} className="h-9">
                 Cancel
               </Button>
-              <Button type="submit" disabled={loading}>
-                {loading ? 'Registering...' : 'Register Application'}
+              <Button type="submit" disabled={loading} className="h-9">
+                {loading ? 'Registering...' : 'Register application'}
               </Button>
             </DialogFooter>
           </form>

@@ -1,9 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
+import { usePageTitle } from '@/hooks/usePageTitle';
+import { AlertCircle, ArrowLeft } from 'lucide-react';
 
 export const SignOut: React.FC = () => {
+  usePageTitle('Sign out');
   const [searchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   
@@ -30,7 +34,7 @@ export const SignOut: React.FC = () => {
         
         if (res.ok && data.success) {
           // Clear any local Better Auth frontend state if it exists
-          await authClient.signOut().catch(() => {});
+          await authClient.signOut({}).catch(() => {});
           
           if (mounted) {
             window.location.href = data.redirect_uri;
@@ -38,7 +42,7 @@ export const SignOut: React.FC = () => {
         } else {
           if (mounted) setError(data.error || "Failed to validate redirect URI");
         }
-      } catch (e) {
+      } catch {
         if (mounted) setError("Network error during sign out");
       }
     };
@@ -49,31 +53,37 @@ export const SignOut: React.FC = () => {
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center p-6 bg-background">
-      <div className="w-full max-w-[400px]">
-        <Card className="w-full">
-          <CardContent className="p-12 flex flex-col items-center justify-center text-center">
+      <div className="w-full max-w-[420px]">
+        <Card className="w-full shadow-lg border-border">
+          <CardContent className="p-10 flex flex-col items-center justify-center text-center">
             {error ? (
               <>
-                <div className="mb-4 size-12 rounded-full bg-destructive/10 border border-destructive/30 flex items-center justify-center text-destructive">
-                  <svg className="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                <div className="mb-4 size-12 rounded-full bg-destructive/10 border border-destructive/20 flex items-center justify-center text-destructive">
+                  <AlertCircle className="size-6" />
                 </div>
-                <h2 className="text-lg font-heading text-destructive mb-2">Logout Failed</h2>
-                <p className="text-sm font-mono text-muted-foreground">{error}</p>
+                <h2 className="text-xl font-heading font-semibold text-foreground mb-2">
+                  Sign out failed
+                </h2>
+                <p className="text-xs text-muted-foreground mb-6 max-w-xs">{error}</p>
+                <Button asChild variant="outline" className="w-full">
+                  <Link to="/auth" className="flex items-center justify-center gap-2">
+                    <ArrowLeft className="size-4" /> Return to sign in
+                  </Link>
+                </Button>
               </>
             ) : (
               <>
-                <div className="relative mb-6">
-                  <div className="size-16 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
-                    <svg className="size-8 text-primary animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                    </svg>
-                  </div>
-                  <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                <div className="mb-6 flex items-center gap-1.5 py-4">
+                  <span className="size-2 rounded-full bg-[#0066B1] animate-pulse" />
+                  <span className="size-2 rounded-full bg-[#1C69D4] animate-pulse [animation-delay:150ms]" />
+                  <span className="size-2 rounded-full bg-[#E22718] animate-pulse [animation-delay:300ms]" />
                 </div>
-                <h2 className="text-xl font-heading mb-2">Terminating Session</h2>
-                <p className="font-mono text-xs text-muted-foreground">Destroying IDP tokens and validating return path...</p>
+                <h2 className="text-xl font-heading font-semibold text-foreground mb-2">
+                  Signing out
+                </h2>
+                <p className="font-sans text-xs text-muted-foreground">
+                  Terminating session and returning to application...
+                </p>
               </>
             )}
           </CardContent>

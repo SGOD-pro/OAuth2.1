@@ -2,20 +2,27 @@ import React from 'react';
 
 export const RouteLoader: React.FC = () => {
   return (
-    <div className="flex h-screen w-screen flex-col items-center justify-center gap-6 bg-background" role="status" aria-live="polite">
-      <div className="flex flex-col items-center gap-1.5">
-        <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-muted-foreground">
-          SWYRA Systems
-        </span>
-        <div className="font-heading text-[34px] tracking-tighter text-foreground font-normal">
-          M Auth
+    <div className="flex h-screen w-screen flex-col items-center justify-center gap-4 bg-background" role="status" aria-live="polite">
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex items-center gap-2">
+          <div className="flex h-4 gap-0.5 items-center">
+            <div className="w-[3.5px] h-4 bg-[#0066B1] -skew-x-12" />
+            <div className="w-[3.5px] h-4 bg-[#1C69D4] -skew-x-12" />
+            <div className="w-[3.5px] h-4 bg-[#E22718] -skew-x-12" />
+          </div>
+          <span className="font-heading text-xl font-medium tracking-tight text-foreground">
+            M Auth
+          </span>
         </div>
+        <span className="font-sans text-xs text-muted-foreground">
+          by SWYRA
+        </span>
       </div>
-      <div className="flex w-64 flex-col gap-2.5">
-        {/* 3 bars: 1st full length, 2nd 3/4 length, 3rd 1/2 length */}
-        <div className="h-[2.5px] w-full bg-[#0066B1] rounded-full animate-m-line-1" />
-        <div className="h-[2.5px] w-3/4 bg-[#1C69D4] rounded-full animate-m-line-2" />
-        <div className="h-[2.5px] w-1/2 bg-[#E22718] rounded-full animate-m-line-3" />
+
+      <div className="flex w-36 h-[2px] overflow-hidden rounded-full bg-secondary mt-2">
+        <div className="w-1/3 h-full bg-[#0066B1] animate-pulse" />
+        <div className="w-1/3 h-full bg-[#1C69D4] animate-pulse [animation-delay:150ms]" />
+        <div className="w-1/3 h-full bg-[#E22718] animate-pulse [animation-delay:300ms]" />
       </div>
     </div>
   );

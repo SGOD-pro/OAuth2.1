@@ -5,31 +5,31 @@ import { Slot } from "radix-ui"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "group relative inline-flex shrink-0 items-center justify-center rounded-pill font-sans text-sm font-medium tracking-wide whitespace-nowrap transition-all duration-300 outline-none select-none disabled:pointer-events-none disabled:opacity-50 cursor-pointer [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "inline-flex shrink-0 items-center justify-center rounded-md font-sans text-sm font-medium whitespace-nowrap transition-colors duration-150 outline-none select-none disabled:pointer-events-none disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         default:
-          "overflow-hidden bg-primary text-primary-foreground hover:scale-[1.02] active:scale-[0.98]",
+          "bg-primary text-primary-foreground hover:bg-[#1E4FB5] shadow-xs active:bg-[#183F91]",
         outline:
-          "border border-border bg-transparent text-foreground hover:bg-secondary/50 active:scale-[0.98]",
+          "border border-border bg-transparent text-foreground hover:bg-secondary/70 active:bg-secondary",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80 active:scale-[0.98]",
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80 active:bg-secondary/90",
         ghost:
-          "bg-transparent text-foreground hover:bg-secondary/50 active:scale-[0.98]",
+          "bg-transparent text-foreground hover:bg-secondary/60 active:bg-secondary/80",
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90 active:scale-[0.98]",
-        link: "text-accent underline-offset-4 hover:underline",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/80",
+        link: "text-accent underline-offset-4 hover:underline p-0 h-auto",
       },
       size: {
-        default: "h-12 px-6 gap-2",
-        sm: "h-9 px-4 text-xs gap-1.5",
-        xs: "h-7 px-3 text-xs gap-1",
-        lg: "h-14 px-8 text-base gap-2.5",
-        icon: "size-10 rounded-full",
-        "icon-sm": "size-8 rounded-full",
-        "icon-xs": "size-6 rounded-full",
-        "icon-lg": "size-12 rounded-full",
+        default: "h-9 px-4 gap-2",
+        sm: "h-8 px-3 text-xs gap-1.5",
+        xs: "h-7 px-2.5 text-xs gap-1",
+        lg: "h-11 px-6 text-sm gap-2 font-medium",
+        icon: "size-9 rounded-md",
+        "icon-sm": "size-8 rounded-md",
+        "icon-xs": "size-6 rounded-md",
+        "icon-lg": "size-11 rounded-md",
       },
     },
     defaultVariants: {
@@ -51,26 +51,6 @@ function Button({
     asChild?: boolean
   }) {
   const Comp = asChild ? Slot.Root : "button"
-
-  if (variant === "default" && !asChild) {
-    return (
-      <Comp
-        data-slot="button"
-        data-variant={variant}
-        data-size={size}
-        className={cn(buttonVariants({ variant, size, className }))}
-        {...props}
-      >
-        <span className="relative z-10 inline-flex items-center justify-center gap-2 group-hover:text-white transition-colors duration-300">
-          {children}
-        </span>
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-0 h-full w-0 bg-[linear-gradient(to_right,#0066B1_0%,#1C69D4_50%,#E22718_100%)] opacity-0 transition-all duration-500 ease-out group-hover:w-full group-hover:opacity-100"
-        />
-      </Comp>
-    )
-  }
 
   return (
     <Comp

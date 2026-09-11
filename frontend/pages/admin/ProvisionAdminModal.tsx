@@ -32,10 +32,10 @@ export const ProvisionAdminModal: React.FC<ProvisionAdminModalProps> = ({ client
       });
 
       if (error) {
-        throw new Error(error.message || error.statusText || 'Failed to provision admin');
+        throw new Error((error as { message?: string }).message || error.statusText || 'Failed to provision admin');
       }
 
-      toast.success("Administrator provisioned. Pilot must authenticate to enroll MFA.");
+      toast.success("Administrator provisioned. User must sign in to configure two-factor authentication.");
       onSuccess(email);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to provision admin');
@@ -51,49 +51,51 @@ export const ProvisionAdminModal: React.FC<ProvisionAdminModalProps> = ({ client
           <DialogHeader>
             <DialogTitle>Provision Application Admin</DialogTitle>
             <DialogDescription>
-              Create a dedicated administrator identity for <span className="font-mono text-foreground font-semibold">{clientName || clientId}</span>.
+              Create an administrator user account for <span className="font-mono text-foreground font-medium">{clientName || clientId}</span>.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3 py-2">
-            <div className="space-y-1">
-              <Label htmlFor="name">Administrator Name</Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="name" className="font-sans text-xs font-medium text-foreground">Name</Label>
               <Input
                 id="name"
-                placeholder="Alex Vance"
+                placeholder="e.g. Alex Vance"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                className="h-9"
               />
             </div>
 
-            <div className="space-y-1">
-              <Label htmlFor="email">Email Address <span className="text-destructive">*</span></Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="email" className="font-sans text-xs font-medium text-foreground">Email Address <span className="text-destructive">*</span></Label>
               <Input
                 id="email"
                 type="email"
                 required
-                placeholder="admin@bmw-m.com"
+                placeholder="admin@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                className="h-9"
               />
             </div>
 
-            <div className="space-y-1">
-              <Label htmlFor="password">Initial Password <span className="text-destructive">*</span></Label>
+            <div className="space-y-1.5">
+              <Label htmlFor="password" className="font-sans text-xs font-medium text-foreground">Initial Password <span className="text-destructive">*</span></Label>
               <div className="relative">
                 <Input
                   id="password"
                   type={showPassword ? "text" : "password"}
                   required
-                  placeholder="12+ characters"
+                  placeholder="Minimum 12 characters"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="pr-10"
+                  className="pr-10 h-9"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
                   aria-label={showPassword ? "Hide password" : "Show password"}
                 >
                   {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -103,11 +105,11 @@ export const ProvisionAdminModal: React.FC<ProvisionAdminModalProps> = ({ client
           </div>
 
           <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
+            <Button type="button" variant="outline" onClick={onClose} disabled={loading} className="h-9">
               Cancel
             </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? "Provisioning..." : "Provision Admin"}
+            <Button type="submit" disabled={loading} className="h-9">
+              {loading ? "Provisioning..." : "Provision admin"}
             </Button>
           </DialogFooter>
         </form>

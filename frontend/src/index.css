@@ -12,7 +12,7 @@
   --font-heading: "Space Grotesk Variable", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
 
-  /* Golden Ratio Scale (Base 8px) */
+  /* Golden Ratio Scale */
   --spacing-xs: 8px;
   --spacing-sm: 13px;   /* 8 * 1.618 */
   --spacing-md: 21px;   /* 13 * 1.618 */
@@ -20,20 +20,12 @@
   --spacing-xl: 55px;   /* 34 * 1.618 */
   --spacing-2xl: 89px;  /* 55 * 1.618 */
 
-  /* Container Max-Width Scale */
-  --container-xs: 20rem;
-  --container-sm: 24rem;
-  --container-md: 28rem;
-  --container-lg: 32rem;
-  --container-xl: 36rem;
-  --container-2xl: 42rem;
-  --container-3xl: 48rem;
-  --container-4xl: 56rem;
-
   /* Radius Scale */
-  --radius-sm: 4px;
-  --radius-md: 16px;
-  --radius-lg: 26px; /* 16 * 1.618 */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;   /* Buttons & Inputs */
+  --radius-lg: 12px;  /* Panels & Cards */
+  --radius-xl: 14px;  /* Dialogs */
   --radius-pill: 9999px;
 
   --color-background: var(--background);
@@ -64,71 +56,76 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* BMW M-Series Motorsport Tokens */
+  --color-motorsport-light: #0066B1;
+  --color-motorsport-dark: #1C69D4;
+  --color-motorsport-red: #E22718;
 }
 
 :root {
   --expo-out: cubic-bezier(0.16, 1, 0.3, 1);
-  /* Light Theme: Soft Stone & Ink */
-  --background: oklch(0.98 0.002 240); /* Soft stone canvas */
-  --foreground: oklch(0.15 0.005 240); /* Deep ink */
-  --card: oklch(1 0 0 / 0.6); /* Premium glass */
-  --card-foreground: oklch(0.15 0.005 240);
+  /* ── Light Theme: Precision Stone & Solid Panel (60-30-10) ── */
+  --background: oklch(0.97 0.003 250);        /* 60% Canvas (#F5F6F8) */
+  --foreground: oklch(0.18 0.008 250);        /* Primary text (#171B22) */
+  --card: oklch(1 0 0);                       /* 30% Solid Panel Surface (#FFFFFF) */
+  --card-foreground: oklch(0.18 0.008 250);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.15 0.005 240);
-  --primary: oklch(0.15 0.005 240); /* Ink buttons */
-  --primary-foreground: oklch(0.98 0 0);
-  --secondary: oklch(0.92 0.004 240);
-  --secondary-foreground: oklch(0.20 0.005 240);
-  --muted: oklch(0.92 0.004 240);
-  --muted-foreground: oklch(0.45 0.01 240);
-  --accent: oklch(0.55 0.22 256); /* Electric Blue */
-  --accent-foreground: oklch(0.98 0 0);
-  --destructive: oklch(0.58 0.24 27);
+  --popover-foreground: oklch(0.18 0.008 250);
+  --primary: oklch(0.50 0.20 256);            /* 10% Primary Button (#245DCF) */
+  --primary-foreground: #ffffff;
+  --secondary: oklch(0.94 0.004 250);         /* Elevated Surface (#EEF1F5) */
+  --secondary-foreground: oklch(0.20 0.008 250);
+  --muted: oklch(0.94 0.004 250);
+  --muted-foreground: oklch(0.46 0.012 250);  /* Secondary text (#566171) */
+  --accent: oklch(0.50 0.20 256);             /* Interaction Blue (#245DCF) */
+  --accent-foreground: #ffffff;
+  --destructive: oklch(0.58 0.22 25);
   --destructive-foreground: #ffffff;
-  --border: oklch(0.85 0.004 240);
-  --input: oklch(0.85 0.004 240);
-  --ring: oklch(0.55 0.22 256);
+  --border: oklch(0.88 0.005 250);            /* Hairline divider (#D8DEE7) */
+  --input: oklch(0.88 0.005 250);
+  --ring: oklch(0.50 0.20 256);
 
-  --sidebar: oklch(0.98 0.002 240);
-  --sidebar-foreground: oklch(0.15 0.005 240);
-  --sidebar-primary: oklch(0.15 0.005 240);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent: oklch(0.92 0.004 240);
-  --sidebar-accent-foreground: oklch(0.20 0.005 240);
-  --sidebar-border: oklch(0.85 0.004 240);
-  --sidebar-ring: oklch(0.55 0.22 256);
+  --sidebar: oklch(1 0 0);                    /* Sidebar (#FFFFFF) */
+  --sidebar-foreground: oklch(0.18 0.008 250);
+  --sidebar-primary: oklch(0.50 0.20 256);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: oklch(0.94 0.004 250);
+  --sidebar-accent-foreground: oklch(0.18 0.008 250);
+  --sidebar-border: oklch(0.88 0.005 250);
+  --sidebar-ring: oklch(0.50 0.20 256);
 }
 
 .dark {
-  /* Dark Theme: Carbon Fiber & M-Series Telemetry */
-  --background: oklch(0.12 0 0); /* Deep Carbon Black */
-  --foreground: oklch(0.98 0 0); /* Pure White */
-  --card: oklch(0.16 0 0 / 0.6); /* Brushed aluminum dark glass */
-  --card-foreground: oklch(0.98 0 0);
-  --popover: oklch(0.16 0 0);
-  --popover-foreground: oklch(0.98 0 0);
-  --primary: oklch(0.98 0 0); /* White buttons */
-  --primary-foreground: oklch(0.12 0 0);
-  --secondary: oklch(0.22 0 0); /* Muted Carbon */
-  --secondary-foreground: oklch(0.98 0 0);
-  --muted: oklch(0.22 0 0);
-  --muted-foreground: oklch(0.65 0 0);
-  --accent: oklch(0.65 0.22 256); /* Electric Blue */
-  --accent-foreground: oklch(0.98 0 0);
-  --destructive: oklch(0.70 0.24 25);
+  /* ── Dark Theme: Graphite & Carbon Precision (60-30-10) ── */
+  --background: oklch(0.12 0.005 250);        /* 60% Canvas (#101114) */
+  --foreground: oklch(0.96 0.005 250);        /* Primary text (#F2F4F7) */
+  --card: oklch(0.16 0.006 250);              /* 30% Solid Panel Surface (#191C21) */
+  --card-foreground: oklch(0.96 0.005 250);
+  --popover: oklch(0.16 0.006 250);
+  --popover-foreground: oklch(0.96 0.005 250);
+  --primary: oklch(0.50 0.20 256);            /* 10% Primary Button (#245DCF) */
+  --primary-foreground: #ffffff;
+  --secondary: oklch(0.20 0.008 250);         /* Elevated Surface (#21252C) */
+  --secondary-foreground: oklch(0.96 0.005 250);
+  --muted: oklch(0.20 0.008 250);
+  --muted-foreground: oklch(0.72 0.010 250);  /* Secondary text (#A8B0BD) */
+  --accent: oklch(0.72 0.16 256);             /* Interaction Blue Accent (#70AAFF) */
+  --accent-foreground: #ffffff;
+  --destructive: oklch(0.63 0.22 25);
   --destructive-foreground: #ffffff;
-  --border: oklch(1 0 0 / 10%); /* Hairline borders */
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.65 0.22 256);
+  --border: oklch(0.26 0.008 250);            /* Hairline divider (#2C313A) */
+  --input: oklch(0.26 0.008 250);
+  --ring: oklch(0.72 0.16 256);
 
-  --sidebar: oklch(0.12 0 0);
-  --sidebar-foreground: oklch(0.98 0 0);
-  --sidebar-primary: oklch(0.98 0 0);
-  --sidebar-primary-foreground: oklch(0.12 0 0);
-  --sidebar-accent: oklch(0.22 0 0);
-  --sidebar-accent-foreground: oklch(0.98 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.65 0.22 256);
+  --sidebar: oklch(0.14 0.006 250);           /* Sidebar (#131519) */
+  --sidebar-foreground: oklch(0.96 0.005 250);
+  --sidebar-primary: oklch(0.50 0.20 256);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: oklch(0.20 0.008 250);
+  --sidebar-accent-foreground: oklch(0.96 0.005 250);
+  --sidebar-border: oklch(0.26 0.008 250);
+  --sidebar-ring: oklch(0.72 0.16 256);
 }
 
 @layer base {

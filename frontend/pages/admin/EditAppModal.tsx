@@ -65,14 +65,15 @@ const TagInput: React.FC<{
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+          className="h-9"
         />
-        <Button type="button" variant="outline" size="sm" onClick={add}>Add</Button>
+        <Button type="button" variant="outline" size="sm" onClick={add} className="h-9 px-3">Add</Button>
       </div>
-      {err && <p className="mt-1 font-mono text-xs text-destructive">{err}</p>}
+      {err && <p className="mt-1 font-sans text-xs text-destructive">{err}</p>}
       {tags.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <div className="mt-2 flex flex-wrap gap-1.5">
           {tags.map((t) => (
-            <span key={t} className="flex items-center gap-1.5 rounded-pill bg-secondary/80 border border-border px-2.5 py-0.5 font-mono text-xs text-foreground">
+            <span key={t} className="flex items-center gap-1.5 rounded-md bg-secondary border border-border px-2.5 py-0.5 font-mono text-xs text-foreground">
               {t}
               <button type="button" className="text-muted-foreground hover:text-foreground ml-1" onClick={() => onRemove(t)} aria-label={`Remove ${t}`}>
                 ×
@@ -179,69 +180,69 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
 
         <form onSubmit={submit} className="space-y-4 py-2">
           {error && (
-            <div className="rounded-[16px] border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-mono text-xs text-destructive">
+            <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-sans text-xs text-destructive">
               {error}
             </div>
           )}
           {success && (
-            <div className="rounded-[16px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 font-mono text-xs text-emerald-400">
-              Telemetry configuration updated.
+            <div className="rounded-[12px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 font-sans text-xs text-emerald-500 dark:text-emerald-400">
+              Application configuration updated.
             </div>
           )}
 
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+              <label className="font-sans text-xs font-medium text-foreground">
                 Redirect URIs
               </label>
-              <span className="font-sans text-[11px] text-muted-foreground">
+              <span className="font-sans text-xs text-muted-foreground">
                 OAuth callback endpoints
               </span>
             </div>
             <TagInput
               tags={redirectUris}
-              placeholder="https://app.domain.com/auth/callback"
+              placeholder="https://app.example.com/auth/callback"
               validate={validateUri}
               onAdd={(v) => setRedirectUris((u) => [...u, v])}
               onRemove={(v) => setRedirectUris((u) => u.filter((r) => r !== v))}
             />
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
+              <label className="font-sans text-xs font-medium text-foreground">
                 Allowed CORS Origins
               </label>
-              <span className="font-sans text-[11px] text-muted-foreground">
-                Web app origin(s) permitted for browser requests
+              <span className="font-sans text-xs text-muted-foreground">
+                Web origins permitted for browser token requests
               </span>
             </div>
             <TagInput
               tags={allowedOrigins}
-              placeholder="https://app.domain.com"
+              placeholder="https://app.example.com"
               validate={validateUri}
               onAdd={(v) => setAllowedOrigins((o) => [...o, v])}
               onRemove={(v) => setAllowedOrigins((o) => o.filter((r) => r !== v))}
             />
             {allowedOrigins.length === 0 && (
-              <p className="font-sans text-[11px] text-amber-400/90 mt-1">
-                Notice: At least one allowed origin is required for SPAs and browser-based clients to make cross-origin token requests.
+              <p className="font-sans text-xs text-amber-500 dark:text-amber-400 mt-1">
+                Notice: At least one allowed origin is required for SPAs to make cross-origin token requests.
               </p>
             )}
           </div>
 
-          <div className="rounded-[16px] border border-border/60 bg-secondary/30 p-4 space-y-3">
+          <div className="rounded-[12px] border border-border bg-secondary/30 p-4 space-y-3">
             <label className="flex items-start justify-between gap-4 cursor-pointer">
               <div>
                 <div className="flex items-center gap-2">
                   <span className="font-sans text-xs font-medium text-foreground block">
                     Development Mode
                   </span>
-                  <span className="rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 font-mono text-[9px]">
-                    DEV / LOCALHOST
+                  <span className="rounded bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 px-1.5 py-0.2 font-sans text-[10px] font-medium">
+                    Dev
                   </span>
                 </div>
-                <span className="font-sans text-[11px] text-muted-foreground">
+                <span className="font-sans text-xs text-muted-foreground">
                   Allows loopback URLs (http://localhost, http://127.0.0.1) for local testing.
                 </span>
               </div>
@@ -256,7 +257,7 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
                 <span className="font-sans text-xs font-medium text-foreground block">
                   Application Active
                 </span>
-                <span className="font-sans text-[11px] text-muted-foreground">
+                <span className="font-sans text-xs text-muted-foreground">
                   Disable to reject token requests immediately.
                 </span>
               </div>
@@ -269,9 +270,9 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
             <label className="flex items-start justify-between gap-4 cursor-pointer">
               <div>
                 <span className="font-sans text-xs font-medium text-foreground block">
-                  Bypass Consent Screen
+                  Skip User Consent
                 </span>
-                <span className="font-sans text-[11px] text-muted-foreground">
+                <span className="font-sans text-xs text-muted-foreground">
                   Skip scope approval for first-party clients.
                 </span>
               </div>
@@ -284,9 +285,9 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
             <label className="flex items-start justify-between gap-4 cursor-pointer">
               <div>
                 <span className="font-sans text-xs font-medium text-foreground block">
-                  Allow Remote End-Session
+                  Allow Remote Sign-Out
                 </span>
-                <span className="font-sans text-[11px] text-muted-foreground">
+                <span className="font-sans text-xs text-muted-foreground">
                   Allow RP-initiated logout triggers.
                 </span>
               </div>
@@ -298,11 +299,11 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
           </div>
 
           <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
+            <Button type="button" variant="outline" onClick={onClose} disabled={loading} className="h-9">
               Cancel
             </Button>
-            <Button type="submit" disabled={loading}>
-              {loading ? 'Saving...' : 'Save Changes'}
+            <Button type="submit" disabled={loading} className="h-9">
+              {loading ? 'Saving...' : 'Save changes'}
             </Button>
           </DialogFooter>
         </form>

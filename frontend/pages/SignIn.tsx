@@ -13,6 +13,9 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { toast } from 'sonner';
+import { BrandMark } from '@/components/BrandMark';
+import { usePageTitle } from '@/hooks/usePageTitle';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 const signInSchema = z.object({
   email: z.string().email({ message: "Invalid email address" }),
@@ -28,6 +31,8 @@ const signUpSchema = z.object({
 
 export const SignIn: React.FC = () => {
   const [tab, setTab] = useState('sign-in');
+  usePageTitle(tab === 'sign-in' ? 'Sign in' : 'Create account');
+
   const [loading, setLoading] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
   const [searchParams] = useSearchParams();
@@ -86,7 +91,7 @@ export const SignIn: React.FC = () => {
         if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
           return;
         }
-        const msg = authError.message || 'Invalid email or password. Please verify your credentials.';
+        const msg = authError.message || 'Invalid email or password. Please check your credentials.';
         setError(msg);
         toast.error(msg);
         setLoading(false);
@@ -95,7 +100,7 @@ export const SignIn: React.FC = () => {
           setRedirecting(true);
         } else {
           setLoading(false);
-          toast.success("Successfully authenticated.");
+          toast.success("Signed in successfully.");
         }
       }
     } catch (err: unknown) {
@@ -121,19 +126,17 @@ export const SignIn: React.FC = () => {
         password: values.password,
         name: values.name,
         callbackURL,
-      } as any);
+      } as Parameters<typeof authClient.signUp.email>[0]);
       const { error: authError } = res;
       if (authError) {
         setRedirecting(false);
-        const msg = authError.message || (authError as any).error || 'Registration failed. Please check your details.';
+        const msg = authError.message || 'Registration failed. Please check your details.';
         setError(msg);
         toast.error(msg);
         setLoading(false);
         return;
       }
 
-      // Explicitly sign the user in after registration to establish a session
-      // (in production, Better Auth autoSignIn is disabled, so no session is created on signUp alone)
       const { error: signInError } = await authClient.signIn.email({
         email: values.email,
         password: values.password,
@@ -143,7 +146,7 @@ export const SignIn: React.FC = () => {
       if (signInError) {
         setRedirecting(false);
         setLoading(false);
-        toast.success("Account created successfully! Please sign in with your credentials.");
+        toast.success("Account created successfully. Please sign in.");
         signInForm.setValue('email', values.email);
         setTab('sign-in');
       } else {
@@ -151,7 +154,7 @@ export const SignIn: React.FC = () => {
           setRedirecting(true);
         } else {
           setLoading(false);
-          toast.success("Account created and signed in successfully!");
+          toast.success("Account created and signed in successfully.");
         }
       }
     } catch (err: unknown) {
@@ -182,98 +185,97 @@ export const SignIn: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-2">
-      {/* Left (38.2%): Monumental Space Grotesk Headline & Telemetry */}
-      <div className="w-full min-w-0 flex flex-col justify-center p-8 sm:p-12 lg:p-xl border-b lg:border-b-0 lg:border-r border-border/40 bg-background/50 backdrop-blur-sm relative">
+    <div className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-12 relative bg-background">
+      {/* Top right theme toggle */}
+      <div className="absolute top-4 right-4 z-50">
+        <ThemeToggle />
+      </div>
 
+      {/* Left Brand Panel (approx 42% on desktop) */}
+      <div className="lg:col-span-5 hidden lg:flex flex-col justify-between p-8 sm:p-12 lg:p-[55px] border-r border-border bg-sidebar relative overflow-hidden">
+        <div>
+          <BrandMark />
 
-        <div className="my-12 lg:my-0">
-          <div className="flex items-center gap-3">
-            <div className="flex h-4 gap-1 items-center">
-              <div className="w-0.5 h-3 bg-[#0066B1] -skew-x-12" />
-              <div className="w-0.5 h-3 bg-[#1C69D4] -skew-x-12" />
-              <div className="w-0.5 h-3 bg-[#E22718] -skew-x-12" />
-            </div>
-            <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
-              SWYRA // M Telemetry System v2.1
-            </span>
+          {/* Short M tricolor accent on authentication panel */}
+          <div className="mt-12 flex h-1 w-12 items-stretch rounded-full overflow-hidden" aria-hidden="true">
+            <div className="w-1/3 bg-[#0066B1]" />
+            <div className="w-1/3 bg-[#1C69D4]" />
+            <div className="w-1/3 bg-[#E22718]" />
           </div>
-          <h1 className="font-heading text-5xl sm:text-6xl lg:text-[90px] leading-[1] tracking-[-0.04em] font-normal text-foreground">
-            Digital<br />Telemetry.
+
+          <h1 className="mt-6 font-heading text-[55px] leading-[1.05] tracking-tight font-semibold text-foreground">
+            Identity.<br />Under control.
           </h1>
-          <p className="mt-6 font-mono text-xs uppercase tracking-[0.05em] text-muted-foreground leading-relaxed max-w-[380px] w-full">
-            SWYRA high-performance authorization engine. Precision identity token exchange and cryptographic verification.
+          <p className="mt-5 font-sans text-sm text-muted-foreground leading-relaxed max-w-sm">
+            High-performance OAuth 2.1 authorization service. Precision tokens, cryptographic integrity, and session protection.
           </p>
         </div>
 
-        <div className="space-y-2 pt-6 border-t border-border/30 absolute bottom-4 lg:bottom-8 w-[80%] m-auto">
-          <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+        <div className="space-y-2 pt-6 border-t border-border/80">
+          <div className="flex items-center justify-between font-sans text-xs text-muted-foreground">
             <span>Protocol</span>
-            <span className="text-foreground">OAuth 2.1 RFC-6749</span>
+            <span className="text-foreground font-mono">OAuth 2.1 RFC 6749 / 7636</span>
           </div>
-          <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-            <span>Auth Service</span>
-            <span className="text-accent flex items-center gap-1.5">
-              <span className="inline-block size-1.5 rounded-full bg-accent animate-ping" />
-              SWYRA M Auth
-            </span>
+          <div className="flex items-center justify-between font-sans text-xs text-muted-foreground">
+            <span>Security standard</span>
+            <span className="text-foreground font-mono">PKCE & RS256 JWKS</span>
           </div>
         </div>
-
       </div>
 
-      <div className="w-full min-w-0 flex items-center justify-center p-6 sm:p-12 lg:p-12.5">
-        <div className="w-full max-w-[500px]">
-          <Card className="w-full relative overflow-hidden" watermark="SWYRA">
+      {/* Right Form Area (approx 58% on desktop) */}
+      <div className="lg:col-span-7 w-full flex items-center justify-center p-4 sm:p-8 lg:p-12">
+        <div className="w-full max-w-[440px]">
+          {/* Mobile brand header */}
+          <div className="lg:hidden flex items-center justify-between mb-6">
+            <BrandMark />
+          </div>
+
+          <Card className="w-full border border-border bg-card shadow-sm">
             {redirecting && (
-              <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-card/95 backdrop-blur-md p-8 text-center animate-in fade-in duration-300">
-                <div className="relative mb-6">
-                  <div className="h-16 w-16 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
-                    <svg className="h-8 w-8 text-primary animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-card/95 backdrop-blur-md p-8 text-center animate-in fade-in duration-200">
+                <div className="relative mb-5">
+                  <div className="size-14 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
+                    <svg className="size-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                     </svg>
                   </div>
-                  <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
                 </div>
-                <h3 className="font-heading text-2xl font-normal text-foreground mb-2">
-                  Identity Verified
+                <h3 className="font-heading text-xl font-medium text-foreground mb-1">
+                  Signed in
                 </h3>
-                <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground text-center mb-4">
-                  Establishing authorized token session & redirecting...
+                <p className="font-sans text-xs text-muted-foreground">
+                  Redirecting to your application...
                 </p>
-                <div className="flex items-center gap-2 text-xs font-mono text-primary/90 bg-primary/10 px-3 py-1.5 rounded-full border border-primary/20">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
-                  <span>OAuth 2.1 Handshake In Progress</span>
-                </div>
               </div>
             )}
-            <CardContent className="p-8 sm:p-lg w-full">
-              <div className="mb-8">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-                    SWYRA // M Auth
-                  </span>
-                  <span className="font-mono text-[10px] uppercase text-accent border border-accent/30 rounded-pill px-2 py-0.5">
-                    Secured
-                  </span>
-                </div>
-                <h2 className="font-heading text-[34px] leading-[1.2] tracking-[-0.02em] font-normal text-foreground">
-                  {tab === 'sign-in' ? 'Authenticate' : 'Register Pilot'}
+
+            <CardContent className="p-6 sm:p-8 w-full">
+              <div className="mb-6">
+                <h2 className="font-heading text-2xl font-semibold text-foreground tracking-tight">
+                  {tab === 'sign-in' ? 'Sign in' : 'Create an account'}
                 </h2>
+                <p className="font-sans text-xs text-muted-foreground mt-1">
+                  {tab === 'sign-in' 
+                    ? 'Enter your credentials to access your account' 
+                    : 'Get started by creating your identity'}
+                </p>
               </div>
 
               <Tabs value={tab} onValueChange={setTab} className="w-full">
-                <TabsList className={`w-full grid ${signupEnabled ? 'grid-cols-2' : 'grid-cols-1'} mb-8`}>
-                  <TabsTrigger value="sign-in">Sign In</TabsTrigger>
-                  {signupEnabled && <TabsTrigger value="sign-up">Sign Up</TabsTrigger>}
-                </TabsList>
+                {signupEnabled && (
+                  <TabsList className="w-full grid grid-cols-2 mb-6 h-9">
+                    <TabsTrigger value="sign-in" className="text-xs">Sign In</TabsTrigger>
+                    <TabsTrigger value="sign-up" className="text-xs">Sign Up</TabsTrigger>
+                  </TabsList>
+                )}
 
-                <TabsContent value="sign-in" className="animate-in fade-in duration-300">
+                <TabsContent value="sign-in">
                   <Form {...signInForm}>
-                    <form onSubmit={signInForm.handleSubmit(handleSignIn)} className="space-y-[21px]">
+                    <form onSubmit={signInForm.handleSubmit(handleSignIn)} className="space-y-4">
                       {error && (
-                        <div className="rounded-[16px] border border-destructive/30 bg-destructive/10 p-3.5 font-mono text-xs text-destructive flex items-center gap-2.5 animate-in fade-in zoom-in-95">
-                          <svg className="size-4 shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+                          <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
                           <span>{error}</span>
@@ -284,14 +286,15 @@ export const SignIn: React.FC = () => {
                         control={signInForm.control}
                         name="email"
                         render={({ field }) => (
-                          <FormItem className="space-y-1">
-                            <FormLabel>Email Address</FormLabel>
+                          <FormItem className="space-y-1.5">
+                            <FormLabel className="font-sans text-xs font-medium text-foreground">Email Address</FormLabel>
                             <FormControl>
                               <Input
                                 type="email"
-                                placeholder="pilot@swyra.com"
+                                placeholder="name@example.com"
                                 {...field}
                                 disabled={loading}
+                                className="h-10"
                               />
                             </FormControl>
                             <FormMessage />
@@ -303,14 +306,14 @@ export const SignIn: React.FC = () => {
                         control={signInForm.control}
                         name="password"
                         render={({ field }) => (
-                          <FormItem className="space-y-1">
+                          <FormItem className="space-y-1.5">
                             <div className="flex items-center justify-between">
-                              <FormLabel>Passkey / Secret</FormLabel>
+                              <FormLabel className="font-sans text-xs font-medium text-foreground">Password</FormLabel>
                               <Link
                                 to="/forgot-password"
-                                className="font-mono text-xs text-muted-foreground hover:text-accent transition-colors"
+                                className="font-sans text-xs text-primary hover:underline transition-colors"
                               >
-                                Forgot?
+                                Forgot password?
                               </Link>
                             </div>
                             <FormControl>
@@ -319,6 +322,7 @@ export const SignIn: React.FC = () => {
                                 placeholder="••••••••••••"
                                 {...field}
                                 disabled={loading}
+                                className="h-10"
                               />
                             </FormControl>
                             <FormMessage />
@@ -330,7 +334,7 @@ export const SignIn: React.FC = () => {
                         control={signInForm.control}
                         name="remember"
                         render={({ field }) => (
-                          <FormItem className="flex items-center space-x-2 space-y-0">
+                          <FormItem className="flex items-center space-x-2 space-y-0 pt-0.5">
                             <FormControl>
                               <Checkbox
                                 checked={field.value}
@@ -338,23 +342,23 @@ export const SignIn: React.FC = () => {
                                 disabled={loading}
                               />
                             </FormControl>
-                            <FormLabel className="text-xs font-mono text-muted-foreground font-normal cursor-pointer">
-                              Remember terminal identity
+                            <FormLabel className="text-xs font-sans text-muted-foreground font-normal cursor-pointer">
+                              Remember this device
                             </FormLabel>
                           </FormItem>
                         )}
                       />
 
-                      <Button type="submit" className="w-full" disabled={loading}>
-                        {loading ? 'Authenticating...' : 'Authenticate with Credentials'}
+                      <Button type="submit" className="w-full h-10 font-medium" disabled={loading}>
+                        {loading ? 'Signing in...' : 'Sign in'}
                       </Button>
                     </form>
                   </Form>
 
-                  <div className="my-[21px] flex items-center gap-4">
+                  <div className="my-5 flex items-center gap-3">
                     <Separator className="flex-1" />
-                    <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                      OR
+                    <span className="font-sans text-[11px] text-muted-foreground">
+                      or
                     </span>
                     <Separator className="flex-1" />
                   </div>
@@ -362,11 +366,11 @@ export const SignIn: React.FC = () => {
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full"
+                    className="w-full h-10"
                     onClick={handleGoogleSignIn}
                     disabled={loading}
                   >
-                    <svg className="h-4 w-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
+                    <svg className="size-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
                       <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
                       <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z" />
                       <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />
@@ -377,12 +381,12 @@ export const SignIn: React.FC = () => {
                 </TabsContent>
 
                 {signupEnabled && (
-                  <TabsContent value="sign-up" className="animate-in fade-in duration-300">
+                  <TabsContent value="sign-up">
                     <Form {...signUpForm}>
                       <form onSubmit={signUpForm.handleSubmit(handleSignUp)} className="space-y-4">
                         {error && (
-                          <div className="rounded-[16px] border border-destructive/30 bg-destructive/10 p-3.5 font-mono text-xs text-destructive flex items-center gap-2.5 animate-in fade-in zoom-in-95">
-                            <svg className="size-4 shrink-0 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+                            <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
                             <span>{error}</span>
@@ -393,13 +397,14 @@ export const SignIn: React.FC = () => {
                           control={signUpForm.control}
                           name="name"
                           render={({ field }) => (
-                            <FormItem className="space-y-1">
-                              <FormLabel>Full Legal Name</FormLabel>
+                            <FormItem className="space-y-1.5">
+                              <FormLabel className="font-sans text-xs font-medium text-foreground">Full Name</FormLabel>
                               <FormControl>
                                 <Input
                                   placeholder="Alex Walker"
                                   {...field}
                                   disabled={loading}
+                                  className="h-10"
                                 />
                               </FormControl>
                               <FormMessage />
@@ -411,14 +416,15 @@ export const SignIn: React.FC = () => {
                           control={signUpForm.control}
                           name="email"
                           render={({ field }) => (
-                            <FormItem className="space-y-1">
-                              <FormLabel>Work / Pilot Email</FormLabel>
+                            <FormItem className="space-y-1.5">
+                              <FormLabel className="font-sans text-xs font-medium text-foreground">Email Address</FormLabel>
                               <FormControl>
                                 <Input
                                   type="email"
-                                  placeholder="alex@swyra.com"
+                                  placeholder="alex@example.com"
                                   {...field}
                                   disabled={loading}
+                                  className="h-10"
                                 />
                               </FormControl>
                               <FormMessage />
@@ -430,14 +436,15 @@ export const SignIn: React.FC = () => {
                           control={signUpForm.control}
                           name="password"
                           render={({ field }) => (
-                            <FormItem className="space-y-1">
-                              <FormLabel>Master Passphrase (min 12 chars)</FormLabel>
+                            <FormItem className="space-y-1.5">
+                              <FormLabel className="font-sans text-xs font-medium text-foreground">Password (min. 12 characters)</FormLabel>
                               <FormControl>
                                 <Input
                                   type="password"
                                   placeholder="••••••••••••"
                                   {...field}
                                   disabled={loading}
+                                  className="h-10"
                                 />
                               </FormControl>
                               <FormMessage />
@@ -446,52 +453,40 @@ export const SignIn: React.FC = () => {
                         />
 
                         {/* Password Requirements Checklist */}
-                        <div className="rounded-[16px] border border-border/40 bg-muted/20 p-3 space-y-1.5 font-mono text-[11px]">
-                          <span className="text-muted-foreground uppercase tracking-wider text-[10px] block mb-1">
-                            Security Constraints
+                        <div className="rounded-md border border-border bg-secondary/30 p-3 space-y-1.5 font-sans text-xs">
+                          <span className="text-muted-foreground text-[11px] font-medium block mb-1">
+                            Password requirements:
                           </span>
                           <div className="flex items-center gap-2">
                             <span className={`size-1.5 rounded-full ${signUpPassword.length >= 12 ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
                             <span className={signUpPassword.length >= 12 ? 'text-foreground' : 'text-muted-foreground'}>
-                              Minimum 12 characters
+                              At least 12 characters
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className={`size-1.5 rounded-full ${/[a-z]/.test(signUpPassword) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
-                            <span className={/[a-z]/.test(signUpPassword) ? 'text-foreground' : 'text-muted-foreground'}>
-                              At least one lowercase letter
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className={`size-1.5 rounded-full ${/[A-Z]/.test(signUpPassword) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
-                            <span className={/[A-Z]/.test(signUpPassword) ? 'text-foreground' : 'text-muted-foreground'}>
-                              At least one uppercase letter
+                            <span className={signUpPassword.length >= 12 ? 'text-foreground' : 'text-muted-foreground'}>
+                              Lowercase and uppercase letters
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className={`size-1.5 rounded-full ${/[0-9]/.test(signUpPassword) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
-                            <span className={/[0-9]/.test(signUpPassword) ? 'text-foreground' : 'text-muted-foreground'}>
-                              At least one numerical digit
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className={`size-1.5 rounded-full ${/[^A-Za-z0-9]/.test(signUpPassword) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
-                            <span className={/[^A-Za-z0-9]/.test(signUpPassword) ? 'text-foreground' : 'text-muted-foreground'}>
-                              At least one special symbol
+                            <span className={signUpPassword.length >= 12 ? 'text-foreground' : 'text-muted-foreground'}>
+                              At least one number
                             </span>
                           </div>
                         </div>
 
-                        <Button type="submit" className="w-full" disabled={loading}>
-                          {loading ? 'Creating...' : 'Register New Identity'}
+                        <Button type="submit" className="w-full h-10 font-medium" disabled={loading}>
+                          {loading ? 'Creating account...' : 'Create account'}
                         </Button>
                       </form>
                     </Form>
 
-                    <div className="my-[21px] flex items-center gap-4">
+                    <div className="my-5 flex items-center gap-3">
                       <Separator className="flex-1" />
-                      <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-                        OR
+                      <span className="font-sans text-[11px] text-muted-foreground">
+                        or
                       </span>
                       <Separator className="flex-1" />
                     </div>
@@ -499,11 +494,11 @@ export const SignIn: React.FC = () => {
                     <Button
                       type="button"
                       variant="outline"
-                      className="w-full"
+                      className="w-full h-10"
                       onClick={handleGoogleSignIn}
                       disabled={loading}
                     >
-                      <svg className="h-4 w-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
+                      <svg className="size-4 mr-2" viewBox="0 0 48 48" aria-hidden="true">
                         <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8c-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C12.955 4 4 12.955 4 24s8.955 20 20 20s20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z" />
                         <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4C16.318 4 9.656 8.337 6.306 14.691z" />
                         <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z" />

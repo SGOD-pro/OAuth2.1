@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { useOAuthParams } from '../hooks/useOAuthParams';
 import { InvalidRequest } from '../components/InvalidRequest';
 import { ThemeToggle } from './ThemeToggle';
+import { BrandMark } from './BrandMark';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
@@ -11,6 +12,7 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
   const { isValid } = useOAuthParams();
 
   const isStrictOAuthEntry = location.pathname === '/auth';
+  const isAuthPage = location.pathname === '/auth';
 
   if (isStrictOAuthEntry && !isValid) {
     return <InvalidRequest reason="missing_params" />;
@@ -18,21 +20,18 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <TooltipProvider>
-      <main className="min-h-dvh overflow-x-hidden w-full flex items-center justify-center relative bg-background text-foreground selection:bg-accent selection:text-accent-foreground">
-        {/* Stark precision telemetry background texture */}
-        <div 
-          className="fixed inset-0 pointer-events-none opacity-[0.025] -z-10"
-          style={{
-            backgroundImage: `radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0)`,
-            backgroundSize: '24px 24px'
-          }}
-        />
+      <main className="min-h-dvh overflow-x-hidden w-full flex items-center justify-center relative bg-background text-foreground">
+        {!isAuthPage && (
+          <div className="fixed top-4 right-4 z-50">
+            <ThemeToggle />
+          </div>
+        )}
 
-        <div className="fixed top-5 right-5 z-50">
-          <ThemeToggle />
-        </div>
-
-        <Logo />
+        {!isAuthPage && (
+          <div className="fixed top-4 left-4 z-50">
+            <BrandMark />
+          </div>
+        )}
 
         <div className="z-10 w-full relative">
           {children}
@@ -43,17 +42,4 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
   );
 };
 
-export const Logo = () => {
-  return (
-    <div className="fixed top-5 left-5 flex items-center gap-2.5 bg-card/60 backdrop-blur-md rounded-pill px-4 py-2 border border-border shadow-sm z-50">
-      <div className="flex h-3 gap-0.5 items-center">
-        <div className="w-[3px] h-3 bg-[#0066B1] -skew-x-12" />
-        <div className="w-[3px] h-3 bg-[#1C69D4] -skew-x-12" />
-        <div className="w-[3px] h-3 bg-[#E22718] -skew-x-12" />
-      </div>
-      <p className="text-xs font-mono tracking-[0.15em] uppercase text-foreground font-medium">
-        <span className="text-muted-foreground font-normal">SWYRA //</span> M AUTH
-      </p>
-    </div>
-  );
-};
+export const Logo = BrandMark;
