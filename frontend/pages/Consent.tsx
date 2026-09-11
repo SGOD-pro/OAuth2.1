@@ -51,7 +51,7 @@ export const Consent: React.FC = () => {
         toast.error(res.error.message || 'Consent failed.');
         setLoading(false);
       } else if (res?.data?.url) {
-        window.location.href = res.data.url;
+        window.location.assign(res.data.url);
       } else if (res?.data?.redirect) {
         setLoading(false);
       }

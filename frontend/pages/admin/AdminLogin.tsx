@@ -84,8 +84,9 @@ export const AdminLogin: React.FC = () => {
       }
 
       // Check role
-      const userRes = await (authClient.getSession as any)();
-      const userRole = (userRes?.data as { user?: { role?: string } } | undefined)?.user?.role;
+      const getSessionFn = authClient.getSession as unknown as () => Promise<{ data?: { user?: { role?: string } } }>;
+      const userRes = await getSessionFn();
+      const userRole = userRes?.data?.user?.role;
       if (userRole !== 'admin') {
         setError('Access denied: Administrator privileges required.');
         toast.error('Access denied: Administrator privileges required.');
