@@ -51,7 +51,28 @@ export function TelemetryViewer() {
   };
 
   useEffect(() => {
-    fetchTelemetry();
+    let active = true;
+    fetch('/api/secure-data')
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Failed with HTTP ${res.status}: ${await res.text()}`);
+        return res.json();
+      })
+      .then((json) => {
+        if (active) {
+          setData(json);
+          setLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          setError(err instanceof Error ? err.message : 'Failed to fetch secure data');
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   return (

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
@@ -75,29 +75,43 @@ export const SignIn: React.FC = () => {
 
   const signUpPassword = useWatch({ control: signUpForm.control, name: 'password' }) || '';
 
+  useEffect(() => {
+    if (searchParams.get('prompt') === 'login') return;
+    if (!callbackURL) return;
+
+    authClient.getSession().then((sessionRes) => {
+      if (sessionRes?.data?.user) {
+        setRedirecting(true);
+        window.location.assign(callbackURL);
+      }
+    }).catch(() => {});
+  }, [callbackURL, searchParams]);
+
   const handleSignIn = async (values: z.infer<typeof signInSchema>) => {
     setLoading(true);
     setError(null);
 
     try {
-      const { error: authError } = await authClient.signIn.email({
+      const res = await authClient.signIn.email({
         email: values.email,
         password: values.password,
         callbackURL,
       });
 
-      if (authError) {
+      if (res?.error) {
         setRedirecting(false);
-        if (authError.message?.toLowerCase().includes("two factor") || authError.status === 403) {
+        if (res.error.message?.toLowerCase().includes("two factor") || res.error.status === 403) {
           return;
         }
-        const msg = authError.message || 'Invalid email or password. Please check your credentials.';
+        const msg = res.error.message || 'Invalid email or password. Please check your credentials.';
         setError(msg);
         toast.error(msg);
         setLoading(false);
       } else {
-        if (callbackURL) {
+        const dest = (res?.data as { url?: string } | undefined)?.url || callbackURL;
+        if (dest) {
           setRedirecting(true);
+          window.location.assign(dest);
         } else {
           setLoading(false);
           toast.success("Signed in successfully.");
@@ -137,21 +151,23 @@ export const SignIn: React.FC = () => {
         return;
       }
 
-      const { error: signInError } = await authClient.signIn.email({
+      const signInRes = await authClient.signIn.email({
         email: values.email,
         password: values.password,
         callbackURL,
       });
 
-      if (signInError) {
+      if (signInRes?.error) {
         setRedirecting(false);
         setLoading(false);
         toast.success("Account created successfully. Please sign in.");
         signInForm.setValue('email', values.email);
         setTab('sign-in');
       } else {
-        if (callbackURL) {
+        const dest = (signInRes?.data as { url?: string } | undefined)?.url || callbackURL;
+        if (dest) {
           setRedirecting(true);
+          window.location.assign(dest);
         } else {
           setLoading(false);
           toast.success("Account created and signed in successfully.");

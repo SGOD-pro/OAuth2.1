@@ -141,30 +141,31 @@
 @keyframes m-line-expand {
   0% {
     transform: scaleX(0);
-    opacity: 0;
+    opacity: 0.2;
   }
-  100% {
+  50% {
     transform: scaleX(1);
     opacity: 1;
+  }
+  100% {
+    transform: scaleX(0);
+    opacity: 0.2;
   }
 }
 
 .animate-m-line-1 {
   transform-origin: left;
-  transform: scaleX(0);
-  animation: m-line-expand 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: m-line-expand 1.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
 }
 
 .animate-m-line-2 {
   transform-origin: left;
-  transform: scaleX(0);
-  animation: m-line-expand 0.65s cubic-bezier(0.16, 1, 0.3, 1) 0.12s forwards;
+  animation: m-line-expand 1.4s cubic-bezier(0.16, 1, 0.3, 1) 0.15s infinite;
 }
 
 .animate-m-line-3 {
   transform-origin: left;
-  transform: scaleX(0);
-  animation: m-line-expand 0.65s cubic-bezier(0.16, 1, 0.3, 1) 0.24s forwards;
+  animation: m-line-expand 1.4s cubic-bezier(0.16, 1, 0.3, 1) 0.3s infinite;
 }
 
 /* ── View Transitions Theme Animation ── */

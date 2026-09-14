@@ -80,6 +80,7 @@ async function run() {
     userId: userObjId,
     accountId: String(userObjId),
     providerId: "credential",
+    issuer: "local:credential",
     password: hashedPassword,
     createdAt: now,
     updatedAt: now,

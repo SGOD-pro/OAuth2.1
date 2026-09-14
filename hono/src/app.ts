@@ -114,11 +114,41 @@ app.onError((err, c) => {
 		);
 	}
 
+	const anyErr = err as any;
+	// Handle Better Auth APIError
+	if (anyErr?.name === "APIError" || anyErr?.statusCode || (typeof anyErr?.status === "string" && anyErr?.body)) {
+		const statusCode = typeof anyErr.statusCode === "number"
+			? anyErr.statusCode
+			: anyErr.status === "BAD_REQUEST"
+				? 400
+				: anyErr.status === "UNAUTHORIZED"
+					? 401
+					: anyErr.status === "FORBIDDEN"
+						? 403
+						: anyErr.status === "NOT_FOUND"
+							? 404
+							: 500;
+
+		const errorBody = anyErr.body && typeof anyErr.body === "object"
+			? anyErr.body
+			: { error: anyErr.message || anyErr.status || "API Error" };
+
+		console.error({
+			event: "api_error",
+			path: c.req.path,
+			method: c.req.method,
+			status: statusCode,
+			err: anyErr.body?.error_description || anyErr.body?.error || anyErr.message || anyErr.status || "API Error",
+		});
+
+		return c.json(errorBody, statusCode as any);
+	}
+
 	console.error({
 		event: "unhandled_error",
 		path: c.req.path,
 		method: c.req.method,
-		err: err.message,
+		err: err.message || (anyErr?.body ? JSON.stringify(anyErr.body) : String(err)),
 	});
 
 	// If the crash was on the userinfo endpoint, RFC 6750 requires 401 not 500

@@ -3,6 +3,23 @@ import { redirect } from 'next/navigation';
 import { TelemetryViewer } from './TelemetryViewer';
 import { LogoutButton } from './LogoutButton';
 
+interface SessionPayload {
+  user?: {
+    id?: string;
+    sub?: string;
+    name?: string;
+    email?: string;
+  };
+  tokens?: {
+    access_token?: string;
+    token_type?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    id_token?: string;
+    scope?: string;
+  };
+}
+
 export default async function DashboardPage() {
   const cookieStore = await cookies();
   const sessionCookie = cookieStore.get('auth_session')?.value;
@@ -11,7 +28,7 @@ export default async function DashboardPage() {
     redirect('/');
   }
 
-  let session: any = null;
+  let session: SessionPayload | null = null;
   try {
     session = JSON.parse(sessionCookie);
   } catch {

@@ -23,7 +23,7 @@ export function LogoutButton({ issuer }: { issuer: string }) {
       
       // Redirect to home
       window.location.href = '/';
-    } catch (err) {
+    } catch {
       setLoading(false);
     }
   };

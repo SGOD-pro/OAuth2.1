@@ -51,50 +51,130 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
   const sessionUser = c.get("user") as any;
 
   const isDev = Boolean(body.isDev || body.is_dev);
+  const clientName = (body.name || body.client_name || "").trim();
+  if (!clientName) {
+    return c.json({ error: "Application name is required" }, 400);
+  }
 
-  if (Array.isArray(body.redirect_uris || body.redirectUris)) {
-    const uris = (body.redirect_uris || body.redirectUris) as string[];
-    const invalidUri = validateRedirectUris(uris, { isDev });
-    if (invalidUri) {
-      return c.json({
-        error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
-      }, 400);
+  const redirectUris = (body.redirect_uris || body.redirectUris || []) as string[];
+  const allowedOrigins = (body.allowed_origins || body.allowedOrigins || []) as string[];
+
+  if (redirectUris.length === 0) {
+    return c.json({ error: "At least one redirect URI is required" }, 400);
+  }
+
+  if (allowedOrigins.length === 0) {
+    return c.json({ error: "At least one allowed origin is required" }, 400);
+  }
+
+  const invalidUri = validateRedirectUris(redirectUris, { isDev });
+  if (invalidUri) {
+    return c.json({
+      error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
+    }, 400);
+  }
+
+  const invalidOrigin = validateRedirectUris(allowedOrigins, { isDev });
+  if (invalidOrigin) {
+    return c.json({
+      error: `Invalid allowed origin: "${invalidOrigin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
+    }, 400);
+  }
+
+  // Determine application_type:
+  // If redirect_uris contain loopback (localhost, 127.0.0.1, [::1]) or if isDev is enabled,
+  // Better Auth mandates application_type: "native" because RFC 8252 requires loopback redirect URIs to be native.
+  // "web" strictly forbids loopback redirect URIs.
+  const hasLoopback = redirectUris.some((uri) => {
+    try {
+      const u = new URL(uri);
+      return (
+        u.hostname === "localhost" ||
+        u.hostname === "127.0.0.1" ||
+        u.hostname === "[::1]" ||
+        u.protocol === "http:"
+      );
+    } catch {
+      return false;
     }
-  }
+  });
 
-  if (Array.isArray(body.allowed_origins || body.allowedOrigins)) {
-    const origins = (body.allowed_origins || body.allowedOrigins) as string[];
-    const invalidOrigin = validateRedirectUris(origins, { isDev });
-    if (invalidOrigin) {
-      return c.json({
-        error: `Invalid allowed origin: "${invalidOrigin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
-      }, 400);
-    }
-  }
+  const applicationType = body.application_type || ((isDev || hasLoopback) ? "native" : "web");
 
-  const result = (await authApi.createOAuthClient({
-    headers: getHeaders(c),
-    body,
-  })) as Record<string, unknown> | null;
+  const createBody: any = {
+    client_name: clientName,
+    redirect_uris: redirectUris,
+    application_type: applicationType,
+    skip_consent: Boolean(body.skip_consent ?? body.skipConsent),
+    enable_end_session: body.enable_end_session !== false && body.enableEndSession !== false,
+    metadata: {
+      allowedOrigins,
+      isDev,
+    },
+  };
 
-  if (result && Array.isArray(result.allowed_origins)) {
-    await invalidateOriginCache(result.allowed_origins as string[]);
-  }
-
-  if (result) {
-    await recordAdminAudit({
-      actorUserId: sessionUser?.id,
-      actorEmail: sessionUser?.email,
-      actorScope: sessionUser?.scopedClientId || "super_admin",
-      action: "client_created",
-      targetClientId: String(result.client_id || result.id),
-      details: { name: body.name || body.client_name, client_id: result.client_id },
-      ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
-      timestamp: new Date(),
+  let result: any = null;
+  try {
+    result = await authApi.adminCreateOAuthClient({
+      headers: getHeaders(c),
+      body: createBody,
     });
+  } catch (err: any) {
+    console.error("[ADMIN_CREATE_CLIENT] Better-Auth error:", err.body || err.message);
+    const msg = err.body?.error_description || err.body?.error || err.message || "Failed to create OAuth client";
+    const statusCode = typeof err.statusCode === "number" ? err.statusCode : (err.status === "BAD_REQUEST" ? 400 : 500);
+    return c.json({ error: msg }, statusCode as any);
   }
 
-  return c.json(result);
+  if (!result) {
+    return c.json({ error: "Failed to create client" }, 500);
+  }
+
+  const clientId = result.client_id || result.clientId || result.id;
+
+  // Persist extra fields in MongoDB oauthClient collection
+  const database = await getDb();
+  await database.collection("oauthClient").updateOne(
+    { $or: [{ clientId }, { id: clientId }, { client_id: clientId }] },
+    {
+      $set: {
+        allowedOrigins,
+        isDev,
+        skipConsent: Boolean(body.skip_consent ?? body.skipConsent),
+        enableEndSession: body.enable_end_session !== false && body.enableEndSession !== false,
+        updatedAt: new Date(),
+      },
+    },
+  );
+
+  if (allowedOrigins.length > 0) {
+    await invalidateOriginCache(allowedOrigins);
+  }
+
+  await recordAdminAudit({
+    actorUserId: sessionUser?.id,
+    actorEmail: sessionUser?.email,
+    actorScope: sessionUser?.scopedClientId || "super_admin",
+    action: "client_created",
+    targetClientId: String(clientId),
+    details: { name: clientName, client_id: clientId },
+    ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+    timestamp: new Date(),
+  });
+
+  const responsePayload = {
+    ...result,
+    client_id: clientId,
+    client_secret: result.client_secret || result.clientSecret,
+    client_name: clientName,
+    redirect_uris: redirectUris,
+    allowed_origins: allowedOrigins,
+    is_dev: isDev,
+    skip_consent: Boolean(body.skip_consent ?? body.skipConsent),
+    enable_end_session: body.enable_end_session !== false && body.enableEndSession !== false,
+  };
+
+  return c.json(responsePayload, 201);
 });
 
 // 3. Platform Stats (Super-Admin only)
@@ -202,6 +282,10 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
 
   const database = await getDb();
   await Promise.all([
+    database.collection("oauthClient").deleteOne({
+      $or: [{ clientId: id }, { client_id: id }, { id }],
+    }),
+    database.collection("user_app_registrations").deleteMany({ clientId: id }),
     database.collection("oauthAccessToken").deleteMany({ clientId: id }),
     database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
     database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
@@ -381,9 +465,14 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
 
   const isDev = Boolean(body.isDev ?? body.is_dev ?? oldClient?.isDev ?? oldClient?.is_dev);
 
-  if (Array.isArray(body.redirect_uris || body.redirectUris)) {
-    const uris = (body.redirect_uris || body.redirectUris) as string[];
-    const invalidUri = validateRedirectUris(uris, { isDev });
+  const redirectUris = (body.redirect_uris || body.redirectUris) as string[] | undefined;
+  const allowedOrigins = (body.allowed_origins || body.allowedOrigins) as string[] | undefined;
+
+  if (Array.isArray(redirectUris)) {
+    if (redirectUris.length === 0) {
+      return c.json({ error: "At least one redirect URI is required" }, 400);
+    }
+    const invalidUri = validateRedirectUris(redirectUris, { isDev });
     if (invalidUri) {
       return c.json({
         error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
@@ -391,9 +480,11 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     }
   }
 
-  if (Array.isArray(body.allowed_origins || body.allowedOrigins)) {
-    const origins = (body.allowed_origins || body.allowedOrigins) as string[];
-    const invalidOrigin = validateRedirectUris(origins, { isDev });
+  if (Array.isArray(allowedOrigins)) {
+    if (allowedOrigins.length === 0) {
+      return c.json({ error: "At least one allowed origin is required" }, 400);
+    }
+    const invalidOrigin = validateRedirectUris(allowedOrigins, { isDev });
     if (invalidOrigin) {
       return c.json({
         error: `Invalid allowed origin: "${invalidOrigin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
@@ -401,31 +492,73 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     }
   }
 
+  const hasLoopback = redirectUris?.some((uri) => {
+    try {
+      const u = new URL(uri);
+      return (
+        u.hostname === "localhost" ||
+        u.hostname === "127.0.0.1" ||
+        u.hostname === "[::1]" ||
+        u.protocol === "http:"
+      );
+    } catch {
+      return false;
+    }
+  });
+
+  const applicationType = body.application_type || ((isDev || hasLoopback) ? "native" : (redirectUris ? "web" : undefined));
+
+  const updatePayload: any = {};
+  if (typeof body.client_name === "string") updatePayload.client_name = body.client_name;
+  if (typeof body.name === "string") updatePayload.client_name = body.name;
+  if (redirectUris) updatePayload.redirect_uris = redirectUris;
+  if (applicationType) updatePayload.application_type = applicationType;
+  if (typeof body.skip_consent === "boolean") updatePayload.skip_consent = body.skip_consent;
+  if (typeof body.skipConsent === "boolean") updatePayload.skip_consent = body.skipConsent;
+  if (typeof body.enable_end_session === "boolean") updatePayload.enable_end_session = body.enable_end_session;
+  if (typeof body.enableEndSession === "boolean") updatePayload.enable_end_session = body.enableEndSession;
+  if (typeof body.disabled === "boolean") updatePayload.disabled = body.disabled;
+  if (typeof body.is_active === "boolean") updatePayload.disabled = !body.is_active;
+
   let result: any = null;
   try {
-    result = await authApi.updateOAuthClient({
+    result = await authApi.adminUpdateOAuthClient({
       headers: getHeaders(c),
-      body: { client_id: id, update: body },
+      body: { client_id: id, update: updatePayload },
     });
-  } catch {
-    // Fallback direct update to DB if updateOAuthClient fails on custom fields
-    const database = await getDb();
-    await database.collection("oauthClient").updateOne(
-      { client_id: id },
-      { $set: { ...body, updatedAt: new Date() } }
-    );
-    result = await database.collection("oauthClient").findOne({ client_id: id });
+  } catch (err: any) {
+    console.warn("[ADMIN_PATCH_CLIENT] Better-Auth update error, proceeding with direct DB update:", err?.body || err?.message);
   }
 
-  if (!result) return c.json({ error: "Client not found" }, 404);
+  // Fallback / sync direct update to DB for custom fields (allowedOrigins, isDev, etc.)
+  const database = await getDb();
+  const dbUpdates: any = { updatedAt: new Date() };
+  if (allowedOrigins) dbUpdates.allowedOrigins = allowedOrigins;
+  if (typeof (body.isDev ?? body.is_dev) === "boolean") dbUpdates.isDev = isDev;
+  if (typeof updatePayload.skip_consent === "boolean") dbUpdates.skipConsent = updatePayload.skip_consent;
+  if (typeof updatePayload.enable_end_session === "boolean") dbUpdates.enableEndSession = updatePayload.enable_end_session;
+  if (typeof updatePayload.disabled === "boolean") dbUpdates.disabled = updatePayload.disabled;
+  if (redirectUris) dbUpdates.redirectUris = redirectUris;
+  if (applicationType) dbUpdates.applicationType = applicationType;
+  if (updatePayload.client_name) dbUpdates.name = updatePayload.client_name;
+
+  await database.collection("oauthClient").updateOne(
+    { $or: [{ clientId: id }, { client_id: id }, { id }] },
+    { $set: dbUpdates }
+  );
+  const updatedDoc = await database.collection("oauthClient").findOne({
+    $or: [{ clientId: id }, { client_id: id }, { id }],
+  });
+
+  if (!result && !updatedDoc) return c.json({ error: "Client not found" }, 404);
 
   // Invalidate CORS origin cache for updated origins
   const originsToInvalidate = new Set<string>();
   if (oldClient && Array.isArray(oldClient.allowed_origins)) {
     oldClient.allowed_origins.forEach((o: string) => originsToInvalidate.add(o));
   }
-  if (result && Array.isArray(result.allowed_origins)) {
-    (result.allowed_origins as string[]).forEach((o: string) => originsToInvalidate.add(o));
+  if (Array.isArray(allowedOrigins)) {
+    allowedOrigins.forEach((o: string) => originsToInvalidate.add(o));
   }
   if (originsToInvalidate.size > 0) {
     await invalidateOriginCache(Array.from(originsToInvalidate));
@@ -433,7 +566,6 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
 
   // Token revocation on client disable
   if (body.disabled === true || body.is_active === false) {
-    const database = await getDb();
     await Promise.all([
       database.collection("oauthAccessToken").deleteMany({ clientId: id }),
       database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
@@ -453,7 +585,20 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     timestamp: new Date(),
   });
 
-  const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
+  const finalResult = {
+    ...(result || {}),
+    ...(updatedDoc || {}),
+    client_id: updatedDoc?.clientId || id,
+    client_name: updatedDoc?.name || result?.client_name || "Application",
+    redirect_uris: updatedDoc?.redirectUris || redirectUris || [],
+    allowed_origins: updatedDoc?.allowedOrigins || allowedOrigins || [],
+    disabled: Boolean(updatedDoc?.disabled),
+    is_dev: Boolean(updatedDoc?.isDev),
+    skip_consent: Boolean(updatedDoc?.skipConsent),
+    enable_end_session: Boolean(updatedDoc?.enableEndSession ?? true),
+  };
+
+  const { client_secret: _omit, clientSecret: _omit2, _id: _omit3, ...safeResult } = finalResult as any;
   return c.json(safeResult);
 });
 

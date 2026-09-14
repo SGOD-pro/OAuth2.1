@@ -31,3 +31,4 @@ hono/tests/
 *.test.log
 test-results/
 .system_generated/
+image.png

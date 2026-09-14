@@ -1,8 +1,8 @@
 import { cookies } from 'next/headers';
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { generateCodeVerifier, generateCodeChallenge, generateState } from '@/lib/oauth';
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   const issuer = process.env.AUTH_ISSUER || 'http://localhost:3000';
   const clientId = process.env.CLIENT_ID || '';
   const redirectUri = process.env.AUTH_CALLBACK_URL || 'http://localhost:3001/api/auth/callback';
