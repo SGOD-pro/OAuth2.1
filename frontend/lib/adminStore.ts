@@ -27,8 +27,6 @@ export interface OAuthClient {
     isDev?: boolean;
     is_dev?: boolean;
   };
-  adminUserId?: string;
-  adminEmail?: string;
   skip_consent: boolean;
   enable_end_session: boolean;
 }

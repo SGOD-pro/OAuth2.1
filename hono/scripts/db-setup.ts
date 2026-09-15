@@ -18,6 +18,20 @@ async function run() {
     { providerId: "google", issuer: { $exists: false } },
     { $set: { issuer: "local:oauth:google" } }
   );
+
+  // Application admin management & revocation indexes
+  await db.collection("app_admins").createIndex(
+    { clientId: 1, email: 1 },
+    { unique: true, name: "app_admins_client_email_unique" }
+  );
+  await db.collection("app_admins").createIndex(
+    { clientId: 1 },
+    { name: "app_admins_client_lookup" }
+  );
+  await db.collection("app_admin_revoked_tokens").createIndex(
+    { expiresAt: 1 },
+    { expireAfterSeconds: 0, name: "app_admin_revoked_tokens_ttl" }
+  );
   
   console.log("Database setup complete. TTL indexes and account schema migrations applied.");
   await closeDb();

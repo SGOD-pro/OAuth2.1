@@ -4,6 +4,7 @@ import { HTTPException } from "hono/http-exception";
 
 import admin from "./routes/admin";
 import auth from "./routes/auth";
+import appAdminAuth from "./routes/app-admin-auth";
 import { dynamicCors } from "./middleware/cors";
 import { requireAdmin } from "./middleware/admin-auth";
 import { authRateLimit } from "./middleware/rate-limit";
@@ -86,6 +87,7 @@ app.use("/api/admin/*", csrfProtection);
 app.use("/api/auth/*", async (c, next) => {
 	const path = c.req.path;
 	const isCrossOriginOk =
+		path.startsWith("/api/auth/app-admin") ||
 		path.startsWith("/api/auth/oauth2/token") ||
 		path.startsWith("/api/auth/oauth2/revoke") ||
 		path.startsWith("/api/auth/oauth2/introspect") ||
@@ -162,6 +164,7 @@ app.onError((err, c) => {
 });
 
 app.get("/", (c) => c.json({ message: "Health check", status: "ok" }));
+app.route("/api/auth/app-admin", appAdminAuth); // Application admin authentication & verification routes
 app.route("/api/admin", admin);  // all /api/admin/* routes
 app.route("/api/auth", auth);    // all /api/auth/* routes
 app.route("/.well-known", auth); // all /.well-known/* routes (JWKS, OIDC Discovery)

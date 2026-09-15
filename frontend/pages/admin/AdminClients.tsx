@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { AdminLayout } from './AdminLayout';
 import { RegisterAppModal } from './RegisterAppModal';
 import { EditAppModal } from './EditAppModal';
-import { ProvisionAdminModal } from './ProvisionAdminModal';
+import { AppAdminManager } from './ProvisionAdminModal';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -27,7 +27,6 @@ export const AdminClients: React.FC = () => {
   const clients = data || [];
 
   const [showRegister, setShowRegister] = useState(false);
-  const [showProvisionAdmin, setShowProvisionAdmin] = useState(false);
   const [editClient, setEditClient] = useState<OAuthClient | null>(null);
   const [selectedClient, setSelectedClient] = useState<OAuthClient | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -237,19 +236,6 @@ export const AdminClients: React.FC = () => {
                                       Configuration for {c.client_name}
                                     </span>
                                   </div>
-
-                                  {c.adminEmail ? (
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-sans text-xs text-muted-foreground">Admin:</span>
-                                      <code className="font-mono text-xs text-foreground bg-secondary px-2 py-0.5 rounded border border-border">
-                                        {c.adminEmail}
-                                      </code>
-                                    </div>
-                                  ) : (
-                                    <Button size="sm" variant="outline" className="h-7 text-xs rounded-md" onClick={() => setShowProvisionAdmin(true)}>
-                                      Provision Admin
-                                    </Button>
-                                  )}
                                 </div>
 
                                 <div className="grid lg:grid-cols-2 gap-4 sm:gap-6">
@@ -307,6 +293,15 @@ export const AdminClients: React.FC = () => {
                                     </pre>
                                   </div>
                                 </div>
+
+                                <div className="border-t border-border pt-4">
+                                  <AppAdminManager
+                                    clientId={c.client_id}
+                                    clientName={c.client_name}
+                                    allowedOrigins={c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []}
+                                    redirectUris={c.redirect_uris ?? c.redirectUris ?? []}
+                                  />
+                                </div>
                               </div>
                             </TableCell>
                           </TableRow>
@@ -336,18 +331,6 @@ export const AdminClients: React.FC = () => {
             onClose={() => setEditClient(null)}
             onSuccess={() => {
               setEditClient(null);
-              void fetchClients();
-            }}
-          />
-        )}
-
-        {showProvisionAdmin && selectedClient && (
-          <ProvisionAdminModal
-            clientId={selectedClient.client_id}
-            clientName={selectedClient.client_name}
-            onClose={() => setShowProvisionAdmin(false)}
-            onSuccess={() => {
-              setShowProvisionAdmin(false);
               void fetchClients();
             }}
           />

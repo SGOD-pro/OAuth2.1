@@ -22,18 +22,23 @@ export async function isOriginAllowed(origin: string): Promise<boolean> {
     .collection("oauthClient")
     .find(
       {},
-      { projection: { redirectUris: 1, allowedOrigins: 1 } },
+      { projection: { redirectUris: 1, redirect_uris: 1, allowedOrigins: 1, allowed_origins: 1 } },
     )
     .toArray();
 
   for (const client of clients) {
-    const redirectUris = (client["redirectUris"] as string[] | undefined) ?? [];
+    const redirectUris =
+      (client["redirectUris"] as string[] | undefined) ??
+      (client["redirect_uris"] as string[] | undefined) ??
+      [];
     for (const uri of redirectUris) {
       if (originMatchesRedirectUri(normalizedOrigin, uri)) return true;
     }
 
     const allowedOrigins =
-      (client["allowedOrigins"] as string[] | undefined) ?? [];
+      (client["allowedOrigins"] as string[] | undefined) ??
+      (client["allowed_origins"] as string[] | undefined) ??
+      [];
     for (const allowed of allowedOrigins) {
       if (allowed === normalizedOrigin) return true;
       // Also accept full URLs stored as "allowed origins"

@@ -6,6 +6,8 @@ import { getHeaders, isStrongPassword, validateRedirectUris } from "../utils/sec
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
 import { requireAdmin, requireSuperAdmin, requireScopedAdmin } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
+import { ObjectId } from "mongodb";
+import { hashPassword } from "better-auth/crypto";
 
 // Helper accessor for Better Auth dynamic plugin APIs
 const authApi = authProvider.api as any;
@@ -701,7 +703,353 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
   return c.json(safeResult);
 });
 
-// 10. Admin Catch-All 404 Handler
+// -- Application Administrators Management (Super Admin) ------------------
+
+// 10. List Application Admins for a Client
+admin.get("/clients/:clientId/app-admins", requireAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  try {
+    const database = await getDb();
+    const admins = await database
+      .collection("app_admins")
+      .find({ clientId })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const safeAdmins = admins.map((a: any) => ({
+      id: a._id.toString(),
+      email: a.email,
+      name: a.name || a.email.split("@")[0],
+      redirectUrl: a.redirectUrl || "",
+      isActive: a.isActive !== false,
+      loginCount: a.loginCount || 0,
+      lastLoginAt: a.lastLoginAt ? a.lastLoginAt.toISOString() : null,
+      createdAt: a.createdAt ? a.createdAt.toISOString() : new Date().toISOString(),
+    }));
+
+    return c.json({ admins: safeAdmins });
+  } catch (err: any) {
+    console.error("[ADMIN_LIST_APP_ADMINS] Error:", err);
+    return c.json({ error: "Failed to load application administrators" }, 500);
+  }
+});
+
+// Helper: Validate that an app admin redirectUrl matches one of the client's registered origins or redirect URIs
+function isRedirectUrlAllowedForClient(redirectUrl: string, client: any): { allowed: boolean; error?: string } {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(redirectUrl);
+  } catch {
+    return { allowed: false, error: "Redirect URL must be a valid URL format (e.g. https://app.example.com/admin)" };
+  }
+
+  const isDev = Boolean(client.isDev || client.is_dev);
+  const isLoopback = parsedUrl.hostname === "localhost" || parsedUrl.hostname === "127.0.0.1" || parsedUrl.hostname === "[::1]";
+
+  if (isDev && isLoopback) {
+    return { allowed: true };
+  }
+
+  const clientOrigins = new Set<string>();
+  const allowedOrigins = ((client.allowedOrigins || client.allowed_origins || []) as string[]);
+  const redirectUris = ((client.redirectUris || client.redirect_uris || []) as string[]);
+
+  for (const o of allowedOrigins) {
+    try {
+      clientOrigins.add(new URL(o).origin);
+    } catch {
+      clientOrigins.add(o.replace(/\/$/, ""));
+    }
+  }
+
+  for (const u of redirectUris) {
+    try {
+      clientOrigins.add(new URL(u).origin);
+    } catch {}
+  }
+
+  // If client has registered origins or redirect URIs, enforce that the admin redirect URL belongs to one of them
+  if (clientOrigins.size > 0 && !clientOrigins.has(parsedUrl.origin)) {
+    return {
+      allowed: false,
+      error: `Redirect URL origin "${parsedUrl.origin}" does not match any registered allowed origins or redirect URIs for this application. Configure it under Allowed Origins or Redirect URIs first.`,
+    };
+  }
+
+  return { allowed: true };
+}
+
+// 11. Create Application Admin for a Client
+admin.post("/clients/:clientId/app-admins", requireAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  const body = await c.req.json().catch(() => ({}));
+  const sessionUser = c.get("user") as any;
+
+  const email = typeof body.email === "string" ? body.email.toLowerCase().trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : email.split("@")[0];
+  const redirectUrl = typeof body.redirectUrl === "string" ? body.redirectUrl.trim() : "";
+
+  if (!email || !email.includes("@")) {
+    return c.json({ error: "Valid email address is required" }, 400);
+  }
+
+  if (!redirectUrl) {
+    return c.json({ error: "Redirect URL is required" }, 400);
+  }
+
+  if (!isStrongPassword(password)) {
+    return c.json(
+      {
+        error: "weak_password",
+        message: "Password must be at least 12 characters and include uppercase, lowercase, number, and special symbol.",
+      },
+      400
+    );
+  }
+
+  try {
+    const database = await getDb();
+
+    // Verify client exists
+    const client = await database.collection("oauthClient").findOne({
+      $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+    });
+
+    if (!client) {
+      return c.json({ error: "Application not found" }, 404);
+    }
+
+    // Enforce origin matching against client's registered origins/redirect URIs
+    const urlCheck = isRedirectUrlAllowedForClient(redirectUrl, client);
+    if (!urlCheck.allowed) {
+      return c.json({ error: urlCheck.error }, 400);
+    }
+
+    const canonicalClientId = client.clientId || client.client_id || clientId;
+
+    // Check email uniqueness within this application
+    const existing = await database.collection("app_admins").findOne({
+      clientId: canonicalClientId,
+      email,
+    });
+
+    if (existing) {
+      return c.json({ error: "An administrator with this email already exists for this application" }, 409);
+    }
+
+    const hashedPassword = await hashPassword(password);
+    const now = new Date();
+
+    const doc = {
+      clientId: canonicalClientId,
+      email,
+      name,
+      password: hashedPassword,
+      redirectUrl,
+      isActive: true,
+      loginCount: 0,
+      lastLoginAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const insertResult = await database.collection("app_admins").insertOne(doc);
+
+    await recordAdminAudit({
+      actorUserId: sessionUser?.id,
+      actorEmail: sessionUser?.email,
+      actorScope: "super_admin",
+      action: "app_admin_created",
+      targetClientId: canonicalClientId,
+      details: { email, name, redirectUrl },
+      ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+      timestamp: now,
+    });
+
+    return c.json(
+      {
+        success: true,
+        admin: {
+          id: insertResult.insertedId.toString(),
+          email,
+          name,
+          redirectUrl,
+          isActive: true,
+          loginCount: 0,
+          lastLoginAt: null,
+          createdAt: now.toISOString(),
+        },
+      },
+      201
+    );
+  } catch (err: any) {
+    console.error("[ADMIN_CREATE_APP_ADMIN] Error:", err);
+    return c.json({ error: err?.message || "Failed to create application administrator" }, 500);
+  }
+});
+
+// 12. Update Application Admin
+admin.put("/clients/:clientId/app-admins/:adminId", requireAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  const adminId = c.req.param("adminId");
+  const body = await c.req.json().catch(() => ({}));
+  const sessionUser = c.get("user") as any;
+
+  let adminObjId: ObjectId;
+  try {
+    adminObjId = new ObjectId(adminId);
+  } catch {
+    return c.json({ error: "Invalid admin ID" }, 400);
+  }
+
+  try {
+    const database = await getDb();
+
+    // Verify admin exists and belongs to client
+    const existing = await database.collection("app_admins").findOne({
+      _id: adminObjId,
+      clientId,
+    });
+
+    if (!existing) {
+      return c.json({ error: "Administrator not found" }, 404);
+    }
+
+    const updateFields: any = { updatedAt: new Date() };
+
+    if (typeof body.name === "string" && body.name.trim()) {
+      updateFields.name = body.name.trim();
+    }
+
+    if (typeof body.email === "string" && body.email.trim()) {
+      const newEmail = body.email.toLowerCase().trim();
+      if (!newEmail.includes("@")) {
+        return c.json({ error: "Valid email address is required" }, 400);
+      }
+      if (newEmail !== existing.email) {
+        const conflict = await database.collection("app_admins").findOne({
+          clientId,
+          email: newEmail,
+          _id: { $ne: adminObjId },
+        });
+        if (conflict) {
+          return c.json({ error: "Another administrator with this email already exists for this application" }, 409);
+        }
+        updateFields.email = newEmail;
+      }
+    }
+
+    if (typeof body.redirectUrl === "string" && body.redirectUrl.trim()) {
+      const client = await database.collection("oauthClient").findOne({
+        $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+      });
+      const urlCheck = isRedirectUrlAllowedForClient(body.redirectUrl.trim(), client || {});
+      if (!urlCheck.allowed) {
+        return c.json({ error: urlCheck.error }, 400);
+      }
+      updateFields.redirectUrl = body.redirectUrl.trim();
+    }
+
+    if (typeof body.isActive === "boolean") {
+      updateFields.isActive = body.isActive;
+    }
+
+    if (typeof body.password === "string" && body.password.length > 0) {
+      if (!isStrongPassword(body.password)) {
+        return c.json(
+          {
+            error: "weak_password",
+            message: "Password must be at least 12 characters and include uppercase, lowercase, number, and special symbol.",
+          },
+          400
+        );
+      }
+      updateFields.password = await hashPassword(body.password);
+    }
+
+    await database.collection("app_admins").updateOne(
+      { _id: adminObjId },
+      { $set: updateFields }
+    );
+
+    const updated = await database.collection("app_admins").findOne({ _id: adminObjId });
+
+    await recordAdminAudit({
+      actorUserId: sessionUser?.id,
+      actorEmail: sessionUser?.email,
+      actorScope: "super_admin",
+      action: "app_admin_updated",
+      targetClientId: clientId,
+      details: { adminId, updatedFields: Object.keys(updateFields) },
+      ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+      timestamp: new Date(),
+    });
+
+    return c.json({
+      success: true,
+      admin: {
+        id: updated._id.toString(),
+        email: updated.email,
+        name: updated.name,
+        redirectUrl: updated.redirectUrl,
+        isActive: updated.isActive !== false,
+        loginCount: updated.loginCount || 0,
+        lastLoginAt: updated.lastLoginAt ? updated.lastLoginAt.toISOString() : null,
+        createdAt: updated.createdAt ? updated.createdAt.toISOString() : null,
+      },
+    });
+  } catch (err: any) {
+    console.error("[ADMIN_UPDATE_APP_ADMIN] Error:", err);
+    return c.json({ error: err?.message || "Failed to update administrator" }, 500);
+  }
+});
+
+// 13. Delete Application Admin
+admin.delete("/clients/:clientId/app-admins/:adminId", requireAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  const adminId = c.req.param("adminId");
+  const sessionUser = c.get("user") as any;
+
+  let adminObjId: ObjectId;
+  try {
+    adminObjId = new ObjectId(adminId);
+  } catch {
+    return c.json({ error: "Invalid admin ID" }, 400);
+  }
+
+  try {
+    const database = await getDb();
+    const existing = await database.collection("app_admins").findOne({
+      _id: adminObjId,
+      clientId,
+    });
+
+    if (!existing) {
+      return c.json({ error: "Administrator not found" }, 404);
+    }
+
+    await database.collection("app_admins").deleteOne({ _id: adminObjId });
+
+    await recordAdminAudit({
+      actorUserId: sessionUser?.id,
+      actorEmail: sessionUser?.email,
+      actorScope: "super_admin",
+      action: "app_admin_deleted",
+      targetClientId: clientId,
+      details: { adminId, email: existing.email },
+      ipAddress: c.req.header("x-forwarded-for") || "127.0.0.1",
+      timestamp: new Date(),
+    });
+
+    return c.json({ success: true, message: "Administrator removed" });
+  } catch (err: any) {
+    console.error("[ADMIN_DELETE_APP_ADMIN] Error:", err);
+    return c.json({ error: err?.message || "Failed to delete administrator" }, 500);
+  }
+});
+
+// 14. Admin Catch-All 404 Handler
 admin.all("*", (c) => {
   return c.json({ error: "Endpoint not found" }, 404);
 });
