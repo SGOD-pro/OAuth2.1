@@ -2,7 +2,7 @@
 
 > A production-ready, config-only OAuth 2.1 / OpenID Connect identity provider you deploy once and own forever — with zero always-on infrastructure costs.
 
-Built with **Hono**, **MongoDB Atlas**, and the **Better Auth** identity engine. Features a high-aesthetic Admin Console for managing OAuth 2.1 clients, dynamic CORS whitelists, and scoped application administrators with built-in multi-tenant isolation.
+Built with **Hono**, **MongoDB Atlas**, and the **Better Auth** identity engine. Features a high-aesthetic Admin Console for managing OAuth 2.1 clients, dynamic CORS whitelists, and dedicated Per-Application Administrators with secure backend verification endpoints and built-in multi-tenant isolation.
 
 ---
 
@@ -52,8 +52,8 @@ Detailed technical guides, protocol specifications, and integration runbooks are
 |---|---|
 | 🏛️ **[System Architecture](docs/ARCHITECTURE.md)** | Multi-tenant isolation, cryptographic token binding, OIDC discovery, and PKCE sequence flows. |
 | 🚀 **[Multi-Cloud Deployment Guide](docs/DEPLOYMENT.md)** | Step-by-step guides for AWS Lambda, EC2/VPS, Azure, GCP Cloud Run, Vercel, Netlify, Railway, and Docker. |
-| ⚙️ **[Admin Console & App Management](docs/ADMIN_GUIDE.md)** | Registering applications, CORS origin management, Development Mode switch, and scoped admin roles. |
-| 🔌 **[Consumer Integration Guide](docs/INTEGRATION_GUIDE.md)** | Code examples and patterns for Next.js 14 BFF, React SPA + Express, and pure PKCE frontends. |
+| ⚙️ **[Admin Console & App Management](docs/ADMIN_GUIDE.md)** | Registering applications, CORS origin management, Development Mode switch, and per-application admin provisioning. |
+| 🔌 **[Consumer Integration Guide](docs/INTEGRATION_GUIDE.md)** | Code examples and patterns for Next.js 14 BFF, React SPA + Express, pure PKCE frontends, and App Admin verification. |
 | 🛡️ **[Security & Abuse Defense](docs/SECURITY.md)** | Threat model, target-keyed rate limiting, constant-time hashing, token family rotation, and WAF boundaries. |
 | 📋 **[Environment Variables Reference](docs/ENVIRONMENT_VARIABLES.md)** | Complete specification of all backend, frontend, and consumer client configuration flags. |
 
@@ -445,7 +445,8 @@ https://<your-frontend-domain>/admin/login
 
 From the Admin Console, you can:
 - Register new OAuth 2.1 client applications (BFFs, SPAs, Mobile Apps).
-- Configure allowed Redirect URIs and Dynamic CORS Origins.
+- Provision, edit, and revoke dedicated **Per-Application Administrators** for registered clients.
+- Configure allowed Redirect URIs and Dynamic CORS Origins with origin auto-suggestion.
 - Toggle the Development Mode switch (`isDev`) for local loopback testing.
 - View real-time security logs, active sessions, and multi-tenant user registrations.
 
@@ -488,6 +489,17 @@ export async function verifyAccessToken(token: string) {
   return payload;
 }
 ```
+
+### 4. Per-Application Administrator Authentication & Verification
+For securing the consumer application's own administrative dashboard using SWYRA Auth:
+
+| Endpoint | Method | Description | Auth Required |
+|---|---|---|---|
+| `/api/auth/app-admin/login` | `POST` | Authenticate an application admin (`clientId`, `email`, `password`) and receive signed token + `redirectUrl`. | `client_id` + `client_secret` in body |
+| `/api/auth/app-admin/verify` | `POST` | High-security backend verification endpoint to validate admin session tokens and check revocation. | `client_id` + `client_secret` + Bearer token |
+| `/api/auth/app-admin/logout` | `POST` | Revoke an application administrator token session. | `client_id` + `client_secret` + Bearer token |
+
+*Detailed examples and middleware implementation guides available in [Consumer Integration Guide](docs/INTEGRATION_GUIDE.md#5-per-application-administrator-authentication--verification).*
 
 ---
 

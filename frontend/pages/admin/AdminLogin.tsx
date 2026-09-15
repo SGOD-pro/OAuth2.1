@@ -13,6 +13,7 @@ import { RouteLoader } from '@/components/RouteLoader';
 import { BrandMark } from '@/components/BrandMark';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { Eye, EyeOff } from 'lucide-react';
 
 const adminLoginSchema = z.object({
   email: z.string().email({ message: "Invalid email address" }),
@@ -23,6 +24,7 @@ export const AdminLogin: React.FC = () => {
   usePageTitle('Admin sign in');
 
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -195,13 +197,24 @@ export const AdminLogin: React.FC = () => {
                       <FormItem className="space-y-1.5">
                         <FormLabel className="font-sans text-xs font-medium text-foreground">Password</FormLabel>
                         <FormControl>
-                          <Input 
-                            type="password" 
-                            placeholder="••••••••••••" 
-                            {...field} 
-                            disabled={loading} 
-                            className="h-10"
-                          />
+                          <div className="relative">
+                            <Input 
+                              type={showPassword ? "text" : "password"} 
+                              placeholder="••••••••••••" 
+                              {...field} 
+                              disabled={loading} 
+                              className="h-10 pr-10"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                              aria-label={showPassword ? "Hide password" : "Show password"}
+                              tabIndex={-1}
+                            >
+                              {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                            </button>
+                          </div>
                         </FormControl>
                         <FormMessage />
                       </FormItem>

@@ -12,7 +12,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { BrandMark } from '@/components/BrandMark';
 import { usePageTitle } from '@/hooks/usePageTitle';
-import { CheckCircle2, ArrowLeft } from 'lucide-react';
+import { CheckCircle2, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 
 const resetPasswordSchema = z.object({
   password: z.string().min(12, { message: "Password must be at least 12 characters" }),
@@ -26,6 +26,8 @@ export const ResetPassword: React.FC = () => {
   usePageTitle('Set new password');
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -119,12 +121,24 @@ export const ResetPassword: React.FC = () => {
                         <FormItem className="space-y-1.5">
                           <FormLabel className="text-xs font-medium text-foreground">New password</FormLabel>
                           <FormControl>
-                            <Input 
-                              type="password" 
-                              placeholder="••••••••••••" 
-                              {...field} 
-                              disabled={loading} 
-                            />
+                            <div className="relative">
+                              <Input 
+                                type={showPassword ? "text" : "password"} 
+                                placeholder="••••••••••••" 
+                                {...field} 
+                                disabled={loading} 
+                                className="pr-10"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                                aria-label={showPassword ? "Hide password" : "Show password"}
+                                tabIndex={-1}
+                              >
+                                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                              </button>
+                            </div>
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -138,12 +152,24 @@ export const ResetPassword: React.FC = () => {
                         <FormItem className="space-y-1.5">
                           <FormLabel className="text-xs font-medium text-foreground">Confirm new password</FormLabel>
                           <FormControl>
-                            <Input 
-                              type="password" 
-                              placeholder="••••••••••••" 
-                              {...field} 
-                              disabled={loading} 
-                            />
+                            <div className="relative">
+                              <Input 
+                                type={showConfirmPassword ? "text" : "password"} 
+                                placeholder="••••••••••••" 
+                                {...field} 
+                                disabled={loading} 
+                                className="pr-10"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                                aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                                tabIndex={-1}
+                              >
+                                {showConfirmPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                              </button>
+                            </div>
                           </FormControl>
                           <FormMessage />
                         </FormItem>

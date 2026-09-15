@@ -125,3 +125,198 @@ For purely client-side single-page applications without a custom backend:
 3. **Token Exchange**:
    - Make `POST /api/auth/oauth2/token` with `code` and `code_verifier`.
    - Confidential client secrets are **not required** for public SPA PKCE clients.
+
+---
+
+## 5. Per-Application Administrator Authentication & Verification
+
+Each registered OAuth application can have dedicated **Application Administrators** provisioned via the Super Admin Console (`/admin/clients`). Application administrators manage the **consumer application's own administrative portal** (e.g., product management, user moderation, order operations), completely separated from SWYRA Auth's platform administration.
+
+SWYRA Auth exposes high-security, server-to-server endpoints allowing consumer applications to authenticate admins, verify active admin sessions, and revoke tokens.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as App Admin
+    participant AppFront as Consumer Frontend
+    participant AppBack as Consumer Backend / BFF
+    participant IdP as SWYRA Auth API
+
+    Admin->>AppFront: Enter email & password at /admin/login
+    AppFront->>AppBack: POST /api/admin/login
+    AppBack->>IdP: POST /api/auth/app-admin/login<br/>{ client_id, client_secret, email, password }
+    Note over IdP: 1. Validate client credentials<br/>2. Rate limit check (IP + Target)<br/>3. Verify admin password (timing-safe)<br/>4. Generate HS256 JWT with JTI
+    IdP-->>AppBack: 200 OK { token, redirectUrl, admin }
+    AppBack-->>AppFront: Set HttpOnly session cookie & return { redirectUrl }
+    AppFront-->>Admin: Redirect to redirectUrl (e.g., /admin/dashboard)
+
+    Note over AppFront,AppBack: Protected Admin Operations
+    Admin->>AppBack: GET /admin/api/data (with admin session)
+    AppBack->>IdP: POST /api/auth/app-admin/verify<br/>{ client_id, client_secret, token }
+    Note over IdP: 1. Verify token signature & JTI revocation<br/>2. Verify client ID match<br/>3. Verify admin active in DB
+    IdP-->>AppBack: 200 OK { valid: true, admin }
+    AppBack-->>Admin: Admin Data Response
+
+    Note over AppFront,AppBack: Logout
+    Admin->>AppBack: POST /admin/logout
+    AppBack->>IdP: POST /api/auth/app-admin/logout<br/>{ client_id, client_secret, token }
+    IdP-->>AppBack: 200 OK { success: true }
+```
+
+### 5.1 Endpoint Reference
+
+| Endpoint | Method | Purpose | Auth Required |
+|---|---|---|---|
+| `/api/auth/app-admin/login` | `POST` | Authenticates an app admin with credentials | `client_id` + `client_secret` in body |
+| `/api/auth/app-admin/verify` | `POST` | Verifies admin token signature, active status, and revocation | `client_id` + `client_secret` + Bearer token |
+| `/api/auth/app-admin/logout` | `POST` | Revokes admin token and adds JTI to revocation list | `client_id` + `client_secret` + Bearer token |
+
+---
+
+### 5.2 Step 1: Administrator Login (`/api/auth/app-admin/login`)
+
+When an administrator logs into your application's admin panel, your backend relays their credentials along with your confidential `client_id` and `client_secret`.
+
+#### Request:
+`POST /api/auth/app-admin/login`  
+**Content-Type**: `application/json`
+
+```json
+{
+  "client_id": "qMoXkZwvWnZJRmFhpiTyzLMozZYrwvlF",
+  "client_secret": "HQEFWhArRpYvjySBrzSbtBBlOpeZDpHY",
+  "email": "ops-admin@storefront.example.com",
+  "password": "AdminSecurePassword@2026!"
+}
+```
+
+#### Success Response (`200 OK`):
+```json
+{
+  "success": true,
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "tokenType": "Bearer",
+  "expiresIn": 3600,
+  "redirectUrl": "https://storefront.example.com/admin/dashboard",
+  "admin": {
+    "id": "66e74b21d8b2a1a4567e8901",
+    "email": "ops-admin@storefront.example.com",
+    "name": "Operations Lead",
+    "clientId": "qMoXkZwvWnZJRmFhpiTyzLMozZYrwvlF",
+    "role": "app_admin",
+    "redirectUrl": "https://storefront.example.com/admin/dashboard"
+  }
+}
+```
+
+> [!TIP]
+> **Redirect URL Routing**: After a successful login, navigate the administrator to the returned `redirectUrl`. The origin of `redirectUrl` is guaranteed to match your application's registered `allowed_origins` or `redirect_uris`.
+
+#### Error Responses:
+- `400 Bad Request`: Missing `client_id`, `client_secret`, `email`, or `password`.
+- `401 Unauthorized`: Invalid client credentials (`invalid_client`) or invalid admin credentials (`invalid_credentials`).
+- `403 Forbidden`: Admin account is deactivated (`account_disabled`) or application suspended.
+- `429 Too Many Requests`: Rate limit exceeded (target-keyed and IP-based defense).
+
+---
+
+### 5.3 Step 2: Protecting Admin Routes (`/api/auth/app-admin/verify`)
+
+Your backend verifies the incoming admin token before allowing access to sensitive administrative endpoints. This ensures that deactivated admins or revoked sessions are rejected immediately.
+
+#### Next.js 14 App Router Verification Handler Example:
+```typescript
+// app/api/admin/verify-session/route.ts
+import { NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+
+export async function GET() {
+  const token = cookies().get('app_admin_session')?.value;
+  if (!token) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
+  const res = await fetch(`${process.env.AUTH_ISSUER}/api/auth/app-admin/verify`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      client_id: process.env.CLIENT_ID,
+      client_secret: process.env.CLIENT_SECRET,
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.valid) {
+    return NextResponse.json({ error: data.message || 'forbidden' }, { status: res.status });
+  }
+
+  return NextResponse.json({ authenticated: true, admin: data.admin });
+}
+```
+
+#### Express.js Admin Guard Middleware Example:
+```typescript
+// middleware/requireAppAdmin.ts
+import type { Request, Response, NextFunction } from 'express';
+
+export async function requireAppAdmin(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({ error: 'unauthorized', message: 'Missing admin token' });
+  }
+
+  try {
+    const response = await fetch(`${process.env.AUTH_ISSUER}/api/auth/app-admin/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: process.env.CLIENT_ID,
+        client_secret: process.env.CLIENT_SECRET,
+        token,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.valid) {
+      return res.status(response.status).json({
+        error: data.error || 'forbidden',
+        message: data.message || 'Invalid admin session',
+      });
+    }
+
+    // Attach verified admin to request
+    (req as any).admin = data.admin;
+    next();
+  } catch (err) {
+    return res.status(500).json({ error: 'internal_error', message: 'Verification failed' });
+  }
+}
+```
+
+---
+
+### 5.4 Step 3: Administrator Logout & Token Revocation (`/api/auth/app-admin/logout`)
+
+When the administrator logs out, invoke the logout endpoint to revoke the token's unique identifier (`jti`). Even if a revoked token has not reached its 1-hour expiration time, `/verify` will reject it immediately.
+
+#### Express / Next.js Logout Example:
+```typescript
+export async function logoutAdmin(adminToken: string) {
+  const res = await fetch(`${process.env.AUTH_ISSUER}/api/auth/app-admin/logout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: process.env.CLIENT_ID,
+      client_secret: process.env.CLIENT_SECRET,
+      token: adminToken,
+    }),
+  });
+
+  return await res.json();
+}
+```

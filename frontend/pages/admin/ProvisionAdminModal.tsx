@@ -388,7 +388,7 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
               <p className="font-heading text-xs font-medium text-foreground mb-0.5">
                 No application administrators configured
               </p>
-              <p className="font-sans text-[11px] text-muted-foreground max-w-sm mb-3">
+              <p className="font-sans text-[11px] text-muted-foreground  mb-3">
                 Create an admin account to allow secure server-to-server administrator verification for this application.
               </p>
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setIsAdding(true)}>

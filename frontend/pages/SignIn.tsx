@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { BrandMark } from '@/components/BrandMark';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { Eye, EyeOff } from 'lucide-react';
 
 const signInSchema = z.object({
   email: z.string().email({ message: "Invalid email address" }),
@@ -34,6 +35,8 @@ export const SignIn: React.FC = () => {
   usePageTitle(tab === 'sign-in' ? 'Sign in' : 'Create account');
 
   const [loading, setLoading] = useState(false);
+  const [showSignInPassword, setShowSignInPassword] = useState(false);
+  const [showSignUpPassword, setShowSignUpPassword] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
   const [searchParams] = useSearchParams();
   const initialError = searchParams.get('error_description') || searchParams.get('error');
@@ -333,13 +336,24 @@ export const SignIn: React.FC = () => {
                               </Link>
                             </div>
                             <FormControl>
-                              <Input
-                                type="password"
-                                placeholder="••••••••••••"
-                                {...field}
-                                disabled={loading}
-                                className="h-10"
-                              />
+                              <div className="relative">
+                                <Input
+                                  type={showSignInPassword ? 'text' : 'password'}
+                                  placeholder="••••••••••••"
+                                  {...field}
+                                  disabled={loading}
+                                  className="h-10 pr-10"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setShowSignInPassword(!showSignInPassword)}
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                                  aria-label={showSignInPassword ? 'Hide password' : 'Show password'}
+                                  tabIndex={-1}
+                                >
+                                  {showSignInPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                                </button>
+                              </div>
                             </FormControl>
                             <FormMessage />
                           </FormItem>
@@ -455,13 +469,24 @@ export const SignIn: React.FC = () => {
                             <FormItem className="space-y-1.5">
                               <FormLabel className="font-sans text-xs font-medium text-foreground">Password (min. 12 characters)</FormLabel>
                               <FormControl>
-                                <Input
-                                  type="password"
-                                  placeholder="••••••••••••"
-                                  {...field}
-                                  disabled={loading}
-                                  className="h-10"
-                                />
+                                <div className="relative">
+                                  <Input
+                                    type={showSignUpPassword ? 'text' : 'password'}
+                                    placeholder="••••••••••••"
+                                    {...field}
+                                    disabled={loading}
+                                    className="h-10 pr-10"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowSignUpPassword(!showSignUpPassword)}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                                    aria-label={showSignUpPassword ? 'Hide password' : 'Show password'}
+                                    tabIndex={-1}
+                                  >
+                                    {showSignUpPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                                  </button>
+                                </div>
                               </FormControl>
                               <FormMessage />
                             </FormItem>

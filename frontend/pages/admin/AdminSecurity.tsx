@@ -16,6 +16,7 @@ import {
 import { toast } from 'sonner';
 import { QRCodeSVG } from 'qrcode.react';
 import { usePageTitle } from '@/hooks/usePageTitle';
+import { Eye, EyeOff } from 'lucide-react';
 
 type SetupStep = 'idle' | 'qr' | 'done' | 'disable-prompt';
 
@@ -26,6 +27,7 @@ export const AdminSecurity: React.FC = () => {
   const isTwoFactorEnabled = !!(session as unknown as { user?: { twoFactorEnabled?: boolean } })?.user?.twoFactorEnabled;
 
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [totpUri, setTotpUri] = useState('');
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
   const [confirmCode, setConfirmCode] = useState('');
@@ -190,15 +192,26 @@ export const AdminSecurity: React.FC = () => {
                 </p>
                 <div className="space-y-1.5">
                   <label className="font-sans text-xs font-medium text-foreground">Account Password</label>
-                  <Input 
-                    type="password" 
-                    placeholder="Enter password" 
-                    value={password} 
-                    onChange={(e) => setPassword(e.target.value)} 
-                    disabled={loading} 
-                    required 
-                    className="h-9"
-                  />
+                  <div className="relative">
+                    <Input 
+                      type={showPassword ? "text" : "password"} 
+                      placeholder="Enter password" 
+                      value={password} 
+                      onChange={(e) => setPassword(e.target.value)} 
+                      disabled={loading} 
+                      required 
+                      className="h-9 pr-9"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      tabIndex={-1}
+                    >
+                      {showPassword ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="flex gap-2.5 pt-1">
                   <Button type="button" variant="outline" onClick={() => setStep('done')} disabled={loading} className="h-9 text-xs">
@@ -218,15 +231,26 @@ export const AdminSecurity: React.FC = () => {
                 </p>
                 <div className="space-y-1.5">
                   <label className="font-sans text-xs font-medium text-foreground">Account Password</label>
-                  <Input 
-                    type="password" 
-                    placeholder="Enter your password to begin" 
-                    value={password} 
-                    onChange={(e) => setPassword(e.target.value)} 
-                    disabled={loading} 
-                    required 
-                    className="h-9"
-                  />
+                  <div className="relative">
+                    <Input 
+                      type={showPassword ? "text" : "password"} 
+                      placeholder="Enter your password to begin" 
+                      value={password} 
+                      onChange={(e) => setPassword(e.target.value)} 
+                      disabled={loading} 
+                      required 
+                      className="h-9 pr-9"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      tabIndex={-1}
+                    >
+                      {showPassword ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <Button type="submit" className="h-9 text-xs mt-1" disabled={loading || !password}>
                   {loading ? 'Preparing setup...' : 'Configure two-factor authentication'}

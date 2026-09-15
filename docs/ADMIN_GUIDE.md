@@ -55,19 +55,60 @@ Existing clients can be modified at any time by clicking **Edit Config** on the 
 
 ---
 
-## 4. Administrator Role Hierarchy
+## 4. Administrator Architecture & Per-Application Admins
 
-| Role | Scope | Capabilities |
-|---|---|---|
-| **Super Admin** (`role: "super_admin"`) | Global | Register/delete OAuth clients, provision scoped admins, inspect system-wide audit logs, access platform telemetry. |
-| **Scoped Admin** (`role: "admin"`, `scopedClientId: "<id>"`) | Single App | View and edit configuration for their assigned `client_id` only. Cannot modify global settings or other clients. |
+SWYRA Auth implements a strict separation of administrative boundaries:
 
-### Provisioning Scoped Admins via CLI:
-```bash
-cd hono
-npm run admin:create -- "app-admin@domain.com" "SecurePassword@123!" "App Admin"
+```mermaid
+flowchart TD
+    subgraph Platform["SWYRA Auth Platform"]
+        SuperAdmin["Single Super Admin<br/>swyra@auth2.1.com<br/>Full Platform Authority"]
+        Console["Admin Console (/admin)<br/>Clients, Audits, Security"]
+    end
+
+    subgraph RegisteredApps["Registered OAuth Applications"]
+        App1["App: Storefront Dashboard<br/>Client ID: qMoX..."]
+        App2["App: Mobile Portal<br/>Client ID: vAb8..."]
+    end
+
+    subgraph AppAdmins["Application Administrators (per app)"]
+        Admin1["Lead Admin (admin@store.com)<br/>Redirect: https://store.com/admin"]
+        Admin2["Finance Admin (finance@store.com)<br/>Redirect: https://store.com/admin/finance"]
+        Admin3["Ops Admin (ops@portal.com)<br/>Redirect: https://portal.com/admin"]
+    end
+
+    SuperAdmin --> Console
+    Console -- "Manages" --> RegisteredApps
+    RegisteredApps -- "Has Admins" --> AppAdmins
 ```
-Or use the **Provision Admin** button in the Admin Console client drawer.
+
+### 1. Platform Super Administrator
+The SWYRA Auth IdP has **exactly one** Super Admin account (`role: "admin"`). The Super Admin has global control:
+- Registering, updating, and deleting OAuth 2.1 client applications.
+- Configuring allowed CORS origins and redirect URIs.
+- Managing and provisioning per-application administrators.
+- Monitoring security audit logs and configuring platform 2FA.
+
+### 2. Application Administrators (`AppAdminManager`)
+Each registered application can have multiple dedicated application administrators. These accounts are strictly for administering the **consumer application's own admin dashboard**, never the SWYRA Auth platform console.
+
+#### Adding an Application Administrator:
+1. Navigate to **Applications** (`/admin/clients`).
+2. Click on the registered application's row to expand the detail drawer.
+3. In the **Application Administrators** section, click **+ Add Admin**.
+4. Fill in the required fields:
+   - **Name / Title**: Human-readable name or role (e.g. `Security Lead`).
+   - **Email Address**: Administrator's login email.
+   - **Redirect URL**: The consumer app's administrative destination (e.g., `https://app.domain.com/admin/dashboard`).
+   - **Password**: Strong password (minimum 12 characters, including uppercase, lowercase, number, and special symbol).
+5. **Origin Matching & Quick-Fill**:
+   - The Redirect URL's origin must match one of the application's registered **Allowed Origins** or **Redirect URIs** (or loopback in Development Mode).
+   - The console provides **Quick-Fill Suggestion Pills** based on the registered origins. Click any pill to automatically format the redirect URL.
+
+#### Managing Admins (Full CRUD):
+- **Edit**: Update name, email, redirect URL, toggle active/inactive status, or update password (optional).
+- **Delete**: Revokes the administrator with a confirmation modal.
+- **Telemetry**: Real-time visibility into **Login Count**, **Last Login Date**, and **Active Status**.
 
 ---
 
