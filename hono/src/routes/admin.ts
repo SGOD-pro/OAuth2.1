@@ -4,7 +4,7 @@ import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { getHeaders, isStrongPassword, validateRedirectUris } from "../utils/security";
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
-import { requireSuperAdmin, requireScopedAdmin } from "../middleware/admin-auth";
+import { requireAdmin, requireSuperAdmin, requireScopedAdmin } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 
 // Helper accessor for Better Auth dynamic plugin APIs
