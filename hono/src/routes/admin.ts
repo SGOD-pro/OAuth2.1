@@ -261,28 +261,39 @@ admin.get("/logs", requireSuperAdmin, async (c) => {
 admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
   const id = c.req.param("id");
   const sessionUser = c.get("user") as any;
+  const database = await getDb();
 
-  try {
-    const existing = (await authApi.getOAuthClient({
-      headers: getHeaders(c),
-      query: { client_id: id },
-    })) as Record<string, unknown> | null;
-
-    if (existing && Array.isArray(existing.allowed_origins)) {
-      await invalidateOriginCache(existing.allowed_origins as string[]);
-    }
-  } catch {
-    // Ignore fetch error before deletion
-  }
-
-  const result = await authApi.deleteOAuthClient({
-    headers: getHeaders(c),
-    body: { client_id: id },
+  const existingClient = await database.collection("oauthClient").findOne({
+    $or: [{ clientId: id }, { client_id: id }, { id }],
   });
 
-  const database = await getDb();
+  if (!existingClient) {
+    return c.json({ error: "Client not found" }, 404);
+  }
+
+  // Invalidate origin cache
+  const allowedOrigins = existingClient.allowedOrigins || existingClient.allowed_origins || [];
+  if (Array.isArray(allowedOrigins) && allowedOrigins.length > 0) {
+    await invalidateOriginCache(allowedOrigins as string[]);
+  }
+
+  // Attempt Better Auth delete if user ownership matches, but catch if it throws 401 UNAUTHORIZED
+  // (Better Auth's deleteOAuthClient is an end-user endpoint checking client.userId === session.user.id.
+  // A Super-Admin has global authority to delete any application).
+  try {
+    await authApi.deleteOAuthClient({
+      headers: getHeaders(c),
+      body: { client_id: id },
+    });
+  } catch (err: any) {
+    console.warn(
+      `[ADMIN_DELETE_CLIENT] Better Auth deleteOAuthClient skipped (${err?.body?.error || err?.message || err?.status}), proceeding with Super-Admin database deletion.`
+    );
+  }
+
+  // Delete all traces of client and associated tokens/sessions
   await Promise.all([
-    database.collection("oauthClient").deleteOne({
+    database.collection("oauthClient").deleteMany({
       $or: [{ clientId: id }, { client_id: id }, { id }],
     }),
     database.collection("user_app_registrations").deleteMany({ clientId: id }),
@@ -302,7 +313,7 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
     timestamp: new Date(),
   });
 
-  return c.json(result);
+  return c.json({ success: true, message: "Client deleted successfully" });
 });
 
 // 6. Provision Scoped or Global Admin (Super-Admin only with Rate Limiting B6)
