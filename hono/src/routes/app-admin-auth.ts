@@ -26,22 +26,45 @@ async function executeDummyHash(): Promise<void> {
 	});
 }
 
-// Helper: Verify client secret (supports both plaintext and hashed secrets)
+// Helper: Verify client secret (supports Better-Auth SHA-256 base64url, scrypt/bcrypt, and plaintext)
 async function verifyClientSecret(providedSecret: string, storedSecret: string): Promise<boolean> {
 	if (!providedSecret || !storedSecret) return false;
 
+	// 1. Better Auth SHA-256 base64url hash (standard OAuth client secret storage method)
+	try {
+		const hashedProvided = crypto.createHash("sha256").update(providedSecret).digest("base64url");
+		const bufHashed = Buffer.from(hashedProvided);
+		const bufStored = Buffer.from(storedSecret);
+		if (bufHashed.length === bufStored.length && crypto.timingSafeEqual(bufHashed, bufStored)) {
+			return true;
+		}
+	} catch {
+		// continue
+	}
+
+	// 2. Scrypt or standard hash format (if stored with ':' or '$')
 	if (storedSecret.includes(":") || storedSecret.startsWith("$")) {
 		try {
-			return await verifyPassword({ password: providedSecret, hash: storedSecret });
+			if (await verifyPassword({ password: providedSecret, hash: storedSecret })) {
+				return true;
+			}
 		} catch {
-			return false;
+			// continue
 		}
 	}
 
-	const bufA = Buffer.from(providedSecret);
-	const bufB = Buffer.from(storedSecret);
-	if (bufA.length !== bufB.length) return false;
-	return crypto.timingSafeEqual(bufA, bufB);
+	// 3. Plaintext secret match (fallback for unhashed or testing clients)
+	try {
+		const bufA = Buffer.from(providedSecret);
+		const bufB = Buffer.from(storedSecret);
+		if (bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB)) {
+			return true;
+		}
+	} catch {
+		return false;
+	}
+
+	return false;
 }
 
 // Helper: Rate limiting for app admin login
