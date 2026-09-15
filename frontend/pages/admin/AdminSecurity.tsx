@@ -188,7 +188,7 @@ export const AdminSecurity: React.FC = () => {
                 <p className="font-sans text-xs text-destructive">
                   Enter your current account password to confirm disabling two-factor authentication:
                 </p>
-                <div className="space-y-1.5 max-w-sm">
+                <div className="space-y-1.5">
                   <label className="font-sans text-xs font-medium text-foreground">Account Password</label>
                   <Input 
                     type="password" 
@@ -213,10 +213,10 @@ export const AdminSecurity: React.FC = () => {
 
             {step === 'idle' && (
               <form onSubmit={handleEnable} className="space-y-4">
-                <p className="font-sans text-sm text-muted-foreground leading-relaxed max-w-lg">
+                <p className="font-sans text-sm text-muted-foreground leading-relaxed">
                   Use an authenticator app (such as Google Authenticator, 1Password, or Bitwarden) to generate one-time codes.
                 </p>
-                <div className="space-y-1.5 max-w-sm">
+                <div className="space-y-1.5">
                   <label className="font-sans text-xs font-medium text-foreground">Account Password</label>
                   <Input 
                     type="password" 
@@ -267,7 +267,7 @@ export const AdminSecurity: React.FC = () => {
                   </div>
                 </div>
 
-                <form onSubmit={handleConfirm} className="space-y-4 max-w-sm">
+                <form onSubmit={handleConfirm} className="space-y-4">
                   <div className="space-y-1.5">
                     <label className="font-sans text-xs font-medium text-foreground">
                       Verification code

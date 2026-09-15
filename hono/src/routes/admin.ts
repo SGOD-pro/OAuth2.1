@@ -20,11 +20,18 @@ export const admin = new Hono<{
 
 // -- Super-Admin Only Routes ---------------------------------------------
 
-// 1. List All OAuth Clients (Super-Admin only)
-admin.get("/clients", requireSuperAdmin, async (c) => {
+// 1. List All OAuth Clients (Super-Admin or Scoped-Admin)
+admin.get("/clients", requireAdmin, async (c) => {
   try {
     const database = await getDb();
-    const clients = await database.collection("oauthClient").find({}).toArray();
+    const sessionUser = c.get("user") as any;
+    const scopedClientId = sessionUser?.scopedClientId;
+
+    const query = scopedClientId
+      ? { $or: [{ clientId: scopedClientId }, { client_id: scopedClientId }, { id: scopedClientId }] }
+      : {};
+
+    const clients = await database.collection("oauthClient").find(query).toArray();
     const safeClients = clients.map((doc: any) => {
       const { clientSecret, client_secret, _id, ...rest } = doc;
       return {
@@ -36,6 +43,8 @@ admin.get("/clients", requireSuperAdmin, async (c) => {
         disabled: Boolean(rest.disabled),
         is_dev: Boolean(rest.isDev || rest.is_dev),
         skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
+        adminEmail: rest.adminEmail || rest.admin_email || null,
+        adminUserId: rest.adminUserId || rest.admin_user_id || null,
       };
     });
     return c.json(safeClients);
@@ -178,14 +187,21 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
 });
 
 // 3. Platform Stats (Super-Admin only)
-admin.get("/stats", requireSuperAdmin, async (c) => {
+admin.get("/stats", requireAdmin, async (c) => {
   try {
     const database = await getDb();
+    const sessionUser = c.get("user") as any;
+    const scopedClientId = sessionUser?.scopedClientId;
+
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const clientQuery = scopedClientId
+      ? { $or: [{ clientId: scopedClientId }, { client_id: scopedClientId }, { id: scopedClientId }] }
+      : {};
+
     const [totalUsers, totalClients, activeClients, recent24hLogins, activeSessions, recentLogs] = await Promise.all([
-      database.collection("user").countDocuments(),
-      database.collection("oauthClient").countDocuments(),
-      database.collection("oauthClient").countDocuments({ disabled: { $ne: true } }),
+      scopedClientId ? 1 : database.collection("user").countDocuments(),
+      database.collection("oauthClient").countDocuments(clientQuery),
+      database.collection("oauthClient").countDocuments({ ...clientQuery, disabled: { $ne: true } }),
       database.collection("session").countDocuments({ createdAt: { $gte: oneDayAgo } }),
       database.collection("session").countDocuments({ expiresAt: { $gt: new Date() } }),
       database.collection("session").find().sort({ createdAt: -1 }).limit(10).toArray(),
@@ -361,12 +377,13 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
 
     const userId = newUser?.user?.id || (newUser as any)?.id;
 
-    // 2. Set role: "admin", scopedClientId, and mustChangePassword
+    // 2. Set role: "admin", scopedClientId, emailVerified: true, and mustChangePassword
     await database.collection("user").updateOne(
       { $or: [{ id: userId }, { _id: userId }, { email }] } as any,
       {
         $set: {
           role: "admin",
+          emailVerified: true,
           scopedClientId: scopedClientId,
           mustChangePassword: isTempPassword,
           updatedAt: new Date(),
@@ -374,7 +391,21 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
       }
     );
 
-    // 3. Record audit trail
+    // 3. If assigned to a client, link to oauthClient document
+    if (scopedClientId) {
+      await database.collection("oauthClient").updateOne(
+        { $or: [{ clientId: scopedClientId }, { client_id: scopedClientId }, { id: scopedClientId }] },
+        {
+          $set: {
+            adminUserId: String(userId),
+            adminEmail: email,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    }
+
+    // 4. Record audit trail
     await recordAdminAudit({
       actorUserId: sessionUser?.id,
       actorEmail: sessionUser?.email,

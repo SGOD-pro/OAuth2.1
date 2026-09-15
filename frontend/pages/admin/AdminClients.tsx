@@ -126,7 +126,7 @@ export const AdminClients: React.FC = () => {
                 </svg>
               </div>
               <h3 className="font-heading text-lg font-medium text-foreground mb-1">No applications registered</h3>
-              <p className="font-sans text-sm text-muted-foreground mb-6 max-w-sm">
+              <p className="font-sans text-sm text-muted-foreground mb-6">
                 Register your first OAuth 2.1 client to issue credentials and authorize users.
               </p>
               <Button onClick={() => setShowRegister(true)}>Create application</Button>

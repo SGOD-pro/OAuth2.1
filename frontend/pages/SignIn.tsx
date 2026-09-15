@@ -222,7 +222,7 @@ export const SignIn: React.FC = () => {
           <h1 className="mt-6 font-heading text-[55px] leading-[1.05] tracking-tight font-semibold text-foreground">
             Identity.<br />Under control.
           </h1>
-          <p className="mt-5 font-sans text-sm text-muted-foreground leading-relaxed max-w-sm">
+          <p className="mt-5 font-sans text-sm text-muted-foreground leading-relaxed">
             High-performance OAuth 2.1 authorization service. Precision tokens, cryptographic integrity, and session protection.
           </p>
         </div>

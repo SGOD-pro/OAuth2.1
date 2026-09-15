@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { Eye, EyeOff } from 'lucide-react';
-import { authClient } from '@/lib/auth-client';
+import { apiFetch } from '@/lib/api';
 
 interface ProvisionAdminModalProps {
   clientId: string;
@@ -26,13 +26,16 @@ export const ProvisionAdminModal: React.FC<ProvisionAdminModalProps> = ({ client
     setLoading(true);
 
     try {
-      const { error } = await authClient.$fetch('/api/admin/users', {
+      const res = await apiFetch('/api/admin/users', {
         method: 'POST',
-        body: { email, password, name, clientId },
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, name, clientId }),
       });
 
-      if (error) {
-        throw new Error((error as { message?: string }).message || error.statusText || 'Failed to provision admin');
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.message || data.error || `Failed to provision admin (${res.status})`);
       }
 
       toast.success("Administrator provisioned. User must sign in to configure two-factor authentication.");
