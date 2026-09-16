@@ -157,9 +157,16 @@ export function verifyBackupCode(rawCode: string, hashedCodes: string[]): { vali
   return { valid: false, remaining: hashedCodes };
 }
 
-// Derive a 256-bit AES-GCM encryption key from appAdminJwtSecret
+// Derive a 256-bit AES-GCM encryption key. In production, APP_ADMIN_TOTP_KEY is required.
 function getEncryptionKey(): Buffer {
-  const source = process.env.APP_ADMIN_TOTP_KEY || config.appAdminJwtSecret;
+  const explicit = process.env.APP_ADMIN_TOTP_KEY;
+  if (explicit && explicit.length >= 32) {
+    return crypto.createHash("sha256").update(explicit).digest();
+  }
+  if (config.env === "production") {
+    throw new Error("APP_ADMIN_TOTP_KEY must be explicitly configured in production (minimum 32 characters)");
+  }
+  const source = config.appAdminTotpKey;
   return crypto.createHash("sha256").update(source).digest();
 }
 

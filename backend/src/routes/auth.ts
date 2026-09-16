@@ -6,7 +6,7 @@ import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { getOriginCache, putOriginCache, registerTokenFamily, verifyAndRotateTokenFamily, incrementRateLimit } from "../db/state";
 import { rateLimiters, checkRateLimit } from "../cache/redis";
-import { getTrustedClientIp } from "../utils/security";
+import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration } from "../utils/security";
 import { config } from "../config";
 
 export const auth = new Hono();
@@ -121,22 +121,15 @@ auth.post("/sign-in/email", async (c) => {
             // Equalize CPU timing with real password verification (Fix B10)
             await executeDummyHash();
         } else if (clientId && user.role !== "admin") {
-            const clientDoc = await database.collection("oauthClient").findOne({
-                $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-            });
-            const isPublic = clientDoc ? (clientDoc.isPublic !== false && clientDoc.is_public !== false) : true;
-
-            const reg = await database.collection("user_app_registrations").findOne({
-                $or: [
-                    { userId: String(user._id), clientId },
-                    { userId: user._id, clientId },
-                    ...(user.id ? [{ userId: user.id, clientId }] : []),
-                ],
-            });
+            const clientDoc = await resolveOAuthClient(database, clientId);
+            const isPublic = clientDoc ? clientDoc.isPublic : true;
+            const canonicalClientId = clientDoc ? clientDoc.clientId : clientId;
+            const userId = String(user.id || user._id);
+            const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
 
             if (!isPublic) {
                 // Private application: strict registration required
-                if (!reg) {
+                if (!isRegistered) {
                     return c.json(
                         {
                             status: false,
@@ -148,12 +141,15 @@ auth.post("/sign-in/email", async (c) => {
                 }
             } else {
                 // Public application: auto-record app registration on sign-in if not yet recorded
-                if (!reg) {
+                if (!isRegistered) {
                     await database.collection("user_app_registrations").insertOne({
-                        userId: String(user.id || user._id),
-                        clientId,
+                        userId,
+                        clientId: canonicalClientId,
                         registeredAt: new Date(),
-                    }).catch(() => {});
+                    }).catch((err: any) => {
+                        if (err?.code === 11000) return;
+                        throw err;
+                    });
                 }
             }
         }
@@ -169,20 +165,21 @@ auth.post("/sign-up/email", async (c) => {
     const database = await getDb();
 
     // If client is in private mode, block public self-registration
+    let canonicalClientId = clientId;
     if (clientId) {
-        const clientDoc = await database.collection("oauthClient").findOne({
-            $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-        });
-        const isPublic = clientDoc ? (clientDoc.isPublic !== false && clientDoc.is_public !== false) : true;
-        if (!isPublic) {
-            return c.json(
-                {
-                    status: false,
-                    error: "registration_disabled",
-                    message: "Self-registration is disabled for this private application. An administrator must provision your account.",
-                },
-                403
-            );
+        const clientDoc = await resolveOAuthClient(database, clientId);
+        if (clientDoc) {
+            canonicalClientId = clientDoc.clientId;
+            if (!clientDoc.isPublic) {
+                return c.json(
+                    {
+                        status: false,
+                        error: "registration_disabled",
+                        message: "Self-registration is disabled for this private application. An administrator must provision your account.",
+                    },
+                    403
+                );
+            }
         }
     }
 
@@ -190,16 +187,11 @@ auth.post("/sign-up/email", async (c) => {
         const email = body.email.toLowerCase().trim();
         const existingUser = await database.collection("user").findOne({ email });
 
-        if (existingUser && clientId) {
-            const reg = await database.collection("user_app_registrations").findOne({
-                $or: [
-                    { userId: String(existingUser._id), clientId },
-                    { userId: existingUser._id, clientId },
-                    ...(existingUser.id ? [{ userId: existingUser.id, clientId }] : []),
-                ],
-            });
+        if (existingUser && canonicalClientId) {
+            const userId = String(existingUser.id || existingUser._id);
+            const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
 
-            if (reg) {
+            if (isRegistered) {
                 return c.json(
                     {
                         status: false,
@@ -211,9 +203,12 @@ auth.post("/sign-up/email", async (c) => {
 
             // Register existing user for new application
             await database.collection("user_app_registrations").insertOne({
-                userId: String(existingUser.id || existingUser._id),
-                clientId,
+                userId,
+                clientId: canonicalClientId,
                 registeredAt: new Date(),
+            }).catch((err: any) => {
+                if (err?.code === 11000) return;
+                throw err;
             });
 
             return c.json({
@@ -226,15 +221,19 @@ auth.post("/sign-up/email", async (c) => {
 
     const res = await authProvider.handler(c.req.raw);
 
-    if (res.status >= 200 && res.status < 300 && clientId && body?.email) {
+    if (res.status >= 200 && res.status < 300 && canonicalClientId && body?.email) {
         try {
             const email = body.email.toLowerCase().trim();
             const createdUser = await database.collection("user").findOne({ email });
             if (createdUser) {
+                const userId = String(createdUser.id || createdUser._id);
                 await database.collection("user_app_registrations").insertOne({
-                    userId: String(createdUser.id || createdUser._id),
-                    clientId,
+                    userId,
+                    clientId: canonicalClientId,
                     registeredAt: new Date(),
+                }).catch((err: any) => {
+                    if (err?.code === 11000) return;
+                    throw err;
                 });
             }
         } catch (err) {
@@ -245,12 +244,13 @@ auth.post("/sign-up/email", async (c) => {
     return res;
 });
 
-// 4. OAuth Authorize Endpoint (Mandatory State + PKCE)
+// 4. OAuth Authorize Endpoint (Mandatory State + Canonical Client & Redirect URI Validation + Private-App Authorization Boundary)
 auth.get("/oauth2/authorize", async (c) => {
     const state = c.req.query("state");
     const clientId = c.req.query("client_id");
     const redirectUri = c.req.query("redirect_uri");
 
+    // A. CSRF State parameter requirement
     if (!state || state.trim() === "") {
         const errorRedirect = new URL(`${config.frontendUrl}/auth`);
         if (clientId) errorRedirect.searchParams.set("client_id", clientId);
@@ -261,6 +261,101 @@ auth.get("/oauth2/authorize", async (c) => {
         return c.redirect(errorRedirect.toString(), 302);
     }
 
+    if (!clientId) {
+        return c.json({ error: "invalid_request", error_description: "client_id is required" }, 400);
+    }
+
+    const database = await getDb();
+    const client = await resolveOAuthClient(database, clientId);
+
+    // B. Resolve canonical OAuth client & verify not deleted
+    if (!client) {
+        return c.json({ error: "invalid_client", error_description: "Client application not found" }, 401);
+    }
+
+    // C. Verify client is not suspended/deactivated
+    if (client.disabled) {
+        return c.json({ error: "unauthorized_client", error_description: "Client application is suspended or deactivated" }, 403);
+    }
+
+    // D. Validate requested redirect URI against registered client redirect URI list
+    if (!redirectUri) {
+        return c.json({ error: "invalid_request", error_description: "redirect_uri is required" }, 400);
+    }
+
+    const isValidRedirect = isRegisteredRedirectUri(client, redirectUri);
+    if (!isValidRedirect) {
+        return c.json({ error: "invalid_request", error_description: "The redirect_uri is not registered for this application" }, 400);
+    }
+
+    const canonicalClientId = client.clientId;
+
+    // E. Determine authenticated user from session
+    let sessionUser: any = null;
+    try {
+        const sessionResult = await authProvider.api.getSession({
+            headers: getHeaders(c),
+        });
+        sessionUser = sessionResult?.user ?? null;
+    } catch {
+        sessionUser = null;
+    }
+
+    // F. Enforce Private Application Mode at OAuth Boundary
+    if (!client.isPublic) {
+        if (sessionUser) {
+            // User is already authenticated with a valid global session
+            const userId = String(sessionUser.id || (sessionUser as any)._id);
+            const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
+
+            if (!isRegistered && sessionUser.role !== "admin") {
+                // Deny authorization immediately! Do NOT issue code or continue to token issuance.
+                const errorUrl = new URL(redirectUri);
+                errorUrl.searchParams.set("error", "access_denied");
+                errorUrl.searchParams.set("error_description", "Access restricted: Your account is not authorized for this private application");
+                errorUrl.searchParams.set("state", state);
+                return c.redirect(errorUrl.toString(), 302);
+            }
+        } else {
+            // User does not have an active session yet: bind canonical client ID to cookie
+            setCookie(c, "current_client_id", canonicalClientId, {
+                path: "/",
+                httpOnly: true,
+                secure: config.env === "production",
+                sameSite: "Lax",
+                maxAge: 60 * 10,
+            });
+            // Delegate to Better Auth which will redirect to loginPage
+            return authProvider.handler(c.req.raw);
+        }
+    } else {
+        // Public Application Mode:
+        if (sessionUser) {
+            const userId = String(sessionUser.id || (sessionUser as any)._id);
+            const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
+            if (!isRegistered) {
+                await database.collection("user_app_registrations").insertOne({
+                    userId,
+                    clientId: canonicalClientId,
+                    registeredAt: new Date(),
+                }).catch((err: any) => {
+                    if (err?.code === 11000) return;
+                    throw err;
+                });
+            }
+        }
+    }
+
+    // Bind canonical client ID to current_client_id cookie
+    setCookie(c, "current_client_id", canonicalClientId, {
+        path: "/",
+        httpOnly: true,
+        secure: config.env === "production",
+        sameSite: "Lax",
+        maxAge: 60 * 10,
+    });
+
+    // Continue normal Better Auth OAuth flow
     return authProvider.handler(c.req.raw);
 });
 

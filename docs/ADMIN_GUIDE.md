@@ -134,3 +134,37 @@ All administrative actions produce immutable audit entries stored in the `admin_
 - Admin provisioning and role changes
 - Origin cache invalidation triggers
 - IP address, actor user ID, and timestamp capture
+
+---
+
+## 6. Post-Deployment Super-Admin Provisioning
+
+Because public registration is disabled by default in production (`AUTH_PUBLIC_SIGNUP_ENABLED=false`), provision your initial Super-Admin account using the CLI utility:
+
+```bash
+cd backend
+npm run admin:create -- "admin@yourdomain.com" "YourStrongPassword@2026!" "Super Admin"
+```
+
+> **Password Requirements:** 12–128 characters, containing at least one uppercase letter, one lowercase letter, one number, and one symbol.
+
+Log into your Admin Console at:
+```text
+https://<your-frontend-domain>/admin/login
+```
+
+---
+
+## 7. Troubleshooting & Diagnostic Matrix
+
+| Symptom | Root Cause | Resolution |
+|---|---|---|
+| **502 Bad Gateway / Lambda Timeout** | MongoDB Atlas IP allowlist blocking requests. | In MongoDB Atlas under **Network Access**, add `0.0.0.0/0` or the VPC NAT IP. |
+| **"Invalid client secret" during token exchange** | Stored hashed secret in consumer app `.env`. | Place the raw **plaintext client secret** in the consumer application `.env`, not the hash. |
+| **"User is not registered for this private application"** | Multi-tenant App Isolation guard triggered. | Explicitly assign the user in Admin Console or via `POST /api/admin/clients/:clientId/users`. |
+| **CORS error on `/api/auth/*`** | Origin not in client whitelist or `FRONTEND_URL` mismatch. | In Admin Console, add the consumer origin to **Allowed Origins** (or enable Development Mode for `localhost`). |
+| **404 on Vercel/Netlify sub-routes** | Missing SPA rewrite rule. | Ensure `vercel.json` has `{"source": "/(.*)", "destination": "/index.html"}` or Netlify `_redirects` has `/* /index.html 200`. |
+| **`FATAL: TRUSTED_PROXY_CIDRS must be set in production`** | Safety check failed on startup. | Set `TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` (or your proxy's CIDR) in the backend `.env`. |
+| **`FATAL: APP_ADMIN_JWT_SECRET is required in production`** | Missing required production secret. | Set `APP_ADMIN_JWT_SECRET` (≥32 characters) in the production environment. |
+| **`FATAL: APP_ADMIN_TOTP_KEY is required in production`** | Missing required production secret. | Set `APP_ADMIN_TOTP_KEY` (≥32 characters) in the production environment. |
+| **`EADDRINUSE: :::3000`** | Port already held by a previous process. | Run `fuser -k 3000/tcp` (Linux/WSL) or `taskkill /F /PID <pid>` (Windows). |

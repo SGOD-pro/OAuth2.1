@@ -270,7 +270,7 @@ export const AdminSecurity: React.FC = () => {
                     <QRCodeSVG value={totpUri} size={160} />
                   </div>
 
-                  <div className="w-full max-w-md space-y-1.5 text-center">
+                  <div className="w-full  space-y-1.5 text-center">
                     <span className="font-sans text-xs text-muted-foreground block">
                       Manual setup key
                     </span>

@@ -64,7 +64,7 @@ export const SignOut: React.FC = () => {
                 <h2 className="text-xl font-heading font-semibold text-foreground mb-2">
                   Sign out failed
                 </h2>
-                <p className="text-xs text-muted-foreground mb-6 max-w-xs">{error}</p>
+                <p className="text-xs text-muted-foreground mb-6">{error}</p>
                 <Button asChild variant="outline" className="w-full">
                   <Link to="/auth" className="flex items-center justify-center gap-2">
                     <ArrowLeft className="size-4" /> Return to sign in

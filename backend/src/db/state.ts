@@ -72,6 +72,7 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("oauth_token_families", { consumedTokenHashes: 1 }),
       safeIndex("admin_audit", { timestamp: -1 }),
       safeIndex("app_admin_revoked_tokens", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      safeIndex("user_app_registrations", { clientId: 1, userId: 1 }, { unique: true }),
     ]);
   })();
 

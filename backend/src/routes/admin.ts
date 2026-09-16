@@ -670,25 +670,73 @@ admin.get("/app/:clientId/config", requireScopedAdmin, async (c) => {
 
 admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
   const clientId = c.req.param("clientId");
-  const body = await c.req.json();
+  const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
 
-  delete body.client_id;
-  delete body.id;
+  // Disallow forbidden privilege and identity fields
+  const forbiddenFields = [
+    "role",
+    "scopedClientId",
+    "ownerId",
+    "permissions",
+    "isSuperAdmin",
+    "clientId",
+    "client_id",
+    "id",
+    "_id",
+    "userId",
+    "clientSecret",
+    "client_secret",
+  ];
+  for (const field of forbiddenFields) {
+    delete body[field];
+  }
+
+  // Construct explicitly allowlisted update object
+  const safeUpdate: Record<string, any> = {};
+  if (typeof body.name === "string") safeUpdate.name = body.name.trim();
+  if (typeof body.client_name === "string") safeUpdate.client_name = body.client_name.trim();
+  if (Array.isArray(body.redirect_uris)) safeUpdate.redirect_uris = body.redirect_uris;
+  if (Array.isArray(body.redirectUris)) safeUpdate.redirectUris = body.redirectUris;
+  if (Array.isArray(body.allowed_origins)) safeUpdate.allowed_origins = body.allowed_origins;
+  if (Array.isArray(body.allowedOrigins)) safeUpdate.allowedOrigins = body.allowedOrigins;
+  if (typeof (body.is_dev ?? body.isDev) === "boolean") {
+    safeUpdate.is_dev = Boolean(body.is_dev ?? body.isDev);
+    safeUpdate.isDev = Boolean(body.is_dev ?? body.isDev);
+  }
+  if (typeof (body.is_public ?? body.isPublic) === "boolean") {
+    safeUpdate.is_public = Boolean(body.is_public ?? body.isPublic);
+    safeUpdate.isPublic = Boolean(body.is_public ?? body.isPublic);
+  }
+  if (typeof (body.skip_consent ?? body.skipConsent) === "boolean") {
+    safeUpdate.skip_consent = Boolean(body.skip_consent ?? body.skipConsent);
+    safeUpdate.skipConsent = Boolean(body.skip_consent ?? body.skipConsent);
+  }
+  if (typeof (body.enable_end_session ?? body.enableEndSession) === "boolean") {
+    safeUpdate.enable_end_session = Boolean(body.enable_end_session ?? body.enableEndSession);
+    safeUpdate.enableEndSession = Boolean(body.enable_end_session ?? body.enableEndSession);
+  }
+  if (typeof body.logo_uri === "string") safeUpdate.logo_uri = body.logo_uri;
+  if (typeof body.icon === "string") safeUpdate.icon = body.icon;
+  if (body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)) {
+    safeUpdate.metadata = body.metadata;
+  }
 
   let result: any = null;
   try {
     result = await authApi.updateOAuthClient({
       headers: getHeaders(c),
-      body: { client_id: clientId, update: body },
+      body: { client_id: clientId, update: safeUpdate },
     });
   } catch {
     const database = await getDb();
     await database.collection("oauthClient").updateOne(
-      { client_id: clientId },
-      { $set: { ...body, updatedAt: new Date() } }
+      { $or: [{ clientId }, { client_id: clientId }, { id: clientId }] },
+      { $set: { ...safeUpdate, updatedAt: new Date() } }
     );
-    result = await database.collection("oauthClient").findOne({ client_id: clientId });
+    result = await database.collection("oauthClient").findOne({
+      $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+    });
   }
 
   if (!result) return c.json({ error: "Application not found" }, 404);
@@ -699,12 +747,12 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
     actorScope: sessionUser?.scopedClientId || "super_admin",
     action: "scoped_app_config_patched",
     targetClientId: clientId,
-    details: { modifiedFields: Object.keys(body) },
+    details: { modifiedFields: Object.keys(safeUpdate) },
     ipAddress: getTrustedClientIp(c),
     timestamp: new Date(),
   });
 
-  const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
+  const { client_secret: _omit, clientSecret: _omit2, ...safeResult } = result as Record<string, unknown>;
   return c.json(safeResult);
 });
 
@@ -1060,11 +1108,16 @@ admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async 
 // 14. List Users Assigned to a Client
 admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
   const clientId = c.req.param("clientId");
+  const queryUserId = c.req.query("userId");
   try {
     const database = await getDb();
+    const query: Record<string, any> = { clientId };
+    if (queryUserId && typeof queryUserId === "string") {
+      query.userId = queryUserId.trim();
+    }
     const regs = await database
       .collection("user_app_registrations")
-      .find({ clientId })
+      .find(query)
       .sort({ registeredAt: -1 })
       .toArray();
 

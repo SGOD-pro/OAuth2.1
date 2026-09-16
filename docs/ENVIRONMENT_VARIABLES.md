@@ -4,7 +4,7 @@ This document provides a reference for all environment variables used by the SWY
 
 ---
 
-## 1. Backend Environment Variables (`hono/.env`)
+## 1. Backend Environment Variables (`backend/.env`)
 
 | Variable | Required | Type | Default | Description |
 |---|---|---|---|---|
@@ -14,13 +14,16 @@ This document provides a reference for all environment variables used by the SWY
 | `BETTER_AUTH_SECRET` | **Yes** | String | - | Cryptographic secret key used to sign sessions and encrypt client secrets (min 32 chars). |
 | `BETTER_AUTH_URL` | **Yes** | String | - | Public URL of the auth backend API (e.g., `https://api.auth.domain.com/api/auth`). |
 | `FRONTEND_URL` | **Yes** | String | - | Public origin of the frontend UI (e.g., `https://auth.domain.com`). Strictly origin, no path. |
+| `APP_ADMIN_JWT_SECRET` | **Prod: Yes** | String | Derived in dev | Dedicated HMAC-SHA256 signing secret for Per-Application Administrator JWTs (min 32 chars). |
+| `APP_ADMIN_TOTP_KEY` | **Prod: Yes** | String | Derived in dev | Dedicated AES-256-GCM encryption key for App Admin TOTP secrets at rest in MongoDB (min 32 chars). |
 | `UPSTASH_REDIS_REST_URL` | No | String | - | Upstash Redis REST endpoint for distributed rate limiting & token caching. |
 | `UPSTASH_REDIS_REST_TOKEN` | No | String | - | Upstash Redis REST Bearer token. |
 | `GOOGLE_CLIENT_ID` | No | String | - | Google OAuth 2.0 Web Client ID for social login. |
 | `GOOGLE_CLIENT_SECRET` | No | String | - | Google OAuth 2.0 Client Secret for social login. |
-| `TRUSTED_PROXY_CIDRS` | No | String | `""` | Comma-separated list of trusted proxy CIDRs (e.g. Cloudflare / ALB) for client IP extraction. |
+| `TRUSTED_PROXY_CIDRS` | **Prod: Yes** | String | `""` | Comma-separated list of trusted proxy CIDRs (e.g. Cloudflare / ALB) for client IP extraction. |
 | `UV_THREADPOOL_SIZE` | No | Number | `16` | libuv worker threadpool count for scrypt hashing concurrency. |
 | `AUTH_PUBLIC_SIGNUP_ENABLED` | No | Boolean | `false` in prod | Set to `true` to allow open public self-registration. |
+| `AUTH_EMAIL_VERIFICATION_ENABLED` | No | Boolean | `false` | Set to `true` to enforce mandatory email verification on sign-up. |
 
 ---
 

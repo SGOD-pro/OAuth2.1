@@ -7,7 +7,7 @@ import { getDb } from "../db/mongo";
 import { config } from "../config";
 import { incrementRateLimit } from "../db/state";
 import { redis, redisEnabled } from "../cache/redis";
-import { getTrustedClientIp } from "../utils/security";
+import { getTrustedClientIp, resolveOAuthClient } from "../utils/security";
 import {
 	generateTotpSecret,
 	verifyTotpCode,
@@ -43,8 +43,8 @@ function getAdminJwtSecret(): Uint8Array {
 	return new TextEncoder().encode(config.appAdminJwtSecret);
 }
 
-// Helper: Verify client secret (supports Better-Auth SHA-256 base64url, scrypt/bcrypt, and plaintext)
-async function verifyClientSecret(providedSecret: string, storedSecret: string): Promise<boolean> {
+// Helper: Verify client secret (supports Better-Auth SHA-256 base64url, scrypt/bcrypt, and migration-safe plaintext)
+async function verifyClientSecret(providedSecret: string, storedSecret: string, client?: any, db?: any): Promise<boolean> {
 	if (!providedSecret || !storedSecret) return false;
 
 	// 1. Better Auth SHA-256 base64url hash (standard OAuth client secret storage method)
@@ -70,11 +70,19 @@ async function verifyClientSecret(providedSecret: string, storedSecret: string):
 		}
 	}
 
-	// 3. Plaintext secret match (fallback for unhashed or testing clients)
+	// 3. Plaintext secret match (fallback with transparent on-the-fly migration to SHA-256 base64url)
 	try {
 		const bufA = Buffer.from(providedSecret);
 		const bufB = Buffer.from(storedSecret);
 		if (bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB)) {
+			// Transparently re-hash and remove plaintext representation
+			if (db && client?._id) {
+				const migrated = crypto.createHash("sha256").update(providedSecret).digest("base64url");
+				db.collection("oauthClient").updateOne(
+					{ _id: client._id },
+					{ $set: { clientSecret: migrated, client_secret: migrated, updatedAt: new Date() } }
+				).catch((err: any) => console.warn("[CLIENT_SECRET_MIGRATION] Migration warning:", err?.message || err));
+			}
 			return true;
 		}
 	} catch {
@@ -84,42 +92,46 @@ async function verifyClientSecret(providedSecret: string, storedSecret: string):
 	return false;
 }
 
-// Helper: Rate limiting for app admin login
-async function checkLoginRateLimit(ip: string, email: string): Promise<boolean> {
+// Helper: Anti-abuse rate limiting for all app admin operations (IP and target account/client aware)
+async function checkAppAdminRateLimit(
+	action: string,
+	ip: string,
+	targetId?: string,
+	options: { ipLimit: number; ipWindowSec: number; targetLimit?: number; targetWindowSec?: number } = { ipLimit: 60, ipWindowSec: 60 }
+): Promise<boolean> {
 	const redisClient = redisEnabled ? redis : null;
-	const normalizedEmail = email.toLowerCase().trim();
-	const emailHash = crypto.createHash("sha256").update(normalizedEmail).digest("hex").slice(0, 16);
+	const targetHash = targetId ? crypto.createHash("sha256").update(targetId.toLowerCase().trim()).digest("hex").slice(0, 16) : null;
 
 	if (redisClient) {
 		try {
-			const ipKey = `ratelimit:app_admin_login:ip:${ip}`;
-			const emailKey = `ratelimit:app_admin_login:email:${emailHash}`;
+			const ipKey = `ratelimit:app_admin_${action}:ip:${ip}`;
+			const ipCount = await redisClient.incr(ipKey);
+			if (ipCount === 1) await redisClient.expire(ipKey, options.ipWindowSec);
+			if (ipCount > options.ipLimit) return false;
 
-			const [ipCount, emailCount] = await Promise.all([
-				redisClient.incr(ipKey),
-				redisClient.incr(emailKey),
-			]);
-
-			if (ipCount === 1) await redisClient.expire(ipKey, 60);
-			if (emailCount === 1) await redisClient.expire(emailKey, 300);
-
-			if (ipCount > 30 || emailCount > 10) return false;
+			if (targetHash && options.targetLimit && options.targetWindowSec) {
+				const targetKey = `ratelimit:app_admin_${action}:target:${targetHash}`;
+				const targetCount = await redisClient.incr(targetKey);
+				if (targetCount === 1) await redisClient.expire(targetKey, options.targetWindowSec);
+				if (targetCount > options.targetLimit) return false;
+			}
 			return true;
 		} catch (e) {
-			console.warn("[APP_ADMIN_AUTH] Redis rate limit error, falling back to MongoDB:", e);
+			console.warn(`[APP_ADMIN_AUTH] Redis rate limit error on ${action}, falling back to MongoDB:`, e);
 		}
 	}
 
 	// MongoDB sliding-window rate limit fallback
-	const ipKey = `APP_ADMIN_IP#${ip}`;
-	const emailKey = `APP_ADMIN_TARGET#${emailHash}`;
+	const ipKey = `APP_ADMIN_${action.toUpperCase()}_IP#${ip}`;
+	const ipEntry = await incrementRateLimit(ipKey, Date.now(), options.ipWindowSec * 1000);
+	if (ipEntry.count > options.ipLimit) return false;
 
-	const [ipEntry, emailEntry] = await Promise.all([
-		incrementRateLimit(ipKey, Date.now(), 60 * 1000),
-		incrementRateLimit(emailKey, Date.now(), 300 * 1000),
-	]);
+	if (targetHash && options.targetLimit && options.targetWindowSec) {
+		const targetKey = `APP_ADMIN_${action.toUpperCase()}_TARGET#${targetHash}`;
+		const targetEntry = await incrementRateLimit(targetKey, Date.now(), options.targetWindowSec * 1000);
+		if (targetEntry.count > options.targetLimit) return false;
+	}
 
-	if (ipEntry.count > 30 || emailEntry.count > 10) return false;
 	return true;
 }
 
@@ -149,7 +161,7 @@ appAdminAuth.post("/login", async (c) => {
 	}
 
 	// 1. Rate limiting check
-	const allowed = await checkLoginRateLimit(ip, email);
+	const allowed = await checkAppAdminRateLimit("login", ip, email, { ipLimit: 30, ipWindowSec: 60, targetLimit: 10, targetWindowSec: 300 });
 	if (!allowed) {
 		return c.json(
 			{
@@ -163,9 +175,7 @@ appAdminAuth.post("/login", async (c) => {
 	const db = await getDb();
 
 	// 2. Validate client credentials
-	const client = await db.collection("oauthClient").findOne({
-		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-	});
+	const client = await resolveOAuthClient(db, clientId);
 
 	if (!client || client.disabled === true) {
 		await executeDummyHash();
@@ -179,7 +189,7 @@ appAdminAuth.post("/login", async (c) => {
 	}
 
 	const storedSecret = client.clientSecret || client.client_secret;
-	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret);
+	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret, client, db);
 	if (!isSecretValid) {
 		await executeDummyHash();
 		return c.json(
@@ -192,8 +202,9 @@ appAdminAuth.post("/login", async (c) => {
 	}
 
 	// 3. Authenticate App Administrator
+	const canonicalClientId = client.clientId;
 	const admin = await db.collection("app_admins").findOne({
-		clientId: client.clientId || client.client_id || clientId,
+		clientId: canonicalClientId,
 		email,
 	});
 
@@ -234,7 +245,6 @@ appAdminAuth.post("/login", async (c) => {
 		);
 	}
 
-	const canonicalClientId = client.clientId || client.client_id || clientId;
 	const secretKey = getAdminJwtSecret();
 	const adminId = admin._id.toString();
 
@@ -245,6 +255,7 @@ appAdminAuth.post("/login", async (c) => {
 			email: admin.email,
 			clientId: canonicalClientId,
 			role: "app_admin_mfa_pending",
+			token_use: "app_admin_mfa_pending",
 		})
 			.setProtectedHeader({ alg: "HS256", typ: "JWT" })
 			.setIssuedAt()
@@ -279,6 +290,7 @@ appAdminAuth.post("/login", async (c) => {
 		name: admin.name || admin.email.split("@")[0],
 		clientId: canonicalClientId,
 		role: "app_admin",
+		token_use: "app_admin",
 		redirectUrl: admin.redirectUrl,
 	})
 		.setProtectedHeader({ alg: "HS256", typ: "JWT" })
@@ -313,6 +325,7 @@ appAdminAuth.post("/login", async (c) => {
  * Can be called by consumer application backend to validate admin sessions.
  */
 appAdminAuth.post("/verify", async (c) => {
+	const ip = getTrustedClientIp(c);
 	const authHeader = c.req.header("authorization");
 	const body = await c.req.json().catch(() => ({}));
 
@@ -335,12 +348,23 @@ appAdminAuth.post("/verify", async (c) => {
 		);
 	}
 
+	// 1. Rate limiting check
+	const allowed = await checkAppAdminRateLimit("verify", ip, clientId, { ipLimit: 120, ipWindowSec: 60, targetLimit: 60, targetWindowSec: 60 });
+	if (!allowed) {
+		return c.json(
+			{
+				valid: false,
+				error: "too_many_requests",
+				message: "Too many verification attempts. Please try again later.",
+			},
+			429
+		);
+	}
+
 	const db = await getDb();
 
-	// 1. Validate client credentials
-	const client = await db.collection("oauthClient").findOne({
-		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-	});
+	// 2. Validate client credentials
+	const client = await resolveOAuthClient(db, clientId);
 
 	if (!client || client.disabled === true) {
 		return c.json(
@@ -354,7 +378,7 @@ appAdminAuth.post("/verify", async (c) => {
 	}
 
 	const storedSecret = client.clientSecret || client.client_secret;
-	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret);
+	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret, client, db);
 	if (!isSecretValid) {
 		return c.json(
 			{
@@ -366,9 +390,9 @@ appAdminAuth.post("/verify", async (c) => {
 		);
 	}
 
-	// 2. Verify token signature and claims
+	// 3. Verify token signature and claims
 	try {
-		const canonicalClientId = client.clientId || client.client_id || clientId;
+		const canonicalClientId = client.clientId;
 		const secretKey = getAdminJwtSecret();
 		const { payload } = await jwtVerify(token, secretKey, {
 			algorithms: ["HS256"],
@@ -376,7 +400,19 @@ appAdminAuth.post("/verify", async (c) => {
 			audience: canonicalClientId,
 		});
 
-		// 3. Check token revocation list
+		// 4. Verify explicit token purpose
+		if (payload.token_use !== "app_admin") {
+			return c.json(
+				{
+					valid: false,
+					error: "invalid_token_purpose",
+					message: "Token purpose mismatch: expected app_admin session token",
+				},
+				401
+			);
+		}
+
+		// 5. Check token revocation list
 		if (payload.jti) {
 			const revoked = await db.collection("app_admin_revoked_tokens").findOne({
 				jti: payload.jti,
@@ -393,7 +429,7 @@ appAdminAuth.post("/verify", async (c) => {
 			}
 		}
 
-		// 4. Ensure token's clientId claim matches the authenticated application (redundant with aud check but explicit)
+		// 6. Ensure token's clientId claim matches the authenticated application
 		if (payload.clientId !== canonicalClientId) {
 			return c.json(
 				{
@@ -405,7 +441,7 @@ appAdminAuth.post("/verify", async (c) => {
 			);
 		}
 
-		// 5. Verify the admin account is still active in database
+		// 7. Verify the admin account is still active in database
 		let adminObjId: ObjectId | null = null;
 		try {
 			adminObjId = new ObjectId(payload.sub as string);
@@ -458,6 +494,7 @@ appAdminAuth.post("/verify", async (c) => {
  * Revokes an App Admin JWT token by storing its JTI in the revocation list.
  */
 appAdminAuth.post("/logout", async (c) => {
+	const ip = getTrustedClientIp(c);
 	const authHeader = c.req.header("authorization");
 	const body = await c.req.json().catch(() => ({}));
 
@@ -479,31 +516,52 @@ appAdminAuth.post("/logout", async (c) => {
 		);
 	}
 
+	// 1. Rate limiting check
+	const allowed = await checkAppAdminRateLimit("logout", ip, undefined, { ipLimit: 60, ipWindowSec: 60 });
+	if (!allowed) {
+		return c.json(
+			{
+				error: "too_many_requests",
+				message: "Too many requests. Please try again later.",
+			},
+			429
+		);
+	}
+
 	const db = await getDb();
 
-	// Validate client
-	const client = await db.collection("oauthClient").findOne({
-		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-	});
+	// 2. Validate client
+	const client = await resolveOAuthClient(db, clientId);
 
 	if (!client) {
 		return c.json({ error: "invalid_client" }, 401);
 	}
 
 	const storedSecret = client.clientSecret || client.client_secret;
-	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret);
+	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret, client, db);
 	if (!isSecretValid) {
 		return c.json({ error: "invalid_client" }, 401);
 	}
 
 	try {
-		const canonicalClientId = client.clientId || client.client_id || clientId;
+		const canonicalClientId = client.clientId;
 		const secretKey = getAdminJwtSecret();
 		const { payload } = await jwtVerify(token, secretKey, {
 			algorithms: ["HS256"],
 			issuer: config.auth.baseURL ?? undefined,
 			audience: canonicalClientId,
 		});
+
+		// Check token purpose
+		if (payload.token_use !== "app_admin") {
+			return c.json(
+				{
+					error: "invalid_token_purpose",
+					message: "Token purpose mismatch: expected app_admin session token",
+				},
+				401
+			);
+		}
 
 		if (payload.jti) {
 			const expiresAt = payload.exp ? new Date(payload.exp * 1000) : new Date(Date.now() + 3600 * 1000);
@@ -512,7 +570,7 @@ appAdminAuth.post("/logout", async (c) => {
 				{
 					$set: {
 						jti: payload.jti,
-						clientId: client.clientId || client.client_id || clientId,
+						clientId: canonicalClientId,
 						revokedAt: new Date(),
 						expiresAt,
 					},
@@ -540,6 +598,7 @@ appAdminAuth.post("/logout", async (c) => {
  * Requires client credentials, the short-lived mfa_token, and a 6-digit TOTP code or backup code.
  */
 appAdminAuth.post("/mfa/verify-login", async (c) => {
+	const ip = getTrustedClientIp(c);
 	const body = await c.req.json().catch(() => ({}));
 	const clientId = body.client_id || body.clientId;
 	const clientSecret = body.client_secret || body.clientSecret;
@@ -556,12 +615,22 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		);
 	}
 
+	// 1. Anti-brute-force rate limiting check
+	const allowed = await checkAppAdminRateLimit("mfa_verify", ip, clientId, { ipLimit: 30, ipWindowSec: 60, targetLimit: 10, targetWindowSec: 300 });
+	if (!allowed) {
+		return c.json(
+			{
+				error: "too_many_requests",
+				message: "Too many verification attempts. Please try again in a few minutes.",
+			},
+			429
+		);
+	}
+
 	const db = await getDb();
 
-	// 1. Validate client credentials
-	const client = await db.collection("oauthClient").findOne({
-		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-	});
+	// 2. Validate client credentials
+	const client = await resolveOAuthClient(db, clientId);
 
 	if (!client || client.disabled === true) {
 		return c.json(
@@ -574,7 +643,7 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 	}
 
 	const storedSecret = client.clientSecret || client.client_secret;
-	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret);
+	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret, client, db);
 	if (!isSecretValid) {
 		return c.json(
 			{
@@ -585,10 +654,10 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		);
 	}
 
-	const canonicalClientId = client.clientId || client.client_id || clientId;
+	const canonicalClientId = client.clientId;
 	const secretKey = getAdminJwtSecret();
 
-	// 2. Verify mfa_token signature and claims
+	// 3. Verify mfa_token signature and claims
 	let payload: any;
 	try {
 		const verified = await jwtVerify(mfaToken, secretKey, {
@@ -607,17 +676,18 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		);
 	}
 
-	if (payload.role !== "app_admin_mfa_pending") {
+	// Strict token purpose verification
+	if (payload.token_use !== "app_admin_mfa_pending" || payload.role !== "app_admin_mfa_pending") {
 		return c.json(
 			{
-				error: "invalid_token_role",
-				message: "Invalid challenge token",
+				error: "invalid_token_purpose",
+				message: "Invalid challenge token: expected app_admin_mfa_pending token",
 			},
-			400
+			401
 		);
 	}
 
-	// 3. Load administrator
+	// 4. Load administrator
 	let adminObjId: ObjectId;
 	try {
 		adminObjId = new ObjectId(payload.sub as string);
@@ -650,7 +720,7 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		);
 	}
 
-	// 4. Verify TOTP code or Backup code
+	// 5. Verify TOTP code or atomically consume Backup code
 	let plainSecret: string;
 	try {
 		plainSecret = decryptTotpSecret(admin.totpSecret);
@@ -662,27 +732,32 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 	let usedBackupCode = false;
 
 	if (!isTotpValid) {
-		// Check backup codes
-		const backupRes = verifyBackupCode(code, admin.totpBackupCodes || []);
-		if (backupRes.valid) {
+		// Atomic check and one-time consumption of backup code (race-condition proof)
+		const normalized = code.trim().toUpperCase();
+		const targetHash = crypto.createHash("sha256").update(normalized).digest("hex");
+
+		const backupRes = await db.collection("app_admins").updateOne(
+			{ _id: admin._id, totpBackupCodes: targetHash },
+			{
+				$pull: { totpBackupCodes: targetHash },
+				$set: { updatedAt: new Date() },
+			}
+		);
+
+		if (backupRes.modifiedCount > 0) {
 			usedBackupCode = true;
-			// Update remaining backup codes
-			await db.collection("app_admins").updateOne(
-				{ _id: admin._id },
-				{ $set: { totpBackupCodes: backupRes.remaining, updatedAt: new Date() } }
-			);
 		} else {
 			return c.json(
 				{
 					error: "invalid_code",
-					message: "Invalid two-factor authentication code. Please check your authenticator app or backup codes.",
+					message: "Invalid or already consumed two-factor authentication code. Please check your authenticator app or backup codes.",
 				},
 				401
 			);
 		}
 	}
 
-	// 5. Update login telemetry
+	// 6. Update login telemetry
 	const now = new Date();
 	await db.collection("app_admins").updateOne(
 		{ _id: admin._id },
@@ -692,7 +767,7 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		}
 	);
 
-	// 6. Issue full session JWT
+	// 7. Issue full session JWT
 	const adminId = admin._id.toString();
 	const jti = crypto.randomUUID();
 
@@ -702,6 +777,7 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		name: admin.name || admin.email.split("@")[0],
 		clientId: canonicalClientId,
 		role: "app_admin",
+		token_use: "app_admin",
 		redirectUrl: admin.redirectUrl,
 	})
 		.setProtectedHeader({ alg: "HS256", typ: "JWT" })
@@ -737,6 +813,7 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
  * Generates a new Base32 secret, QR otpauth URL, and emergency backup codes.
  */
 appAdminAuth.post("/mfa/setup", async (c) => {
+	const ip = getTrustedClientIp(c);
 	const authHeader = c.req.header("authorization");
 	const body = await c.req.json().catch(() => ({}));
 
@@ -751,22 +828,26 @@ appAdminAuth.post("/mfa/setup", async (c) => {
 		return c.json({ error: "invalid_request", message: "client_id, client_secret, and token are required" }, 400);
 	}
 
+	// 1. Rate limiting check
+	const allowed = await checkAppAdminRateLimit("mfa_setup", ip, clientId, { ipLimit: 20, ipWindowSec: 60, targetLimit: 5, targetWindowSec: 300 });
+	if (!allowed) {
+		return c.json({ error: "too_many_requests", message: "Too many setup attempts. Please try again later." }, 429);
+	}
+
 	const db = await getDb();
 
-	// Validate client
-	const client = await db.collection("oauthClient").findOne({
-		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-	});
-	if (!client) return c.json({ error: "invalid_client" }, 401);
+	// 2. Validate client
+	const client = await resolveOAuthClient(db, clientId);
+	if (!client || client.disabled === true) return c.json({ error: "invalid_client" }, 401);
 
 	const storedSecret = client.clientSecret || client.client_secret;
-	if (!(await verifyClientSecret(clientSecret, storedSecret))) {
+	if (!(await verifyClientSecret(clientSecret, storedSecret, client, db))) {
 		return c.json({ error: "invalid_client" }, 401);
 	}
 
-	const canonicalClientId = client.clientId || client.client_id || clientId;
+	const canonicalClientId = client.clientId;
 
-	// Verify token
+	// 3. Verify token
 	try {
 		const secretKey = getAdminJwtSecret();
 		const { payload } = await jwtVerify(token, secretKey, {
@@ -774,6 +855,11 @@ appAdminAuth.post("/mfa/setup", async (c) => {
 			issuer: config.auth.baseURL ?? undefined,
 			audience: canonicalClientId,
 		});
+
+		// Verify explicit token purpose
+		if (payload.token_use !== "app_admin") {
+			return c.json({ error: "invalid_token_purpose", message: "Token purpose mismatch: expected app_admin session token" }, 401);
+		}
 
 		// Check revoked
 		if (payload.jti) {
@@ -806,7 +892,7 @@ appAdminAuth.post("/mfa/setup", async (c) => {
 
 		const otpauthUrl = generateOtpAuthUri(
 			admin.email,
-			client.name || client.client_name || "Application Admin",
+			client.name || "Application Admin",
 			secret
 		);
 
@@ -827,6 +913,7 @@ appAdminAuth.post("/mfa/setup", async (c) => {
  * Confirms a pending TOTP setup by verifying the first code from the authenticator app.
  */
 appAdminAuth.post("/mfa/confirm", async (c) => {
+	const ip = getTrustedClientIp(c);
 	const authHeader = c.req.header("authorization");
 	const body = await c.req.json().catch(() => ({}));
 
@@ -842,19 +929,23 @@ appAdminAuth.post("/mfa/confirm", async (c) => {
 		return c.json({ error: "invalid_request", message: "client_id, client_secret, token, and code are required" }, 400);
 	}
 
+	// 1. Rate limiting check
+	const allowed = await checkAppAdminRateLimit("mfa_confirm", ip, clientId, { ipLimit: 20, ipWindowSec: 60, targetLimit: 10, targetWindowSec: 300 });
+	if (!allowed) {
+		return c.json({ error: "too_many_requests", message: "Too many confirmation attempts. Please try again later." }, 429);
+	}
+
 	const db = await getDb();
 
-	const client = await db.collection("oauthClient").findOne({
-		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-	});
-	if (!client) return c.json({ error: "invalid_client" }, 401);
+	const client = await resolveOAuthClient(db, clientId);
+	if (!client || client.disabled === true) return c.json({ error: "invalid_client" }, 401);
 
 	const storedSecret = client.clientSecret || client.client_secret;
-	if (!(await verifyClientSecret(clientSecret, storedSecret))) {
+	if (!(await verifyClientSecret(clientSecret, storedSecret, client, db))) {
 		return c.json({ error: "invalid_client" }, 401);
 	}
 
-	const canonicalClientId = client.clientId || client.client_id || clientId;
+	const canonicalClientId = client.clientId;
 
 	try {
 		const secretKey = getAdminJwtSecret();
@@ -863,6 +954,11 @@ appAdminAuth.post("/mfa/confirm", async (c) => {
 			issuer: config.auth.baseURL ?? undefined,
 			audience: canonicalClientId,
 		});
+
+		// Verify explicit token purpose
+		if (payload.token_use !== "app_admin") {
+			return c.json({ error: "invalid_token_purpose", message: "Token purpose mismatch: expected app_admin session token" }, 401);
+		}
 
 		const admin = await db.collection("app_admins").findOne({
 			_id: new ObjectId(payload.sub as string),
@@ -913,6 +1009,7 @@ appAdminAuth.post("/mfa/confirm", async (c) => {
  * Requires administrator password and a current TOTP code or backup code for verification.
  */
 appAdminAuth.post("/mfa/disable", async (c) => {
+	const ip = getTrustedClientIp(c);
 	const authHeader = c.req.header("authorization");
 	const body = await c.req.json().catch(() => ({}));
 
@@ -935,19 +1032,23 @@ appAdminAuth.post("/mfa/disable", async (c) => {
 		);
 	}
 
+	// 1. Rate limiting check
+	const allowed = await checkAppAdminRateLimit("mfa_disable", ip, clientId, { ipLimit: 15, ipWindowSec: 60, targetLimit: 5, targetWindowSec: 300 });
+	if (!allowed) {
+		return c.json({ error: "too_many_requests", message: "Too many attempts. Please try again later." }, 429);
+	}
+
 	const db = await getDb();
 
-	const client = await db.collection("oauthClient").findOne({
-		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-	});
-	if (!client) return c.json({ error: "invalid_client" }, 401);
+	const client = await resolveOAuthClient(db, clientId);
+	if (!client || client.disabled === true) return c.json({ error: "invalid_client" }, 401);
 
 	const storedSecret = client.clientSecret || client.client_secret;
-	if (!(await verifyClientSecret(clientSecret, storedSecret))) {
+	if (!(await verifyClientSecret(clientSecret, storedSecret, client, db))) {
 		return c.json({ error: "invalid_client" }, 401);
 	}
 
-	const canonicalClientId = client.clientId || client.client_id || clientId;
+	const canonicalClientId = client.clientId;
 
 	try {
 		const secretKey = getAdminJwtSecret();
@@ -956,6 +1057,11 @@ appAdminAuth.post("/mfa/disable", async (c) => {
 			issuer: config.auth.baseURL ?? undefined,
 			audience: canonicalClientId,
 		});
+
+		// Verify explicit token purpose
+		if (payload.token_use !== "app_admin") {
+			return c.json({ error: "invalid_token_purpose", message: "Token purpose mismatch: expected app_admin session token" }, 401);
+		}
 
 		const admin = await db.collection("app_admins").findOne({
 			_id: new ObjectId(payload.sub as string),

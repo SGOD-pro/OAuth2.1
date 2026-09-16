@@ -5,9 +5,9 @@ set -e
 
 echo "🚀 Starting deployment of Hono Backend..."
 
-# Make sure we are in the hono directory
+# Make sure we are in the backend directory
 if [ ! -f "template.yaml" ]; then
-    echo "❌ Error: Please run this script from inside the 'hono' directory."
+    echo "❌ Error: Please run this script from inside the 'backend' directory."
     exit 1
 fi
 

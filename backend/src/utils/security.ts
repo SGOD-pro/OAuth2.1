@@ -1,4 +1,5 @@
 import { config } from "../config";
+import { ObjectId } from "mongodb";
 
 /**
  * True if hostname is strictly a local loopback interface (localhost, 127.0.0.1, ::1).
@@ -251,4 +252,115 @@ function ipv4ToNumber(ip: string): number | null {
   const parts = ip.split(".").map(Number);
   if (parts.some((part) => part > 255)) return null;
   return parts.reduce((acc, part) => ((acc << 8) + part) >>> 0, 0);
+}
+
+export interface CanonicalOAuthClient {
+  _id: any;
+  id: string;
+  clientId: string;
+  clientSecret?: string;
+  client_secret?: string;
+  name: string;
+  redirectUris: string[];
+  allowedOrigins: string[];
+  disabled: boolean;
+  isDev: boolean;
+  isPublic: boolean;
+  skipConsent: boolean;
+  [key: string]: any;
+}
+
+/**
+ * Resolve canonical OAuth client from database by id, clientId, or client_id.
+ * Normalizes field names (clientId, redirectUris, isPublic, disabled).
+ */
+export async function resolveOAuthClient(
+  db: any,
+  clientIdOrId: string,
+): Promise<CanonicalOAuthClient | null> {
+  if (!clientIdOrId || typeof clientIdOrId !== "string") return null;
+
+  const raw = await db.collection("oauthClient").findOne({
+    $or: [
+      { clientId: clientIdOrId },
+      { client_id: clientIdOrId },
+      { id: clientIdOrId },
+    ],
+  });
+
+  if (!raw) return null;
+
+  const canonicalId = raw.clientId || raw.client_id || raw.id || String(raw._id);
+  const redirectUris = raw.redirectUris || raw.redirect_uris || [];
+  const allowedOrigins = raw.allowedOrigins || raw.allowed_origins || [];
+  const isPublic = raw.isPublic !== false && raw.is_public !== false;
+  const disabled = Boolean(raw.disabled);
+
+  return {
+    ...raw,
+    id: canonicalId,
+    clientId: canonicalId,
+    name: raw.name || raw.client_name || "Application",
+    redirectUris,
+    allowedOrigins,
+    isPublic,
+    disabled,
+  };
+}
+
+/**
+ * Check if the requested redirect URI matches one of the client's registered redirect URIs.
+ * Exact matching of origin and pathname is enforced.
+ */
+export function isRegisteredRedirectUri(
+  client: CanonicalOAuthClient | null,
+  redirectUri: string,
+): boolean {
+  if (!client || !redirectUri || !Array.isArray(client.redirectUris) || client.redirectUris.length === 0) {
+    return false;
+  }
+
+  try {
+    const targetUrl = new URL(redirectUri);
+    return client.redirectUris.some((registered: string) => {
+      try {
+        const regUrl = new URL(registered);
+        // Protocol, hostname, port, and pathname must match exactly
+        if (targetUrl.protocol !== regUrl.protocol) return false;
+        if (targetUrl.hostname.toLowerCase() !== regUrl.hostname.toLowerCase()) return false;
+        const targetPort = targetUrl.port || defaultPort(targetUrl.protocol);
+        const regPort = regUrl.port || defaultPort(regUrl.protocol);
+        if (targetPort !== regPort) return false;
+        if (targetUrl.pathname !== regUrl.pathname) return false;
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check whether a user is registered for an application in user_app_registrations.
+ * Uses authenticated server-side userId and canonical client ID.
+ */
+export async function checkUserAppRegistration(
+  db: any,
+  userId: string,
+  canonicalClientId: string,
+): Promise<boolean> {
+  if (!userId || !canonicalClientId) return false;
+
+  const reg = await db.collection("user_app_registrations").findOne({
+    clientId: canonicalClientId,
+    $or: [
+      { userId: String(userId) },
+      { userId },
+      ...(ObjectId.isValid(userId) ? [{ userId: new ObjectId(userId) }] : []),
+    ],
+  });
+
+  return Boolean(reg);
 }

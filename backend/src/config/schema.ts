@@ -29,13 +29,30 @@ export const envSchema = z.object({
     REDIS_URL: z.string().optional(),
     REDIS_TOKEN: z.string().optional(),
 
-    // Optional dedicated signing key for app-admin JWTs (≥32 chars).
-    // If not set, a sub-key is derived from BETTER_AUTH_SECRET via HMAC-SHA256.
+    // Dedicated signing key for app-admin JWTs (≥32 chars).
+    // Required in production. In development/test, falls back to HMAC sub-key.
     APP_ADMIN_JWT_SECRET: z.string().min(32).optional(),
 
-    // Optional dedicated AES-256-GCM encryption key for app-admin TOTP secrets at rest (≥32 chars).
-    // If not set, a key is derived from appAdminJwtSecret.
+    // Dedicated AES-256-GCM encryption key for app-admin TOTP secrets at rest (≥32 chars).
+    // Required in production. In development/test, falls back to derived sub-key.
     APP_ADMIN_TOTP_KEY: z.string().min(32).optional(),
-})
+}).superRefine((data, ctx) => {
+    if (data.NODE_ENV === 'production') {
+        if (!data.APP_ADMIN_JWT_SECRET || data.APP_ADMIN_JWT_SECRET.trim().length < 32) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'APP_ADMIN_JWT_SECRET is required in production and must be at least 32 characters',
+                path: ['APP_ADMIN_JWT_SECRET'],
+            });
+        }
+        if (!data.APP_ADMIN_TOTP_KEY || data.APP_ADMIN_TOTP_KEY.trim().length < 32) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'APP_ADMIN_TOTP_KEY is required in production and must be at least 32 characters',
+                path: ['APP_ADMIN_TOTP_KEY'],
+            });
+        }
+    }
+});
 
 export type Env = z.infer<typeof envSchema>

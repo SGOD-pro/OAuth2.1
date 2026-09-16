@@ -52,7 +52,7 @@ flowchart TD
 
 ### Step 3: Initialize Database Indexes
 ```bash
-cd hono
+cd backend
 cp .env.example .env
 # Set MONGO_URI and BETTER_AUTH_SECRET in hono/.env
 npm run db:setup
@@ -68,7 +68,7 @@ The backend includes a dedicated serverless entrypoint in `src/lambda.ts` bundle
 
 1. **Install dependencies & build**:
    ```bash
-   cd hono
+   cd backend
    npm install
    npm run build
    ```
@@ -78,7 +78,7 @@ The backend includes a dedicated serverless entrypoint in `src/lambda.ts` bundle
    # Or for guided first-time deployment:
    sam deploy --guided --profile aws
    ```
-3. **Configure Environment in `hono/samconfig.toml`**:
+3. **Configure Environment in `backend/samconfig.toml`**:
    ```toml
    parameter_overrides = "BetterAuthUrl=\"https://<lambda-id>.lambda-url.<region>.on.aws/api/auth\" FrontendUrl=\"https://auth.yourdomain.com\""
    ```
@@ -91,7 +91,7 @@ For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux
 
 1. **Build the Standalone Node.js bundle**:
    ```bash
-   cd hono
+   cd backend
    npm install
    npm run build:node
    # Produces standalone dist/index.cjs powered by @hono/node-server
@@ -139,7 +139,7 @@ For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux
 
 1. **Deploying on Railway**:
    - Create a new project on [railway.app](https://railway.app) connected to your GitHub repository.
-   - **Root Directory**: `hono`
+   - **Root Directory**: `backend`
    - **Build Command**: `npm install && npm run build:node`
    - **Start Command**: `npm start` (runs `node dist/index.cjs`)
    - Add environment variables in the Railway dashboard (`MONGO_URI`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `FRONTEND_URL`, `UV_THREADPOOL_SIZE=16`).
@@ -150,7 +150,7 @@ For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux
    - **Start Command**: `npm start`
 3. **Deploying on Fly.io**:
    ```bash
-   cd hono
+   cd backend
    fly launch --dockerfile Dockerfile
    fly secrets set MONGO_URI="..." BETTER_AUTH_SECRET="..." BETTER_AUTH_URL="..." FRONTEND_URL="..."
    fly deploy
@@ -163,7 +163,7 @@ For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux
 1. **GCP Cloud Run (Serverless Container)**:
    ```bash
    # 1. Build and push container to Google Artifact Registry
-   cd hono
+   cd backend
    gcloud builds submit --tag gcr.io/$PROJECT_ID/swyra-auth:latest .
 
    # 2. Deploy to Cloud Run with automatic HTTPS and concurrency scaling
@@ -186,7 +186,7 @@ For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux
 1. **Azure Container Apps**:
    ```bash
    # 1. Build container image in Azure Container Registry (ACR)
-   az acr build --registry <yourRegistryName> --image swyra-auth:latest ./hono
+   az acr build --registry <yourRegistryName> --image swyra-auth:latest ./backend
 
    # 2. Create Azure Container App
    az containerapp create \
@@ -234,8 +234,8 @@ To run the complete stack (Hono Backend API + React Frontend Gateway) on a singl
 git clone <repo-url> && cd OAuth2.1
 
 # 2. Configure environment
-cp hono/.env.example hono/.env
-# Edit hono/.env with your MongoDB Atlas URI, Better Auth Secret, and Domains
+cp backend/.env.example backend/.env
+# Edit backend/.env with your MongoDB Atlas URI, Better Auth Secret, and Domains
 
 # 3. Start services in background
 docker compose up -d --build
@@ -251,7 +251,7 @@ docker compose up -d --build
 Because public registration is disabled by default in production (`AUTH_PUBLIC_SIGNUP_ENABLED=false`), provision your initial Super-Admin account using the CLI utility:
 
 ```bash
-cd hono
+cd backend
 npm run admin:create -- "admin@yourdomain.com" "YourStrongPassword@2026!" "Super Admin"
 ```
 

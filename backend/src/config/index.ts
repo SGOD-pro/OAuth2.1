@@ -51,20 +51,40 @@ export const config = {
 
     /**
      * Dedicated signing key for app-admin JWTs.
-     * Prefer an explicit APP_ADMIN_JWT_SECRET env var (≥32 chars).
-     * If absent, derive a cryptographically independent sub-key via HMAC-SHA256
-     * so the app-admin signing key is NEVER equal to the raw BETTER_AUTH_SECRET
-     * used by Better Auth sessions.
+     * In production: MUST be explicitly set via APP_ADMIN_JWT_SECRET (≥32 chars).
+     * In development/test: falls back to HMAC-SHA256 sub-key derived from BETTER_AUTH_SECRET.
      */
     get appAdminJwtSecret(): string {
         const explicit = process.env.APP_ADMIN_JWT_SECRET
         if (explicit && explicit.length >= 32) return explicit
+
+        if (this.env === 'production') {
+            throw new Error('APP_ADMIN_JWT_SECRET must be explicitly configured in production (minimum 32 characters)')
+        }
 
         const masterSecret = this.auth.secret
         if (!masterSecret) throw new Error('BETTER_AUTH_SECRET is not configured')
 
         return createHmac('sha256', masterSecret)
             .update('app-admin-jwt-signing-v1')
+            .digest('hex')
+    },
+
+    /**
+     * Dedicated AES-256-GCM encryption key for app-admin TOTP secrets at rest.
+     * In production: MUST be explicitly set via APP_ADMIN_TOTP_KEY (≥32 chars).
+     * In development/test: falls back to derived key from appAdminJwtSecret.
+     */
+    get appAdminTotpKey(): string {
+        const explicit = process.env.APP_ADMIN_TOTP_KEY
+        if (explicit && explicit.length >= 32) return explicit
+
+        if (this.env === 'production') {
+            throw new Error('APP_ADMIN_TOTP_KEY must be explicitly configured in production (minimum 32 characters)')
+        }
+
+        return createHmac('sha256', this.appAdminJwtSecret)
+            .update('app-admin-totp-encryption-v1')
             .digest('hex')
     },
 

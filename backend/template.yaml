@@ -18,6 +18,17 @@ Parameters:
     NoEcho: true
   FrontendUrl:
     Type: String
+  AppAdminJwtSecret:
+    Type: String
+    NoEcho: true
+    Default: "swyra_app_admin_jwt_secret_prod_key_32chars"
+  AppAdminTotpKey:
+    Type: String
+    NoEcho: true
+    Default: "swyra_app_admin_totp_key_prod_encryption_32"
+  TrustedProxyCidrs:
+    Type: String
+    Default: "127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
 Globals:
   Function:
@@ -41,6 +52,9 @@ Resources:
           GOOGLE_CLIENT_ID: !Ref GoogleClientId
           GOOGLE_CLIENT_SECRET: !Ref GoogleClientSecret
           FRONTEND_URL: !Ref FrontendUrl
+          APP_ADMIN_JWT_SECRET: !Ref AppAdminJwtSecret
+          APP_ADMIN_TOTP_KEY: !Ref AppAdminTotpKey
+          TRUSTED_PROXY_CIDRS: !Ref TrustedProxyCidrs
           AUTH_PUBLIC_SIGNUP_ENABLED: "true"
       FunctionUrlConfig:
         AuthType: NONE
