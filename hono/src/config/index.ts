@@ -44,6 +44,10 @@ export const config = {
         },
     },
 
+    get betterAuthSecret() {
+        return this.auth.secret
+    },
+
     google: {
         get clientId() {
             return process.env.GOOGLE_CLIENT_ID || parsedEnv.GOOGLE_CLIENT_ID

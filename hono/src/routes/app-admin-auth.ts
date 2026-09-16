@@ -26,6 +26,15 @@ async function executeDummyHash(): Promise<void> {
 	});
 }
 
+// Helper: Get JWT secret key for signing app admin tokens
+function getAdminJwtSecret(): Uint8Array {
+	const secret = config.auth?.secret || (config as any).betterAuthSecret || process.env.BETTER_AUTH_SECRET;
+	if (!secret) {
+		throw new Error("BETTER_AUTH_SECRET is not configured");
+	}
+	return new TextEncoder().encode(secret);
+}
+
 // Helper: Verify client secret (supports Better-Auth SHA-256 base64url, scrypt/bcrypt, and plaintext)
 async function verifyClientSecret(providedSecret: string, storedSecret: string): Promise<boolean> {
 	if (!providedSecret || !storedSecret) return false;
@@ -228,7 +237,7 @@ appAdminAuth.post("/login", async (c) => {
 	);
 
 	// 5. Generate secure HS256 JWT
-	const secretKey = new TextEncoder().encode(config.betterAuthSecret);
+	const secretKey = getAdminJwtSecret();
 	const adminId = admin._id.toString();
 	const jti = crypto.randomUUID();
 
@@ -324,7 +333,7 @@ appAdminAuth.post("/verify", async (c) => {
 
 	// 2. Verify token signature and claims
 	try {
-		const secretKey = new TextEncoder().encode(config.betterAuthSecret);
+		const secretKey = getAdminJwtSecret();
 		const { payload } = await jwtVerify(token, secretKey, {
 			algorithms: ["HS256"],
 		});
@@ -450,7 +459,7 @@ appAdminAuth.post("/logout", async (c) => {
 	}
 
 	try {
-		const secretKey = new TextEncoder().encode(config.betterAuthSecret);
+		const secretKey = getAdminJwtSecret();
 		const { payload } = await jwtVerify(token, secretKey, {
 			algorithms: ["HS256"],
 		});
