@@ -44,6 +44,8 @@ admin.get("/clients", requireAdmin, async (c) => {
         allowed_origins: rest.allowedOrigins || rest.allowed_origins || [],
         disabled: Boolean(rest.disabled),
         is_dev: Boolean(rest.isDev || rest.is_dev),
+        is_public: doc.isPublic !== false && doc.is_public !== false,
+        isPublic: doc.isPublic !== false && doc.is_public !== false,
         skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
         adminEmail: rest.adminEmail || rest.admin_email || null,
         adminUserId: rest.adminUserId || rest.admin_user_id || null,
@@ -142,6 +144,7 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
   }
 
   const clientId = result.client_id || result.clientId || result.id;
+  const isPublic = typeof body.isPublic === "boolean" ? body.isPublic : (typeof body.is_public === "boolean" ? body.is_public : true);
 
   // Persist extra fields in MongoDB oauthClient collection
   const database = await getDb();
@@ -151,6 +154,7 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
       $set: {
         allowedOrigins,
         isDev,
+        isPublic,
         skipConsent: Boolean(body.skip_consent ?? body.skipConsent),
         enableEndSession: body.enable_end_session !== false && body.enableEndSession !== false,
         updatedAt: new Date(),
@@ -579,6 +583,7 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   const dbUpdates: any = { updatedAt: new Date() };
   if (allowedOrigins) dbUpdates.allowedOrigins = allowedOrigins;
   if (typeof (body.isDev ?? body.is_dev) === "boolean") dbUpdates.isDev = isDev;
+  if (typeof (body.isPublic ?? body.is_public) === "boolean") dbUpdates.isPublic = Boolean(body.isPublic ?? body.is_public);
   if (typeof updatePayload.skip_consent === "boolean") dbUpdates.skipConsent = updatePayload.skip_consent;
   if (typeof updatePayload.enable_end_session === "boolean") dbUpdates.enableEndSession = updatePayload.enable_end_session;
   if (typeof updatePayload.disabled === "boolean") dbUpdates.disabled = updatePayload.disabled;
@@ -722,6 +727,7 @@ admin.get("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
       name: a.name || a.email.split("@")[0],
       redirectUrl: a.redirectUrl || "",
       isActive: a.isActive !== false,
+      totpEnabled: a.totpEnabled === true,
       loginCount: a.loginCount || 0,
       lastLoginAt: a.lastLoginAt ? a.lastLoginAt.toISOString() : null,
       createdAt: a.createdAt ? a.createdAt.toISOString() : new Date().toISOString(),
@@ -1049,7 +1055,160 @@ admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async 
   }
 });
 
-// 14. Admin Catch-All 404 Handler
+// -- Application User Management (Private App Isolation) --------------------
+
+// 14. List Users Assigned to a Client
+admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  try {
+    const database = await getDb();
+    const regs = await database
+      .collection("user_app_registrations")
+      .find({ clientId })
+      .sort({ registeredAt: -1 })
+      .toArray();
+
+    const userIds = regs.map((r: any) => r.userId);
+    const users = await database
+      .collection("user")
+      .find({
+        $or: [
+          { id: { $in: userIds } },
+          { _id: { $in: userIds.map((id: string) => { try { return new ObjectId(id); } catch { return id; } }) } },
+        ],
+      })
+      .toArray();
+
+    const userMap = new Map<string, any>();
+    users.forEach((u: any) => {
+      userMap.set(String(u.id || u._id), u);
+      userMap.set(String(u._id), u);
+    });
+
+    const enriched = regs.map((r: any) => {
+      const u = userMap.get(String(r.userId));
+      return {
+        registrationId: r._id.toString(),
+        userId: r.userId,
+        email: u?.email || "Unknown",
+        name: u?.name || u?.email?.split("@")[0] || "User",
+        registeredAt: r.registeredAt ? r.registeredAt.toISOString() : null,
+      };
+    });
+
+    return c.json({ users: enriched });
+  } catch (err: any) {
+    console.error("[ADMIN_LIST_APP_USERS] Error:", err);
+    return c.json({ error: "Failed to load assigned users" }, 500);
+  }
+});
+
+// 15. Assign a User to a Client (for Private Applications)
+admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  const body = await c.req.json().catch(() => ({}));
+  const email = typeof body.email === "string" ? body.email.toLowerCase().trim() : "";
+  const sessionUser = c.get("user") as any;
+
+  if (!email || !email.includes("@")) {
+    return c.json({ error: "Valid user email is required" }, 400);
+  }
+
+  try {
+    const database = await getDb();
+
+    const client = await database.collection("oauthClient").findOne({
+      $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+    });
+    if (!client) return c.json({ error: "Application not found" }, 404);
+
+    const user = await database.collection("user").findOne({ email });
+    if (!user) {
+      return c.json({ error: "No user found with this email address" }, 404);
+    }
+
+    const userId = String(user.id || user._id);
+
+    const existing = await database.collection("user_app_registrations").findOne({
+      clientId,
+      userId,
+    });
+    if (existing) {
+      return c.json({ error: "User is already assigned to this application" }, 409);
+    }
+
+    const now = new Date();
+    await database.collection("user_app_registrations").insertOne({
+      clientId,
+      userId,
+      registeredAt: now,
+      assignedBy: sessionUser?.email || "admin",
+    });
+
+    await recordAdminAudit({
+      actorUserId: sessionUser?.id,
+      actorEmail: sessionUser?.email,
+      actorScope: sessionUser?.scopedClientId || "super_admin",
+      action: "user_assigned_to_app",
+      targetClientId: clientId,
+      targetUserId: userId,
+      details: { email },
+      ipAddress: getTrustedClientIp(c),
+      timestamp: now,
+    });
+
+    return c.json({
+      success: true,
+      message: "User successfully authorized for this application",
+      user: {
+        userId,
+        email: user.email,
+        name: user.name || user.email.split("@")[0],
+        registeredAt: now.toISOString(),
+      },
+    }, 201);
+  } catch (err: any) {
+    console.error("[ADMIN_ASSIGN_APP_USER] Error:", err);
+    return c.json({ error: err?.message || "Failed to assign user" }, 500);
+  }
+});
+
+// 16. Remove a User from a Client
+admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, async (c) => {
+  const clientId = c.req.param("clientId");
+  const userId = c.req.param("userId");
+  const sessionUser = c.get("user") as any;
+
+  try {
+    const database = await getDb();
+    const result = await database.collection("user_app_registrations").deleteMany({
+      clientId,
+      $or: [{ userId }, { userId: String(userId) }],
+    });
+
+    if (result.deletedCount === 0) {
+      return c.json({ error: "Assignment not found" }, 404);
+    }
+
+    await recordAdminAudit({
+      actorUserId: sessionUser?.id,
+      actorEmail: sessionUser?.email,
+      actorScope: sessionUser?.scopedClientId || "super_admin",
+      action: "user_removed_from_app",
+      targetClientId: clientId,
+      targetUserId: userId,
+      ipAddress: getTrustedClientIp(c),
+      timestamp: new Date(),
+    });
+
+    return c.json({ success: true, message: "User access removed from application" });
+  } catch (err: any) {
+    console.error("[ADMIN_REMOVE_APP_USER] Error:", err);
+    return c.json({ error: err?.message || "Failed to remove user" }, 500);
+  }
+});
+
+// 17. Admin Catch-All 404 Handler
 admin.all("*", (c) => {
   return c.json({ error: "Endpoint not found" }, 404);
 });

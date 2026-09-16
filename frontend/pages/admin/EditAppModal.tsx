@@ -16,6 +16,8 @@ interface OAuthClient {
   allowedOrigins?: string[];
   is_dev?: boolean;
   isDev?: boolean;
+  is_public?: boolean;
+  isPublic?: boolean;
   metadata?: {
     allowedOrigins?: string[];
     allowed_origins?: string[];
@@ -100,6 +102,9 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
   const [isDev, setIsDev] = useState<boolean>(
     client.is_dev ?? client.isDev ?? client.metadata?.isDev ?? client.metadata?.is_dev ?? false
   );
+  const [isPublic, setIsPublic] = useState<boolean>(
+    client.is_public ?? client.isPublic ?? true
+  );
   const [skipConsent, setSkipConsent] = useState<boolean>(
     client.skip_consent ?? client.skipConsent ?? false
   );
@@ -142,6 +147,8 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
           allowedOrigins: allowedOrigins,
           is_dev: isDev,
           isDev: isDev,
+          is_public: isPublic,
+          isPublic: isPublic,
           skip_consent: skipConsent,
           skipConsent: skipConsent,
           enable_end_session: enableEndSession,
@@ -249,6 +256,21 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
               <Checkbox
                 checked={isDev}
                 onCheckedChange={(checked) => setIsDev(checked === true)}
+              />
+            </label>
+
+            <label className="flex items-start justify-between gap-4 cursor-pointer">
+              <div>
+                <span className="font-sans text-xs font-medium text-foreground block">
+                  Public Application Mode
+                </span>
+                <span className="font-sans text-xs text-muted-foreground">
+                  When enabled, any platform user can log in. When disabled (Private Mode), only explicitly assigned users can access it.
+                </span>
+              </div>
+              <Checkbox
+                checked={isPublic}
+                onCheckedChange={(checked) => setIsPublic(checked === true)}
               />
             </label>
 

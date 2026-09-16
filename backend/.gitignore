@@ -29,7 +29,11 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # tests & test results
-tests/
+tests/*
+!tests/security/
+tests/security/*
+!tests/security/test-app-admin-security.ts
+!tests/security/security-remediation-test.ts
 test-results/
 
 # misc

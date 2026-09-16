@@ -53,31 +53,25 @@ export async function ensureTtlIndexes(): Promise<void> {
   indexPromise ??= (async () => {
     const db = await getDb();
 
+    const safeIndex = async (col: string, spec: any, options?: any) => {
+      try {
+        await db.collection(col).createIndex(spec, options);
+      } catch (err: any) {
+        // Code 85: IndexOptionsConflict / IndexKeySpecsConflict - ignore if already exists
+        if (err?.code !== 85 && err?.codeName !== "IndexOptionsConflict" && err?.code !== 86) {
+          console.warn(`[INDEX] Warning creating index on ${col}:`, err?.message || err);
+        }
+      }
+    };
+
     await Promise.all([
-      db
-        .collection<RateLimitDoc>("rate_limits")
-        .createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 }),
-      db
-        .collection<OriginCacheDoc>("origin_cache")
-        .createIndex({ cachedAt: 1 }, { expireAfterSeconds: 300 }),
-      db
-        .collection<TokenFamilyDoc>("oauth_token_families")
-        .createIndex({ familyId: 1 }, { unique: true }),
-      db
-        .collection<TokenFamilyDoc>("oauth_token_families")
-        .createIndex({ activeTokenHash: 1 }),
-      db
-        .collection<TokenFamilyDoc>("oauth_token_families")
-        .createIndex({ consumedTokenHashes: 1 }),
-      db
-        .collection<AdminAuditEvent>("admin_audit")
-        .createIndex({ timestamp: -1 }),
-      // TTL index: auto-purge expired app-admin token revocation records.
-      // expiresAt is set to the token's exp time on logout, so MongoDB removes
-      // the revocation entry only after the token would have expired anyway.
-      db
-        .collection("app_admin_revoked_tokens")
-        .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      safeIndex("rate_limits", { createdAt: 1 }, { expireAfterSeconds: 60 }),
+      safeIndex("origin_cache", { cachedAt: 1 }, { expireAfterSeconds: 300 }),
+      safeIndex("oauth_token_families", { familyId: 1 }, { unique: true }),
+      safeIndex("oauth_token_families", { activeTokenHash: 1 }),
+      safeIndex("oauth_token_families", { consumedTokenHashes: 1 }),
+      safeIndex("admin_audit", { timestamp: -1 }),
+      safeIndex("app_admin_revoked_tokens", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
   })();
 

@@ -15,6 +15,7 @@ export interface AppAdmin {
   name?: string;
   redirectUrl: string;
   isActive: boolean;
+  totpEnabled?: boolean;
   loginCount: number;
   lastLoginAt?: string | null;
   createdAt: string;
@@ -537,6 +538,12 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
                                 className="text-[10px] px-1.5 py-0 shrink-0"
                               >
                                 {admin.isActive ? 'Active' : 'Inactive'}
+                              </Badge>
+                              <Badge
+                                variant="outline"
+                                className={admin.totpEnabled ? 'text-[10px] px-1.5 py-0 shrink-0 bg-emerald-500/10 text-emerald-500 border-emerald-500/30' : 'text-[10px] px-1.5 py-0 shrink-0 bg-secondary text-muted-foreground border-border'}
+                              >
+                                {admin.totpEnabled ? '2FA Active' : '2FA Off'}
                               </Badge>
                             </div>
                             <span className="font-mono text-[11px] text-muted-foreground truncate block">

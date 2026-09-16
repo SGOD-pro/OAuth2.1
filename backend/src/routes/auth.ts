@@ -121,6 +121,11 @@ auth.post("/sign-in/email", async (c) => {
             // Equalize CPU timing with real password verification (Fix B10)
             await executeDummyHash();
         } else if (clientId && user.role !== "admin") {
+            const clientDoc = await database.collection("oauthClient").findOne({
+                $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+            });
+            const isPublic = clientDoc ? (clientDoc.isPublic !== false && clientDoc.is_public !== false) : true;
+
             const reg = await database.collection("user_app_registrations").findOne({
                 $or: [
                     { userId: String(user._id), clientId },
@@ -129,14 +134,27 @@ auth.post("/sign-in/email", async (c) => {
                 ],
             });
 
-            if (!reg) {
-                return c.json(
-                    {
-                        status: false,
-                        message: "User is not registered for this application. Please register first.",
-                    },
-                    400
-                );
+            if (!isPublic) {
+                // Private application: strict registration required
+                if (!reg) {
+                    return c.json(
+                        {
+                            status: false,
+                            error: "access_denied",
+                            message: "Access restricted: This application is in private mode and your account has not been authorized. Please contact an administrator.",
+                        },
+                        403
+                    );
+                }
+            } else {
+                // Public application: auto-record app registration on sign-in if not yet recorded
+                if (!reg) {
+                    await database.collection("user_app_registrations").insertOne({
+                        userId: String(user.id || user._id),
+                        clientId,
+                        registeredAt: new Date(),
+                    }).catch(() => {});
+                }
             }
         }
     }
@@ -149,6 +167,24 @@ auth.post("/sign-up/email", async (c) => {
     const body = await c.req.raw.clone().json().catch(() => null);
     const clientId = extractClientId(c, body);
     const database = await getDb();
+
+    // If client is in private mode, block public self-registration
+    if (clientId) {
+        const clientDoc = await database.collection("oauthClient").findOne({
+            $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+        });
+        const isPublic = clientDoc ? (clientDoc.isPublic !== false && clientDoc.is_public !== false) : true;
+        if (!isPublic) {
+            return c.json(
+                {
+                    status: false,
+                    error: "registration_disabled",
+                    message: "Self-registration is disabled for this private application. An administrator must provision your account.",
+                },
+                403
+            );
+        }
+    }
 
     if (body?.email) {
         const email = body.email.toLowerCase().trim();

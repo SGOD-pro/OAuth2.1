@@ -68,9 +68,9 @@ Detailed technical guides, protocol specifications, and integration runbooks are
 
 ### 2. Configure Backend Environment
 ```bash
-cd hono
+cd backend
 cp .env.example .env
-# Edit hono/.env with your MONGO_URI, BETTER_AUTH_SECRET, and FRONTEND_URL
+# Edit backend/.env with your MONGO_URI, BETTER_AUTH_SECRET, and FRONTEND_URL
 npm run db:setup
 ```
 
@@ -125,9 +125,9 @@ Before deploying to any platform:
 
 3. **Initialize Database Indexes**:
    ```bash
-   cd hono
+   cd backend
    npm install
-   # Set MONGO_URI and BETTER_AUTH_SECRET in hono/.env
+   # Set MONGO_URI and BETTER_AUTH_SECRET in backend/.env
    npm run db:setup
    ```
 
@@ -178,7 +178,7 @@ Railway allows deploying both the Hono backend API and the Vite frontend within 
 ##### Step 1: Deploy Hono Backend API
 1. Create a new project at [railway.app](https://railway.app) and connect your GitHub repo.
 2. In service settings, configure:
-   - **Root Directory**: `hono`
+   - **Root Directory**: `backend`
    - **Build Command**: `npm install && npm run build:node`
    - **Start Command**: `npm start` (or `node dist/index.cjs`)
 3. Add Environment Variables:
@@ -220,7 +220,7 @@ sudo npm install -g pm2
 ##### Step 2: Clone and Build Backend
 ```bash
 git clone https://github.com/<your-org>/OAuth2.1.git /var/www/oauth21
-cd /var/www/oauth21/hono
+cd /var/www/oauth21/backend
 
 # Setup production environment
 cp .env.example .env
@@ -299,7 +299,7 @@ The backend features zero-cold-start optimized bundling for AWS Lambda with dedi
 
 ##### Step 1: Build & Deploy via SAM
 ```bash
-cd hono
+cd backend
 npm install
 npm run build # Builds dist/index.cjs
 
@@ -309,7 +309,7 @@ npm run build # Builds dist/index.cjs
 sam deploy --guided --profile aws
 ```
 
-##### Step 2: Configure Parameters in `hono/samconfig.toml`
+##### Step 2: Configure Parameters in `backend/samconfig.toml`
 ```toml
 parameter_overrides = "BetterAuthUrl=\"https://<lambda-id>.lambda-url.<region>.on.aws/api/auth\" FrontendUrl=\"https://auth.yourdomain.com\""
 ```
@@ -333,7 +333,7 @@ curl https://<lambda-id>.lambda-url.<region>.on.aws/
 
 2. Build and submit container image:
    ```bash
-   cd hono
+   cd backend
    gcloud builds submit --tag gcr.io/<YOUR_PROJECT_ID>/swyra-auth:latest .
    ```
 
@@ -355,7 +355,7 @@ curl https://<lambda-id>.lambda-url.<region>.on.aws/
 ##### Deploying to Azure Container Apps:
 1. Build container image in Azure Container Registry (ACR):
    ```bash
-   az acr build --registry <yourRegistryName> --image swyra-auth:latest ./hono
+   az acr build --registry <yourRegistryName> --image swyra-auth:latest ./backend
    ```
 
 2. Deploy Container App:
@@ -386,8 +386,8 @@ Run both the Hono backend and React frontend with unified networking on any cont
 git clone https://github.com/<your-org>/OAuth2.1.git && cd OAuth2.1
 
 # 2. Configure backend environment
-cp hono/.env.example hono/.env
-# Edit hono/.env with your MONGO_URI and BETTER_AUTH_SECRET
+cp backend/.env.example backend/.env
+# Edit backend/.env with your MONGO_URI and BETTER_AUTH_SECRET
 
 # 3. Start services
 docker compose up -d --build
@@ -400,7 +400,7 @@ docker compose up -d --build
 
 ## 📋 Environment Variables Master Reference
 
-### Backend Configuration (`hono/.env`)
+### Backend Configuration (`backend/.env`)
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -413,6 +413,8 @@ docker compose up -d --build
 | `TRUSTED_PROXY_CIDRS` | In Prod | `""` | Comma-separated list of trusted load-balancer/proxy CIDRs (e.g., `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`). |
 | `AUTH_PUBLIC_SIGNUP_ENABLED` | No | `false` (prod) | Set to `true` to allow open public registration, or `false` for invitation/admin-only. |
 | `AUTH_EMAIL_VERIFICATION_ENABLED` | No | `false` | Set to `true` to require email confirmation before login. |
+| `APP_ADMIN_JWT_SECRET` | No | Auto-derived sub-key | Dedicated HS256 key (min 32 chars) for App Admin session tokens. Defaults to HMAC-SHA256 derived from `BETTER_AUTH_SECRET`. |
+| `APP_ADMIN_TOTP_KEY` | No | Auto-derived key | Dedicated AES-256-GCM key (min 32 chars) to encrypt App Admin TOTP secrets at rest. |
 | `UPSTASH_REDIS_REST_URL` | No | — | Upstash Redis REST endpoint for distributed rate limiting & token caching. |
 | `UPSTASH_REDIS_REST_TOKEN` | No | — | Upstash Redis REST Bearer token. |
 | `GOOGLE_CLIENT_ID` | No | — | Google OAuth 2.0 Web Client ID for social login. |
@@ -432,7 +434,7 @@ docker compose up -d --build
 Because public self-registration is disabled in production by default (`AUTH_PUBLIC_SIGNUP_ENABLED=false`), provision your initial Super-Admin account using the CLI command:
 
 ```bash
-cd hono
+cd backend
 npm run admin:create -- "admin@yourdomain.com" "YourStrongPassword@2026!" "Super Admin"
 ```
 
@@ -522,7 +524,7 @@ curl -s https://api.auth.yourdomain.com/.well-known/jwks.json | jq .keys
 curl -I https://api.auth.yourdomain.com/ | grep -E "strict-transport-security|x-frame-options|content-security-policy"
 
 # 5. Run Security Test Suite Locally
-cd hono
+cd backend
 npm run security:self-check
 ```
 

@@ -8,6 +8,15 @@ import { config } from "../config";
 import { incrementRateLimit } from "../db/state";
 import { redis, redisEnabled } from "../cache/redis";
 import { getTrustedClientIp } from "../utils/security";
+import {
+	generateTotpSecret,
+	verifyTotpCode,
+	generateOtpAuthUri,
+	generateBackupCodes,
+	verifyBackupCode,
+	encryptTotpSecret,
+	decryptTotpSecret,
+} from "../utils/totp";
 
 const appAdminAuth = new Hono();
 
@@ -225,7 +234,33 @@ appAdminAuth.post("/login", async (c) => {
 		);
 	}
 
-	// 4. Update login telemetry
+	const canonicalClientId = client.clientId || client.client_id || clientId;
+	const secretKey = getAdminJwtSecret();
+	const adminId = admin._id.toString();
+
+	// 4. Check if Two-Factor Authentication (TOTP) is enabled
+	if (admin.totpEnabled === true) {
+		const mfaToken = await new SignJWT({
+			sub: adminId,
+			email: admin.email,
+			clientId: canonicalClientId,
+			role: "app_admin_mfa_pending",
+		})
+			.setProtectedHeader({ alg: "HS256", typ: "JWT" })
+			.setIssuedAt()
+			.setIssuer(config.auth.baseURL ?? "")
+			.setAudience(canonicalClientId)
+			.setExpirationTime("5m")
+			.sign(secretKey);
+
+		return c.json({
+			mfa_required: true,
+			mfa_token: mfaToken,
+			message: "Two-factor authentication code required",
+		});
+	}
+
+	// 5. Update login telemetry
 	const now = new Date();
 	await db.collection("app_admins").updateOne(
 		{ _id: admin._id },
@@ -235,16 +270,14 @@ appAdminAuth.post("/login", async (c) => {
 		}
 	);
 
-	// 5. Generate secure HS256 JWT
-	const secretKey = getAdminJwtSecret();
-	const adminId = admin._id.toString();
+	// 6. Generate secure HS256 JWT
 	const jti = crypto.randomUUID();
 
 	const token = await new SignJWT({
 		sub: adminId,
 		email: admin.email,
 		name: admin.name || admin.email.split("@")[0],
-		clientId: admin.clientId,
+		clientId: canonicalClientId,
 		role: "app_admin",
 		redirectUrl: admin.redirectUrl,
 	})
@@ -252,7 +285,7 @@ appAdminAuth.post("/login", async (c) => {
 		.setJti(jti)
 		.setIssuedAt()
 		.setIssuer(config.auth.baseURL ?? "")
-		.setAudience(admin.clientId)
+		.setAudience(canonicalClientId)
 		.setExpirationTime("1h")
 		.sign(secretKey);
 
@@ -266,9 +299,10 @@ appAdminAuth.post("/login", async (c) => {
 			id: adminId,
 			email: admin.email,
 			name: admin.name || admin.email.split("@")[0],
-			clientId: admin.clientId,
+			clientId: canonicalClientId,
 			role: "app_admin",
 			redirectUrl: admin.redirectUrl,
+			mfa_enabled: false,
 		},
 	});
 });
@@ -403,6 +437,7 @@ appAdminAuth.post("/verify", async (c) => {
 				name: admin.name || admin.email.split("@")[0],
 				clientId: admin.clientId,
 				role: "app_admin",
+				mfa_enabled: admin.totpEnabled === true,
 			},
 			redirectUrl: admin.redirectUrl,
 		});
@@ -496,6 +531,480 @@ appAdminAuth.post("/logout", async (c) => {
 			success: true,
 			message: "Session terminated",
 		});
+	}
+});
+
+/**
+ * POST /api/auth/app-admin/mfa/verify-login
+ * Completes the two-factor authentication login challenge.
+ * Requires client credentials, the short-lived mfa_token, and a 6-digit TOTP code or backup code.
+ */
+appAdminAuth.post("/mfa/verify-login", async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+	const clientId = body.client_id || body.clientId;
+	const clientSecret = body.client_secret || body.clientSecret;
+	const mfaToken = body.mfa_token || body.mfaToken;
+	const code = typeof body.code === "string" ? body.code.trim() : "";
+
+	if (!clientId || !clientSecret || !mfaToken || !code) {
+		return c.json(
+			{
+				error: "invalid_request",
+				message: "client_id, client_secret, mfa_token, and code are all required",
+			},
+			400
+		);
+	}
+
+	const db = await getDb();
+
+	// 1. Validate client credentials
+	const client = await db.collection("oauthClient").findOne({
+		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+	});
+
+	if (!client || client.disabled === true) {
+		return c.json(
+			{
+				error: "invalid_client",
+				message: "Client authentication failed or application is suspended",
+			},
+			401
+		);
+	}
+
+	const storedSecret = client.clientSecret || client.client_secret;
+	const isSecretValid = await verifyClientSecret(clientSecret, storedSecret);
+	if (!isSecretValid) {
+		return c.json(
+			{
+				error: "invalid_client",
+				message: "Invalid client credentials",
+			},
+			401
+		);
+	}
+
+	const canonicalClientId = client.clientId || client.client_id || clientId;
+	const secretKey = getAdminJwtSecret();
+
+	// 2. Verify mfa_token signature and claims
+	let payload: any;
+	try {
+		const verified = await jwtVerify(mfaToken, secretKey, {
+			algorithms: ["HS256"],
+			issuer: config.auth.baseURL ?? undefined,
+			audience: canonicalClientId,
+		});
+		payload = verified.payload;
+	} catch (err: any) {
+		return c.json(
+			{
+				error: "invalid_mfa_token",
+				message: "The two-factor authentication challenge token is invalid or has expired. Please sign in again.",
+			},
+			401
+		);
+	}
+
+	if (payload.role !== "app_admin_mfa_pending") {
+		return c.json(
+			{
+				error: "invalid_token_role",
+				message: "Invalid challenge token",
+			},
+			400
+		);
+	}
+
+	// 3. Load administrator
+	let adminObjId: ObjectId;
+	try {
+		adminObjId = new ObjectId(payload.sub as string);
+	} catch {
+		return c.json({ error: "invalid_admin_id" }, 400);
+	}
+
+	const admin = await db.collection("app_admins").findOne({
+		_id: adminObjId,
+		clientId: canonicalClientId,
+	});
+
+	if (!admin || admin.isActive === false) {
+		return c.json(
+			{
+				error: "account_disabled",
+				message: "This administrator account is currently deactivated",
+			},
+			403
+		);
+	}
+
+	if (!admin.totpSecret) {
+		return c.json(
+			{
+				error: "mfa_not_configured",
+				message: "Two-factor authentication is not configured for this account",
+			},
+			400
+		);
+	}
+
+	// 4. Verify TOTP code or Backup code
+	let plainSecret: string;
+	try {
+		plainSecret = decryptTotpSecret(admin.totpSecret);
+	} catch {
+		return c.json({ error: "mfa_decrypt_error", message: "Failed to decrypt two-factor secret" }, 500);
+	}
+
+	const isTotpValid = verifyTotpCode(code, plainSecret);
+	let usedBackupCode = false;
+
+	if (!isTotpValid) {
+		// Check backup codes
+		const backupRes = verifyBackupCode(code, admin.totpBackupCodes || []);
+		if (backupRes.valid) {
+			usedBackupCode = true;
+			// Update remaining backup codes
+			await db.collection("app_admins").updateOne(
+				{ _id: admin._id },
+				{ $set: { totpBackupCodes: backupRes.remaining, updatedAt: new Date() } }
+			);
+		} else {
+			return c.json(
+				{
+					error: "invalid_code",
+					message: "Invalid two-factor authentication code. Please check your authenticator app or backup codes.",
+				},
+				401
+			);
+		}
+	}
+
+	// 5. Update login telemetry
+	const now = new Date();
+	await db.collection("app_admins").updateOne(
+		{ _id: admin._id },
+		{
+			$inc: { loginCount: 1 },
+			$set: { lastLoginAt: now, updatedAt: now },
+		}
+	);
+
+	// 6. Issue full session JWT
+	const adminId = admin._id.toString();
+	const jti = crypto.randomUUID();
+
+	const token = await new SignJWT({
+		sub: adminId,
+		email: admin.email,
+		name: admin.name || admin.email.split("@")[0],
+		clientId: canonicalClientId,
+		role: "app_admin",
+		redirectUrl: admin.redirectUrl,
+	})
+		.setProtectedHeader({ alg: "HS256", typ: "JWT" })
+		.setJti(jti)
+		.setIssuedAt()
+		.setIssuer(config.auth.baseURL ?? "")
+		.setAudience(canonicalClientId)
+		.setExpirationTime("1h")
+		.sign(secretKey);
+
+	return c.json({
+		success: true,
+		token,
+		tokenType: "Bearer",
+		expiresIn: 3600,
+		redirectUrl: admin.redirectUrl,
+		usedBackupCode,
+		admin: {
+			id: adminId,
+			email: admin.email,
+			name: admin.name || admin.email.split("@")[0],
+			clientId: canonicalClientId,
+			role: "app_admin",
+			redirectUrl: admin.redirectUrl,
+			mfa_enabled: true,
+		},
+	});
+});
+
+/**
+ * POST /api/auth/app-admin/mfa/setup
+ * Initiates TOTP two-factor setup for an authenticated app administrator.
+ * Generates a new Base32 secret, QR otpauth URL, and emergency backup codes.
+ */
+appAdminAuth.post("/mfa/setup", async (c) => {
+	const authHeader = c.req.header("authorization");
+	const body = await c.req.json().catch(() => ({}));
+
+	const clientId = body.client_id || body.clientId;
+	const clientSecret = body.client_secret || body.clientSecret;
+	let token = body.token;
+	if (!token && authHeader?.startsWith("Bearer ")) {
+		token = authHeader.slice(7).trim();
+	}
+
+	if (!clientId || !clientSecret || !token) {
+		return c.json({ error: "invalid_request", message: "client_id, client_secret, and token are required" }, 400);
+	}
+
+	const db = await getDb();
+
+	// Validate client
+	const client = await db.collection("oauthClient").findOne({
+		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+	});
+	if (!client) return c.json({ error: "invalid_client" }, 401);
+
+	const storedSecret = client.clientSecret || client.client_secret;
+	if (!(await verifyClientSecret(clientSecret, storedSecret))) {
+		return c.json({ error: "invalid_client" }, 401);
+	}
+
+	const canonicalClientId = client.clientId || client.client_id || clientId;
+
+	// Verify token
+	try {
+		const secretKey = getAdminJwtSecret();
+		const { payload } = await jwtVerify(token, secretKey, {
+			algorithms: ["HS256"],
+			issuer: config.auth.baseURL ?? undefined,
+			audience: canonicalClientId,
+		});
+
+		// Check revoked
+		if (payload.jti) {
+			const revoked = await db.collection("app_admin_revoked_tokens").findOne({ jti: payload.jti });
+			if (revoked) return c.json({ error: "token_revoked" }, 401);
+		}
+
+		const admin = await db.collection("app_admins").findOne({
+			_id: new ObjectId(payload.sub as string),
+			clientId: canonicalClientId,
+		});
+		if (!admin || admin.isActive === false) return c.json({ error: "account_inactive" }, 403);
+
+		// Generate new TOTP secret & backup codes
+		const secret = generateTotpSecret();
+		const encryptedSecret = encryptTotpSecret(secret);
+		const { raw: rawBackupCodes, hashed: hashedBackupCodes } = generateBackupCodes();
+
+		// Save as pending until confirmed
+		await db.collection("app_admins").updateOne(
+			{ _id: admin._id },
+			{
+				$set: {
+					pendingTotpSecret: encryptedSecret,
+					pendingTotpBackupCodes: hashedBackupCodes,
+					updatedAt: new Date(),
+				},
+			}
+		);
+
+		const otpauthUrl = generateOtpAuthUri(
+			admin.email,
+			client.name || client.client_name || "Application Admin",
+			secret
+		);
+
+		return c.json({
+			success: true,
+			secret,
+			otpauth_url: otpauthUrl,
+			backup_codes: rawBackupCodes,
+			message: "Scan the otpauth_url QR code in your authenticator app and call /mfa/confirm with a 6-digit code.",
+		});
+	} catch (err: any) {
+		return c.json({ error: "invalid_token", message: err?.message || "Token validation failed" }, 401);
+	}
+});
+
+/**
+ * POST /api/auth/app-admin/mfa/confirm
+ * Confirms a pending TOTP setup by verifying the first code from the authenticator app.
+ */
+appAdminAuth.post("/mfa/confirm", async (c) => {
+	const authHeader = c.req.header("authorization");
+	const body = await c.req.json().catch(() => ({}));
+
+	const clientId = body.client_id || body.clientId;
+	const clientSecret = body.client_secret || body.clientSecret;
+	const code = typeof body.code === "string" ? body.code.trim() : "";
+	let token = body.token;
+	if (!token && authHeader?.startsWith("Bearer ")) {
+		token = authHeader.slice(7).trim();
+	}
+
+	if (!clientId || !clientSecret || !token || !code) {
+		return c.json({ error: "invalid_request", message: "client_id, client_secret, token, and code are required" }, 400);
+	}
+
+	const db = await getDb();
+
+	const client = await db.collection("oauthClient").findOne({
+		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+	});
+	if (!client) return c.json({ error: "invalid_client" }, 401);
+
+	const storedSecret = client.clientSecret || client.client_secret;
+	if (!(await verifyClientSecret(clientSecret, storedSecret))) {
+		return c.json({ error: "invalid_client" }, 401);
+	}
+
+	const canonicalClientId = client.clientId || client.client_id || clientId;
+
+	try {
+		const secretKey = getAdminJwtSecret();
+		const { payload } = await jwtVerify(token, secretKey, {
+			algorithms: ["HS256"],
+			issuer: config.auth.baseURL ?? undefined,
+			audience: canonicalClientId,
+		});
+
+		const admin = await db.collection("app_admins").findOne({
+			_id: new ObjectId(payload.sub as string),
+			clientId: canonicalClientId,
+		});
+		if (!admin || admin.isActive === false) return c.json({ error: "account_inactive" }, 403);
+
+		if (!admin.pendingTotpSecret) {
+			return c.json({ error: "no_pending_setup", message: "No pending MFA setup found. Please call /mfa/setup first." }, 400);
+		}
+
+		const plainSecret = decryptTotpSecret(admin.pendingTotpSecret);
+		const isValid = verifyTotpCode(code, plainSecret);
+
+		if (!isValid) {
+			return c.json({ error: "invalid_code", message: "Verification code does not match the authenticator setup. Please try again." }, 400);
+		}
+
+		// Activate MFA
+		await db.collection("app_admins").updateOne(
+			{ _id: admin._id },
+			{
+				$set: {
+					totpEnabled: true,
+					totpSecret: admin.pendingTotpSecret,
+					totpBackupCodes: admin.pendingTotpBackupCodes || [],
+					updatedAt: new Date(),
+				},
+				$unset: {
+					pendingTotpSecret: "",
+					pendingTotpBackupCodes: "",
+				},
+			}
+		);
+
+		return c.json({
+			success: true,
+			message: "Two-factor authentication has been successfully enabled for this account.",
+		});
+	} catch (err: any) {
+		return c.json({ error: "invalid_token", message: err?.message || "Token validation failed" }, 401);
+	}
+});
+
+/**
+ * POST /api/auth/app-admin/mfa/disable
+ * Disables TOTP two-factor authentication.
+ * Requires administrator password and a current TOTP code or backup code for verification.
+ */
+appAdminAuth.post("/mfa/disable", async (c) => {
+	const authHeader = c.req.header("authorization");
+	const body = await c.req.json().catch(() => ({}));
+
+	const clientId = body.client_id || body.clientId;
+	const clientSecret = body.client_secret || body.clientSecret;
+	const password = typeof body.password === "string" ? body.password : "";
+	const code = typeof body.code === "string" ? body.code.trim() : "";
+	let token = body.token;
+	if (!token && authHeader?.startsWith("Bearer ")) {
+		token = authHeader.slice(7).trim();
+	}
+
+	if (!clientId || !clientSecret || !token || !password || !code) {
+		return c.json(
+			{
+				error: "invalid_request",
+				message: "client_id, client_secret, token, password, and code are all required to disable MFA",
+			},
+			400
+		);
+	}
+
+	const db = await getDb();
+
+	const client = await db.collection("oauthClient").findOne({
+		$or: [{ clientId }, { client_id: clientId }, { id: clientId }],
+	});
+	if (!client) return c.json({ error: "invalid_client" }, 401);
+
+	const storedSecret = client.clientSecret || client.client_secret;
+	if (!(await verifyClientSecret(clientSecret, storedSecret))) {
+		return c.json({ error: "invalid_client" }, 401);
+	}
+
+	const canonicalClientId = client.clientId || client.client_id || clientId;
+
+	try {
+		const secretKey = getAdminJwtSecret();
+		const { payload } = await jwtVerify(token, secretKey, {
+			algorithms: ["HS256"],
+			issuer: config.auth.baseURL ?? undefined,
+			audience: canonicalClientId,
+		});
+
+		const admin = await db.collection("app_admins").findOne({
+			_id: new ObjectId(payload.sub as string),
+			clientId: canonicalClientId,
+		});
+		if (!admin || admin.isActive === false) return c.json({ error: "account_inactive" }, 403);
+
+		if (admin.totpEnabled !== true || !admin.totpSecret) {
+			return c.json({ error: "mfa_not_enabled", message: "Two-factor authentication is not currently enabled" }, 400);
+		}
+
+		// Verify password
+		const isPasswordValid = await verifyPassword({ password, hash: admin.password });
+		if (!isPasswordValid) {
+			return c.json({ error: "invalid_credentials", message: "Invalid administrator password" }, 401);
+		}
+
+		// Verify TOTP or backup code
+		const plainSecret = decryptTotpSecret(admin.totpSecret);
+		const isTotpValid = verifyTotpCode(code, plainSecret);
+		const isBackupValid = !isTotpValid && verifyBackupCode(code, admin.totpBackupCodes || []).valid;
+
+		if (!isTotpValid && !isBackupValid) {
+			return c.json({ error: "invalid_code", message: "Invalid two-factor code or backup code" }, 401);
+		}
+
+		// Disable MFA
+		await db.collection("app_admins").updateOne(
+			{ _id: admin._id },
+			{
+				$set: {
+					totpEnabled: false,
+					updatedAt: new Date(),
+				},
+				$unset: {
+					totpSecret: "",
+					totpBackupCodes: "",
+					pendingTotpSecret: "",
+					pendingTotpBackupCodes: "",
+				},
+			}
+		);
+
+		return c.json({
+			success: true,
+			message: "Two-factor authentication disabled successfully",
+		});
+	} catch (err: any) {
+		return c.json({ error: "invalid_token", message: err?.message || "Token validation failed" }, 401);
 	}
 });
 

@@ -320,3 +320,104 @@ export async function logoutAdmin(adminToken: string) {
   return await res.json();
 }
 ```
+
+---
+
+### 5.5 Step 4: Administrator Two-Factor Authentication (TOTP MFA)
+
+For high-security applications, administrators can configure RFC 6238 TOTP two-factor authentication (Google Authenticator, Microsoft Authenticator, 1Password, etc.).
+
+#### A. Handling MFA During Login
+If an administrator has MFA enabled, `POST /api/auth/app-admin/login` will return `mfa_required: true` with a short-lived (5-minute) challenge token instead of the full session token:
+
+```json
+{
+  "mfa_required": true,
+  "mfa_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "message": "Two-factor authentication code required"
+}
+```
+
+When your consumer app receives `mfa_required: true`, prompt the administrator for their 6-digit TOTP code (or emergency backup code) and submit it to:
+
+```http
+POST /api/auth/app-admin/mfa/verify-login
+Content-Type: application/json
+
+{
+  "client_id": "your_client_id",
+  "client_secret": "your_client_secret",
+  "mfa_token": "eyJhbGciOiJIUzI1Ni...",
+  "code": "123456"
+}
+```
+
+**Success Response (Full 1h Session Token):**
+```json
+{
+  "success": true,
+  "token": "eyJhbGciOiJIUzI1Ni...",
+  "tokenType": "Bearer",
+  "expiresIn": 3600,
+  "redirectUrl": "https://app.example.com/admin",
+  "usedBackupCode": false,
+  "admin": {
+    "id": "65e...",
+    "email": "admin@example.com",
+    "name": "App Admin",
+    "clientId": "your_client_id",
+    "role": "app_admin",
+    "mfa_enabled": true
+  }
+}
+```
+
+#### B. MFA Setup & Management Endpoints
+
+| Endpoint | Method | Required Payload | Description |
+|---|---|---|---|
+| `/api/auth/app-admin/mfa/setup` | `POST` | `client_id, client_secret, token` | Initiates setup. Returns Base32 `secret`, `otpauth_url` for QR codes, and 8 one-time `backup_codes`. |
+| `/api/auth/app-admin/mfa/confirm` | `POST` | `client_id, client_secret, token, code` | Confirms setup with first 6-digit code to activate MFA. |
+| `/api/auth/app-admin/mfa/disable` | `POST` | `client_id, client_secret, token, password, code` | Disables MFA (requires admin password and current code). |
+
+---
+
+### 5.6 Cryptographic Token Isolation & Claims
+
+App administrator tokens are signed using a dedicated key derived independently from the identity engine's master secret via HMAC-SHA256 (`APP_ADMIN_JWT_SECRET`). Tokens contain:
+
+```json
+{
+  "sub": "65e123456789abcdef012345",
+  "email": "admin@example.com",
+  "name": "App Admin",
+  "clientId": "your_client_id",
+  "role": "app_admin",
+  "iss": "https://auth.yourdomain.com",
+  "aud": "your_client_id",
+  "jti": "7b2e9d28-3617-48f5-93df-4c3d4c382101",
+  "iat": 1710590000,
+  "exp": 1710593600
+}
+```
+
+- **Audience (`aud`) Verification**: Tokens issued for Application A cannot be verified or used by Application B. Even if an attacker steals an admin token from App A, presenting it with App B's client credentials results in an immediate cryptographic rejection (`401 / 403`).
+- **Issuer (`iss`) Verification**: Validates the token originates from the authentic identity authority.
+
+---
+
+## 6. Public vs Private Application Modes
+
+Each registered OAuth 2.1 client can operate in one of two isolation modes:
+
+| Mode | `isPublic` | User Access Policy | Self-Registration |
+|---|---|---|---|
+| **Public Application** *(default)* | `true` | Any registered platform user can sign into this application. User assignment is auto-recorded on first login. | Enabled |
+| **Private Application** | `false` | **Strict Isolation**: Only users explicitly provisioned or assigned to this application by an administrator can sign in. | **Disabled** (returns `403 registration_disabled`) |
+
+### Private App User Management API
+Administrators can assign and revoke user access to private applications via the Admin API:
+- `GET /api/admin/clients/:clientId/users` — List assigned users
+- `POST /api/admin/clients/:clientId/users` — Assign an existing user (`{ "email": "user@example.com" }`)
+- `DELETE /api/admin/clients/:clientId/users/:userId` — Revoke user access
+

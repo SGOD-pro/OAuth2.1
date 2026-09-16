@@ -18,16 +18,19 @@ examples
 *.env.local
 
 # scratch/test scripts and results
-hono/rate-limit-test.cjs
-hono/test2.cjs
+backend/rate-limit-test.cjs
+backend/test2.cjs
 skills-lock.json
 .next
 .dist
 dist
 
 # Test outputs & suites
-tests/
-hono/tests/
+backend/tests/*
+!backend/tests/security/
+backend/tests/security/*
+!backend/tests/security/test-app-admin-security.ts
+!backend/tests/security/security-remediation-test.ts
 *.test.log
 test-results/
 .system_generated/

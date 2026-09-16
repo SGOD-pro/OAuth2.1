@@ -32,6 +32,10 @@ export const envSchema = z.object({
     // Optional dedicated signing key for app-admin JWTs (≥32 chars).
     // If not set, a sub-key is derived from BETTER_AUTH_SECRET via HMAC-SHA256.
     APP_ADMIN_JWT_SECRET: z.string().min(32).optional(),
+
+    // Optional dedicated AES-256-GCM encryption key for app-admin TOTP secrets at rest (≥32 chars).
+    // If not set, a key is derived from appAdminJwtSecret.
+    APP_ADMIN_TOTP_KEY: z.string().min(32).optional(),
 })
 
 export type Env = z.infer<typeof envSchema>

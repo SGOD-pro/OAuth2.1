@@ -21,6 +21,8 @@ export interface OAuthClient {
   disabled: boolean;
   is_dev?: boolean;
   isDev?: boolean;
+  is_public?: boolean;
+  isPublic?: boolean;
   metadata?: {
     allowedOrigins?: string[];
     allowed_origins?: string[];

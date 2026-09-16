@@ -34,10 +34,13 @@ flowchart LR
 1. **Client Name**: Human-readable identifier for your consumer application.
 2. **Redirect URIs**: Callback routes whitelisted to receive authorization codes (e.g., `https://app.domain.com/api/auth/callback`).
 3. **Allowed CORS Origins**: Web origins permitted to make cross-origin token requests (e.g., `https://app.domain.com`).
-4. **Development Mode (`isDev` / `is_dev`)**:
+4. **Public Application Mode (`isPublic` / `is_public`)**:
+   - **Public Mode (default)**: Any registered platform user can sign into the application.
+   - **Private Mode**: Restricts application access to only users who are explicitly authorized and assigned to this specific application by an administrator. Self-registration for private applications is disabled (`403 registration_disabled`).
+5. **Development Mode (`isDev` / `is_dev`)**:
    - **Switch ON**: Permits loopback hosts (`http://localhost:*`, `http://127.0.0.1:*`) for local testing while still strictly blocking intranet/private IPs against SSRF.
    - **Switch OFF**: Enforces strict `https://` across all hosts in production.
-5. **Bypass Consent Screen**: Skips scope approval screen for trusted internal applications.
+6. **Bypass Consent Screen**: Skips scope approval screen for trusted internal applications.
 
 > [!IMPORTANT]
 > **Plaintext Secret Rule**: The client secret is only returned **once** in the creation response. Copy it immediately and place it in the consumer backend `.env` file. It cannot be retrieved later because it is stored hashed in MongoDB.
@@ -50,8 +53,19 @@ Existing clients can be modified at any time by clicking **Edit Config** on the 
 
 - **Update Redirect URIs**: Add or remove callback URLs.
 - **Update Allowed CORS Origins**: Add or remove permitted front-end origins (updates the active CORS whitelist cache automatically).
+- **Toggle Public / Private Mode**: Change application between public multi-user mode and private isolated mode.
 - **Toggle Development Mode**: Enable or disable loopback allowances.
 - **Toggle Application Active**: Disabling a client instantly revokes all active access tokens, refresh tokens, authorization codes, and token families.
+
+---
+
+## 3.1 Managing Users in Private Applications
+
+When an application is set to **Private Mode**, users must be explicitly granted access to sign in:
+
+- **List Users**: `GET /api/admin/clients/:clientId/users` displays all platform users who currently have access.
+- **Assign User**: `POST /api/admin/clients/:clientId/users` grants access to an existing platform user by email (`{ "email": "employee@company.com" }`).
+- **Revoke User**: `DELETE /api/admin/clients/:clientId/users/:userId` immediately removes access. Attempts to sign in will receive `403 access_denied`.
 
 ---
 
@@ -108,7 +122,8 @@ Each registered application can have multiple dedicated application administrato
 #### Managing Admins (Full CRUD):
 - **Edit**: Update name, email, redirect URL, toggle active/inactive status, or update password (optional).
 - **Delete**: Revokes the administrator with a confirmation modal.
-- **Telemetry**: Real-time visibility into **Login Count**, **Last Login Date**, and **Active Status**.
+- **Two-Factor Authentication (MFA)**: Status badges display `2FA Active` (emerald) or `2FA Off` (neutral) for every administrator.
+- **Telemetry**: Real-time visibility into **Login Count**, **Last Login Date**, **2FA Status**, and **Active Status**.
 
 ---
 

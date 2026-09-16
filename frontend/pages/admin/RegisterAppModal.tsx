@@ -12,6 +12,7 @@ interface FormState {
   redirectUris: string[];
   allowedOrigins: string[];
   isDev: boolean;
+  isPublic: boolean;
   skipConsent: boolean;
   enableEndSession: boolean;
 }
@@ -95,6 +96,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
     redirectUris: [],
     allowedOrigins: [],
     isDev: false,
+    isPublic: true,
     skipConsent: false,
     enableEndSession: true,
   });
@@ -132,6 +134,8 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
           redirect_uris: form.redirectUris,
           allowed_origins: form.allowedOrigins,
           is_dev: form.isDev,
+          is_public: form.isPublic,
+          isPublic: form.isPublic,
           skip_consent: form.skipConsent,
           enable_end_session: form.enableEndSession,
         }),
@@ -276,6 +280,21 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
                 <Checkbox
                   checked={form.isDev}
                   onCheckedChange={(checked) => setForm((f) => ({ ...f, isDev: checked === true }))}
+                />
+              </label>
+
+              <label className="flex items-start justify-between gap-4 cursor-pointer">
+                <div>
+                  <span className="font-sans text-xs font-medium text-foreground block">
+                    Public Application Mode
+                  </span>
+                  <span className="font-sans text-xs text-muted-foreground">
+                    When enabled, any platform user can log into this application. When disabled (Private Mode), only explicitly assigned users can access it.
+                  </span>
+                </div>
+                <Checkbox
+                  checked={form.isPublic}
+                  onCheckedChange={(checked) => setForm((f) => ({ ...f, isPublic: checked === true }))}
                 />
               </label>
 
