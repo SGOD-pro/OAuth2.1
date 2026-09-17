@@ -5,14 +5,13 @@ nginx
 .gemini
 node_modules
 logs
-package-lock.json
 .kiro
 .vscode
 .qoder
 .code-review-graph
 .agent
 examples
-
+.vercel
 # environment secrets — never commit real values
 .env
 *.env.local
