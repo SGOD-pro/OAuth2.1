@@ -35,3 +35,5 @@ backend/tests/security/*
 test-results/
 .system_generated/
 image.png
+.vercel
+.env*
