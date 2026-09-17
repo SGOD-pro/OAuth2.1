@@ -46,7 +46,9 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
     (redirectUris || []).forEach((u) => {
       try {
         set.add(new URL(u).origin);
-      } catch {}
+      } catch {
+        // Ignore invalid URL
+      }
     });
     return Array.from(set).filter(Boolean);
   }, [allowedOrigins, redirectUris]);
@@ -136,7 +138,7 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
     setEditLoading(true);
 
     try {
-      const payload: Record<string, any> = {
+      const payload: Record<string, unknown> = {
         email: editForm.email,
         name: editForm.name,
         redirectUrl: editForm.redirectUrl,

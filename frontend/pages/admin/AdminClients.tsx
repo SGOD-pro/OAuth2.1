@@ -204,9 +204,9 @@ export const AdminClients: React.FC = () => {
                               </Badge>
                               <Badge 
                                 variant="outline" 
-                                className={c.is_public !== false && (c as any).isPublic !== false ? 'bg-sky-500/10 text-sky-500 border-sky-500/30 text-[11px]' : 'bg-purple-500/10 text-purple-500 border-purple-500/30 text-[11px]'}
+                                className={c.is_public !== false && (c as Record<string, unknown>).isPublic !== false ? 'bg-sky-500/10 text-sky-500 border-sky-500/30 text-[11px]' : 'bg-purple-500/10 text-purple-500 border-purple-500/30 text-[11px]'}
                               >
-                                {c.is_public !== false && (c as any).isPublic !== false ? 'Public' : 'Private'}
+                                {c.is_public !== false && (c as Record<string, unknown>).isPublic !== false ? 'Public' : 'Private'}
                               </Badge>
                             </div>
                           </TableCell>

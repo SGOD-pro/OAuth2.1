@@ -74,6 +74,7 @@ Complete technical documentation, integration guides, and operational runbooks a
 | 👑 **[Admin Console & App Management](docs/ADMIN_GUIDE.md)** | Registering applications, CORS management, private user assignment, App Admin provisioning, CLI utilities, and troubleshooting. |
 | 🔌 **[Consumer Integration Guide](docs/INTEGRATION_GUIDE.md)** | End-to-end integration patterns and code samples for Next.js 14 BFF, React SPA + Express, and App Admin verification. |
 | 🛡️ **[Security & Abuse Defense](docs/SECURITY.md)** | Threat model, rate limiting algorithms, constant-time hashing, and reverse proxy boundaries. |
+| 🔄 **[CI/CD & Auto Deployment](docs/CICD.md)** | Automated GitHub Actions pipelines for AWS Lambda (SAM) and Vercel edge deployment. |
 | 📋 **[Environment Variables Reference](docs/ENVIRONMENT_VARIABLES.md)** | Complete table of all backend, frontend, and consumer client configuration flags. |
 
 ---

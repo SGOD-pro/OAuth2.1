@@ -1,0 +1,108 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/ci.yml'
+  push:
+    branches:
+      - '**'
+      - '!main'
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-frontend:
+    name: Frontend Lint & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run Frontend Linter (ESLint)
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build Frontend SPA
+        working-directory: frontend
+        run: npm run build
+
+  test-backend:
+    name: Backend Security Tests & Build
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:6
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Install Backend Dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run Automated Security Test Suite
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          MONGO_URI: mongodb://127.0.0.1:27017/test_security
+          BETTER_AUTH_SECRET: "ci_better_auth_secret_minimum_32_characters_long_key"
+          BETTER_AUTH_URL: http://localhost:3000
+          FRONTEND_URL: http://localhost:5174
+          GOOGLE_CLIENT_ID: test-google-id
+          GOOGLE_CLIENT_SECRET: test-google-secret
+          TRUSTED_PROXY_CIDRS: "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32"
+        run: npx tsx tests/security/test-app-admin-security.ts
+
+      - name: Build Lambda Bundle
+        working-directory: backend
+        run: npm run build
+
+      - name: Build Standalone Node Server Bundle
+        working-directory: backend
+        run: npm run build:node
+
+      - name: Validate SAM CloudFormation Template
+        working-directory: backend
+        run: sam validate --lint

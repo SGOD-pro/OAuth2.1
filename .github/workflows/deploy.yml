@@ -1,0 +1,243 @@
+name: Auto Deployment (Production)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Component to deploy'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - backend
+          - frontend
+
+# Prevent concurrent overlapping production deployments
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  detect-changes:
+    name: Detect Changed Components
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      deploy_backend: ${{ steps.filter.outputs.deploy_backend }}
+      deploy_frontend: ${{ steps.filter.outputs.deploy_frontend }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Evaluate Components to Deploy
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_TARGET: ${{ github.event.inputs.target }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Triggered manually with target: $MANUAL_TARGET"
+            if [ "$MANUAL_TARGET" = "all" ] || [ "$MANUAL_TARGET" = "backend" ]; then
+              echo "deploy_backend=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "deploy_backend=false" >> "$GITHUB_OUTPUT"
+            fi
+            if [ "$MANUAL_TARGET" = "all" ] || [ "$MANUAL_TARGET" = "frontend" ]; then
+              echo "deploy_frontend=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "deploy_frontend=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          # On push to main, check diff against parent commit
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD || true)
+          echo "Changed files in this commit:"
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -qE '^(backend/|\.github/workflows/deploy\.yml)'; then
+            echo "Backend changes detected."
+            echo "deploy_backend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No backend changes."
+            echo "deploy_backend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if echo "$CHANGED_FILES" | grep -qE '^(frontend/|\.github/workflows/deploy\.yml)'; then
+            echo "Frontend changes detected."
+            echo "deploy_frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No frontend changes."
+            echo "deploy_frontend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy-backend:
+    name: Deploy Backend to AWS Lambda
+    needs: detect-changes
+    if: needs.detect-changes.outputs.deploy_backend == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+
+    services:
+      mongodb:
+        image: mongo:6
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS Credentials (OIDC or IAM Access Keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'ap-south-1' }}
+          mask-aws-account-id: true
+
+      - name: Configure Named AWS Profile for SAM
+        run: |
+          # samconfig.toml references profile = "aws"
+          mkdir -p ~/.aws
+          aws configure set aws_access_key_id "${AWS_ACCESS_KEY_ID}" --profile aws
+          aws configure set aws_secret_access_key "${AWS_SECRET_ACCESS_KEY}" --profile aws
+          aws configure set region "${AWS_REGION:-ap-south-1}" --profile aws
+          if [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+            aws configure set aws_session_token "${AWS_SESSION_TOKEN}" --profile aws
+          fi
+
+      - name: Install Backend Dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Pre-Deployment Security Invariant Tests
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          MONGO_URI: mongodb://127.0.0.1:27017/test_security
+          BETTER_AUTH_SECRET: "deploy_preflight_secret_minimum_32_characters_key"
+          BETTER_AUTH_URL: http://localhost:3000
+          FRONTEND_URL: http://localhost:5174
+          GOOGLE_CLIENT_ID: test-google-id
+          GOOGLE_CLIENT_SECRET: test-google-secret
+          TRUSTED_PROXY_CIDRS: "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32"
+        run: npx tsx tests/security/test-app-admin-security.ts
+
+      - name: Compile Production Lambda Handler
+        working-directory: backend
+        run: npm run build
+
+      - name: Build AWS SAM Application
+        working-directory: backend
+        run: sam build
+
+      - name: Deploy Stack via AWS SAM
+        working-directory: backend
+        run: |
+          sam deploy \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
+
+      - name: Smoke Test Deployed Lambda Health Endpoint
+        run: |
+          echo "Validating live Lambda Function URL..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/)
+          if [ "$STATUS" -eq 200 ]; then
+            echo "Backend probe successful (HTTP 200)."
+          else
+            echo "Warning: Live health check returned HTTP $STATUS"
+          fi
+
+  deploy-frontend:
+    name: Deploy Frontend to Vercel
+    needs: detect-changes
+    if: needs.detect-changes.outputs.deploy_frontend == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run Frontend Linter (ESLint)
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build Frontend SPA
+        working-directory: frontend
+        run: npm run build
+
+      - name: Deploy Production Bundle to Vercel
+        working-directory: frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::VERCEL_TOKEN secret is not set in GitHub repository secrets. Deployment skipped."
+            exit 1
+          fi
+
+          echo "Linking Vercel Project..."
+          npx --yes vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+          echo "Building production package via Vercel..."
+          npx --yes vercel build --prod --token="$VERCEL_TOKEN"
+
+          echo "Deploying prebuilt production artifacts..."
+          npx --yes vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+      - name: Smoke Test Deployed Frontend
+        run: |
+          echo "Probing production frontend gateway..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/)
+          echo "Frontend probe returned HTTP $STATUS"
