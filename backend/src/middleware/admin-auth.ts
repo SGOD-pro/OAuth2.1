@@ -1,6 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import { authProvider } from "../utils/auth";
-import { getHeaders } from "../utils/security";
+import { getHeaders, resolveOAuthClient } from "../utils/security";
 import { getDb } from "../db/mongo";
 
 /**
@@ -48,6 +48,11 @@ export const requireAdmin = createMiddleware(async (c, next) => {
   return next();
 });
 
+export function isSuperAdmin(user: any): boolean {
+  if (!user) return false;
+  return user.role === "admin" && (user.scopedClientId == null || user.scopedClientId === "");
+}
+
 /**
  * Super-Admin Middleware: Global operations only (client creation, user provisioning, global stats/logs)
  */
@@ -63,8 +68,7 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
     return c.json({ error: "Admin access required" }, 403);
   }
 
-  const scopedClientId = auth.user?.scopedClientId;
-  if (scopedClientId !== null && scopedClientId !== undefined && scopedClientId !== "") {
+  if (!isSuperAdmin(auth.user)) {
     return c.json(
       {
         error: "forbidden",
@@ -106,15 +110,20 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
   const scopedClientId = auth.user?.scopedClientId;
   const targetClientId = c.req.param("id") || c.req.param("clientId");
 
-  // If user is scoped to a specific application, enforce strict boundary
-  if (scopedClientId && targetClientId && targetClientId !== scopedClientId) {
-    return c.json(
-      {
-        error: "forbidden",
-        message: "Cross-tenant access forbidden: you can only manage your own assigned application",
-      },
-      403
-    );
+  // If user is scoped to a specific application, resolve canonical tenant identity first
+  if (scopedClientId && targetClientId) {
+    const database = await getDb();
+    const resolvedClient = await resolveOAuthClient(database, targetClientId);
+    const canonicalTargetId = resolvedClient ? resolvedClient.clientId : targetClientId;
+    if (canonicalTargetId !== scopedClientId) {
+      return c.json(
+        {
+          error: "forbidden",
+          message: "Cross-tenant access forbidden: you can only manage your own assigned application",
+        },
+        403
+      );
+    }
   }
 
   c.set("scopedClientId", scopedClientId || null);

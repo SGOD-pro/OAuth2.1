@@ -4,7 +4,7 @@ import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { getHeaders, isStrongPassword, validateRedirectUris, getTrustedClientIp } from "../utils/security";
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
-import { requireAdmin, requireSuperAdmin, requireScopedAdmin } from "../middleware/admin-auth";
+import { requireAdmin, requireSuperAdmin, requireScopedAdmin, isSuperAdmin } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
@@ -193,7 +193,7 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
 });
 
 // 3. Platform Stats (Super-Admin only)
-admin.get("/stats", requireAdmin, async (c) => {
+admin.get("/stats", requireSuperAdmin, async (c) => {
   try {
     const database = await getDb();
     const sessionUser = c.get("user") as any;
@@ -503,6 +503,22 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   delete body.id;
   delete body.userId;
 
+  if (!isSuperAdmin(sessionUser)) {
+    delete body.isPublic;
+    delete body.is_public;
+    delete body.isDev;
+    delete body.is_dev;
+    delete body.disabled;
+    delete body.is_active;
+    delete body.clientId;
+    delete body.clientSecret;
+    delete body.client_secret;
+    delete body.adminEmail;
+    delete body.admin_email;
+    delete body.adminUserId;
+    delete body.admin_user_id;
+  }
+
   let oldClient: any = null;
   try {
     oldClient = await authApi.getOAuthClient({
@@ -582,8 +598,10 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   const database = await getDb();
   const dbUpdates: any = { updatedAt: new Date() };
   if (allowedOrigins) dbUpdates.allowedOrigins = allowedOrigins;
-  if (typeof (body.isDev ?? body.is_dev) === "boolean") dbUpdates.isDev = isDev;
-  if (typeof (body.isPublic ?? body.is_public) === "boolean") dbUpdates.isPublic = Boolean(body.isPublic ?? body.is_public);
+  if (isSuperAdmin(sessionUser)) {
+    if (typeof (body.isDev ?? body.is_dev) === "boolean") dbUpdates.isDev = isDev;
+    if (typeof (body.isPublic ?? body.is_public) === "boolean") dbUpdates.isPublic = Boolean(body.isPublic ?? body.is_public);
+  }
   if (typeof updatePayload.skip_consent === "boolean") dbUpdates.skipConsent = updatePayload.skip_consent;
   if (typeof updatePayload.enable_end_session === "boolean") dbUpdates.enableEndSession = updatePayload.enable_end_session;
   if (typeof updatePayload.disabled === "boolean") dbUpdates.disabled = updatePayload.disabled;
@@ -700,13 +718,15 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
   if (Array.isArray(body.redirectUris)) safeUpdate.redirectUris = body.redirectUris;
   if (Array.isArray(body.allowed_origins)) safeUpdate.allowed_origins = body.allowed_origins;
   if (Array.isArray(body.allowedOrigins)) safeUpdate.allowedOrigins = body.allowedOrigins;
-  if (typeof (body.is_dev ?? body.isDev) === "boolean") {
-    safeUpdate.is_dev = Boolean(body.is_dev ?? body.isDev);
-    safeUpdate.isDev = Boolean(body.is_dev ?? body.isDev);
-  }
-  if (typeof (body.is_public ?? body.isPublic) === "boolean") {
-    safeUpdate.is_public = Boolean(body.is_public ?? body.isPublic);
-    safeUpdate.isPublic = Boolean(body.is_public ?? body.isPublic);
+  if (isSuperAdmin(sessionUser)) {
+    if (typeof (body.is_dev ?? body.isDev) === "boolean") {
+      safeUpdate.is_dev = Boolean(body.is_dev ?? body.isDev);
+      safeUpdate.isDev = Boolean(body.is_dev ?? body.isDev);
+    }
+    if (typeof (body.is_public ?? body.isPublic) === "boolean") {
+      safeUpdate.is_public = Boolean(body.is_public ?? body.isPublic);
+      safeUpdate.isPublic = Boolean(body.is_public ?? body.isPublic);
+    }
   }
   if (typeof (body.skip_consent ?? body.skipConsent) === "boolean") {
     safeUpdate.skip_consent = Boolean(body.skip_consent ?? body.skipConsent);
@@ -1007,6 +1027,9 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
 
     if (typeof body.isActive === "boolean") {
       updateFields.isActive = body.isActive;
+      if (body.isActive === false) {
+        updateFields.tokensRevokedBefore = new Date();
+      }
     }
 
     if (typeof body.password === "string" && body.password.length > 0) {
@@ -1020,6 +1043,7 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
         );
       }
       updateFields.password = await hashPassword(body.password);
+      updateFields.passwordChangedAt = new Date();
     }
 
     await database.collection("app_admins").updateOne(
@@ -1028,6 +1052,9 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
     );
 
     const updated = await database.collection("app_admins").findOne({ _id: adminObjId });
+    if (!updated) {
+      return c.json({ error: "Administrator not found after update" }, 404);
+    }
 
     await recordAdminAudit({
       actorUserId: sessionUser?.id,
@@ -1122,12 +1149,18 @@ admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
       .toArray();
 
     const userIds = regs.map((r: any) => r.userId);
+    const validObjectIds: ObjectId[] = [];
+    for (const id of userIds) {
+      try {
+        if (ObjectId.isValid(id)) validObjectIds.push(new ObjectId(id));
+      } catch {}
+    }
     const users = await database
       .collection("user")
       .find({
         $or: [
           { id: { $in: userIds } },
-          { _id: { $in: userIds.map((id: string) => { try { return new ObjectId(id); } catch { return id; } }) } },
+          { _id: { $in: validObjectIds } },
         ],
       })
       .toArray();
@@ -1234,12 +1267,35 @@ admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, async (c) =
 
   try {
     const database = await getDb();
-    const result = await database.collection("user_app_registrations").deleteMany({
-      clientId,
-      $or: [{ userId }, { userId: String(userId) }],
-    });
+    const [regResult, tokenResult, refreshResult, consentResult, codeResult] = await Promise.all([
+      database.collection("user_app_registrations").deleteMany({
+        clientId,
+        $or: [{ userId }, { userId: String(userId) }],
+      }),
+      database.collection("oauthAccessToken").deleteMany({ clientId, userId: { $in: [userId, String(userId)] } }),
+      database.collection("oauthRefreshToken").deleteMany({ clientId, userId: { $in: [userId, String(userId)] } }),
+      database.collection("oauthConsent").deleteMany({ clientId, userId: { $in: [userId, String(userId)] } }),
+      database.collection("oauthAuthorizationCode").deleteMany({ clientId, userId: { $in: [userId, String(userId)] } }),
+      database.collection("oauth_token_families").updateMany(
+        { clientId, userId: { $in: [userId, String(userId)] } },
+        { $set: { status: "revoked", revokedAt: new Date() } }
+      ),
+      database.collection("verification").deleteMany({
+        $or: [
+          { value: { $regex: `"userId":"${userId}".*"client_id":"${clientId}"` } },
+          { value: { $regex: `"client_id":"${clientId}".*"userId":"${userId}"` } },
+        ]
+      }).catch(() => {}),
+    ]);
 
-    if (result.deletedCount === 0) {
+    const totalRemoved =
+      regResult.deletedCount +
+      tokenResult.deletedCount +
+      refreshResult.deletedCount +
+      consentResult.deletedCount +
+      codeResult.deletedCount;
+
+    if (totalRemoved === 0) {
       return c.json({ error: "Assignment not found" }, 404);
     }
 

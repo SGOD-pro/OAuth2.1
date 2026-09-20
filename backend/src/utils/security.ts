@@ -312,26 +312,72 @@ export async function resolveOAuthClient(
  * Check if the requested redirect URI matches one of the client's registered redirect URIs.
  * Exact matching of origin and pathname is enforced.
  */
+/**
+ * Check if the requested redirect URI matches one of the client's registered redirect URIs.
+ * Strict exact matching is enforced per RFC 6749 Section 3.1.2 and OAuth 2.1:
+ * - Scheme, host, port, path, and query string must match exactly.
+ * - Fragment components ('#') are strictly forbidden per RFC 6749 Section 3.1.2.
+ * - Userinfo components ('user:pass@') are strictly forbidden per RFC 6749 Section 3.1.2.
+ * - Loopback addresses (localhost, 127.0.0.1, [::1]) may allow variable port ONLY if the client
+ *   registered a loopback redirect URI per RFC 8252 Section 7.3.
+ */
 export function isRegisteredRedirectUri(
   client: CanonicalOAuthClient | null,
   redirectUri: string,
 ): boolean {
-  if (!client || !redirectUri || !Array.isArray(client.redirectUris) || client.redirectUris.length === 0) {
+  if (!client || !redirectUri || typeof redirectUri !== "string" || !Array.isArray(client.redirectUris) || client.redirectUris.length === 0) {
+    return false;
+  }
+
+  // RFC 6749 Section 3.1.2: Redirection endpoint URI MUST NOT include a fragment component
+  if (redirectUri.includes("#")) {
     return false;
   }
 
   try {
     const targetUrl = new URL(redirectUri);
+
+    // RFC 6749 Section 3.1.2: Redirection endpoint URI MUST NOT contain userinfo
+    if (targetUrl.username || targetUrl.password) {
+      return false;
+    }
+
+    const targetHostname = targetUrl.hostname.toLowerCase();
+
     return client.redirectUris.some((registered: string) => {
       try {
+        if (registered.includes("#")) return false;
         const regUrl = new URL(registered);
-        // Protocol, hostname, port, and pathname must match exactly
+        if (regUrl.username || regUrl.password) return false;
+
+        // 1. Protocol must match exactly (e.g. https: vs http:)
         if (targetUrl.protocol !== regUrl.protocol) return false;
-        if (targetUrl.hostname.toLowerCase() !== regUrl.hostname.toLowerCase()) return false;
+
+        // 2. Hostname must match exactly (case-insensitive, no trailing dot mismatches)
+        const regHostname = regUrl.hostname.toLowerCase();
+        if (targetHostname !== regHostname) return false;
+
+        // 3. Port matching
         const targetPort = targetUrl.port || defaultPort(targetUrl.protocol);
         const regPort = regUrl.port || defaultPort(regUrl.protocol);
-        if (targetPort !== regPort) return false;
+
+        const isLoopback = (
+          regHostname === "localhost" ||
+          regHostname === "127.0.0.1" ||
+          regHostname === "[::1]"
+        );
+
+        // RFC 8252 Section 7.3: Native loopback clients may bind to variable ephemeral ports
+        if (!isLoopback && targetPort !== regPort) {
+          return false;
+        }
+
+        // 4. Pathname must match exactly (no trailing slash discrepancies)
         if (targetUrl.pathname !== regUrl.pathname) return false;
+
+        // 5. Query string must match exactly (no arbitrary injected parameters)
+        if (targetUrl.search !== regUrl.search) return false;
+
         return true;
       } catch {
         return false;

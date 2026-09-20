@@ -17,6 +17,9 @@
     "dev": "tsx watch --env-file=.env src/dev.ts",
     "security:self-check": "tsx --env-file=.env scripts/security-self-check.ts",
     "test:security": "tsx --env-file=.env tests/security/test-app-admin-security.ts",
+    "test:gate": "tsx --env-file=.env tests/security/phase25-security-gate.ts",
+    "test:second-pass": "tsx --env-file=.env tests/security/second-pass-security-suite.ts",
+    "test:security-gate": "tsx --env-file=.env tests/security/final-adversarial-gate.ts",
     "admin:create": "tsx --env-file=.env scripts/create-admin.ts"
   },
   "devDependencies": {

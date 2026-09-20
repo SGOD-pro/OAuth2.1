@@ -34,6 +34,9 @@ tests/*
 tests/security/*
 !tests/security/test-app-admin-security.ts
 !tests/security/security-remediation-test.ts
+!tests/security/phase25-security-gate.ts
+!tests/security/second-pass-security-suite.ts
+!tests/security/final-adversarial-gate.ts
 test-results/
 
 # misc

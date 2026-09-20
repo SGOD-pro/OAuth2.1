@@ -44,7 +44,7 @@ function getAdminJwtSecret(): Uint8Array {
 }
 
 // Helper: Verify client secret (supports Better-Auth SHA-256 base64url, scrypt/bcrypt, and migration-safe plaintext)
-async function verifyClientSecret(providedSecret: string, storedSecret: string, client?: any, db?: any): Promise<boolean> {
+async function verifyClientSecret(providedSecret: string, storedSecret: string | undefined, client?: any, db?: any): Promise<boolean> {
 	if (!providedSecret || !storedSecret) return false;
 
 	// 1. Better Auth SHA-256 base64url hash (standard OAuth client secret storage method)
@@ -292,6 +292,7 @@ appAdminAuth.post("/login", async (c) => {
 		role: "app_admin",
 		token_use: "app_admin",
 		redirectUrl: admin.redirectUrl,
+		pwd_version: admin.passwordChangedAt ? new Date(admin.passwordChangedAt).getTime() : 0,
 	})
 		.setProtectedHeader({ alg: "HS256", typ: "JWT" })
 		.setJti(jti)
@@ -461,8 +462,51 @@ appAdminAuth.post("/verify", async (c) => {
 					error: "account_inactive",
 					message: "Administrator account no longer exists or is inactive",
 				},
-				403
+				401
 			);
+		}
+
+		if (admin.passwordChangedAt) {
+			const pwdChangedMs = new Date(admin.passwordChangedAt).getTime();
+			if (payload.pwd_version !== undefined) {
+				if (Number(payload.pwd_version) < pwdChangedMs) {
+					return c.json(
+						{
+							valid: false,
+							error: "token_expired",
+							message: "Session expired due to password change. Please sign in again.",
+						},
+						401
+					);
+				}
+			} else if (payload.iat) {
+				const iatMs = Number(payload.iat) * 1000;
+				if (iatMs < pwdChangedMs) {
+					return c.json(
+						{
+							valid: false,
+							error: "token_expired",
+							message: "Session expired due to password change. Please sign in again.",
+						},
+						401
+					);
+				}
+			}
+		}
+
+		if (admin.tokensRevokedBefore && payload.iat) {
+			const iatMs = Number(payload.iat) * 1000;
+			const revokedBeforeMs = new Date(admin.tokensRevokedBefore).getTime();
+			if (iatMs < revokedBeforeMs - 1000) {
+				return c.json(
+					{
+						valid: false,
+						error: "token_revoked",
+						message: "Administrator session token has been revoked.",
+					},
+					401
+				);
+			}
 		}
 
 		return c.json({
@@ -482,7 +526,7 @@ appAdminAuth.post("/verify", async (c) => {
 			{
 				valid: false,
 				error: "invalid_token",
-				message: err?.message || "Token validation failed",
+				message: "Token validation failed",
 			},
 			401
 		);
@@ -739,7 +783,7 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		const backupRes = await db.collection("app_admins").updateOne(
 			{ _id: admin._id, totpBackupCodes: targetHash },
 			{
-				$pull: { totpBackupCodes: targetHash },
+				$pull: { totpBackupCodes: targetHash } as any,
 				$set: { updatedAt: new Date() },
 			}
 		);
@@ -779,6 +823,7 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		role: "app_admin",
 		token_use: "app_admin",
 		redirectUrl: admin.redirectUrl,
+		pwd_version: admin.passwordChangedAt ? new Date(admin.passwordChangedAt).getTime() : 0,
 	})
 		.setProtectedHeader({ alg: "HS256", typ: "JWT" })
 		.setJti(jti)
@@ -904,7 +949,7 @@ appAdminAuth.post("/mfa/setup", async (c) => {
 			message: "Scan the otpauth_url QR code in your authenticator app and call /mfa/confirm with a 6-digit code.",
 		});
 	} catch (err: any) {
-		return c.json({ error: "invalid_token", message: err?.message || "Token validation failed" }, 401);
+		return c.json({ error: "invalid_token", message: "Token validation failed" }, 401);
 	}
 });
 
@@ -999,7 +1044,7 @@ appAdminAuth.post("/mfa/confirm", async (c) => {
 			message: "Two-factor authentication has been successfully enabled for this account.",
 		});
 	} catch (err: any) {
-		return c.json({ error: "invalid_token", message: err?.message || "Token validation failed" }, 401);
+		return c.json({ error: "invalid_token", message: "Token validation failed" }, 401);
 	}
 });
 
@@ -1079,38 +1124,59 @@ appAdminAuth.post("/mfa/disable", async (c) => {
 			return c.json({ error: "invalid_credentials", message: "Invalid administrator password" }, 401);
 		}
 
-		// Verify TOTP or backup code
+		// Verify TOTP or atomically consume backup code
 		const plainSecret = decryptTotpSecret(admin.totpSecret);
 		const isTotpValid = verifyTotpCode(code, plainSecret);
-		const isBackupValid = !isTotpValid && verifyBackupCode(code, admin.totpBackupCodes || []).valid;
 
-		if (!isTotpValid && !isBackupValid) {
-			return c.json({ error: "invalid_code", message: "Invalid two-factor code or backup code" }, 401);
-		}
+		if (isTotpValid) {
+			// Disable MFA with valid TOTP code
+			await db.collection("app_admins").updateOne(
+				{ _id: admin._id },
+				{
+					$set: {
+						totpEnabled: false,
+						updatedAt: new Date(),
+					},
+					$unset: {
+						totpSecret: "",
+						totpBackupCodes: "",
+						pendingTotpSecret: "",
+						pendingTotpBackupCodes: "",
+					},
+				}
+			);
+		} else {
+			// Atomic verification and one-time consumption of backup code (race condition proof)
+			const normalized = code.trim().toUpperCase();
+			const targetHash = crypto.createHash("sha256").update(normalized).digest("hex");
 
-		// Disable MFA
-		await db.collection("app_admins").updateOne(
-			{ _id: admin._id },
-			{
-				$set: {
-					totpEnabled: false,
-					updatedAt: new Date(),
-				},
-				$unset: {
-					totpSecret: "",
-					totpBackupCodes: "",
-					pendingTotpSecret: "",
-					pendingTotpBackupCodes: "",
-				},
+			const backupRes = await db.collection("app_admins").updateOne(
+				{ _id: admin._id, totpBackupCodes: targetHash },
+				{
+					$set: {
+						totpEnabled: false,
+						updatedAt: new Date(),
+					},
+					$unset: {
+						totpSecret: "",
+						totpBackupCodes: "",
+						pendingTotpSecret: "",
+						pendingTotpBackupCodes: "",
+					},
+				}
+			);
+
+			if (backupRes.modifiedCount === 0) {
+				return c.json({ error: "invalid_code", message: "Invalid or already consumed two-factor code or backup code" }, 401);
 			}
-		);
+		}
 
 		return c.json({
 			success: true,
 			message: "Two-factor authentication disabled successfully",
 		});
 	} catch (err: any) {
-		return c.json({ error: "invalid_token", message: err?.message || "Token validation failed" }, 401);
+		return c.json({ error: "invalid_token", message: "Token validation failed" }, 401);
 	}
 });
 

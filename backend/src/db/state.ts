@@ -211,7 +211,8 @@ export async function registerTokenFamily(
 
 export async function verifyAndRotateTokenFamily(
   incomingTokenHash: string,
-  newTokenHash: string
+  newTokenHash: string,
+  userId?: string
 ): Promise<{
   valid: boolean;
   replayed: boolean;
@@ -242,19 +243,35 @@ export async function verifyAndRotateTokenFamily(
 
   // 3. Replay Detection (Theft Detected!)
   if (doc.consumedTokenHashes.includes(incomingTokenHash)) {
-    // FAIL-SECURE: Immediately cascade-revoke the entire family
+    // When checking with a dummy hash, distinguish between an in-flight concurrent race
+    // (within 2000ms grace window of rotation) and a subsequent replay theft attempt.
+    const timeSinceRotation = doc.updatedAt ? Date.now() - new Date(doc.updatedAt).getTime() : 10000;
+    const isConcurrentCheck = newTokenHash === "dummy" && timeSinceRotation < 2000;
+
+    if (isConcurrentCheck) {
+      // In-flight collision: The token was legitimately rotated by the winning concurrent request.
+      // Reject this loser request as consumed without revoking the winner's active family.
+      return { valid: false, replayed: false, familyId: doc.familyId, clientId: doc.clientId, userId: doc.userId };
+    }
+
+    // FAIL-SECURE: Immediately cascade-revoke the entire family on true replay theft
     await db.collection<TokenFamilyDoc>("oauth_token_families").updateOne(
       { _id: doc._id },
       { $set: { status: "revoked", revokedAt: new Date() } }
     );
 
-    // Revoke all active tokens for this client/user
-    if (doc.clientId) {
+    // Revoke all active tokens for this client/user scope.
+    // FAIL-CLOSED: If userId is missing, DO NOT fall back to client-wide deletion ({ clientId }).
+    // A missing userId must NEVER cause revocation of unrelated users' credentials!
+    if (doc.clientId && doc.userId) {
+      const filter = { clientId: doc.clientId, userId: doc.userId };
       await Promise.all([
-        db.collection("oauthAccessToken").deleteMany({ clientId: doc.clientId }),
-        db.collection("oauthRefreshToken").deleteMany({ clientId: doc.clientId }),
-        db.collection("oauthAuthorizationCode").deleteMany({ clientId: doc.clientId }),
+        db.collection("oauthAccessToken").deleteMany(filter),
+        db.collection("oauthRefreshToken").deleteMany(filter),
+        db.collection("oauthAuthorizationCode").deleteMany(filter),
       ]);
+    } else {
+      console.warn(`[TOKEN_FAMILY_REPLAY] Warning: Family ${doc.familyId} has missing userId/clientId; revoking family record only to prevent cross-user DoS`);
     }
 
     await invalidateCachedTokenFamily(doc.familyId);
@@ -266,18 +283,49 @@ export async function verifyAndRotateTokenFamily(
       timestamp: new Date(),
     });
 
-    return { valid: false, replayed: true, familyId: doc.familyId, clientId: doc.clientId };
+    return { valid: false, replayed: true, familyId: doc.familyId, clientId: doc.clientId, userId: doc.userId };
   }
 
-  // 4. Legitimate Rotation
+  // If caller only provided a dummy hash for replay-checking without rotating
+  if (newTokenHash === "dummy" || !newTokenHash) {
+    return {
+      valid: doc.activeTokenHash === incomingTokenHash,
+      replayed: false,
+      familyId: doc.familyId,
+      clientId: doc.clientId,
+      userId: doc.userId,
+    };
+  }
+
+  // 4. Legitimate Rotation with Atomic Compare-and-Swap (CAS)
   if (doc.activeTokenHash === incomingTokenHash) {
-    await db.collection<TokenFamilyDoc>("oauth_token_families").updateOne(
-      { _id: doc._id },
+    const updateResult = await db.collection<TokenFamilyDoc>("oauth_token_families").updateOne(
+      {
+        _id: doc._id,
+        activeTokenHash: incomingTokenHash,
+        status: "active",
+      },
       {
         $push: { consumedTokenHashes: incomingTokenHash },
-        $set: { activeTokenHash: newTokenHash, updatedAt: new Date() },
+        $set: {
+          activeTokenHash: newTokenHash,
+          updatedAt: new Date(),
+          rotating: false,
+          ...(userId && !doc.userId ? { userId } : {}),
+        },
       }
     );
+
+    if (updateResult.modifiedCount === 0) {
+      // Race condition detected! Another concurrent request rotated the token
+      return {
+        valid: false,
+        replayed: true,
+        familyId: doc.familyId,
+        clientId: doc.clientId,
+        userId: doc.userId || userId,
+      };
+    }
 
     await setCachedTokenFamilyStatus(doc.familyId, "active");
     return {
@@ -285,7 +333,7 @@ export async function verifyAndRotateTokenFamily(
       replayed: false,
       familyId: doc.familyId,
       clientId: doc.clientId,
-      userId: doc.userId,
+      userId: doc.userId || userId,
     };
   }
 
