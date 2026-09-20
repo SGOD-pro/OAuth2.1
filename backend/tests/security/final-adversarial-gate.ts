@@ -19,15 +19,84 @@ process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8
 process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
 process.env.TOTP_ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || "c".repeat(32);
 
+const jose = await import("jose");
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");
 const { registerTokenFamily, verifyAndRotateTokenFamily } = await import("../../src/db/state");
 const { isRegisteredRedirectUri, getTrustedClientIp, normalizeOrigin } = await import("../../src/utils/security");
 
+// --------------------------------------------------------------------------
+// Narrow Google External Provider Mocking (RS256 ID Token & JWKS)
+// --------------------------------------------------------------------------
+const googleKeyPair = await jose.generateKeyPair("RS256");
+const googlePublicKeyJwk = (await jose.exportJWK(googleKeyPair.publicKey)) as any;
+googlePublicKeyJwk.kid = "test-google-kid";
+googlePublicKeyJwk.alg = "RS256";
+googlePublicKeyJwk.use = "sig";
+
+let mockGoogleProfile = {
+  sub: `google_sub_${crypto.randomBytes(6).toString("hex")}`,
+  email: `google_user_${crypto.randomBytes(4).toString("hex")}@example.com`,
+  name: "Mock Google User",
+};
+
+const originalGlobalFetch = globalThis.fetch;
+globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const urlStr =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.href
+      : (input as any)?.url || (input as any)?.href || String(input);
+
+  if (urlStr.startsWith("https://oauth2.googleapis.com/token")) {
+    const idToken = await new jose.SignJWT({
+      iss: "https://accounts.google.com",
+      aud: process.env.GOOGLE_CLIENT_ID || "test-google-id",
+      sub: mockGoogleProfile.sub,
+      email: mockGoogleProfile.email,
+      email_verified: true,
+      name: mockGoogleProfile.name,
+      picture: "https://example.com/avatar.png",
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "test-google-kid" })
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(googleKeyPair.privateKey);
+
+    return new Response(
+      JSON.stringify({
+        access_token: `mock_google_at_${crypto.randomBytes(8).toString("hex")}`,
+        id_token: idToken,
+        token_type: "Bearer",
+        expires_in: 3600,
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+
+  if (urlStr.startsWith("https://www.googleapis.com/oauth2/v3/certs")) {
+    return new Response(
+      JSON.stringify({
+        keys: [googlePublicKeyJwk],
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+
+  return originalGlobalFetch(input, init);
+};
+
 console.log("================================================================");
 console.log("  SWYRA AUTH -- FINAL ADVERSARIAL SECURITY GATE HARNESS");
-console.log("  Verifying Invariants I1 through I17 across all 29 Cases");
+console.log("  Verifying Invariants I1 through I17 across all 30 Cases");
 console.log("================================================================");
 
 let passed = 0;
@@ -319,7 +388,7 @@ let activeRefreshToken: string = "";
 let initialTokenFamilyId: string = "";
 let racedTokenString: string = "";
 
-await runTest(4, "Refresh-token concurrency: 5 simultaneous requests produce exactly 1 successor", async () => {
+await runTest(4, "Refresh-token concurrency: 5 simultaneous requests produce exactly 1 successor with zero duplicates", async () => {
   // Obtain initial refresh token
   const pkce = generatePkce();
   const code = await getAuthCode(appA_id, redirectUriA, user1Cookie, pkce);
@@ -345,7 +414,14 @@ await runTest(4, "Refresh-token concurrency: 5 simultaneous requests produce exa
   const tokenToRace = initialJson.refresh_token;
   racedTokenString = tokenToRace;
 
-  // Send 5 concurrent requests with exact same refresh token R
+  // Record pre-race active refresh tokens for this canonical user/client
+  const preTokens = await db.collection("oauthRefreshToken").find({
+    clientId: appA_id,
+    userId: { $in: [user1Id, new ObjectId(user1Id)] },
+    $or: [{ revoked: null }, { revoked: false }, { revoked: { $exists: false } }],
+  }).toArray();
+
+  // Send 5 concurrent requests with exact same refresh token R0
   const reqBody = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: tokenToRace,
@@ -370,11 +446,11 @@ await runTest(4, "Refresh-token concurrency: 5 simultaneous requests produce exa
   assert.equal(successCount, 1, `Expected exactly 1 success out of 5 concurrent requests, got ${successCount}`);
   assert.equal(failureCount, 4, `Expected exactly 4 failures out of 5 concurrent requests, got ${failureCount}`);
 
-  // Inspect MongoDB state
+  // Inspect winner response
   const winnerResponse = responses.find((r) => r.status === 200)!;
   const winnerJson = await winnerResponse.json();
   activeRefreshToken = winnerJson.refresh_token;
-  assert.ok(activeRefreshToken, "Winner must receive new successor refresh token");
+  assert.ok(activeRefreshToken, "Winner must receive new successor refresh token R1");
 
   const winnerHash = crypto.createHash("sha256").update(activeRefreshToken).digest("hex");
   const familyDoc = await db.collection("oauth_token_families").findOne({ activeTokenHash: winnerHash });
@@ -385,64 +461,179 @@ await runTest(4, "Refresh-token concurrency: 5 simultaneous requests produce exa
   assert.equal(familyDoc.userId, user1Id);
   initialTokenFamilyId = familyDoc.familyId;
 
-  // Verify MongoDB: exactly 1 active successor token document exists, no duplicate active credentials
-  const b64Hash = crypto.createHash("sha256").update(activeRefreshToken).digest("base64url");
-  let activeTokensInDb: any[] = [];
+  // F-08 Assertion: Query ALL active refresh tokens for this client/user in MongoDB
+  let activePostTokens: any[] = [];
   for (let attempt = 0; attempt < 15; attempt++) {
-    const rawTokens = await db.collection("oauthRefreshToken").find({
+    const postTokens = await db.collection("oauthRefreshToken").find({
       clientId: appA_id,
       userId: { $in: [user1Id, new ObjectId(user1Id)] },
-      $or: [{ token: activeRefreshToken }, { token: b64Hash }],
+      $or: [{ revoked: null }, { revoked: false }, { revoked: { $exists: false } }],
     }).toArray();
-    activeTokensInDb = rawTokens.filter((t: any) => t.revoked == null);
-    if (activeTokensInDb.length > 0) break;
+    activePostTokens = postTokens.filter((t: any) => !t.expiresAt || new Date(t.expiresAt) > new Date());
+    if (activePostTokens.length === 1) break;
     await new Promise((r) => setTimeout(r, 100));
   }
-  assert.equal(activeTokensInDb.length, 1, "Exactly one active successor refresh token document must exist in MongoDB");
+  assert.equal(
+    activePostTokens.length,
+    1,
+    `Expected exactly 1 active refresh token document in DB (zero duplicate active credentials), found ${activePostTokens.length}`
+  );
 
-  // Verify old consumed token cannot remain active
+  // Verify old consumed token R0 cannot remain active
   const oldB64Hash = crypto.createHash("sha256").update(tokenToRace).digest("base64url");
-  let activeOldTokens: any[] = [];
-  for (let attempt = 0; attempt < 15; attempt++) {
-    const oldTokensInDb = await db.collection("oauthRefreshToken").find({
-      clientId: appA_id,
-      $or: [{ token: tokenToRace }, { token: oldB64Hash }],
-    }).toArray();
-    activeOldTokens = oldTokensInDb.filter((t: any) => t.revoked == null && (!t.expiresAt || new Date(t.expiresAt) > new Date()));
-    if (activeOldTokens.length === 0) break;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  assert.equal(activeOldTokens.length, 0, "Consumed token must not remain as an active credential");
+  const oldTokensInDb = await db.collection("oauthRefreshToken").find({
+    clientId: appA_id,
+    $or: [{ token: tokenToRace }, { token: oldB64Hash }],
+  }).toArray();
+  const activeOld = oldTokensInDb.filter((t: any) => t.revoked == null && (!t.expiresAt || new Date(t.expiresAt) > new Date()));
+  assert.equal(activeOld.length, 0, "Consumed token R0 must not remain as an active credential");
+
+  // Sequential second refresh: Rotate R1 -> R2
+  const secondRefreshRes = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicA}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: activeRefreshToken,
+    }).toString(),
+  });
+  assert.equal(secondRefreshRes.status, 200, "Sequential second refresh with R1 must succeed");
+  const secondJson = await secondRefreshRes.json();
+  const secondSuccessorToken = secondJson.refresh_token;
+  assert.ok(secondSuccessorToken, "Must issue second successor refresh token R2");
+
+  // Verify MongoDB family updated to R2
+  const secondHash = crypto.createHash("sha256").update(secondSuccessorToken).digest("hex");
+  const secondFamilyDoc = await db.collection("oauth_token_families").findOne({ activeTokenHash: secondHash });
+  assert.ok(secondFamilyDoc, "Token family must have R2 as activeTokenHash");
+  assert.equal(secondFamilyDoc.status, "active", "Family must remain active after R2 rotation");
+  assert.ok(secondFamilyDoc.consumedTokenHashes.includes(winnerHash), "consumedTokenHashes must contain R1");
+
+  // Replaying R1 must now fail
+  const replayR1 = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicA}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: activeRefreshToken,
+    }).toString(),
+  });
+  assert.ok(replayR1.status >= 400, "Replaying consumed R1 must fail");
+
+  // Replaying R0 must also fail
+  const replayR0 = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicA}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: tokenToRace,
+    }).toString(),
+  });
+  assert.ok(replayR0.status >= 400, "Replaying consumed R0 must fail");
+
+  // Negative cross-client test: App A refresh token presented with App B credentials
+  const basicB = Buffer.from(`${appB_id}:${appB_secret}`).toString("base64");
+  const crossRefreshRes = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicB}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: secondSuccessorToken,
+    }).toString(),
+  });
+  assert.ok(crossRefreshRes.status >= 400, "App A refresh token with App B credentials must be rejected");
+
+  // Invariant: App A family remains untouched and active
+  const appAFamCheck = await db.collection("oauth_token_families").findOne({ activeTokenHash: secondHash });
+  assert.ok(appAFamCheck, "App A family must remain intact");
+  assert.equal(appAFamCheck.status, "active", "App A family must remain active after cross-client attempt");
+
+  // Update activeRefreshToken to R2 for subsequent tests
+  activeRefreshToken = secondSuccessorToken;
 });
 
 // --------------------------------------------------------------------------
-// CASE 5: Refresh-Token Replay & 2-Second Grace-Boundary Verification
+// CASE 5: Refresh-Token Replay & Exact Grace-Boundary Verification (1999ms, 2000ms, 2001ms)
 // --------------------------------------------------------------------------
-await runTest(5, "Refresh-token replay: 2-second grace boundary distinguishes in-flight race from theft", async () => {
-  const familyDoc = await db.collection("oauth_token_families").findOne({ familyId: initialTokenFamilyId });
-  assert.ok(familyDoc && familyDoc.consumedTokenHashes.length > 0, "Must have consumed token hash");
-  const consumedHash = familyDoc.consumedTokenHashes[0];
+await runTest(5, "Refresh-token replay: isolated synthetic fixtures for 1999ms, 2000ms, and 2001ms boundaries", async () => {
+  const baseTime = Date.now();
 
-  // 1. Within 2000ms grace window: in-flight collision check does NOT revoke family
-  await db.collection("oauth_token_families").updateOne(
-    { familyId: initialTokenFamilyId },
-    { $set: { updatedAt: new Date() } }
-  );
-  const withinGrace = await verifyAndRotateTokenFamily(consumedHash, "dummy");
-  assert.equal(withinGrace.replayed, false, "Within grace window, loser request must not trigger replay revocation");
-  const activeFam = await db.collection("oauth_token_families").findOne({ familyId: initialTokenFamilyId });
-  assert.equal(activeFam?.status, "active", "Family must remain active during grace window");
+  // 1. Isolated synthetic fixture at 1999ms (within 2000ms grace window): must NOT trigger cascade revocation
+  const fam1999Id = `fam_1999_${crypto.randomBytes(4).toString("hex")}`;
+  const consumed1999 = crypto.randomBytes(32).toString("hex");
+  const active1999 = crypto.randomBytes(32).toString("hex");
+  await db.collection("oauth_token_families").insertOne({
+    familyId: fam1999Id,
+    clientId: appA_id,
+    userId: user1Id,
+    activeTokenHash: active1999,
+    consumedTokenHashes: [consumed1999],
+    status: "active",
+    createdAt: new Date(baseTime - 5000),
+    updatedAt: new Date(baseTime),
+  });
 
-  // 2. Outside 2000ms grace window: replay check MUST trigger full cascade revocation
-  await db.collection("oauth_token_families").updateOne(
-    { familyId: initialTokenFamilyId },
-    { $set: { updatedAt: new Date(Date.now() - 3000) } }
-  );
-  const outsideGrace = await verifyAndRotateTokenFamily(consumedHash, "dummy");
-  assert.equal(outsideGrace.replayed, true, "Outside grace window, replay attempt must trigger revocation");
+  const res1999 = await verifyAndRotateTokenFamily(consumed1999, "dummy", undefined, baseTime + 1999);
+  assert.equal(res1999.replayed, false, "At 1999ms (within 2000ms grace), request must NOT trigger replay revocation");
+  const doc1999 = await db.collection("oauth_token_families").findOne({ familyId: fam1999Id });
+  assert.equal(doc1999?.status, "active", "Family at 1999ms must remain active");
 
-  const revokedFamily = await db.collection("oauth_token_families").findOne({ familyId: initialTokenFamilyId });
-  assert.equal(revokedFamily?.status, "revoked", "Family status must be revoked after grace window expires");
+  // 2. Isolated synthetic fixture at exactly 2000ms (grace window ended): MUST trigger cascade revocation
+  const fam2000Id = `fam_2000_${crypto.randomBytes(4).toString("hex")}`;
+  const consumed2000 = crypto.randomBytes(32).toString("hex");
+  const active2000 = crypto.randomBytes(32).toString("hex");
+  await db.collection("oauth_token_families").insertOne({
+    familyId: fam2000Id,
+    clientId: appA_id,
+    userId: user1Id,
+    activeTokenHash: active2000,
+    consumedTokenHashes: [consumed2000],
+    status: "active",
+    createdAt: new Date(baseTime - 5000),
+    updatedAt: new Date(baseTime),
+  });
+
+  const res2000 = await verifyAndRotateTokenFamily(consumed2000, "dummy", undefined, baseTime + 2000);
+  assert.equal(res2000.replayed, true, "At 2000ms (grace window ended), replay attempt must trigger revocation");
+  const doc2000 = await db.collection("oauth_token_families").findOne({ familyId: fam2000Id });
+  assert.equal(doc2000?.status, "revoked", "Family at 2000ms must be marked revoked");
+
+  // 3. Isolated synthetic fixture at 2001ms (past grace window): MUST trigger cascade revocation
+  const fam2001Id = `fam_2001_${crypto.randomBytes(4).toString("hex")}`;
+  const consumed2001 = crypto.randomBytes(32).toString("hex");
+  const active2001 = crypto.randomBytes(32).toString("hex");
+  await db.collection("oauth_token_families").insertOne({
+    familyId: fam2001Id,
+    clientId: appA_id,
+    userId: user1Id,
+    activeTokenHash: active2001,
+    consumedTokenHashes: [consumed2001],
+    status: "active",
+    createdAt: new Date(baseTime - 5000),
+    updatedAt: new Date(baseTime),
+  });
+
+  const res2001 = await verifyAndRotateTokenFamily(consumed2001, "dummy", undefined, baseTime + 2001);
+  assert.equal(res2001.replayed, true, "At 2001ms (past grace window), replay attempt must trigger revocation");
+  const doc2001 = await db.collection("oauth_token_families").findOne({ familyId: fam2001Id });
+  assert.equal(doc2001?.status, "revoked", "Family at 2001ms must be marked revoked");
+
+  // Clean up synthetic fixtures
+  await db.collection("oauth_token_families").deleteMany({
+    familyId: { $in: [fam1999Id, fam2000Id, fam2001Id] },
+  });
 });
 
 // --------------------------------------------------------------------------
@@ -782,9 +973,9 @@ await runTest(12, "App Admin password invalidation: changing password immediatel
 });
 
 // --------------------------------------------------------------------------
-// CASE 13: App Admin Disable/Delete Invalidation
+// CASE 13: App Admin Disable & Re-Enable Lifecycle
 // --------------------------------------------------------------------------
-await runTest(13, "App Admin disable/delete invalidation: deactivated admin cannot verify token", async () => {
+await runTest(13, "App Admin disable/re-enable lifecycle: deactivated admin fails verify/login, re-enabled requires new token", async () => {
   const adminEmail = `admin_dis_${crypto.randomBytes(4).toString("hex")}@example.com`;
   const pass = "AdminPassword@123456";
 
@@ -797,6 +988,7 @@ await runTest(13, "App Admin disable/delete invalidation: deactivated admin cann
       redirectUrl: "http://localhost:5174/admin",
     }),
   });
+  assert.equal(createRes.status, 201);
   const adminData = await createRes.json();
   const adminId = adminData.admin?.id || adminData.adminId || adminData.id;
 
@@ -810,21 +1002,88 @@ await runTest(13, "App Admin disable/delete invalidation: deactivated admin cann
       password: pass,
     }),
   });
-  const { token } = await loginRes.json();
+  assert.equal(loginRes.status, 200);
+  const { token: oldToken } = await loginRes.json();
 
-  // Deactivate admin
-  await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
+  // Verify initial token -> 200
+  const vInitial = await app.request("/api/auth/app-admin/verify", {
+    method: "POST",
+    headers: getTestHeaders({ Authorization: `Bearer ${oldToken}` }),
+    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
+  });
+  assert.equal(vInitial.status, 200, "Initial token must be valid");
+
+  // Allow clock tick so iat < tokensRevokedBefore - 1000 holds deterministically
+  await new Promise((r) => setTimeout(r, 1100));
+
+  // 1. Deactivate admin
+  const deactRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
     method: "PUT",
     headers: getTestHeaders({ Cookie: superAdminCookie }),
     body: JSON.stringify({ isActive: false }),
   });
+  assert.equal(deactRes.status, 200);
 
-  const v = await app.request("/api/auth/app-admin/verify", {
+  // 2. Token verification fails
+  const vDeact = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${token}` }),
+    headers: getTestHeaders({ Authorization: `Bearer ${oldToken}` }),
     body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
   });
-  assert.equal(v.status, 401, "Deactivated admin token verification must fail with 401");
+  assert.equal(vDeact.status, 401, "Deactivated admin token verification must fail with 401");
+
+  // 3. Login fails
+  const loginDeact = await app.request("/api/auth/app-admin/login", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({
+      client_id: appA_id,
+      client_secret: appA_secret,
+      email: adminEmail,
+      password: pass,
+    }),
+  });
+  assert.equal(loginDeact.status, 403, "Deactivated admin login must fail with 403 account_disabled");
+  const deactJson = await loginDeact.json();
+  assert.equal(deactJson.error, "account_disabled");
+
+  // 4. Re-activate admin
+  const reactRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
+    method: "PUT",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({ isActive: true }),
+  });
+  assert.equal(reactRes.status, 200);
+
+  // 5. Old token STILL fails because tokensRevokedBefore was set during deactivation
+  const vOldAfterReact = await app.request("/api/auth/app-admin/verify", {
+    method: "POST",
+    headers: getTestHeaders({ Authorization: `Bearer ${oldToken}` }),
+    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
+  });
+  assert.equal(vOldAfterReact.status, 401, "Old token must remain invalid after reactivation");
+
+  // 6. Login with password now succeeds -> returns new token
+  const loginReact = await app.request("/api/auth/app-admin/login", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({
+      client_id: appA_id,
+      client_secret: appA_secret,
+      email: adminEmail,
+      password: pass,
+    }),
+  });
+  assert.equal(loginReact.status, 200, "Re-activated admin login must succeed");
+  const { token: newToken } = await loginReact.json();
+
+  // 7. New token verifies successfully
+  const vNew = await app.request("/api/auth/app-admin/verify", {
+    method: "POST",
+    headers: getTestHeaders({ Authorization: `Bearer ${newToken}` }),
+    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
+  });
+  assert.equal(vNew.status, 200, "New token issued after reactivation must verify successfully");
 });
 
 // --------------------------------------------------------------------------
@@ -934,48 +1193,79 @@ await runTest(17, "Cookie poisoning: invalid current_client_id cookie fails clos
 
 // --------------------------------------------------------------------------
 // --------------------------------------------------------------------------
-// CASE 18: Parallel Browser-Tab Isolation
+// CASE 18: Parallel Browser-Tab Isolation & Shared Cookie Jar
 // --------------------------------------------------------------------------
-await runTest(18, "Parallel browser-tab isolation: distinct client contexts remain isolated", async () => {
-  // 1. Tab A initiates with App A -> receives Cookie A
+await runTest(18, "Parallel browser-tab isolation: shared cookie jar poison resilience & cross-client rejection", async () => {
+  // 1. Tab A initiates with App A -> receives Cookie A in the shared browser cookie jar
   const resA = await app.request(`/api/auth/oauth/initiate?client_id=${appA_id}`, {
     method: "GET",
     headers: getTestHeaders(),
   });
   assert.equal(resA.status, 200);
   const cookieHeadersA = (resA.headers as any).getSetCookie ? (resA.headers as any).getSetCookie() : [resA.headers.get("set-cookie") || ""];
-  const cookieA = cookieHeadersA.find((c: string) => c.includes("current_client_id")) || cookieHeadersA.join("; ");
+  const cookieA = cookieHeadersA.find((c: string) => c.includes("current_client_id")) || "";
   assert.ok(cookieA.includes(appA_id), "Cookie for tab A must be bound to App A");
 
-  // 2. Tab B initiates with App B -> receives Cookie B
+  // Single shared browser cookie jar: currently has App A
+  let sharedCookieJar = `current_client_id=${appA_id}`;
+
+  // 2. Tab B initiates with App B in the same browser -> overwrites current_client_id in the shared jar
   const resB = await app.request(`/api/auth/oauth/initiate?client_id=${appB_id}`, {
     method: "GET",
-    headers: getTestHeaders(),
+    headers: getTestHeaders({ Cookie: sharedCookieJar }),
   });
   assert.equal(resB.status, 200);
   const cookieHeadersB = (resB.headers as any).getSetCookie ? (resB.headers as any).getSetCookie() : [resB.headers.get("set-cookie") || ""];
-  const cookieB = cookieHeadersB.find((c: string) => c.includes("current_client_id")) || cookieHeadersB.join("; ");
+  const cookieB = cookieHeadersB.find((c: string) => c.includes("current_client_id")) || "";
   assert.ok(cookieB.includes(appB_id), "Cookie for tab B must be bound to App B");
 
-  // 3. Tab A continues authorization flow presenting Cookie A: must redirect strictly to App A redirectUri
-  const authA = await app.request(`/api/auth/oauth2/authorize?client_id=${appA_id}&redirect_uri=${encodeURIComponent(redirectUriA)}&response_type=code&state=state_tab_a`, {
-    method: "GET",
-    headers: getTestHeaders({ Cookie: `${user1Cookie}; ${cookieA}` }),
-  });
+  // Shared jar now holds App B's current_client_id cookie
+  sharedCookieJar = `current_client_id=${appB_id}`;
+
+  // 3. Tab A resumes authorization flow presenting the shared cookie jar (stale App B cookie!):
+  // Authoritative URL query client_id=appA_id MUST take precedence and redirect strictly to redirectUriA
+  const pkceA = generatePkce();
+  const authA = await app.request(
+    `/api/auth/oauth2/authorize?client_id=${appA_id}&redirect_uri=${encodeURIComponent(redirectUriA)}&response_type=code&scope=openid%20offline_access&state=state_tab_a&code_challenge=${pkceA.challenge}&code_challenge_method=S256`,
+    {
+      method: "GET",
+      headers: getTestHeaders({ Cookie: `${user1Cookie}; ${sharedCookieJar}` }),
+    }
+  );
   assert.equal(authA.status, 302);
   const locA = authA.headers.get("location") || "";
-  assert.ok(locA.startsWith(redirectUriA), "Tab A authorization must redirect to App A");
+  assert.ok(locA.startsWith(redirectUriA), "Tab A authorization must redirect to App A, ignoring stale App B cookie");
+  const codeA = new URL(locA).searchParams.get("code");
+  assert.ok(codeA, "Tab A must receive an authorization code");
 
-  // 4. Tab B continues authorization flow presenting Cookie B: must redirect strictly to App B redirectUri
-  const authB = await app.request(`/api/auth/oauth2/authorize?client_id=${appB_id}&redirect_uri=${encodeURIComponent(redirectUriB)}&response_type=code&state=state_tab_b`, {
-    method: "GET",
-    headers: getTestHeaders({ Cookie: `${user1Cookie}; ${cookieB}` }),
+  // 4. Tab A authorization code CANNOT be redeemed with App B's credentials at /token
+  const crossExchange = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code: codeA!,
+      code_verifier: pkceA.verifier,
+      client_id: appB_id,
+      client_secret: appB_secret,
+      redirect_uri: redirectUriA,
+    }).toString(),
   });
-  assert.equal(authB.status, 302);
-  const locB = authB.headers.get("location") || "";
-  assert.ok(locB.startsWith(redirectUriB), "Tab B authorization must redirect to App B");
+  assert.ok(crossExchange.status >= 400, "App B cannot redeem Tab A authorization code");
 
-  // 5. Unknown or disabled client cannot establish a valid client context
+  // 5. Sign-in fallback: Tab A submits email sign-in with explicit client_id=appA_id while shared cookie jar has App B
+  const signinA = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: sharedCookieJar }),
+    body: JSON.stringify({
+      email: user1Email,
+      password: user1Pass,
+      client_id: appA_id,
+    }),
+  });
+  assert.equal(signinA.status, 200, "Sign-in with explicit client_id prioritizes URL/body client over stale cookie");
+
+  // 6. Unknown and disabled clients fail closed
   const resUnknown = await app.request(`/api/auth/oauth/initiate?client_id=non_existent_client_xyz`, {
     method: "GET",
     headers: getTestHeaders(),
@@ -990,67 +1280,219 @@ await runTest(18, "Parallel browser-tab isolation: distinct client contexts rema
 });
 
 // --------------------------------------------------------------------------
-// CASE 19: Social Login Private-App Isolation & Existing Session Preservation
+// CASE 19: Real Better Auth Google Callback Integration & Private App Isolation
 // --------------------------------------------------------------------------
-await runTest(19, "Social login private-app isolation: unassigned user callback revokes only newly created session", async () => {
-  // 1. User 2 has an existing valid Session A on the IDP (e.g. from legitimate prior login)
-  const existingSessionToken = `existing_sess_a_${crypto.randomBytes(16).toString("hex")}`;
-  await db.collection("session").insertOne({
-    id: existingSessionToken,
-    token: existingSessionToken,
-    userId: user2Id,
-    expiresAt: new Date(Date.now() + 86400000),
-    createdAt: new Date(),
-    updatedAt: new Date(),
+await runTest(19, "Social login private-app isolation: real Better Auth handler revokes only newly created session", async () => {
+  // 1. Missing state error test: callback without state parameter fails closed
+  const resMissingState = await app.request("/api/auth/callback/google?code=some_dummy_auth_code_123", {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: `current_client_id=${appA_id}` }),
+  });
+  assert.ok(resMissingState.status >= 300, "Missing state parameter must not succeed");
+  const locMissing = resMissingState.headers.get("location") || "";
+  assert.ok(locMissing.includes("error=") || resMissingState.status >= 400, "Missing state returns error redirect or 4xx");
+
+  // 2. Provider error test with valid state: provider-level error callback is gracefully handled
+  const initErr = await app.request("/api/auth/sign-in/social", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: `current_client_id=${appA_id}` }),
+    body: JSON.stringify({
+      provider: "google",
+      callbackURL: `${process.env.FRONTEND_URL || "http://localhost:5174"}/dashboard`,
+    }),
+  });
+  assert.equal(initErr.status, 200);
+  const initErrJson = await initErr.json();
+  const stateErr = new URL(initErrJson.url).searchParams.get("state") || "";
+  const setCookieErr = (initErr.headers as any).getSetCookie
+    ? (initErr.headers as any).getSetCookie()
+    : [initErr.headers.get("set-cookie") || ""];
+  const stateCookieErr = setCookieErr.find((c: string) => c.includes("better-auth.state")) || setCookieErr.join("; ");
+
+  const resProviderError = await app.request(`/api/auth/callback/google?error=access_denied&error_description=User+cancelled&state=${encodeURIComponent(stateErr)}`, {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: `${stateCookieErr}; current_client_id=${appA_id}` }),
+  });
+  assert.ok(resProviderError.status >= 300, "Provider error callback must be handled");
+  const locProviderErr = resProviderError.headers.get("location") || "";
+  assert.ok(locProviderErr.includes("error=access_denied") || resProviderError.status >= 400, "Provider error redirects with error");
+
+  // 3. User performs a legitimate initial social sign-in on IDP to establish valid Session A
+  const unassignedSocialEmail = `unassigned_social_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const googleSub = `google_unauth_${crypto.randomBytes(4).toString("hex")}`;
+  mockGoogleProfile = {
+    sub: googleSub,
+    email: unassignedSocialEmail,
+    name: "Unassigned Social User",
+  };
+
+  const initLegit = await app.request("/api/auth/sign-in/social", {
+    method: "POST",
+    headers: getTestHeaders({}),
+    body: JSON.stringify({
+      provider: "google",
+      callbackURL: `${process.env.FRONTEND_URL || "http://localhost:5174"}/dashboard`,
+    }),
+  });
+  assert.equal(initLegit.status, 200);
+  const initLegitJson = await initLegit.json();
+  const stateLegitParam = new URL(initLegitJson.url).searchParams.get("state") || "";
+  const setCookieLegit = (initLegit.headers as any).getSetCookie
+    ? (initLegit.headers as any).getSetCookie()
+    : [initLegit.headers.get("set-cookie") || ""];
+  const stateCookieLegit = setCookieLegit.find((c: string) => c.includes("better-auth.state")) || setCookieLegit.join("; ");
+
+  const cbLegit = await app.request(`/api/auth/callback/google?state=${encodeURIComponent(stateLegitParam)}&code=valid_legit_code`, {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: stateCookieLegit }),
+  });
+  assert.equal(cbLegit.status, 302, "Legitimate initial social login must succeed with 302 redirect");
+  const legitSetCookies = (cbLegit.headers as any).getSetCookie
+    ? (cbLegit.headers as any).getSetCookie()
+    : [cbLegit.headers.get("set-cookie") || ""];
+  const sessionACookie = legitSetCookies.find((c: string) => c.includes("better-auth.session_token")) || "";
+  assert.ok(sessionACookie, "Must receive better-auth.session_token for Session A");
+  const rawSessionAToken = sessionACookie.split(";")[0].split("=")[1].split(".")[0];
+  assert.ok(rawSessionAToken, "Must extract raw token for Session A");
+
+  // Verify Session A exists in MongoDB and extract userId
+  const sessionAInDb = await db.collection("session").findOne({ token: rawSessionAToken });
+  assert.ok(sessionAInDb, "Session A must be active in MongoDB");
+  const unassignedUserId = String(sessionAInDb.userId);
+
+  // Invariant check: user is NOT assigned to private appA_id
+  await db.collection("user_app_registrations").deleteMany({
+    clientId: appA_id,
+    userId: { $in: [unassignedUserId, new ObjectId(unassignedUserId)] },
   });
 
-  // 2. User 2 attempts unauthorized social login into private App A
-  const res = await app.request("/api/auth/callback/google", {
+  // 4. Now initiate social sign-in via Better Auth endpoint for PRIVATE appA_id
+  const initRes = await app.request("/api/auth/sign-in/social", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: `current_client_id=${appA_id}` }),
+    body: JSON.stringify({
+      provider: "google",
+      callbackURL: `${process.env.FRONTEND_URL || "http://localhost:5174"}/dashboard`,
+    }),
+  });
+  assert.equal(initRes.status, 200, "Social sign-in initiation must return 200 with redirect URL");
+  const initJson = await initRes.json();
+  assert.ok(initJson.url, "Initiate response must contain OAuth URL");
+
+  // Extract state parameter and state cookie
+  const oauthUrl = new URL(initJson.url);
+  const stateParam = oauthUrl.searchParams.get("state") || "";
+  assert.ok(stateParam, "Must have state parameter");
+
+  const setCookieHeaders = (initRes.headers as any).getSetCookie
+    ? (initRes.headers as any).getSetCookie()
+    : [initRes.headers.get("set-cookie") || ""];
+  const stateCookie = setCookieHeaders.find((c: string) => c.includes("better-auth.state")) || setCookieHeaders.join("; ");
+
+  // 5. Send real callback request to /api/auth/callback/google with current_client_id=appA_id
+  // Real Better Auth handler executes, calls narrow mock https://oauth2.googleapis.com/token & certs,
+  // logs in existing Google user, creates new session, and passes to handleSocialCallback which enforces private app isolation!
+  const cbRes = await app.request(`/api/auth/callback/google?state=${encodeURIComponent(stateParam)}&code=valid_test_code_123`, {
     method: "GET",
     headers: getTestHeaders({
-      Cookie: `current_client_id=${appA_id}`,
-      "x-test-mock-social-user": user2Id,
+      Cookie: `${stateCookie}; current_client_id=${appA_id}`,
     }),
   });
 
-  // 3. Must be rejected and redirected with error=access_denied
-  assert.equal(res.status, 302, "Must redirect unassigned social login on private app");
-  const loc = res.headers.get("location") || "";
+  // 6. Invariant: Redirects with error=access_denied
+  assert.equal(cbRes.status, 302, "Must redirect unassigned social login on private app");
+  const loc = cbRes.headers.get("location") || "";
   assert.ok(loc.includes("error=access_denied"), "Redirect location must indicate access_denied");
 
-  // 4. Invariant: Pre-existing Session A MUST REMAIN VALID in MongoDB!
-  const sessionAInDb = await db.collection("session").findOne({ token: existingSessionToken });
-  assert.ok(sessionAInDb, "Pre-existing Session A must NOT be deleted when an unassigned private login is rejected");
+  // 7. Invariant: Pre-existing Session A MUST REMAIN VALID in MongoDB!
+  const sessionAStillActive = await db.collection("session").findOne({ token: rawSessionAToken });
+  assert.ok(sessionAStillActive, "Pre-existing Session A must NOT be deleted when unassigned private login is rejected");
 
-  // 5. Invariant: The rejected flow's newly created session (Session B) MUST be deleted!
+  // 8. Invariant: The rejected flow's newly created session MUST be deleted!
   const unauthSessions = await db.collection("session").find({
-    userId: user2Id,
-    token: { $ne: existingSessionToken },
+    userId: { $in: [unassignedUserId, new ObjectId(unassignedUserId)] },
+    token: { $ne: rawSessionAToken },
   }).toArray();
   assert.equal(unauthSessions.length, 0, "Unauthorized newly created social session must be deterministically deleted");
 
-  // Clean up Session A fixture
-  await db.collection("session").deleteOne({ token: existingSessionToken });
+  // Clean up Session A and mock Google account fixture
+  await Promise.all([
+    db.collection("session").deleteMany({ userId: { $in: [unassignedUserId, new ObjectId(unassignedUserId)] } }),
+    db.collection("account").deleteMany({ userId: { $in: [unassignedUserId, new ObjectId(unassignedUserId)] } }),
+    db.collection("user").deleteOne({ _id: { $in: [unassignedUserId as any, new ObjectId(unassignedUserId)] } as any }),
+  ]);
 });
 
 // --------------------------------------------------------------------------
-// CASE 20: Social Login Public-App Membership
+// CASE 20: Social Login Public-App Membership Idempotency
 // --------------------------------------------------------------------------
-await runTest(20, "Social login public-app membership: creates membership idempotently", async () => {
+await runTest(20, "Social login public-app membership: creates membership idempotently with zero duplicates", async () => {
   const publicAppId = `public_app_${testSuffix}`;
   await seedOAuthClient(publicAppId, "pub_secret_12345", true, ["http://localhost:5174/cb-pub"]);
 
-  const res = await app.request("/api/auth/callback/google", {
-    method: "GET",
-    headers: getTestHeaders({
-      Cookie: `current_client_id=${publicAppId}`,
-      "x-test-mock-social-user": user2Id,
+  const pubSocialEmail = `pub_social_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  mockGoogleProfile = {
+    sub: `google_pub_${crypto.randomBytes(4).toString("hex")}`,
+    email: pubSocialEmail,
+    name: "Public Social User",
+  };
+
+  // 1. First callback flow
+  const init1 = await app.request("/api/auth/sign-in/social", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: `current_client_id=${publicAppId}` }),
+    body: JSON.stringify({
+      provider: "google",
+      callbackURL: "http://localhost:5174/cb-pub",
     }),
   });
+  assert.equal(init1.status, 200);
+  const init1Json = await init1.json();
+  const state1 = new URL(init1Json.url).searchParams.get("state")!;
+  const cookies1 = (init1.headers as any).getSetCookie ? (init1.headers as any).getSetCookie().join("; ") : init1.headers.get("set-cookie") || "";
 
-  assert.equal(res.status, 302);
-  const reg = await db.collection("user_app_registrations").findOne({ userId: user2Id, clientId: publicAppId });
-  assert.ok(reg, "Public app social login must record registration");
+  const cb1 = await app.request(`/api/auth/callback/google?state=${encodeURIComponent(state1)}&code=valid_code_pub_1`, {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: `${cookies1}; current_client_id=${publicAppId}`,
+    }),
+  });
+  assert.equal(cb1.status, 302);
+
+  // Look up created user
+  const createdUser = await db.collection("user").findOne({ email: pubSocialEmail });
+  assert.ok(createdUser, "Social user must be created in MongoDB");
+  const pubUserId = String(createdUser.id || createdUser._id);
+
+  // Assert exactly 1 registration created
+  const regsAfterFirst = await db.collection("user_app_registrations").find({ userId: pubUserId, clientId: publicAppId }).toArray();
+  assert.equal(regsAfterFirst.length, 1, "First social callback must create exactly 1 registration");
+
+  // 2. Second callback flow with same user into same public app
+  const init2 = await app.request("/api/auth/sign-in/social", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: `current_client_id=${publicAppId}` }),
+    body: JSON.stringify({
+      provider: "google",
+      callbackURL: "http://localhost:5174/cb-pub",
+    }),
+  });
+  assert.equal(init2.status, 200);
+  const init2Json = await init2.json();
+  const state2 = new URL(init2Json.url).searchParams.get("state")!;
+  const cookies2 = (init2.headers as any).getSetCookie ? (init2.headers as any).getSetCookie().join("; ") : init2.headers.get("set-cookie") || "";
+
+  const cb2 = await app.request(`/api/auth/callback/google?state=${encodeURIComponent(state2)}&code=valid_code_pub_2`, {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: `${cookies2}; current_client_id=${publicAppId}`,
+    }),
+  });
+  assert.equal(cb2.status, 302);
+
+  // Invariant: Idempotency check -- still exactly 1 registration, ZERO duplicates!
+  const regsAfterSecond = await db.collection("user_app_registrations").find({ userId: pubUserId, clientId: publicAppId }).toArray();
+  assert.equal(regsAfterSecond.length, 1, "Second social callback must maintain exactly 1 registration with ZERO duplicates");
 });
 
 // --------------------------------------------------------------------------
@@ -1232,6 +1674,74 @@ await runTest(29, "Invalid redirect behavior: fragments, userinfo, and unapprove
     );
     assert.equal(authRes.status, 400, `Redirect URI ${badUri} must be rejected with 400`);
   }
+});
+
+// --------------------------------------------------------------------------
+// CASE 30: App Admin Deletion Lifecycle & Database Eviction
+// --------------------------------------------------------------------------
+await runTest(30, "App Admin deletion lifecycle: deleted admin document is removed and tokens rejected", async () => {
+  const adminEmail = `admin_del_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const pass = "AdminDeletePass@123456";
+
+  const createRes = await app.request(`/api/admin/clients/${appA_id}/app-admins`, {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      email: adminEmail,
+      password: pass,
+      redirectUrl: "http://localhost:5174/admin",
+    }),
+  });
+  assert.equal(createRes.status, 201);
+  const adminData = await createRes.json();
+  const adminId = adminData.admin?.id || adminData.adminId || adminData.id;
+
+  const loginRes = await app.request("/api/auth/app-admin/login", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({
+      client_id: appA_id,
+      client_secret: appA_secret,
+      email: adminEmail,
+      password: pass,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+  const { token } = await loginRes.json();
+
+  // Delete admin
+  const delRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
+    method: "DELETE",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+  });
+  assert.equal(delRes.status, 200, "Admin deletion must succeed");
+
+  // Token verify fails -> 401
+  const v = await app.request("/api/auth/app-admin/verify", {
+    method: "POST",
+    headers: getTestHeaders({ Authorization: `Bearer ${token}` }),
+    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
+  });
+  assert.equal(v.status, 401, "Deleted admin token verification must return 401");
+
+  // Login fails -> 401
+  const loginDel = await app.request("/api/auth/app-admin/login", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({
+      client_id: appA_id,
+      client_secret: appA_secret,
+      email: adminEmail,
+      password: pass,
+    }),
+  });
+  assert.equal(loginDel.status, 401, "Deleted admin login must return 401");
+
+  // MongoDB document is deleted
+  const doc = await db.collection("app_admins").findOne({
+    $or: [{ id: adminId }, { _id: adminId }, ...(ObjectId.isValid(adminId) ? [{ _id: new ObjectId(adminId) }] : [])],
+  });
+  assert.equal(doc, null, "Deleted admin document must not exist in MongoDB");
 });
 
 // --------------------------------------------------------------------------

@@ -552,7 +552,22 @@ auth.post("/oauth2/token", async (c) => {
         );
 
         if (!claim) {
-            // Another concurrent request has already claimed rotation or rotated this token!
+            // Check if rotation is currently in-flight by the winning concurrent request
+            const currentDoc = await database.collection("oauth_token_families").findOne({
+                $or: [{ activeTokenHash: incomingHash }, { consumedTokenHashes: incomingHash }]
+            });
+
+            if (currentDoc && (currentDoc as any).rotating === true) {
+                return c.json(
+                    {
+                        error: "invalid_grant",
+                        error_description: "Refresh token was already consumed or is currently being rotated",
+                    },
+                    400
+                );
+            }
+
+            // Otherwise, token was already rotated; check if within grace window or replay theft
             const check = await verifyAndRotateTokenFamily(incomingHash, "dummy");
             if (check.replayed) {
                 return c.json(
@@ -993,68 +1008,80 @@ auth.all("/admin/*", checkBetterAuthAdminAccess);
 
 // 10. Social Login Callback App-Isolation & Registration Enforcer
 async function handleSocialCallback(c: any) {
-    let res: Response;
-    let mockSessionToken: string | null = null;
-    let mockUser: any = null;
-
-    if (process.env.NODE_ENV === "test" && c.req.header("x-test-mock-social-user")) {
-        const mockUserId = c.req.header("x-test-mock-social-user")!;
-        mockSessionToken = `test_social_sess_${crypto.randomBytes(16).toString("hex")}`;
-        const database = await getDb();
-        await database.collection("session").insertOne({
-            id: mockSessionToken,
-            token: mockSessionToken,
-            userId: mockUserId,
-            expiresAt: new Date(Date.now() + 3600000),
-            createdAt: new Date(),
-            updatedAt: new Date(),
-        });
-        let userObjId: any = mockUserId;
-        try {
-            userObjId = new ObjectId(mockUserId);
-        } catch {}
-        mockUser = await database.collection("user").findOne({
-            $or: [{ id: mockUserId }, { _id: mockUserId }, { _id: userObjId }],
-        });
-        if (!mockUser) {
-            mockUser = { id: mockUserId, _id: mockUserId, role: "user" };
-        }
-        const headers = new Headers();
-        headers.set("set-cookie", `better-auth.session_token=${mockSessionToken}; Path=/; HttpOnly; SameSite=Lax`);
-        headers.set("location", `${config.frontendUrl}/dashboard`);
-        res = new Response(null, { status: 302, headers });
-    } else {
-        res = await authProvider.handler(c.req.raw);
-    }
+    const res = await authProvider.handler(c.req.raw);
 
     const clientId = getCookie(c, "current_client_id");
 
     if (clientId) {
-        const database = await getDb();
-        const clientDoc = await resolveOAuthClient(database, clientId);
+        let database: any;
+        try {
+            database = await getDb();
+        } catch (dbErr) {
+            console.error("DB connection error in handleSocialCallback:", dbErr);
+            return c.json({ error: "server_error", message: "Database resolution failure" }, 500);
+        }
+
+        let clientDoc: any;
+        try {
+            clientDoc = await resolveOAuthClient(database, clientId);
+        } catch (dbErr) {
+            console.error("DB query error in resolveOAuthClient:", dbErr);
+            return c.json({ error: "server_error", message: "Database resolution failure" }, 500);
+        }
 
         if (clientDoc) {
             const canonicalClientId = clientDoc.clientId;
 
             // Extract session token from set-cookie header on res or from incoming request cookies
-            let sessionToken: string | null = mockSessionToken;
-            const setCookieHeader = res.headers.get("set-cookie");
-            if (!sessionToken && setCookieHeader) {
-                const match = setCookieHeader.match(/(?:__Secure-)?better-auth\.session_token=([^;]+)/);
+            let sessionToken: string | null = null;
+            const setCookieList: string[] = (res.headers as any).getSetCookie
+                ? (res.headers as any).getSetCookie()
+                : [res.headers.get("set-cookie") || ""];
+            for (const header of setCookieList) {
+                const match = header.match(/(?:__Secure-)?better-auth\.session_token=([^;]+)/);
                 if (match) {
                     sessionToken = decodeURIComponent(match[1]);
+                    break;
                 }
             }
             if (!sessionToken) {
                 sessionToken = getCookie(c, "better-auth.session_token") || getCookie(c, "__Secure-better-auth.session_token") || null;
             }
 
-            let sessionUser: any = mockUser;
+            const rawSessionToken = sessionToken ? sessionToken.split(".")[0] : null;
+
+            let sessionUser: any = null;
+            if (!sessionUser && (sessionToken || rawSessionToken)) {
+                try {
+                    const sessionDoc = await database.collection("session").findOne({
+                        $or: [
+                            ...(sessionToken ? [{ token: sessionToken }, { id: sessionToken }] : []),
+                            ...(rawSessionToken ? [{ token: rawSessionToken }, { id: rawSessionToken }] : []),
+                        ],
+                    });
+                    if (sessionDoc) {
+                        const rawUserId = sessionDoc.userId;
+                        let userObjId: any = rawUserId;
+                        try {
+                            if (ObjectId.isValid(rawUserId)) userObjId = new ObjectId(rawUserId);
+                        } catch {}
+                        sessionUser = await database.collection("user").findOne({
+                            $or: [{ id: String(rawUserId) }, { _id: rawUserId }, { _id: userObjId }],
+                        }).catch(() => null);
+                        if (!sessionUser) {
+                            sessionUser = { id: String(rawUserId), _id: rawUserId };
+                        }
+                    }
+                } catch {
+                    sessionUser = null;
+                }
+            }
+
             if (!sessionUser) {
                 try {
                     const headers = getHeaders(c);
-                    if (setCookieHeader) {
-                        headers.set("cookie", setCookieHeader);
+                    if (sessionToken) {
+                        headers.set("cookie", `better-auth.session_token=${sessionToken}`);
                     }
                     const sessionResult = await authProvider.api.getSession({ headers });
                     sessionUser = sessionResult?.user ?? null;
@@ -1074,9 +1101,12 @@ async function handleSocialCallback(c: any) {
                         // CRITICAL: Fail-Closed deterministic cleanup!
                         // Identify and revoke the exact created session, without destroying the user's
                         // entire account or other devices' unrelated sessions.
-                        if (sessionToken) {
+                        if (sessionToken || rawSessionToken) {
                             await database.collection("session").deleteMany({
-                                $or: [{ token: sessionToken }, { id: sessionToken }],
+                                $or: [
+                                    ...(sessionToken ? [{ token: sessionToken }, { id: sessionToken }] : []),
+                                    ...(rawSessionToken ? [{ token: rawSessionToken }, { id: rawSessionToken }] : []),
+                                ],
                             });
                         }
 

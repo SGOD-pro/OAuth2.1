@@ -70,6 +70,10 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("oauth_token_families", { familyId: 1 }, { unique: true }),
       safeIndex("oauth_token_families", { activeTokenHash: 1 }),
       safeIndex("oauth_token_families", { consumedTokenHashes: 1 }),
+      safeIndex("oauthClient", { clientId: 1 }),
+      safeIndex("oauthRefreshToken", { token: 1 }),
+      safeIndex("oauthAccessToken", { token: 1 }),
+      safeIndex("oauthAuthorizationCode", { code: 1 }),
       safeIndex("admin_audit", { timestamp: -1 }),
       safeIndex("app_admin_revoked_tokens", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("user_app_registrations", { clientId: 1, userId: 1 }, { unique: true }),
@@ -212,7 +216,8 @@ export async function registerTokenFamily(
 export async function verifyAndRotateTokenFamily(
   incomingTokenHash: string,
   newTokenHash: string,
-  userId?: string
+  userId?: string,
+  nowMs: number = Date.now()
 ): Promise<{
   valid: boolean;
   replayed: boolean;
@@ -245,7 +250,7 @@ export async function verifyAndRotateTokenFamily(
   if (doc.consumedTokenHashes.includes(incomingTokenHash)) {
     // When checking with a dummy hash, distinguish between an in-flight concurrent race
     // (within 2000ms grace window of rotation) and a subsequent replay theft attempt.
-    const timeSinceRotation = doc.updatedAt ? Date.now() - new Date(doc.updatedAt).getTime() : 10000;
+    const timeSinceRotation = doc.updatedAt ? nowMs - new Date(doc.updatedAt).getTime() : 10000;
     const isConcurrentCheck = newTokenHash === "dummy" && timeSinceRotation < 2000;
 
     if (isConcurrentCheck) {

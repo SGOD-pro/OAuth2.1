@@ -5,9 +5,6 @@ import assert from "node:assert/strict";
 import crypto from "crypto";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
-import { generateTotpCode } from "../../src/utils/totp";
-import { envSchema } from "../../src/config/schema";
-
 // Load test environment
 process.env.NODE_ENV = "test";
 process.env.MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/test_security";
@@ -18,6 +15,8 @@ process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-goo
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
 
+const { generateTotpCode } = await import("../../src/utils/totp");
+const { envSchema } = await import("../../src/config/schema");
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");

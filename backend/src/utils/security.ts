@@ -280,12 +280,23 @@ export async function resolveOAuthClient(
 ): Promise<CanonicalOAuthClient | null> {
   if (!clientIdOrId || typeof clientIdOrId !== "string") return null;
 
+  const trimmed = clientIdOrId.trim();
+  if (!trimmed) return null;
+
+  const queries: any[] = [
+    { clientId: trimmed },
+    { client_id: trimmed },
+    { id: trimmed },
+  ];
+
+  if (ObjectId.isValid(trimmed) && trimmed.length === 24) {
+    try {
+      queries.push({ _id: new ObjectId(trimmed) });
+    } catch {}
+  }
+
   const raw = await db.collection("oauthClient").findOne({
-    $or: [
-      { clientId: clientIdOrId },
-      { client_id: clientIdOrId },
-      { id: clientIdOrId },
-    ],
+    $or: queries,
   });
 
   if (!raw) return null;

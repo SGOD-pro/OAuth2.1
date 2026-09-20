@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import crypto from "crypto";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
-import { getHeaders, isStrongPassword, validateRedirectUris, getTrustedClientIp } from "../utils/security";
+import { getHeaders, isStrongPassword, validateRedirectUris, getTrustedClientIp, resolveOAuthClient } from "../utils/security";
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
 import { requireAdmin, requireSuperAdmin, requireScopedAdmin, isSuperAdmin } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
@@ -283,15 +283,23 @@ admin.get("/logs", requireSuperAdmin, async (c) => {
 admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
   const id = c.req.param("id");
   const sessionUser = c.get("user") as any;
-  const database = await getDb();
+  let database: any;
+  let existingClient: any;
 
-  const existingClient = await database.collection("oauthClient").findOne({
-    $or: [{ clientId: id }, { client_id: id }, { id }],
-  });
+  try {
+    database = await getDb();
+    existingClient = await resolveOAuthClient(database, id);
+  } catch (err: any) {
+    console.error("[ADMIN_DELETE_CLIENT] DB error resolving client:", err);
+    return c.json({ error: "Failed to resolve client due to database error" }, 500);
+  }
 
   if (!existingClient) {
     return c.json({ error: "Client not found" }, 404);
   }
+
+  const canonicalClientId = existingClient.clientId;
+  const clientMongoId = existingClient._id;
 
   // Invalidate origin cache
   const allowedOrigins = existingClient.allowedOrigins || existingClient.allowed_origins || [];
@@ -300,12 +308,10 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
   }
 
   // Attempt Better Auth delete if user ownership matches, but catch if it throws 401 UNAUTHORIZED
-  // (Better Auth's deleteOAuthClient is an end-user endpoint checking client.userId === session.user.id.
-  // A Super-Admin has global authority to delete any application).
   try {
     await authApi.deleteOAuthClient({
       headers: getHeaders(c),
-      body: { client_id: id },
+      body: { client_id: canonicalClientId },
     });
   } catch (err: any) {
     console.warn(
@@ -313,16 +319,16 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
     );
   }
 
-  // Delete all traces of client and associated tokens/sessions
+  // Delete exact client by MongoDB _id, and all dependent resources by canonicalClientId
   await Promise.all([
-    database.collection("oauthClient").deleteMany({
-      $or: [{ clientId: id }, { client_id: id }, { id }],
-    }),
-    database.collection("user_app_registrations").deleteMany({ clientId: id }),
-    database.collection("oauthAccessToken").deleteMany({ clientId: id }),
-    database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
-    database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
-    database.collection("oauth_token_families").deleteMany({ clientId: id }),
+    database.collection("oauthClient").deleteOne({ _id: clientMongoId }),
+    database.collection("user_app_registrations").deleteMany({ clientId: canonicalClientId }),
+    database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId }),
+    database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId }),
+    database.collection("oauthAuthorizationCode").deleteMany({ clientId: canonicalClientId }),
+    database.collection("oauthConsent").deleteMany({ clientId: canonicalClientId }),
+    database.collection("oauth_token_families").deleteMany({ clientId: canonicalClientId }),
+    database.collection("app_admins").deleteMany({ clientId: canonicalClientId }),
   ]);
 
   await recordAdminAudit({
@@ -330,7 +336,7 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
     actorEmail: sessionUser?.email,
     actorScope: sessionUser?.scopedClientId || "super_admin",
     action: "client_deleted",
-    targetClientId: id,
+    targetClientId: canonicalClientId,
     ipAddress: getTrustedClientIp(c),
     timestamp: new Date(),
   });
@@ -780,12 +786,24 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
 
 // 10. List Application Admins for a Client
 admin.get("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
-  const clientId = c.req.param("clientId");
+  const rawClientId = c.req.param("clientId");
   try {
     const database = await getDb();
+    let client: any;
+    try {
+      client = await resolveOAuthClient(database, rawClientId);
+    } catch (err: any) {
+      console.error("[ADMIN_LIST_APP_ADMINS] DB error resolving client:", err);
+      return c.json({ error: "Failed to resolve client due to database error" }, 500);
+    }
+    if (!client) {
+      return c.json({ error: "Application not found" }, 404);
+    }
+    const canonicalClientId = client.clientId;
+
     const admins = await database
       .collection("app_admins")
-      .find({ clientId })
+      .find({ clientId: canonicalClientId })
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -886,9 +904,13 @@ admin.post("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
     const database = await getDb();
 
     // Verify client exists
-    const client = await database.collection("oauthClient").findOne({
-      $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-    });
+    let client: any;
+    try {
+      client = await resolveOAuthClient(database, clientId);
+    } catch (err: any) {
+      console.error("[ADMIN_CREATE_APP_ADMIN] DB error resolving client:", err);
+      return c.json({ error: "Failed to resolve client due to database error" }, 500);
+    }
 
     if (!client) {
       return c.json({ error: "Application not found" }, 404);
@@ -900,7 +922,7 @@ admin.post("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
       return c.json({ error: urlCheck.error }, 400);
     }
 
-    const canonicalClientId = client.clientId || client.client_id || clientId;
+    const canonicalClientId = client.clientId;
 
     // Check email uniqueness within this application
     const existing = await database.collection("app_admins").findOne({
@@ -980,10 +1002,24 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
   try {
     const database = await getDb();
 
+    let client: any;
+    try {
+      client = await resolveOAuthClient(database, clientId);
+    } catch (err: any) {
+      console.error("[ADMIN_UPDATE_APP_ADMIN] DB error resolving client:", err);
+      return c.json({ error: "Failed to resolve client due to database error" }, 500);
+    }
+
+    if (!client) {
+      return c.json({ error: "Application not found" }, 404);
+    }
+
+    const canonicalClientId = client.clientId;
+
     // Verify admin exists and belongs to client
     const existing = await database.collection("app_admins").findOne({
       _id: adminObjId,
-      clientId,
+      clientId: canonicalClientId,
     });
 
     if (!existing) {
@@ -1003,7 +1039,7 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
       }
       if (newEmail !== existing.email) {
         const conflict = await database.collection("app_admins").findOne({
-          clientId,
+          clientId: canonicalClientId,
           email: newEmail,
           _id: { $ne: adminObjId },
         });
@@ -1015,10 +1051,7 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
     }
 
     if (typeof body.redirectUrl === "string" && body.redirectUrl.trim()) {
-      const client = await database.collection("oauthClient").findOne({
-        $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-      });
-      const urlCheck = isRedirectUrlAllowedForClient(body.redirectUrl.trim(), client || {});
+      const urlCheck = isRedirectUrlAllowedForClient(body.redirectUrl.trim(), client);
       if (!urlCheck.allowed) {
         return c.json({ error: urlCheck.error }, 400);
       }
@@ -1061,7 +1094,7 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
       actorEmail: sessionUser?.email,
       actorScope: "super_admin",
       action: "app_admin_updated",
-      targetClientId: clientId,
+      targetClientId: canonicalClientId,
       details: { adminId, updatedFields: Object.keys(updateFields) },
       ipAddress: getTrustedClientIp(c),
       timestamp: new Date(),
@@ -1088,7 +1121,7 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
 
 // 13. Delete Application Admin
 admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c) => {
-  const clientId = c.req.param("clientId");
+  const rawClientId = c.req.param("clientId");
   const adminId = c.req.param("adminId");
   const sessionUser = c.get("user") as any;
 
@@ -1101,9 +1134,23 @@ admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async 
 
   try {
     const database = await getDb();
+    let client: any;
+    try {
+      client = await resolveOAuthClient(database, rawClientId);
+    } catch (err: any) {
+      console.error("[ADMIN_DELETE_APP_ADMIN] DB error resolving client:", err);
+      return c.json({ error: "Failed to resolve client due to database error" }, 500);
+    }
+
+    if (!client) {
+      return c.json({ error: "Application not found" }, 404);
+    }
+
+    const canonicalClientId = client.clientId;
+
     const existing = await database.collection("app_admins").findOne({
       _id: adminObjId,
-      clientId,
+      clientId: canonicalClientId,
     });
 
     if (!existing) {
@@ -1117,7 +1164,7 @@ admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async 
       actorEmail: sessionUser?.email,
       actorScope: "super_admin",
       action: "app_admin_deleted",
-      targetClientId: clientId,
+      targetClientId: canonicalClientId,
       details: { adminId, email: existing.email },
       ipAddress: getTrustedClientIp(c),
       timestamp: new Date(),
@@ -1134,11 +1181,23 @@ admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async 
 
 // 14. List Users Assigned to a Client
 admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
-  const clientId = c.req.param("clientId");
+  const rawClientId = c.req.param("clientId");
   const queryUserId = c.req.query("userId");
   try {
     const database = await getDb();
-    const query: Record<string, any> = { clientId };
+    let client: any;
+    try {
+      client = await resolveOAuthClient(database, rawClientId);
+    } catch (err: any) {
+      console.error("[ADMIN_LIST_APP_USERS] DB error resolving client:", err);
+      return c.json({ error: "Failed to resolve client due to database error" }, 500);
+    }
+    if (!client) {
+      return c.json({ error: "Application not found" }, 404);
+    }
+    const canonicalClientId = client.clientId;
+
+    const query: Record<string, any> = { clientId: canonicalClientId };
     if (queryUserId && typeof queryUserId === "string") {
       query.userId = queryUserId.trim();
     }
@@ -1191,7 +1250,7 @@ admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
 
 // 15. Assign a User to a Client (for Private Applications)
 admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
-  const clientId = c.req.param("clientId");
+  const rawClientId = c.req.param("clientId");
   const body = await c.req.json().catch(() => ({}));
   const email = typeof body.email === "string" ? body.email.toLowerCase().trim() : "";
   const sessionUser = c.get("user") as any;
@@ -1202,11 +1261,16 @@ admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
 
   try {
     const database = await getDb();
-
-    const client = await database.collection("oauthClient").findOne({
-      $or: [{ clientId }, { client_id: clientId }, { id: clientId }],
-    });
+    let client: any;
+    try {
+      client = await resolveOAuthClient(database, rawClientId);
+    } catch (err: any) {
+      console.error("[ADMIN_ASSIGN_APP_USER] DB error resolving client:", err);
+      return c.json({ error: "Failed to resolve client due to database error" }, 500);
+    }
     if (!client) return c.json({ error: "Application not found" }, 404);
+
+    const canonicalClientId = client.clientId;
 
     const user = await database.collection("user").findOne({ email });
     if (!user) {
@@ -1216,7 +1280,7 @@ admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
     const userId = String(user.id || user._id);
 
     const existing = await database.collection("user_app_registrations").findOne({
-      clientId,
+      clientId: canonicalClientId,
       userId,
     });
     if (existing) {
@@ -1225,7 +1289,7 @@ admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
 
     const now = new Date();
     await database.collection("user_app_registrations").insertOne({
-      clientId,
+      clientId: canonicalClientId,
       userId,
       registeredAt: now,
       assignedBy: sessionUser?.email || "admin",
@@ -1236,7 +1300,7 @@ admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
       actorEmail: sessionUser?.email,
       actorScope: sessionUser?.scopedClientId || "super_admin",
       action: "user_assigned_to_app",
-      targetClientId: clientId,
+      targetClientId: canonicalClientId,
       targetUserId: userId,
       details: { email },
       ipAddress: getTrustedClientIp(c),
@@ -1261,29 +1325,43 @@ admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
 
 // 16. Remove a User from a Client
 admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, async (c) => {
-  const clientId = c.req.param("clientId");
+  const rawClientId = c.req.param("clientId");
   const userId = c.req.param("userId");
   const sessionUser = c.get("user") as any;
 
   try {
     const database = await getDb();
+    let clientDoc: any;
+    try {
+      clientDoc = await resolveOAuthClient(database, rawClientId);
+    } catch (err: any) {
+      console.error("[ADMIN_REMOVE_APP_USER] DB error resolving client:", err);
+      return c.json({ error: "Failed to resolve client due to database error" }, 500);
+    }
+
+    if (!clientDoc) {
+      return c.json({ error: "Client not found" }, 404);
+    }
+
+    const canonicalClientId = clientDoc.clientId;
+
     const [regResult, tokenResult, refreshResult, consentResult, codeResult] = await Promise.all([
       database.collection("user_app_registrations").deleteMany({
-        clientId,
+        clientId: canonicalClientId,
         $or: [{ userId }, { userId: String(userId) }],
       }),
-      database.collection("oauthAccessToken").deleteMany({ clientId, userId: { $in: [userId, String(userId)] } }),
-      database.collection("oauthRefreshToken").deleteMany({ clientId, userId: { $in: [userId, String(userId)] } }),
-      database.collection("oauthConsent").deleteMany({ clientId, userId: { $in: [userId, String(userId)] } }),
-      database.collection("oauthAuthorizationCode").deleteMany({ clientId, userId: { $in: [userId, String(userId)] } }),
+      database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: { $in: [userId, String(userId)] } }),
+      database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: { $in: [userId, String(userId)] } }),
+      database.collection("oauthConsent").deleteMany({ clientId: canonicalClientId, userId: { $in: [userId, String(userId)] } }),
+      database.collection("oauthAuthorizationCode").deleteMany({ clientId: canonicalClientId, userId: { $in: [userId, String(userId)] } }),
       database.collection("oauth_token_families").updateMany(
-        { clientId, userId: { $in: [userId, String(userId)] } },
+        { clientId: canonicalClientId, userId: { $in: [userId, String(userId)] } },
         { $set: { status: "revoked", revokedAt: new Date() } }
       ),
       database.collection("verification").deleteMany({
         $or: [
-          { value: { $regex: `"userId":"${userId}".*"client_id":"${clientId}"` } },
-          { value: { $regex: `"client_id":"${clientId}".*"userId":"${userId}"` } },
+          { value: { $regex: `"userId":"${userId}".*"client_id":"${canonicalClientId}"` } },
+          { value: { $regex: `"client_id":"${canonicalClientId}".*"userId":"${userId}"` } },
         ]
       }).catch(() => {}),
     ]);
@@ -1304,7 +1382,7 @@ admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, async (c) =
       actorEmail: sessionUser?.email,
       actorScope: sessionUser?.scopedClientId || "super_admin",
       action: "user_removed_from_app",
-      targetClientId: clientId,
+      targetClientId: canonicalClientId,
       targetUserId: userId,
       ipAddress: getTrustedClientIp(c),
       timestamp: new Date(),
