@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import assert from "node:assert/strict";
 import crypto from "crypto";
 import { ObjectId } from "mongodb";
