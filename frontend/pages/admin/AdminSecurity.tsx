@@ -325,7 +325,7 @@ export const AdminSecurity: React.FC = () => {
 
       {/* Backup codes dialog with motorsport accent */}
       <Dialog open={showBackupDialog} onOpenChange={setShowBackupDialog}>
-        <DialogContent className="sm:max-w-md" accent="motorsport">
+        <DialogContent className="" accent="motorsport">
           <DialogHeader>
             <DialogTitle>Save backup codes</DialogTitle>
             <DialogDescription>

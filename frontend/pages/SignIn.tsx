@@ -82,7 +82,8 @@ export const SignIn: React.FC = () => {
     if (searchParams.get('prompt') === 'login') return;
     if (!callbackURL) return;
 
-    authClient.getSession().then((sessionRes) => {
+    const getSessionFn = authClient.getSession as unknown as () => Promise<{ data?: { user?: Record<string, unknown> } | null }>;
+    getSessionFn().then((sessionRes) => {
       if (sessionRes?.data?.user) {
         setRedirecting(true);
         window.location.assign(callbackURL);
