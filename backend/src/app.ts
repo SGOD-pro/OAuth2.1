@@ -163,7 +163,23 @@ app.onError((err, c) => {
 	return c.json({ error: "server_error" }, 500);
 });
 
-app.get("/", (c) => c.json({ message: "Health check", status: "ok" }));
+app.get("/.well-known/jwks.json", async (c) => {
+	const forwardUrl = new URL("/api/auth/jwks", c.req.raw.url);
+	const forwardReq = new Request(forwardUrl.toString(), {
+		method: "GET",
+		headers: c.req.raw.headers,
+	});
+	return auth.fetch(forwardReq);
+});
+app.get("/.well-known/jwks", async (c) => {
+	const forwardUrl = new URL("/api/auth/jwks", c.req.raw.url);
+	const forwardReq = new Request(forwardUrl.toString(), {
+		method: "GET",
+		headers: c.req.raw.headers,
+	});
+	return auth.fetch(forwardReq);
+});
+
 app.route("/api/auth/app-admin", appAdminAuth); // Application admin authentication & verification routes
 app.route("/api/admin", admin);  // all /api/admin/* routes
 app.route("/api/auth", auth);    // all /api/auth/* routes

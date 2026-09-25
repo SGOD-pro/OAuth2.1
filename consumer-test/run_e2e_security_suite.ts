@@ -2,7 +2,7 @@ import { MongoClient } from "mongodb";
 import { config } from "dotenv";
 import { createRemoteJWKSet, jwtVerify, SignJWT } from "jose";
 
-config({ path: "d:/WORK/OAuth2.1/hono/.env" });
+config();
 
 const MONGO_URI = process.env.MONGO_URI || "";
 const BASE_URL = "http://localhost:5174"; // Test through Auth Gateway

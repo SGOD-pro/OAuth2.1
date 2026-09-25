@@ -21,11 +21,9 @@ Parameters:
   AppAdminJwtSecret:
     Type: String
     NoEcho: true
-    Default: "swyra_app_admin_jwt_secret_prod_key_32chars"
   AppAdminTotpKey:
     Type: String
     NoEcho: true
-    Default: "swyra_app_admin_totp_key_prod_encryption_32"
   TrustedProxyCidrs:
     Type: String
     Default: "127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"

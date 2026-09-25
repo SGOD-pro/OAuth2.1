@@ -20,6 +20,9 @@
     "test:gate": "tsx tests/security/phase25-security-gate.ts",
     "test:second-pass": "tsx tests/security/second-pass-security-suite.ts",
     "test:security-gate": "tsx tests/security/final-adversarial-gate.ts",
+    "test:prod-config": "tsx tests/security/test-production-config.ts",
+    "test:oidc-interop": "tsx tests/security/e2e-oidc-interop.test.ts",
+    "test:load": "tsx tests/security/load-and-performance.test.ts",
     "admin:create": "tsx --env-file=.env scripts/create-admin.ts"
   },
   "devDependencies": {

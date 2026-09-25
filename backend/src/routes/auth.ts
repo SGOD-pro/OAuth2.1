@@ -1148,6 +1148,25 @@ async function handleSocialCallback(c: any) {
 auth.all("/callback/:provider", handleSocialCallback);
 auth.all("/oauth2/callback/:provider", handleSocialCallback);
 
+// 11. Standard OIDC JWKS Aliases (RFC 7517 / RFC 8414)
+auth.get("/jwks.json", async (c) => {
+    const forwardUrl = new URL("/api/auth/jwks", c.req.raw.url);
+    const forwardReq = new Request(forwardUrl.toString(), {
+        method: "GET",
+        headers: c.req.raw.headers,
+    });
+    return authProvider.handler(forwardReq);
+});
+
+auth.get("/jwks", async (c) => {
+    const forwardUrl = new URL("/api/auth/jwks", c.req.raw.url);
+    const forwardReq = new Request(forwardUrl.toString(), {
+        method: "GET",
+        headers: c.req.raw.headers,
+    });
+    return authProvider.handler(forwardReq);
+});
+
 // Catch-all delegate to Better Auth
 auth.all("/*", async (c) => {
     return authProvider.handler(c.req.raw);

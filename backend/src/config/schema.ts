@@ -38,6 +38,36 @@ export const envSchema = z.object({
     APP_ADMIN_TOTP_KEY: z.string().min(32).optional(),
 }).superRefine((data, ctx) => {
     if (data.NODE_ENV === 'production') {
+        const validateProductionUrl = (val: string, fieldName: 'BETTER_AUTH_URL' | 'FRONTEND_URL') => {
+            try {
+                const u = new URL(val);
+                if (u.protocol !== 'https:') {
+                    ctx.addIssue({
+                        code: z.ZodIssueCode.custom,
+                        message: `${fieldName} must use HTTPS in production`,
+                        path: [fieldName],
+                    });
+                }
+                const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+                if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost')) {
+                    ctx.addIssue({
+                        code: z.ZodIssueCode.custom,
+                        message: `${fieldName} cannot be a loopback address in production`,
+                        path: [fieldName],
+                    });
+                }
+            } catch {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: `${fieldName} must be a valid URL`,
+                    path: [fieldName],
+                });
+            }
+        };
+
+        if (data.BETTER_AUTH_URL) validateProductionUrl(data.BETTER_AUTH_URL, 'BETTER_AUTH_URL');
+        if (data.FRONTEND_URL) validateProductionUrl(data.FRONTEND_URL, 'FRONTEND_URL');
+
         if (!data.APP_ADMIN_JWT_SECRET || data.APP_ADMIN_JWT_SECRET.trim().length < 32) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,

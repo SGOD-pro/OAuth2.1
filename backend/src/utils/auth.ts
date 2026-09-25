@@ -15,9 +15,9 @@ export const authProvider = betterAuth({
     baseURL: config.auth.baseURL,
     trustedOrigins: [
         config.frontendUrl,
-        "http://localhost:5173",
+        ...(config.env !== "production" ? ["http://localhost:5173", "http://localhost:3000"] : []),
         "https://oauth21.vercel.app"
-    ],
+    ].filter(Boolean),
     secret: config.auth.secret,
 
     emailAndPassword: {
@@ -138,9 +138,11 @@ export const authProvider = betterAuth({
             accessTokenExpiresIn: 900,       // 15 minutes
             refreshTokenExpiresIn: 604800,   // 7 days
 
-            // Security: Strictly disable dynamic client registration and direct client endpoints
+            // Security: Strictly disable dynamic client registration and enforce Super-Admin only privileges
             allowDynamicClientRegistration: false,
-            clientPrivileges: async () => false,
+            clientPrivileges: async ({ user }: any) => {
+                return Boolean(user && user.role === "admin" && (user.scopedClientId == null || user.scopedClientId === ""));
+            },
 
             accessToken: {
                 format: "jwt"

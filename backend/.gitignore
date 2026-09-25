@@ -37,6 +37,9 @@ tests/security/*
 !tests/security/phase25-security-gate.ts
 !tests/security/second-pass-security-suite.ts
 !tests/security/final-adversarial-gate.ts
+!tests/security/test-production-config.ts
+!tests/security/e2e-oidc-interop.test.ts
+!tests/security/load-and-performance.test.ts
 test-results/
 
 # misc

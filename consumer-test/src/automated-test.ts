@@ -5,9 +5,8 @@ import * as path from 'path';
 const app1Env = dotenv.config({ path: path.resolve(__dirname, '../.env.app1') }).parsed;
 if (!app1Env) throw new Error('Could not load .env.app1');
 
-const AUTH_URL = 'http://localhost:3000';
-const ADMIN_EMAIL = 'swyar@auth2.1.com';
-const ADMIN_PASS = 'swyra@123';
+const AUTH_URL = process.env.AUTH_URL || 'http://localhost:3000';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
 
 async function runTests() {
   console.log('=== STARTING AUTOMATED OAUTH SECURITY TESTS ===\n');
@@ -29,7 +28,7 @@ async function runTests() {
     }
 
     const { MongoClient } = await import('mongodb');
-    const client = new MongoClient('mongodb://172.25.240.1:27017');
+    const client = new MongoClient(MONGO_URI);
     await client.connect();
     const db = client.db('oauth');
     await db.collection('user').updateOne(
@@ -253,7 +252,7 @@ async function runTests() {
 
   // 6B. Verify Client updated with Admin Email
   const { MongoClient } = await import('mongodb');
-  const mongoClient = new MongoClient('mongodb://172.25.240.1:27017');
+  const mongoClient = new MongoClient(MONGO_URI);
   await mongoClient.connect();
   const db = mongoClient.db('oauth');
   const app1Client = await db.collection('oauthClient').findOne({ clientId });
@@ -336,7 +335,7 @@ async function runTests() {
 
   try {
     const { MongoClient } = await import('mongodb');
-    const client = new MongoClient('mongodb://172.25.240.1:27017');
+    const client = new MongoClient(MONGO_URI);
     await client.connect();
     const db = client.db('oauth');
     await db.collection('user').updateOne(
