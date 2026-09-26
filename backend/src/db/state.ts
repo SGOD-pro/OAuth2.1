@@ -47,6 +47,20 @@ export interface AdminAuditEvent {
   timestamp: Date;
 }
 
+export interface OAuthTransactionDoc {
+  _id?: any;
+  transactionId: string;
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge?: string;
+  codeChallengeMethod?: string;
+  userId?: string;
+  status: "pending" | "consumed" | "expired";
+  createdAt: Date;
+  expiresAt: Date;
+}
+
 let indexPromise: Promise<void> | null = null;
 
 export async function ensureTtlIndexes(): Promise<void> {
@@ -77,6 +91,9 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("admin_audit", { timestamp: -1 }),
       safeIndex("app_admin_revoked_tokens", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("user_app_registrations", { clientId: 1, userId: 1 }, { unique: true }),
+      safeIndex("oauth_transactions", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      safeIndex("oauth_transactions", { transactionId: 1 }, { unique: true }),
+      safeIndex("oauth_transactions", { state: 1 }),
     ]);
   })();
 
@@ -343,4 +360,72 @@ export async function verifyAndRotateTokenFamily(
   }
 
   return { valid: false, replayed: false };
+}
+
+// -------------------------------------------------------------
+// OAuth 2.1 Transaction State Management (Multi-Tab / Replay Isolation)
+// -------------------------------------------------------------
+
+export async function createOAuthTransaction(data: {
+  transactionId: string;
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  codeChallenge?: string;
+  codeChallengeMethod?: string;
+  userId?: string;
+  ttlSeconds?: number;
+}): Promise<OAuthTransactionDoc> {
+  await ensureTtlIndexes();
+  const db = await getDb();
+  const now = new Date();
+  const ttl = data.ttlSeconds ?? 600; // 10 minutes default
+  const expiresAt = new Date(now.getTime() + ttl * 1000);
+
+  const doc: OAuthTransactionDoc = {
+    transactionId: data.transactionId,
+    clientId: data.clientId,
+    redirectUri: data.redirectUri,
+    state: data.state,
+    codeChallenge: data.codeChallenge,
+    codeChallengeMethod: data.codeChallengeMethod,
+    userId: data.userId,
+    status: "pending",
+    createdAt: now,
+    expiresAt,
+  };
+
+  await db.collection<OAuthTransactionDoc>("oauth_transactions").insertOne(doc);
+  return doc;
+}
+
+export async function getOAuthTransaction(criteria: {
+  transactionId?: string;
+  state?: string;
+}): Promise<OAuthTransactionDoc | null> {
+  await ensureTtlIndexes();
+  const db = await getDb();
+  const query: any = { status: "pending", expiresAt: { $gt: new Date() } };
+
+  if (criteria.transactionId && criteria.state) {
+    query.$or = [{ transactionId: criteria.transactionId }, { state: criteria.state }];
+  } else if (criteria.transactionId) {
+    query.transactionId = criteria.transactionId;
+  } else if (criteria.state) {
+    query.state = criteria.state;
+  } else {
+    return null;
+  }
+
+  return db.collection<OAuthTransactionDoc>("oauth_transactions").findOne(query);
+}
+
+export async function consumeOAuthTransaction(transactionId: string): Promise<boolean> {
+  await ensureTtlIndexes();
+  const db = await getDb();
+  const res = await db.collection<OAuthTransactionDoc>("oauth_transactions").updateOne(
+    { transactionId, status: "pending" },
+    { $set: { status: "consumed", consumedAt: new Date() } as any }
+  );
+  return res.modifiedCount > 0;
 }

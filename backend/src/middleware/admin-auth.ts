@@ -2,6 +2,7 @@ import { createMiddleware } from "hono/factory";
 import { authProvider } from "../utils/auth";
 import { getHeaders, resolveOAuthClient } from "../utils/security";
 import { getDb } from "../db/mongo";
+import { config } from "../config";
 
 /**
  * Helper to fetch session and user document once per request and cache on context `c`
@@ -34,6 +35,16 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
 }
 
 export const requireAdmin = createMiddleware(async (c, next) => {
+  if (config.internalGatewaySecret) {
+    const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
+    if (!gatewayHeader || gatewayHeader !== config.internalGatewaySecret) {
+      return c.json(
+        { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+        403
+      );
+    }
+  }
+
   const auth = await getAuthenticatedUser(c);
 
   if (!auth) {

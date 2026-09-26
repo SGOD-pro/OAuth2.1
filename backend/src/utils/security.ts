@@ -25,7 +25,7 @@ export function isLoopbackHost(hostname: string): boolean {
  */
 export function validateRedirectUri(
   uri: string,
-  options: { isDev?: boolean; env?: string } = {},
+  options: { isDev?: boolean; env?: string; allowDevInProd?: boolean } = {},
 ): boolean {
   try {
     const url = new URL(uri);
@@ -39,7 +39,11 @@ export function validateRedirectUri(
     const currentEnv = options.env ?? config.env;
 
     if (currentEnv === "production") {
-      if (options.isDev) {
+      const allowDev = options.allowDevInProd !== undefined
+        ? options.allowDevInProd
+        : (process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION === "false" ? false : true);
+
+      if (options.isDev && allowDev) {
         const isLoopback = isLoopbackHost(url.hostname);
         if (!isLoopback) {
           if (url.protocol !== "https:") return false;
@@ -59,7 +63,7 @@ export function validateRedirectUri(
 
 export function validateRedirectUris(
   uris: string[],
-  options: { isDev?: boolean; env?: string } = {},
+  options: { isDev?: boolean; env?: string; allowDevInProd?: boolean } = {},
 ): string | null {
   for (const uri of uris) {
     if (!validateRedirectUri(uri, options)) return uri;

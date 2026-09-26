@@ -293,6 +293,7 @@ appAdminAuth.post("/login", async (c) => {
 		token_use: "app_admin",
 		redirectUrl: admin.redirectUrl,
 		pwd_version: admin.passwordChangedAt ? new Date(admin.passwordChangedAt).getTime() : 0,
+		auth_time_ms: now.getTime(),
 	})
 		.setProtectedHeader({ alg: "HS256", typ: "JWT" })
 		.setJti(jti)
@@ -494,10 +495,12 @@ appAdminAuth.post("/verify", async (c) => {
 			}
 		}
 
-		if (admin.tokensRevokedBefore && payload.iat) {
-			const iatMs = Number(payload.iat) * 1000;
+		if (admin.tokensRevokedBefore) {
 			const revokedBeforeMs = new Date(admin.tokensRevokedBefore).getTime();
-			if (iatMs < revokedBeforeMs - 1000) {
+			const tokenIssuedMs = typeof (payload as any).auth_time_ms === "number"
+				? (payload as any).auth_time_ms
+				: (payload.iat ? Number(payload.iat) * 1000 : 0);
+			if (tokenIssuedMs <= revokedBeforeMs) {
 				return c.json(
 					{
 						valid: false,
@@ -824,6 +827,7 @@ appAdminAuth.post("/mfa/verify-login", async (c) => {
 		token_use: "app_admin",
 		redirectUrl: admin.redirectUrl,
 		pwd_version: admin.passwordChangedAt ? new Date(admin.passwordChangedAt).getTime() : 0,
+		auth_time_ms: now.getTime(),
 	})
 		.setProtectedHeader({ alg: "HS256", typ: "JWT" })
 		.setJti(jti)

@@ -31,15 +31,7 @@ lerna-debug.log*
 # tests & test results
 tests/*
 !tests/security/
-tests/security/*
-!tests/security/test-app-admin-security.ts
-!tests/security/security-remediation-test.ts
-!tests/security/phase25-security-gate.ts
-!tests/security/second-pass-security-suite.ts
-!tests/security/final-adversarial-gate.ts
-!tests/security/test-production-config.ts
-!tests/security/e2e-oidc-interop.test.ts
-!tests/security/load-and-performance.test.ts
+tests/security/*.log
 test-results/
 
 # misc

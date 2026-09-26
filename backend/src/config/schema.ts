@@ -36,6 +36,12 @@ export const envSchema = z.object({
     // Dedicated AES-256-GCM encryption key for app-admin TOTP secrets at rest (≥32 chars).
     // Required in production. In development/test, falls back to derived sub-key.
     APP_ADMIN_TOTP_KEY: z.string().min(32).optional(),
+
+    // Optional internal gateway secret for protecting private management endpoints from direct external invoke
+    INTERNAL_GATEWAY_SECRET: z.string().min(32).optional(),
+
+    // In production, whether development OAuth clients with loopback URIs are permitted (defaults to false)
+    ALLOW_DEV_CLIENTS_IN_PRODUCTION: z.string().default('false'),
 }).superRefine((data, ctx) => {
     if (data.NODE_ENV === 'production') {
         const validateProductionUrl = (val: string, fieldName: 'BETTER_AUTH_URL' | 'FRONTEND_URL') => {

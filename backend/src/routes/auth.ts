@@ -5,7 +5,16 @@ import crypto from "crypto";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { ObjectId } from "mongodb";
-import { getOriginCache, putOriginCache, registerTokenFamily, verifyAndRotateTokenFamily, incrementRateLimit } from "../db/state";
+import {
+    getOriginCache,
+    putOriginCache,
+    registerTokenFamily,
+    verifyAndRotateTokenFamily,
+    incrementRateLimit,
+    createOAuthTransaction,
+    getOAuthTransaction,
+    consumeOAuthTransaction,
+} from "../db/state";
 import { rateLimiters, checkRateLimit } from "../cache/redis";
 import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration } from "../utils/security";
 import { config } from "../config";
@@ -26,19 +35,22 @@ export function hasAppAccessBypass(user: any, canonicalClientId: string): boolea
     return user.scopedClientId === canonicalClientId;
 }
 
-// Helper to extract clientId from various locations
-function extractClientId(c: any, body?: any): string | null {
+// Helper to extract clientId from various locations with authoritative transaction state resolution
+async function extractClientId(c: any, body?: any): Promise<string | null> {
     const query = c.req.query("client_id");
     if (query) return query;
 
     if (body?.clientId) return body.clientId;
     if (body?.client_id) return body.client_id;
 
+    let state: string | null = c.req.query("state") || null;
+
     if (body?.callbackURL && typeof body.callbackURL === "string") {
         try {
             const url = new URL(body.callbackURL, "http://localhost");
             const cid = url.searchParams.get("client_id");
             if (cid) return cid;
+            if (!state) state = url.searchParams.get("state");
         } catch {}
     }
 
@@ -48,7 +60,20 @@ function extractClientId(c: any, body?: any): string | null {
             const url = new URL(callbackQuery, "http://localhost");
             const cid = url.searchParams.get("client_id");
             if (cid) return cid;
+            if (!state) state = url.searchParams.get("state");
         } catch {}
+    }
+
+    // Authoritative server-side transaction lookup by state or cookie
+    if (state) {
+        const tx = await getOAuthTransaction({ state });
+        if (tx?.clientId) return tx.clientId;
+    }
+
+    const txIdCookie = getCookie(c, "oauth_transaction_id");
+    if (txIdCookie) {
+        const tx = await getOAuthTransaction({ transactionId: txIdCookie });
+        if (tx?.clientId) return tx.clientId;
     }
 
     const cookieVal = getCookie(c, "current_client_id");
@@ -117,7 +142,7 @@ auth.get("/oauth/initiate", async (c) => {
 // 2. Sign-In App-Isolation Check + Target-Keyed Rate Limit + Constant-Time Protection (Fix B10 & Part 2)
 auth.post("/sign-in/email", async (c) => {
     const body = await c.req.raw.clone().json().catch(() => null);
-    const clientId = extractClientId(c, body);
+    const clientId = await extractClientId(c, body);
     const database = await getDb();
 
     // STRICT FAIL-CLOSED: Validate client identifier FIRST whenever provided
@@ -175,6 +200,16 @@ auth.post("/sign-in/email", async (c) => {
         if (!user) {
             // Equalize CPU timing with real password verification (Fix B10)
             await executeDummyHash();
+        } else if (user.disabled === true || user.isActive === false || user.banned === true) {
+            await executeDummyHash();
+            return c.json(
+                {
+                    status: false,
+                    error: "access_denied",
+                    message: "This account has been deactivated or disabled",
+                },
+                401
+            );
         } else if (clientDoc && !clientDoc.isPublic && canonicalClientId) {
             // Private application: verify authorization boundary before proceeding
             const userId = String(user.id || user._id);
@@ -228,7 +263,7 @@ auth.post("/sign-in/email", async (c) => {
 // 3. Sign-Up App-Isolation Registration
 auth.post("/sign-up/email", async (c) => {
     const body = await c.req.raw.clone().json().catch(() => null);
-    const clientId = extractClientId(c, body);
+    const clientId = await extractClientId(c, body);
     const database = await getDb();
 
     // STRICT FAIL-CLOSED: Validate client identifier FIRST whenever provided
@@ -362,6 +397,36 @@ auth.get("/oauth2/authorize", async (c) => {
 
     const canonicalClientId = client.clientId;
 
+    // Create server-side OAuth transaction record for multi-tab isolation & tampering prevention
+    const transactionId = crypto.randomUUID();
+    const codeChallenge = c.req.query("code_challenge");
+    const codeChallengeMethod = c.req.query("code_challenge_method");
+
+    await createOAuthTransaction({
+        transactionId,
+        clientId: canonicalClientId,
+        redirectUri,
+        state,
+        codeChallenge,
+        codeChallengeMethod,
+    });
+
+    setCookie(c, "oauth_transaction_id", transactionId, {
+        path: "/",
+        httpOnly: true,
+        secure: config.env === "production",
+        sameSite: "Lax",
+        maxAge: 60 * 10,
+    });
+
+    setCookie(c, "current_client_id", canonicalClientId, {
+        path: "/",
+        httpOnly: true,
+        secure: config.env === "production",
+        sameSite: "Lax",
+        maxAge: 60 * 10,
+    });
+
     // E. Determine authenticated user from session & MongoDB
     let sessionUser: any = null;
     try {
@@ -382,6 +447,18 @@ auth.get("/oauth2/authorize", async (c) => {
         sessionUser = null;
     }
 
+    const forwardToBetterAuth = async () => {
+        const res = await authProvider.handler(c.req.raw);
+        const headers = new Headers(res.headers);
+        headers.append("set-cookie", `oauth_transaction_id=${transactionId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
+        headers.append("set-cookie", `current_client_id=${canonicalClientId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
+        return new Response(res.body, {
+            status: res.status,
+            statusText: res.statusText,
+            headers,
+        });
+    };
+
     // F. Enforce Private Application Mode at OAuth Boundary
     if (!client.isPublic) {
         if (sessionUser) {
@@ -398,16 +475,8 @@ auth.get("/oauth2/authorize", async (c) => {
                 return c.redirect(errorUrl.toString(), 302);
             }
         } else {
-            // User does not have an active session yet: bind canonical client ID to cookie
-            setCookie(c, "current_client_id", canonicalClientId, {
-                path: "/",
-                httpOnly: true,
-                secure: config.env === "production",
-                sameSite: "Lax",
-                maxAge: 60 * 10,
-            });
-            // Delegate to Better Auth which will redirect to loginPage
-            return authProvider.handler(c.req.raw);
+            // User does not have an active session yet: Better Auth will redirect to loginPage
+            return forwardToBetterAuth();
         }
     } else {
         // Public Application Mode:
@@ -427,17 +496,8 @@ auth.get("/oauth2/authorize", async (c) => {
         }
     }
 
-    // Bind canonical client ID to current_client_id cookie
-    setCookie(c, "current_client_id", canonicalClientId, {
-        path: "/",
-        httpOnly: true,
-        secure: config.env === "production",
-        sameSite: "Lax",
-        maxAge: 60 * 10,
-    });
-
     // Continue normal Better Auth OAuth flow
-    return authProvider.handler(c.req.raw);
+    return forwardToBetterAuth();
 });
 
 // 5. OAuth Token Endpoint with Authoritative Client Identity & Family Revocation (Fix B2)
@@ -782,10 +842,35 @@ auth.post("/oauth2/token", async (c) => {
                 }
 
                 // Strictly bind token family to canonicalClientId and resolvedUserId
-                await registerTokenFamily(familyId, canonicalClientId, resolvedUserId, initialHash);
+                try {
+                    await registerTokenFamily(familyId, canonicalClientId, resolvedUserId, initialHash);
+                } catch (regErr) {
+                    console.error("[TOKEN_FAMILY] Critical failure registering initial family; failing closed:", regErr);
+                    // FAIL CLOSED: Purge issued tokens so no untracked refresh token exists in DB (Phase 10)
+                    if (tokenData.refresh_token) {
+                        await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
+                    }
+                    if (tokenData.access_token) {
+                        await database.collection("oauthAccessToken").deleteMany({ token: tokenData.access_token }).catch(() => {});
+                    }
+                    return c.json(
+                        {
+                            error: "server_error",
+                            error_description: "Failed to establish secure token family state",
+                        },
+                        500
+                    );
+                }
             }
         } catch (err) {
-            console.error("[TOKEN_FAMILY] Error registering initial family:", err);
+            console.error("[TOKEN_FAMILY] Error in token issuance interceptor:", err);
+            return c.json(
+                {
+                    error: "server_error",
+                    error_description: "Internal security failure during token generation",
+                },
+                500
+            );
         }
     }
 
@@ -841,11 +926,23 @@ auth.post("/oauth2/consent", async (c) => {
 
     const body = await c.req.raw.clone().json().catch(() => null);
     let clientId: string | null = null;
+    let state: string | null = null;
     if (body?.oauth_query && typeof body.oauth_query === "string") {
         try {
             const queryParams = new URLSearchParams(body.oauth_query);
             clientId = queryParams.get("client_id");
+            state = queryParams.get("state");
         } catch {}
+    }
+    if (!state) state = c.req.query("state") || null;
+
+    const txIdCookie = getCookie(c, "oauth_transaction_id");
+    const tx = await getOAuthTransaction({ state: state || undefined, transactionId: txIdCookie || undefined });
+    if (tx) {
+        if (clientId && clientId !== tx.clientId) {
+            return c.json({ error: "invalid_request", error_description: "Client ID does not match OAuth transaction" }, 400);
+        }
+        clientId = tx.clientId;
     }
     if (!clientId) {
         clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
@@ -899,11 +996,23 @@ auth.post("/oauth2/continue", async (c) => {
     if (sessionUser) {
         const body = await c.req.raw.clone().json().catch(() => null);
         let clientId: string | null = null;
+        let state: string | null = null;
         if (body?.oauth_query && typeof body.oauth_query === "string") {
             try {
                 const queryParams = new URLSearchParams(body.oauth_query);
                 clientId = queryParams.get("client_id");
+                state = queryParams.get("state");
             } catch {}
+        }
+        if (!state) state = c.req.query("state") || null;
+
+        const txIdCookie = getCookie(c, "oauth_transaction_id");
+        const tx = await getOAuthTransaction({ state: state || undefined, transactionId: txIdCookie || undefined });
+        if (tx) {
+            if (clientId && clientId !== tx.clientId) {
+                return c.json({ error: "invalid_request", error_description: "Client ID does not match OAuth transaction" }, 400);
+            }
+            clientId = tx.clientId;
         }
         if (!clientId) {
             clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
@@ -1010,7 +1119,18 @@ auth.all("/admin/*", checkBetterAuthAdminAccess);
 async function handleSocialCallback(c: any) {
     const res = await authProvider.handler(c.req.raw);
 
-    const clientId = getCookie(c, "current_client_id");
+    const state = c.req.query("state");
+    const txIdCookie = getCookie(c, "oauth_transaction_id");
+    let clientId: string | null = null;
+    if (state || txIdCookie) {
+        const tx = await getOAuthTransaction({ state: state || undefined, transactionId: txIdCookie || undefined });
+        if (tx?.clientId) {
+            clientId = tx.clientId;
+        }
+    }
+    if (!clientId) {
+        clientId = getCookie(c, "current_client_id");
+    }
 
     if (clientId) {
         let database: any;

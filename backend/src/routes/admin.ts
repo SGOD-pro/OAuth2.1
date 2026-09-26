@@ -8,6 +8,7 @@ import { requireAdmin, requireSuperAdmin, requireScopedAdmin, isSuperAdmin } fro
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
+import { config } from "../config";
 
 // Helper accessor for Better Auth dynamic plugin APIs
 const authApi = authProvider.api as any;
@@ -80,7 +81,13 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     return c.json({ error: "At least one allowed origin is required" }, 400);
   }
 
-  const invalidUri = validateRedirectUris(redirectUris, { isDev });
+  if (config.env === "production" && !config.allowDevClientsInProduction && isDev) {
+    return c.json({
+      error: "Development clients with loopback URIs are disabled in production environment",
+    }, 400);
+  }
+
+  const invalidUri = validateRedirectUris(redirectUris, { isDev, allowDevInProd: config.allowDevClientsInProduction });
   if (invalidUri) {
     return c.json({
       error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
@@ -538,11 +545,17 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   const redirectUris = (body.redirect_uris || body.redirectUris) as string[] | undefined;
   const allowedOrigins = (body.allowed_origins || body.allowedOrigins) as string[] | undefined;
 
+  if (config.env === "production" && !config.allowDevClientsInProduction && isDev) {
+    return c.json({
+      error: "Development clients with loopback URIs are disabled in production environment",
+    }, 400);
+  }
+
   if (Array.isArray(redirectUris)) {
     if (redirectUris.length === 0) {
       return c.json({ error: "At least one redirect URI is required" }, 400);
     }
-    const invalidUri = validateRedirectUris(redirectUris, { isDev });
+    const invalidUri = validateRedirectUris(redirectUris, { isDev, allowDevInProd: config.allowDevClientsInProduction });
     if (invalidUri) {
       return c.json({
         error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,

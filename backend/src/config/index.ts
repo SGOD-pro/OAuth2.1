@@ -117,4 +117,13 @@ export const config = {
             .map((value) => value.trim())
             .filter(Boolean)
     },
+
+    get internalGatewaySecret(): string | undefined {
+        return process.env.INTERNAL_GATEWAY_SECRET || parsedEnv.INTERNAL_GATEWAY_SECRET
+    },
+
+    get allowDevClientsInProduction(): boolean {
+        const val = process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION ?? parsedEnv.ALLOW_DEV_CLIENTS_IN_PRODUCTION ?? 'false'
+        return val === 'true'
+    },
 }

@@ -23,6 +23,16 @@
     "test:prod-config": "tsx tests/security/test-production-config.ts",
     "test:oidc-interop": "tsx tests/security/e2e-oidc-interop.test.ts",
     "test:load": "tsx tests/security/load-and-performance.test.ts",
+    "test:direct-backend": "tsx tests/security/direct-backend-access-suite.ts",
+    "test:session-hijack": "tsx tests/security/session-hijacking-suite.ts",
+    "test:oauth-tx": "tsx tests/security/oauth-transaction-suite.ts",
+    "test:credential-comp": "tsx tests/security/credential-compromise-suite.ts",
+    "test:cross-tenant": "tsx tests/security/cross-tenant-matrix.ts",
+    "test:prod-vs-dev": "tsx tests/security/production-vs-development-suite.ts",
+    "test:deployed-consumer": "tsx tests/security/deployed-consumer-suite.ts",
+    "test:aws-dashboard": "tsx tests/security/aws-dashboard-integration-suite.ts",
+    "test:full-adversarial": "tsx tests/security/full-production-adversarial-suite.ts",
+    "test:all-security": "tsx tests/security/full-production-adversarial-suite.ts && tsx tests/security/final-adversarial-gate.ts && tsx tests/security/direct-backend-access-suite.ts && tsx tests/security/session-hijacking-suite.ts && tsx tests/security/oauth-transaction-suite.ts && tsx tests/security/credential-compromise-suite.ts && tsx tests/security/cross-tenant-matrix.ts && tsx tests/security/production-vs-development-suite.ts && tsx tests/security/deployed-consumer-suite.ts && tsx tests/security/aws-dashboard-integration-suite.ts",
     "admin:create": "tsx --env-file=.env scripts/create-admin.ts"
   },
   "devDependencies": {

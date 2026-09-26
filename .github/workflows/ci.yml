@@ -92,7 +92,7 @@ jobs:
           GOOGLE_CLIENT_ID: test-google-id
           GOOGLE_CLIENT_SECRET: test-google-secret
           TRUSTED_PROXY_CIDRS: "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32"
-        run: npm run test:security-gate
+        run: npm run test:all-security
 
       - name: Build Lambda Bundle
         working-directory: backend
