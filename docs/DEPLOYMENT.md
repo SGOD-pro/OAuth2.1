@@ -54,9 +54,20 @@ flowchart TD
 ```bash
 cd backend
 cp .env.example .env
-# Set MONGO_URI and BETTER_AUTH_SECRET in hono/.env
+# Set MONGO_URI and BETTER_AUTH_SECRET in .env
 npm run db:setup
 ```
+
+### Step 4: Generate Production Cryptographic Secrets
+All production secrets must be at least 32 characters long:
+```bash
+# Generate 4 distinct cryptographically secure secrets
+openssl rand -hex 32  # BETTER_AUTH_SECRET
+openssl rand -hex 32  # APP_ADMIN_JWT_SECRET
+openssl rand -hex 32  # APP_ADMIN_TOTP_KEY
+openssl rand -hex 32  # INTERNAL_GATEWAY_SECRET
+```
+
 
 ---
 

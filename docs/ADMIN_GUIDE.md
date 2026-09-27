@@ -37,6 +37,11 @@ flowchart LR
 4. **Public Application Mode (`isPublic` / `is_public`)**:
    - **Public Mode (default)**: Any registered platform user can sign into the application.
    - **Private Mode**: Restricts application access to only users who are explicitly authorized and assigned to this specific application by an administrator. Self-registration for private applications is disabled (`403 registration_disabled`).
+
+> [!NOTE]
+> **Application Access Mode (`isPublic`) is distinct from OAuth Client Type (Confidential vs Public Client).**  
+> `isPublic` determines multi-tenant user access policy. Whether a client is confidential (has a secret) or public (SPA without secret) is an independent protocol property. See [docs/AI_AGENT_INTEGRATION_CONTRACT.md](file:///home/swyra/projects/OAuth2.1/docs/AI_AGENT_INTEGRATION_CONTRACT.md).
+
 5. **Development Mode (`isDev` / `is_dev`)**:
    - **Switch ON**: Permits loopback hosts (`http://localhost:*`, `http://127.0.0.1:*`) for local testing while still strictly blocking intranet/private IPs against SSRF.
    - **Switch OFF**: Enforces strict `https://` across all hosts in production.
@@ -167,4 +172,6 @@ https://<your-frontend-domain>/admin/login
 | **`FATAL: TRUSTED_PROXY_CIDRS must be set in production`** | Safety check failed on startup. | Set `TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` (or your proxy's CIDR) in the backend `.env`. |
 | **`FATAL: APP_ADMIN_JWT_SECRET is required in production`** | Missing required production secret. | Set `APP_ADMIN_JWT_SECRET` (≥32 characters) in the production environment. |
 | **`FATAL: APP_ADMIN_TOTP_KEY is required in production`** | Missing required production secret. | Set `APP_ADMIN_TOTP_KEY` (≥32 characters) in the production environment. |
+| **`FATAL: INTERNAL_GATEWAY_SECRET is required in production`** | Missing required production secret. | Set `INTERNAL_GATEWAY_SECRET` (≥32 characters) in the production environment. |
 | **`EADDRINUSE: :::3000`** | Port already held by a previous process. | Run `fuser -k 3000/tcp` (Linux/WSL) or `taskkill /F /PID <pid>` (Windows). |
+

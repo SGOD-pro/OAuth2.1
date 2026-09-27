@@ -1,6 +1,14 @@
 # OAuth 2.1 Integration & Security Analysis Report
 
+> [!NOTE]
+> **NON-NORMATIVE HISTORICAL ANALYSIS**: This document preserves historical post-mortem investigations and diagnostic reports for specific consumer deployments (AWS Dashboard and Travel Agent). It is **non-normative**.
+>
+> For authoritative integration rules and code recipes, consult:
+> - **[AI Agent Integration Contract](file:///home/swyra/projects/OAuth2.1/docs/AI_AGENT_INTEGRATION_CONTRACT.md)** (Normative specification)
+> - **[Consumer Integration Guide](file:///home/swyra/projects/OAuth2.1/docs/INTEGRATION_GUIDE.md)** (Implementation recipes)
+
 This document records the technical investigation, root cause analysis, live verification results, and remediation steps for two observed authentication behaviors in consumer applications integrated with the SWYRA OAuth 2.1 Identity Provider.
+
 
 ---
 

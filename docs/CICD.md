@@ -149,9 +149,10 @@ cat .vercel/project.json
   - Runs type checking and builds the production bundle (`npm run build`).
 - **Backend Job**:
   - Launches a live **MongoDB 6** service container on port 27017.
-  - Runs the full automated security test suite (`npm run test:security`):
+  - Runs the full automated security test suite (`npm run test:all-security`):
+    - 11 comprehensive suites covering 118 security tests.
     - OAuth 2.1 authorization boundary & private app isolation.
-    - Audience isolation across registered clients.
+    - Refresh token family rotation & CAS concurrency protection.
     - App-Admin JWT verification, token purpose enforcement, and atomic backup code consumption.
     - Production fail-fast environment schema checks.
   - Compiles both the Lambda entrypoint (`dist/index.cjs`) and standalone Node server.

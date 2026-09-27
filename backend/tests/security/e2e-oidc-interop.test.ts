@@ -200,7 +200,8 @@ await runTest(4, "JWKS Alias: GET /.well-known/jwks returns HTTP 200 with identi
 });
 
 await runTest(5, "JWKS Canonical Endpoint: GET /api/auth/jwks matches discovery document jwks_uri", async () => {
-  const res = await fetch(discoveryDoc.jwks_uri.replace("https://oauth21.vercel.app", BASE_URL).replace("http://localhost:3000", BASE_URL));
+  const jwksPath = new URL(discoveryDoc.jwks_uri).pathname;
+  const res = await fetch(`${BASE_URL}${jwksPath}`);
   assert.equal(res.status, 200, "Discovery jwks_uri must return 200");
   const data = await res.json();
   assert.ok(Array.isArray(data.keys) && data.keys.length > 0);

@@ -2,7 +2,16 @@
 
 > A production-ready, configuration-only OAuth 2.1 / OpenID Connect identity provider you deploy once and own forever — with zero always-on infrastructure costs.
 
-Built with **Hono**, **MongoDB Atlas**, and the **Better Auth** identity engine. Features a high-aesthetic Admin Console for managing OAuth 2.1 clients, dynamic CORS whitelists, private application tenant isolation, and dedicated Per-Application Administrators with cryptographically isolated JWT verification and built-in TOTP multi-factor authentication.
+Built with **Hono**, **MongoDB Atlas**, and the **Better Auth** identity engine. Features a high-aesthetic Admin Console for managing OAuth 2.1 clients, dynamic CORS whitelists, private application tenant isolation, token family rotation with atomic CAS concurrency protection, and dedicated Per-Application Administrators with cryptographically isolated JWT verification and built-in TOTP multi-factor authentication.
+
+---
+
+## 🤖 For AI Coding Agents
+
+If you are an AI coding agent (e.g., Google Antigravity, Claude Code, GitHub Copilot, Cursor, Devin) integrating a consumer application with SWYRA Auth, **start here**:
+
+👉 **[AGENTS.md](AGENTS.md)** (Quick Reference)  
+👉 **[docs/AI_AGENT_INTEGRATION_CONTRACT.md](docs/AI_AGENT_INTEGRATION_CONTRACT.md)** (Normative Integration Specification)
 
 ---
 
@@ -14,24 +23,26 @@ flowchart TD
         NextApp["Next.js App (BFF)<br/>Port: 3001"]
         ReactApp["React SPA<br/>Port: 5175"]
         ExpressApp["Express API Backend<br/>Port: 4000"]
+        FastAPIApp["Python FastAPI Backend"]
     end
 
-    subgraph Gateway["SWYRA Auth Gateway (Port: 5174 / Production CDN)"]
+    subgraph Gateway["SWYRA Auth Gateway (Port: 5174 / Production CDN / Vercel)"]
         ViteProxy["Reverse Proxy Layer<br/>Routes /api/* & /.well-known/*"]
         AuthUI["Auth & Consent UI<br/>/auth, /admin, /consent"]
     end
 
-    subgraph Core["Auth Service Core (Port: 3000 / AWS Lambda / Docker / Cloud Run)"]
+    subgraph Core["Auth Service Core (Port: 3000 / AWS Lambda / Docker / Standalone)"]
         HonoApp["Hono Server + Better Auth Engine"]
         OAuthBoundary["OAuth 2.1 Boundary Guard<br/>(Client Status & Redirect URI Validation)"]
         AppIsolation["Multi-Tenant Isolation Guard<br/>(user_app_registrations)"]
+        TokenFamily["Token Family Rotation & CAS Concurrency Guard"]
         AppAdminService["Per-Application Admin Auth<br/>(Dedicated JWT & TOTP Keys)"]
         JWKSEndpoint["OIDC Discovery & JWKS<br/>/.well-known/jwks.json"]
     end
 
     subgraph Data["Storage Layer"]
-        MongoDB[("MongoDB Atlas<br/>user, session, oauthClient,<br/>user_app_registrations, app_admins")]
-        Redis[("Upstash Redis Cache<br/>Distributed Rate Limiting & Token Cache")]
+        MongoDB[("MongoDB Atlas<br/>user, session, oauthClient,<br/>token_family_states, user_app_registrations, app_admins")]
+        Redis[("Upstash Redis Cache (Optional)<br/>Distributed Rate Limiting & Token Cache")]
     end
 
     NextApp -- "1. OAuth 2.1 Code Flow" --> Gateway
@@ -39,11 +50,14 @@ flowchart TD
     Gateway --> HonoApp
     HonoApp --> OAuthBoundary
     OAuthBoundary --> AppIsolation
+    HonoApp --> TokenFamily
     AppIsolation --> MongoDB
+    TokenFamily --> MongoDB
     HonoApp --> AppAdminService
     AppAdminService --> MongoDB
-    HonoApp --> Redis
+    HonoApp -.-> Redis
     ExpressApp -- "2. Offline RS256 Verification" --> JWKSEndpoint
+    FastAPIApp -- "2. Offline RS256 Verification" --> JWKSEndpoint
     NextApp -- "2. Offline JWT Verification" --> JWKSEndpoint
 ```
 
@@ -51,31 +65,34 @@ flowchart TD
 
 ## 🛡️ Core Security Architecture & Boundaries
 
-- **Strict OAuth 2.1 & RFC 8252 Compliance**: Mandatory PKCE (`code_challenge_method=S256`), exact redirect URI matching (blocking wildcards and userinfo), and single-use authorization codes.
-- **OAuth Boundary Private-App Isolation**: Validates client status, active state, and user authorization at the OAuth authorization boundary (`GET /api/auth/oauth2/authorize`), preventing global session bypass across tenant applications.
-- **Dedicated Application Administrator Separation**: Per-Application Administrators operate with dedicated, cryptographically isolated signing (`APP_ADMIN_JWT_SECRET`) and encryption (`APP_ADMIN_TOTP_KEY`) keys with strict production fail-fast enforcement.
-- **Token-Use Purpose Binding**: Explicit `token_use` claims (`app_admin` vs. `app_admin_mfa_pending`) prevent token substitution attacks across authentication phases.
-- **Atomic MFA & Anti-Replay**: Atomic single-use backup code consumption via MongoDB `$pull` with concurrency protection, combined with brute-force rate limiting.
+- **Strict OAuth 2.1 Compliance**: Mandatory PKCE (`code_challenge_method=S256`), exact redirect URI matching, and single-use authorization codes.
+- **Protocol Endpoint Integrity**: All authorization code flows target `/api/auth/oauth2/authorize` (never internal UI routes).
+- **Token Family Rotation & CAS Concurrency**: Refresh tokens use atomic Compare-And-Swap (CAS) state tracking in MongoDB with a 2-second network grace window, preventing concurrent rotation race conditions and revoking compromised token families on reuse.
+- **OAuth Boundary Private-App Isolation**: Validates client status, active state, and user authorization at the OAuth authorization boundary, preventing cross-tenant access.
+- **Dedicated Application Administrator Separation**: Per-Application Administrators operate with dedicated, cryptographically isolated signing (`APP_ADMIN_JWT_SECRET`) and encryption (`APP_ADMIN_TOTP_KEY`) keys.
+- **Internal Gateway Protection**: Dedicated `INTERNAL_GATEWAY_SECRET` protects internal backend endpoints from external direct invocation.
+- **Atomic MFA & Anti-Replay**: Single-use backup code consumption via MongoDB `$pull` with concurrency protection and brute-force rate limiting.
 - **Target-Keyed Anti-Credential-Stuffing**: Sliding-window rate limiters keyed by both client IP and normalized target email to survive distributed botnet attacks.
-- **Migration-Safe Client Secret Hashing**: Transparent on-the-fly migration from legacy plaintext client secrets to SHA-256 base64url hashes upon successful authentication.
-- **Fail-Closed Token Family Revocation**: Detects refresh token replay and instantly revokes all tokens within the compromised lineage.
 
 ---
 
 ## 📚 Documentation Hub
 
-Complete technical documentation, integration guides, and operational runbooks are located in the [`docs/`](docs/) directory:
+Complete technical documentation, integration contracts, and operational runbooks are located in the [`docs/`](docs/) directory:
 
 | Document | Description |
 |---|---|
+| 🤖 **[AI Agent Integration Contract](docs/AI_AGENT_INTEGRATION_CONTRACT.md)** | **Normative specification** for AI coding agents and automated integration systems. |
+| ⚡ **[AGENTS.md](AGENTS.md)** | Quick-reference cheat sheet for AI agents and developers. |
+| 🔌 **[Consumer Integration Guide](docs/INTEGRATION_GUIDE.md)** | Integration recipes for Next.js BFF, React SPA, React + FastAPI, Express, and App Admin auth. |
 | 🏛️ **[System Architecture](docs/ARCHITECTURE.md)** | Multi-tenant isolation model, cryptographic token binding, OIDC discovery, and protocol sequence flows. |
 | ⚙️ **[Configuration & Environment](docs/CONFIGURATION.md)** | Production security secrets, fail-fast rules, public vs. private app modes, and rate limiting specs. |
-| 🚀 **[Multi-Cloud Deployment Guide](docs/DEPLOYMENT.md)** | Production deployment runbooks for AWS Lambda (SAM), Linux VPS/EC2, Docker Compose, GCP, Azure, Vercel, and Railway. |
-| 👑 **[Admin Console & App Management](docs/ADMIN_GUIDE.md)** | Registering applications, CORS management, private user assignment, App Admin provisioning, CLI utilities, and troubleshooting. |
-| 🔌 **[Consumer Integration Guide](docs/INTEGRATION_GUIDE.md)** | End-to-end integration patterns and code samples for Next.js 14 BFF, React SPA + Express, and App Admin verification. |
-| 🛡️ **[Security & Abuse Defense](docs/SECURITY.md)** | Threat model, rate limiting algorithms, constant-time hashing, and reverse proxy boundaries. |
-| 🔄 **[CI/CD & Auto Deployment](docs/CICD.md)** | Automated GitHub Actions pipelines for AWS Lambda (SAM) and Vercel edge deployment. |
 | 📋 **[Environment Variables Reference](docs/ENVIRONMENT_VARIABLES.md)** | Complete table of all backend, frontend, and consumer client configuration flags. |
+| 🛡️ **[Security & Abuse Defense](docs/SECURITY.md)** | Threat model, rate limiting algorithms, constant-time hashing, test gates, and scope boundaries. |
+| 👑 **[Admin Console & App Management](docs/ADMIN_GUIDE.md)** | Registering applications, CORS management, private user assignment, App Admin provisioning, and CLI utilities. |
+| 🚀 **[Multi-Cloud Deployment Guide](docs/DEPLOYMENT.md)** | Production deployment runbooks for AWS Lambda (SAM), Linux VPS/EC2, Docker Compose, GCP, Azure, and Vercel. |
+| 🔄 **[CI/CD & Auto Deployment](docs/CICD.md)** | Automated GitHub Actions pipelines for AWS Lambda (SAM) and Vercel edge deployment. |
+| 🔍 **[Security Investigations Report](docs/SECURITY_INVESTIGATIONS.md)** | *Non-normative* post-mortem analysis of past consumer integration behaviors. |
 
 ---
 
@@ -112,11 +129,11 @@ From the project root:
 
 ## 🧪 Security Test Suite
 
-SWYRA Auth includes an automated security test suite covering OAuth 2.1 boundary checks, private application isolation, App Admin cross-app token rejection, TOTP MFA challenge flows, token purpose enforcement, atomic backup code consumption, and production environment schema validation:
+SWYRA Auth includes an automated security gate with **11 test suites** executing **118 security tests** (covering OAuth 2.1 boundary checks, token family rotation with CAS concurrency, private application isolation, App Admin cross-app token rejection, TOTP MFA challenge flows, token purpose enforcement, atomic backup code consumption, and production environment schema validation):
 
 ```bash
 cd backend
-npm run test:security
+npm run test:all-security
 ```
 
 ---
