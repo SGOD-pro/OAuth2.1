@@ -265,12 +265,12 @@ export async function verifyAndRotateTokenFamily(
 
   // 3. Replay Detection (Theft Detected!)
   if (doc.consumedTokenHashes.includes(incomingTokenHash)) {
-    // When checking with a dummy hash, distinguish between an in-flight concurrent race
-    // (within 2000ms grace window of rotation) and a subsequent replay theft attempt.
+    // Distinguish between an in-flight concurrent race (within 2000ms grace window of rotation)
+    // and a subsequent replay theft attempt.
     const timeSinceRotation = doc.updatedAt ? nowMs - new Date(doc.updatedAt).getTime() : 10000;
-    const isConcurrentCheck = newTokenHash === "dummy" && timeSinceRotation < 2000;
+    const isWithinGraceWindow = timeSinceRotation < 2000;
 
-    if (isConcurrentCheck) {
+    if (isWithinGraceWindow) {
       // In-flight collision: The token was legitimately rotated by the winning concurrent request.
       // Reject this loser request as consumed without revoking the winner's active family.
       return { valid: false, replayed: false, familyId: doc.familyId, clientId: doc.clientId, userId: doc.userId };

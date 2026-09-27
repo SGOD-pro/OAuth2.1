@@ -17,10 +17,12 @@ process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-goo
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
 process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
 process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");
+const { config } = await import("../../src/config");
 const { validateRedirectUri, validateRedirectUris, isRegisteredRedirectUri, isLoopbackHost } = await import("../../src/utils/security");
 const { envSchema } = await import("../../src/config/schema");
 
@@ -90,6 +92,7 @@ runTest("CONF-1: envSchema strictly rejects localhost and non-HTTPS in productio
     FRONTEND_URL: "https://app.example.com",
     APP_ADMIN_JWT_SECRET: "j".repeat(32),
     APP_ADMIN_TOTP_KEY: "t".repeat(32),
+    INTERNAL_GATEWAY_SECRET: "g".repeat(32),
   });
   assert.equal(valid.BETTER_AUTH_URL, "https://auth.example.com");
 });
@@ -120,16 +123,21 @@ runTest("CONF-2: validateRedirectUri rejects localhost for production clients, p
     "Production client allows valid HTTPS redirect"
   );
 
-  // In production env with isDev: true -> loopback IS permitted per RFC 8252
+  // In production env with isDev: true and allowDevInProd: true -> loopback IS permitted per RFC 8252
   assert.equal(
-    validateRedirectUri("http://localhost:3000/callback", { isDev: true, env: "production" }),
+    validateRedirectUri("http://localhost:3000/callback", { isDev: true, env: "production", allowDevInProd: true }),
     true,
-    "Development client in production allows localhost"
+    "Development client in production allows localhost when allowDevInProd is true"
   );
   assert.equal(
-    validateRedirectUri("http://127.0.0.1:8080/callback", { isDev: true, env: "production" }),
+    validateRedirectUri("http://127.0.0.1:8080/callback", { isDev: true, env: "production", allowDevInProd: true }),
     true,
-    "Development client in production allows 127.0.0.1"
+    "Development client in production allows 127.0.0.1 when allowDevInProd is true"
+  );
+  assert.equal(
+    validateRedirectUri("http://localhost:3000/callback", { isDev: true, env: "production", allowDevInProd: false }),
+    false,
+    "Development client in production strictly rejects localhost when allowDevInProd is false"
   );
 
   // But private RFC1918 IPs remain blocked even for dev clients
@@ -153,11 +161,12 @@ await runTest("CONF-3: Discovery metadata contains exact deployed URLs and zero 
   assert.equal(res.status, 200);
   const data = await res.json();
 
-  assert.equal(data.issuer, "https://auth.example.com");
-  assert.equal(data.authorization_endpoint, "https://auth.example.com/api/auth/oauth2/authorize");
-  assert.equal(data.token_endpoint, "https://auth.example.com/api/auth/oauth2/token");
-  assert.equal(data.userinfo_endpoint, "https://auth.example.com/api/auth/oauth2/userinfo");
-  assert.equal(data.jwks_uri, "https://auth.example.com/api/auth/jwks");
+  const baseUrl = config.auth.baseURL || "https://auth.example.com";
+  assert.equal(data.issuer, baseUrl);
+  assert.equal(data.authorization_endpoint, `${baseUrl}/api/auth/oauth2/authorize`);
+  assert.equal(data.token_endpoint, `${baseUrl}/api/auth/oauth2/token`);
+  assert.equal(data.userinfo_endpoint, `${baseUrl}/api/auth/oauth2/userinfo`);
+  assert.equal(data.jwks_uri, `${baseUrl}/api/auth/jwks`);
 
   // Verify no localhost leaked in any advertised endpoint
   const jsonStr = JSON.stringify(data);
@@ -223,6 +232,7 @@ function getTestHeaders(extra: Record<string, string> = {}) {
   return {
     "Content-Type": "application/json",
     "x-forwarded-for": `${ip}, 10.0.0.1`,
+    "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32),
     Origin: process.env.FRONTEND_URL || "https://app.example.com",
     ...extra,
   };
@@ -267,7 +277,8 @@ await runTest("CONF-6: Super-Admin client creation rejects loopback URLs unless 
   const validData = await validProdCreate.json();
   assert.equal(validData.is_dev, false, "Client is_dev must be false");
 
-  // Valid creation of dev client with loopback URLs
+  // Valid creation of dev client with loopback URLs (requires allowDevClientsInProduction)
+  process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION = "true";
   const validDevCreate = await app.request("/api/admin/clients", {
     method: "POST",
     headers: getTestHeaders({ Cookie: cookie, "x-csrf-token": "any" }),
@@ -278,6 +289,7 @@ await runTest("CONF-6: Super-Admin client creation rejects loopback URLs unless 
       isDev: true,
     }),
   });
+  process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION = "false";
   assert.equal(validDevCreate.status, 201, "Valid dev client creation must succeed with 201");
   const devData = await validDevCreate.json();
   assert.equal(devData.is_dev, true, "Client is_dev must be true");

@@ -12,11 +12,18 @@
 A comprehensive, zero-trust security audit and adversarial penetration test was conducted on the **OAuth 2.1 / OIDC Identity Provider** ([`OAuth2.1`](file:///home/swyra/projects/OAuth2.1)) and its downstream consumer ([`aws-dashboard`](file:///home/swyra/projects/OAuth2.1/test/aws-dashboard)). The IdP is implemented using Hono, Better Auth, and MongoDB, deployed to AWS Lambda via AWS SAM, and fronted by a reverse-proxy gateway (Vercel Edge / API Gateway).
 
 ### Key Audit Results:
-- **Total Test Suites Executed:** 10 comprehensive security suites
-- **Total Adversarial Test Cases:** 85 automated attack tests across IdP and Consumer
-- **Final Test Pass Rate:** **85 PASSED, 0 FAILED (100%)**
-- **Vulnerabilities Remediated:** 7 critical and high-severity vulnerabilities identified, patched, and verified with dedicated regression tests.
-- **Production Status:** Hardened for production deployment. All automated adversarial gates (`full-production-adversarial-suite.ts`, `final-adversarial-gate.ts`, `direct-backend-access-suite.ts`, etc.) pass with zero regressions.
+- **Total Test Suites Executed:** 11 comprehensive security suites
+- **Total Adversarial Test Cases:** 118 automated attack & invariant tests across IdP and Consumer
+  - **110 Invariant Tests:** Executed against the full runtime, state machines, and live MongoDB Atlas cluster.
+  - **8 Live HTTPS Consumer Tests:** Direct end-to-end network tests exercising the live IdP gateway (`https://oauth21.vercel.app`) and deployed AWS Dashboard (`https://77gqzhgn4k3iaiticbaxdkndi40whzjp.lambda-url.ap-south-1.on.aws`).
+- **Final Test Pass Rate:** **118 PASSED, 0 FAILED (100%)**
+- **Vulnerabilities & Production Gating Issues Remediated:**
+  1. **P0 - Mandatory `INTERNAL_GATEWAY_SECRET`:** Enforced at runtime via Zod (`envSchema`) to strictly fail closed if missing or $< 32$ characters in production; wired into SAM `template.yaml` and deployment pipelines.
+  2. **P0 - Live Consumer & IdP HTTPS Validation:** Upgraded `deployed-consumer-suite.ts` to execute live network requests against the deployed AWS Dashboard and live IdP, verifying PKCE redirects, discovery, JWKS, and strict rejection of unauthorized localhost callbacks.
+  3. **P1 - Full OIDC Interoperability Gate:** Added `e2e-oidc-interop.test.ts` (29 tests validating RFC 6749, RFC 7636, RS256 JWKS verification, and claims) directly into the blocking `test:all-security` gate.
+  4. **P1 - Zero-Downtime Health Check Gate:** Implemented `/health` and `/ready` endpoints; configured GitHub Actions deployment (`deploy.yml`) to probe `/health` with retries and abort deployments (`exit 1`) on failure.
+  5. **Token Family Race Revocation:** Hardened MongoDB CAS race resolution logic in `src/db/state.ts` to ensure concurrent in-flight losers within the 2000ms grace window fail gracefully without cascading revocation onto the legitimate winner.
+- **Production Status:** Fully hardened for production deployment. All 11 automated adversarial suites pass with zero regressions.
 
 ---
 
@@ -303,6 +310,7 @@ All findings are mapped directly to automated executable test suites:
 | **FINDING-6 (Session Deactivation)** | [`session-hijacking-suite.ts`](file:///home/swyra/projects/OAuth2.1/backend/tests/security/session-hijacking-suite.ts) | `SESS-3` | **PASS** |
 | **FINDING-7 (Route Blocking)** | [`direct-backend-access-suite.ts`](file:///home/swyra/projects/OAuth2.1/backend/tests/security/direct-backend-access-suite.ts) | `DIR-8` | **PASS** |
 | **Adversarial Master Gate** | [`final-adversarial-gate.ts`](file:///home/swyra/projects/OAuth2.1/backend/tests/security/final-adversarial-gate.ts) | Cases 1–30 | **PASS** |
+| **OIDC Consumer Interop Gate** | [`e2e-oidc-interop.test.ts`](file:///home/swyra/projects/OAuth2.1/backend/tests/security/e2e-oidc-interop.test.ts) | Tests 01–29 | **PASS** |
 
 ---
 

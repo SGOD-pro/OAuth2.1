@@ -180,6 +180,10 @@ app.get("/.well-known/jwks", async (c) => {
 	return auth.fetch(forwardReq);
 });
 
+app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }, 200));
+app.get("/ready", (c) => c.json({ status: "ready" }, 200));
+app.get("/", (c) => c.json({ status: "ok", service: "OAuth 2.1 Identity Provider" }, 200));
+
 app.route("/api/auth/app-admin", appAdminAuth); // Application admin authentication & verification routes
 app.route("/api/admin", admin);  // all /api/admin/* routes
 app.route("/api/auth", auth);    // all /api/auth/* routes

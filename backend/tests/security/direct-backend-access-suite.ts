@@ -62,7 +62,7 @@ await runTest("DIR-1: Public OIDC Discovery is ALLOWED to unauthenticated curl",
   });
   assert.equal(res.status, 200, "OIDC discovery must return 200 to curl");
   const data = await res.json();
-  assert.equal(data.issuer, "https://auth.example.com");
+  assert.equal(data.issuer, process.env.BETTER_AUTH_URL || "https://auth.example.com");
   assert.ok(data.jwks_uri);
   assert.ok(data.authorization_endpoint);
   assert.ok(data.token_endpoint);
@@ -158,18 +158,23 @@ await runTest("DIR-6: Stolen regular user session DENIED on admin endpoints", as
     body: { email: userEmail, password: userPass, name: "Normal User" },
   });
 
+  const origin = process.env.FRONTEND_URL || "https://app.example.com";
   const loginRes = await app.request("/api/auth/sign-in/email", {
     method: "POST",
-    headers: getTestHeaders({ Origin: "https://app.example.com" }),
+    headers: getTestHeaders({ Origin: origin }),
     body: JSON.stringify({ email: userEmail, password: userPass }),
   });
   assert.equal(loginRes.status, 200);
   const cookie = loginRes.headers.get("set-cookie") || "";
 
-  // Regular user attempts to access /api/admin/clients
+  // Regular user attempts to access /api/admin/clients (with gateway secret, reaching admin role check)
   const adminRes = await app.request("/api/admin/clients", {
     method: "GET",
-    headers: getTestHeaders({ Cookie: cookie, Origin: "https://app.example.com" }),
+    headers: getTestHeaders({
+      Cookie: cookie,
+      Origin: origin,
+      "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "",
+    }),
   });
   assert.equal(adminRes.status, 403, "Regular user must receive 403 Forbidden on admin endpoints");
   const data = await adminRes.json();
@@ -243,6 +248,7 @@ await runTest("DIR-9: Forged headers (X-Forwarded-For, Sec-Fetch-Site, User-Agen
       "X-Real-IP": "127.0.0.1",
       "Sec-Fetch-Site": "same-origin",
       "User-Agent": "Mozilla/5.0 (Internal Healthcheck)",
+      "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "",
     }),
   });
   assert.equal(res.status, 401, "Spoofed loopback headers must not bypass admin authentication");
@@ -253,6 +259,7 @@ await runTest("DIR-9: Forged headers (X-Forwarded-For, Sec-Fetch-Site, User-Agen
 // --------------------------------------------------------------------------
 await runTest("DIR-10: Gateway secret enforces server-to-server boundary when configured", async () => {
   const secret = "test-internal-gateway-secret-32-chars!!";
+  const originalSecret = process.env.INTERNAL_GATEWAY_SECRET;
   // Temporarily set gateway secret in config
   process.env.INTERNAL_GATEWAY_SECRET = secret;
 
@@ -260,7 +267,7 @@ await runTest("DIR-10: Gateway secret enforces server-to-server boundary when co
     // Request without gateway secret -> 403 Forbidden
     const deniedRes = await app.request("/api/admin/clients", {
       method: "GET",
-      headers: getTestHeaders(),
+      headers: getTestHeaders({ "x-gateway-secret": "" }),
     });
     assert.equal(deniedRes.status, 403, "Request without gateway secret must be rejected with 403");
 
@@ -271,7 +278,11 @@ await runTest("DIR-10: Gateway secret enforces server-to-server boundary when co
     });
     assert.equal(invalidSecretRes.status, 403, "Request with wrong gateway secret must be rejected with 403");
   } finally {
-    delete process.env.INTERNAL_GATEWAY_SECRET;
+    if (originalSecret !== undefined) {
+      process.env.INTERNAL_GATEWAY_SECRET = originalSecret;
+    } else {
+      delete process.env.INTERNAL_GATEWAY_SECRET;
+    }
   }
 });
 

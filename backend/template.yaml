@@ -24,6 +24,10 @@ Parameters:
   AppAdminTotpKey:
     Type: String
     NoEcho: true
+  InternalGatewaySecret:
+    Type: String
+    NoEcho: true
+    Description: Shared secret between reverse-proxy gateway and Lambda Function URL
   TrustedProxyCidrs:
     Type: String
     Default: "127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -52,6 +56,8 @@ Resources:
           FRONTEND_URL: !Ref FrontendUrl
           APP_ADMIN_JWT_SECRET: !Ref AppAdminJwtSecret
           APP_ADMIN_TOTP_KEY: !Ref AppAdminTotpKey
+          INTERNAL_GATEWAY_SECRET: !Ref InternalGatewaySecret
+          ALLOW_DEV_CLIENTS_IN_PRODUCTION: "false"
           TRUSTED_PROXY_CIDRS: !Ref TrustedProxyCidrs
           AUTH_PUBLIC_SIGNUP_ENABLED: "true"
       FunctionUrlConfig:

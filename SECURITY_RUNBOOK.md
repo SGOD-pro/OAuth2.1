@@ -137,18 +137,25 @@ When registering a new OAuth 2.1 consumer application in production:
 Run these automated verification commands to confirm the healthy state of the security boundary:
 
 ```bash
-# Run the complete adversarial test gate (85 security tests)
+# Run the complete adversarial test gate (118 security tests across 11 suites)
 npm run test:all-security
 
 # Run individual targeted attack suites:
 npm run test:full-adversarial      # Master gate: token-race, grace, admin lifecycle
+npm run test:security-gate         # Final 30-case adversarial regression harness
 npm run test:direct-backend         # Bypass attempts via direct Lambda URL
 npm run test:session-hijack         # Session replay and fixation tests
 npm run test:oauth-tx               # Parallel-tab and state transaction binding
 npm run test:credential-comp        # Blast-radius of leaked secrets & tokens
 npm run test:cross-tenant           # Strict cross-app boundary isolation
 npm run test:prod-vs-dev            # Production configuration & loopback denial
-npm run test:deployed-consumer      # Live consumer integration tests
+npm run test:deployed-consumer      # Live consumer integration tests (HTTPS)
+npm run test:aws-dashboard          # AWS Dashboard consumer security tests
+npm run test:oidc-interop           # OIDC Core 1.0 & JWKS cryptographic interoperability
+
+# Probe live production health and discovery endpoints
+curl -f -s https://oauth21.vercel.app/health
+curl -f -s https://oauth21.vercel.app/.well-known/openid-configuration
 
 # Validate SAM deployment configuration
 sam validate --lint

@@ -18,6 +18,7 @@ process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
 process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
 process.env.TOTP_ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || "c".repeat(32);
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "swyra_internal_gateway_secret_32char_prod_key";
 
 const jose = await import("jose");
 const { default: app } = await import("../../src/app");
@@ -108,6 +109,7 @@ function getTestHeaders(extra: Record<string, string> = {}) {
   return {
     "Content-Type": "application/json",
     "x-forwarded-for": `${ip}, 10.0.0.1`,
+    "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "swyra_internal_gateway_secret_32char_prod_key",
     Origin: process.env.FRONTEND_URL || "http://localhost:5174",
     ...extra,
   };
@@ -1428,7 +1430,8 @@ await runTest(19, "Social login private-app isolation: real Better Auth handler 
 // --------------------------------------------------------------------------
 await runTest(20, "Social login public-app membership: creates membership idempotently with zero duplicates", async () => {
   const publicAppId = `public_app_${testSuffix}`;
-  await seedOAuthClient(publicAppId, "pub_secret_12345", true, ["http://localhost:5174/cb-pub"]);
+  const publicCallbackUrl = `${process.env.FRONTEND_URL || "http://localhost:5174"}/cb-pub`;
+  await seedOAuthClient(publicAppId, "pub_secret_12345", true, [publicCallbackUrl]);
 
   const pubSocialEmail = `pub_social_${crypto.randomBytes(4).toString("hex")}@example.com`;
   mockGoogleProfile = {
@@ -1443,7 +1446,7 @@ await runTest(20, "Social login public-app membership: creates membership idempo
     headers: getTestHeaders({ Cookie: `current_client_id=${publicAppId}` }),
     body: JSON.stringify({
       provider: "google",
-      callbackURL: "http://localhost:5174/cb-pub",
+      callbackURL: publicCallbackUrl,
     }),
   });
   assert.equal(init1.status, 200);
@@ -1474,7 +1477,7 @@ await runTest(20, "Social login public-app membership: creates membership idempo
     headers: getTestHeaders({ Cookie: `current_client_id=${publicAppId}` }),
     body: JSON.stringify({
       provider: "google",
-      callbackURL: "http://localhost:5174/cb-pub",
+      callbackURL: publicCallbackUrl,
     }),
   });
   assert.equal(init2.status, 200);

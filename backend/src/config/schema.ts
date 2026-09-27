@@ -88,6 +88,13 @@ export const envSchema = z.object({
                 path: ['APP_ADMIN_TOTP_KEY'],
             });
         }
+        if (!data.INTERNAL_GATEWAY_SECRET || data.INTERNAL_GATEWAY_SECRET.trim().length < 32) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'INTERNAL_GATEWAY_SECRET is required in production and must be at least 32 characters',
+                path: ['INTERNAL_GATEWAY_SECRET'],
+            });
+        }
     }
 });
 

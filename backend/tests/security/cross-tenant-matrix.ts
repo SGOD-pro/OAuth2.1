@@ -42,16 +42,20 @@ async function runTest(name: string, fn: () => Promise<void> | void) {
   }
 }
 
+const TEST_ORIGIN = process.env.FRONTEND_URL || "https://app.example.com";
+
 let reqCounter = 1;
 function getTestHeaders(overrides: Record<string, string> = {}): Headers {
   const h = new Headers();
   h.set("host", "auth.example.com");
   h.set("content-type", "application/json");
+  h.set("Origin", TEST_ORIGIN);
   const randSub = Math.floor(reqCounter / 5);
   reqCounter++;
   h.set("x-forwarded-for", `10.66.${randSub}.${reqCounter % 200}`);
   for (const [k, v] of Object.entries(overrides)) {
     if (v === "") h.delete(k);
+    else if (k.toLowerCase() === "origin" && v === "https://app.example.com") h.set(k, TEST_ORIGIN);
     else h.set(k, v);
   }
   return h;

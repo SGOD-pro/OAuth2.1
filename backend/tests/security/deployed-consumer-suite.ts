@@ -142,23 +142,132 @@ await runTest("DEP-3: /oauth2/authorize rejects invalid redirect_uri with HTTP 4
 });
 
 // --------------------------------------------------------------------------
-// TEST 4: Live Reachability Check of Deployed AWS Dashboard Endpoint
-// --------------------------------------------------------------------------
-await runTest("DEP-4: Deployed AWS Dashboard endpoint is reachable via HTTPS", async () => {
-  try {
-    const liveRes = await fetch(`${KNOWN_DASHBOARD_DEPLOYED_URL}/login`, {
-      method: "GET",
-      headers: { "User-Agent": "AntigravitySecurityAudit/1.0" },
-      signal: AbortSignal.timeout(6000),
-    });
-    // The deployed dashboard should return 200 (login page) or 302/307 (redirect to IdP)
-    assert.ok(
-      liveRes.status === 200 || liveRes.status === 302 || liveRes.status === 307,
-      `Live endpoint returned HTTP ${liveRes.status}`
-    );
-  } catch (err: any) {
-    console.warn(`[WARN] Live network call to ${KNOWN_DASHBOARD_DEPLOYED_URL} skipped or timed out:`, err.message);
+// Helper for live network calls with retry and 25s cold-start tolerance
+async function fetchWithRetry(url: string, options: RequestInit = {}, maxRetries = 2): Promise<Response> {
+  let lastErr: any;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const signal = options.signal || AbortSignal.timeout(25000);
+      return await fetch(url, { ...options, signal });
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+      }
+    }
   }
+  throw lastErr;
+}
+
+// --------------------------------------------------------------------------
+// TEST 4: Live Reachability Check of Deployed AWS Dashboard UI Endpoint
+// --------------------------------------------------------------------------
+await runTest("DEP-4: Deployed AWS Dashboard endpoint is reachable via HTTPS and returns UI", async () => {
+  const liveRes = await fetchWithRetry(`${KNOWN_DASHBOARD_DEPLOYED_URL}/login`, {
+    method: "GET",
+    headers: { "User-Agent": "AntigravitySecurityAudit/1.0" },
+  });
+  assert.equal(liveRes.status, 200, "Deployed dashboard login page must return HTTP 200");
+  const html = await liveRes.text();
+  assert.ok(html.includes("SWYRA") || html.includes("Lambda") || html.includes("login"), "Response must contain dashboard UI content");
+});
+
+// --------------------------------------------------------------------------
+// TEST 5: Live Consumer Auth Login Initiates Valid OAuth 2.1 PKCE Flow
+// --------------------------------------------------------------------------
+let liveAuthUrl = "";
+await runTest("DEP-5: Live consumer /api/auth/login initiates OAuth 2.1 PKCE redirect", async () => {
+  const loginRes = await fetchWithRetry(`${KNOWN_DASHBOARD_DEPLOYED_URL}/api/auth/login`, {
+    method: "GET",
+    headers: { "User-Agent": "AntigravitySecurityAudit/1.0" },
+    redirect: "manual",
+  });
+
+  assert.equal(loginRes.status, 307, "Must return HTTP 307 Temporary Redirect");
+  const location = loginRes.headers.get("location") || "";
+  assert.ok(location.includes("/oauth2/authorize"), "Location must point to OAuth authorize endpoint");
+  assert.ok(location.includes(`client_id=${KNOWN_DASHBOARD_CLIENT_ID}`), "Must include dashboard client_id");
+  assert.ok(location.includes("code_challenge="), "Must include PKCE code_challenge");
+  assert.ok(location.includes("code_challenge_method=S256"), "Must require S256 code challenge method");
+
+  // Verify cookies are set for PKCE verifier and state
+  const setCookie = loginRes.headers.get("set-cookie") || "";
+  assert.ok(
+    setCookie.includes("oauth_verifier") || setCookie.includes("swyra_pkce_verifier"),
+    "Must set PKCE verifier cookie"
+  );
+  assert.ok(
+    setCookie.includes("oauth_state") || setCookie.includes("swyra_auth_state"),
+    "Must set OAuth state cookie"
+  );
+
+  liveAuthUrl = location;
+});
+
+// --------------------------------------------------------------------------
+// TEST 6: Live IdP Discovery & JWKS RFC Compliance
+// --------------------------------------------------------------------------
+await runTest("DEP-6: Live IdP Discovery and JWKS endpoints return valid production RFC metadata", async () => {
+  const discRes = await fetchWithRetry("https://oauth21.vercel.app/.well-known/openid-configuration");
+  assert.equal(discRes.status, 200, "Discovery must return 200");
+  const disc = await discRes.json();
+  assert.equal(disc.issuer, "https://oauth21.vercel.app", "Issuer must match live production origin");
+  assert.ok(disc.jwks_uri, "JWKS URI must be present");
+  assert.ok(disc.authorization_endpoint, "Authorization endpoint must be present");
+  assert.ok(disc.token_endpoint, "Token endpoint must be present");
+
+  const jwksRes = await fetchWithRetry(disc.jwks_uri);
+  assert.equal(jwksRes.status, 200, "JWKS must return 200");
+  const jwks = await jwksRes.json();
+  assert.ok(Array.isArray(jwks.keys), "JWKS must contain keys array");
+  assert.ok(jwks.keys.length > 0, "JWKS must contain at least one public key");
+});
+
+// --------------------------------------------------------------------------
+// TEST 7: Live IdP + Live Consumer Fail-Closed Redirect Verification
+// --------------------------------------------------------------------------
+await runTest("DEP-7: Live IdP strictly fails closed against unconfigured consumer localhost callback", async () => {
+  assert.ok(liveAuthUrl, "Must have captured live consumer authorization URL");
+  const idpRes = await fetchWithRetry(liveAuthUrl, {
+    method: "GET",
+    headers: { "User-Agent": "AntigravitySecurityAudit/1.0" },
+    redirect: "manual",
+  });
+
+  // The live IdP MUST fail closed because localhost:3000 callback is rejected in production
+  assert.equal(idpRes.status, 400, "Live IdP must return HTTP 400 for unregistered redirect_uri");
+  const data = await idpRes.json();
+  assert.equal(data.error, "invalid_request");
+  assert.equal(data.error_description, "The redirect_uri is not registered for this application");
+});
+
+// --------------------------------------------------------------------------
+// TEST 8: Live IdP Accepts Registered Production Callback for AWS Dashboard
+// --------------------------------------------------------------------------
+await runTest("DEP-8: Live IdP accepts registered HTTPS callback for deployed AWS Dashboard", async () => {
+  const registeredCallback = `${KNOWN_DASHBOARD_DEPLOYED_URL}/auth/callback`;
+  const validLiveUrl = new URL("https://oauth21.vercel.app/api/auth/oauth2/authorize");
+  validLiveUrl.searchParams.set("client_id", KNOWN_DASHBOARD_CLIENT_ID);
+  validLiveUrl.searchParams.set("redirect_uri", registeredCallback);
+  validLiveUrl.searchParams.set("response_type", "code");
+  validLiveUrl.searchParams.set("scope", "openid profile email");
+  validLiveUrl.searchParams.set("state", "test_live_state_" + crypto.randomBytes(4).toString("hex"));
+  validLiveUrl.searchParams.set("code_challenge", crypto.randomBytes(32).toString("base64url"));
+  validLiveUrl.searchParams.set("code_challenge_method", "S256");
+
+  const idpRes = await fetchWithRetry(validLiveUrl.toString(), {
+    method: "GET",
+    headers: { "User-Agent": "AntigravitySecurityAudit/1.0" },
+    redirect: "manual",
+  });
+
+  // The live IdP should accept the registered redirect URI and redirect to login/consent (302)
+  // instead of rejecting with HTTP 400
+  assert.notEqual(idpRes.status, 400, "Must NOT return 400 invalid_request for registered HTTPS callback");
+  assert.ok(
+    idpRes.status === 302 || idpRes.status === 200,
+    `Registered callback should proceed to login flow (got ${idpRes.status})`
+  );
 });
 
 console.log("================================================================");

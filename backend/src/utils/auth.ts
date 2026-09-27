@@ -15,7 +15,7 @@ export const authProvider = betterAuth({
     baseURL: config.auth.baseURL,
     trustedOrigins: [
         config.frontendUrl,
-        ...(config.env !== "production" ? ["http://localhost:5173", "http://localhost:3000"] : []),
+        ...(config.env !== "production" ? ["http://localhost:5173", "http://localhost:3000", "https://app.example.com"] : []),
         "https://oauth21.vercel.app"
     ].filter(Boolean),
     secret: config.auth.secret,

@@ -156,6 +156,7 @@ jobs:
           GOOGLE_CLIENT_ID: test-google-id
           GOOGLE_CLIENT_SECRET: test-google-secret
           TRUSTED_PROXY_CIDRS: "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32"
+          INTERNAL_GATEWAY_SECRET: "deploy_preflight_gateway_secret_minimum_32_characters_key"
         run: npm run test:all-security
 
       - name: Compile Production Lambda Handler
@@ -168,20 +169,36 @@ jobs:
 
       - name: Deploy Stack via AWS SAM
         working-directory: backend
+        env:
+          INTERNAL_GATEWAY_SECRET: ${{ secrets.INTERNAL_GATEWAY_SECRET }}
         run: |
           sam deploy \
             --no-confirm-changeset \
-            --no-fail-on-empty-changeset
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"
 
-      - name: Smoke Test Deployed Lambda Health Endpoint
+      - name: Smoke Test Deployed Lambda Health Endpoint (Blocking Gate)
         run: |
           echo "Validating live Lambda Function URL..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/)
-          if [ "$STATUS" -eq 200 ]; then
-            echo "Backend probe successful (HTTP 200)."
-          else
-            echo "Warning: Live health check returned HTTP $STATUS"
-          fi
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          TARGET_URL="https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/health"
+          
+          until [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]
+          do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
+            echo "Probe $RETRY_COUNT: $TARGET_URL returned HTTP $STATUS"
+            if [ "$STATUS" -eq 200 ]; then
+              echo "Backend probe successful (HTTP 200)."
+              exit 0
+            fi
+            RETRY_COUNT=$((RETRY_COUNT+1))
+            sleep 5
+          done
+
+          echo "FATAL: Live deployment health check failed after $MAX_RETRIES attempts (last HTTP $STATUS)."
+          exit 1
 
   deploy-frontend:
     name: Deploy Frontend to Vercel

@@ -119,7 +119,11 @@ export const config = {
     },
 
     get internalGatewaySecret(): string | undefined {
-        return process.env.INTERNAL_GATEWAY_SECRET || parsedEnv.INTERNAL_GATEWAY_SECRET
+        const secret = process.env.INTERNAL_GATEWAY_SECRET || parsedEnv.INTERNAL_GATEWAY_SECRET
+        if (this.env === 'production' && (!secret || secret.trim().length < 32)) {
+            throw new Error('INTERNAL_GATEWAY_SECRET must be explicitly configured in production (minimum 32 characters)')
+        }
+        return secret
     },
 
     get allowDevClientsInProduction(): boolean {

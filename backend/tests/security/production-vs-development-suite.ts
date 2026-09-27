@@ -183,7 +183,7 @@ await runTest("PROD-4: OIDC discovery document contains zero localhost reference
   assert.ok(!text.includes("127.0.0.1"), "Discovery metadata must contain zero 127.0.0.1 references");
   assert.ok(!text.includes("http://"), "Discovery metadata must NOT contain any unencrypted http:// URLs");
 
-  assert.equal(data.issuer, "https://auth.example.com");
+  assert.equal(data.issuer, process.env.BETTER_AUTH_URL || "https://auth.example.com");
   assert.ok(data.authorization_endpoint.startsWith("https://"));
   assert.ok(data.token_endpoint.startsWith("https://"));
   assert.ok(data.jwks_uri.startsWith("https://"));
