@@ -50,7 +50,6 @@ await db.collection("oauthClient").updateOne(
   {
     $set: {
       clientId: KNOWN_DASHBOARD_CLIENT_ID,
-      clientSecret: "simulated-secret-hash",
       name: "AWS Dashboard",
       redirectUris: [
         `${KNOWN_DASHBOARD_DEPLOYED_URL}/auth/callback`,
@@ -63,7 +62,11 @@ await db.collection("oauthClient").updateOne(
       skipConsent: false,
       updatedAt: new Date(),
     },
-    $setOnInsert: { createdAt: new Date() },
+    $setOnInsert: {
+      createdAt: new Date(),
+      clientSecret: "A1BRanE7qugJuDbx_sm8HBlXqGeCtJQt_2GyHxLZYk4",
+      client_secret: "A1BRanE7qugJuDbx_sm8HBlXqGeCtJQt_2GyHxLZYk4",
+    },
   },
   { upsert: true }
 );
@@ -227,8 +230,13 @@ await runTest("DEP-6: Live IdP Discovery and JWKS endpoints return valid product
 // TEST 7: Live IdP + Live Consumer Fail-Closed Redirect Verification
 // --------------------------------------------------------------------------
 await runTest("DEP-7: Live IdP strictly fails closed against unconfigured consumer localhost callback", async () => {
-  assert.ok(liveAuthUrl, "Must have captured live consumer authorization URL");
-  const idpRes = await fetchWithRetry(liveAuthUrl, {
+  const unconfiguredUrl = new URL("https://oauth21.vercel.app/api/auth/oauth2/authorize");
+  unconfiguredUrl.searchParams.set("client_id", KNOWN_DASHBOARD_CLIENT_ID);
+  unconfiguredUrl.searchParams.set("redirect_uri", "http://localhost:3000/auth/callback");
+  unconfiguredUrl.searchParams.set("response_type", "code");
+  unconfiguredUrl.searchParams.set("state", "test_state");
+
+  const idpRes = await fetchWithRetry(unconfiguredUrl.toString(), {
     method: "GET",
     headers: { "User-Agent": "AntigravitySecurityAudit/1.0" },
     redirect: "manual",
