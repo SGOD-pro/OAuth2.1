@@ -143,7 +143,7 @@ await runTest("DEP-3: /oauth2/authorize rejects invalid redirect_uri with HTTP 4
 
 // --------------------------------------------------------------------------
 // Helper for live network calls with retry and 25s cold-start tolerance
-async function fetchWithRetry(url: string, options: RequestInit = {}, maxRetries = 2): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit = {}, maxRetries = 4): Promise<Response> {
   let lastErr: any;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
