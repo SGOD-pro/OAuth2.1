@@ -35,6 +35,14 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
 }
 
 export const requireAdmin = createMiddleware(async (c, next) => {
+  const auth = await getAuthenticatedUser(c);
+
+  // If already authenticated as an administrator via session cookie, permit access
+  if (auth && auth.user?.role === "admin") {
+    return next();
+  }
+
+  // If not authenticated via admin session, require internal gateway secret for server-to-server boundary
   if (config.internalGatewaySecret) {
     const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
     if (!gatewayHeader || gatewayHeader !== config.internalGatewaySecret) {
@@ -44,8 +52,6 @@ export const requireAdmin = createMiddleware(async (c, next) => {
       );
     }
   }
-
-  const auth = await getAuthenticatedUser(c);
 
   if (!auth) {
     return c.json({ error: "Authentication required" }, 401);

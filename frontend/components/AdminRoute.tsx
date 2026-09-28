@@ -1,7 +1,6 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useSession } from '../lib/auth-client';
-import { apiFetch } from '../lib/api';
 import { RouteLoader } from './RouteLoader';
 import { ErrorBoundary } from './ErrorBoundary';
 
@@ -18,13 +17,6 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
   const { data: session, isPending } = useSession();
   const role = (session?.user as { role?: string })?.role;
   const isAdmin = role === 'admin';
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    apiFetch('/api/admin/stats').catch(() => {
-      // Silent fail - mutations will still be blocked if session is invalid.
-    });
-  }, [isAdmin]);
 
   if (isPending) return <RouteLoader />;
   

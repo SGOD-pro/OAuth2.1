@@ -1,6 +1,15 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+
+// Global flag ensuring the 3-line entrance expansion runs strictly once across the app session
+let hasAnimatedOnce = false;
 
 export const RouteLoader: React.FC = () => {
+  const [shouldAnimate] = useState(() => !hasAnimatedOnce);
+
+  useEffect(() => {
+    hasAnimatedOnce = true;
+  }, []);
+
   return (
     <div className="flex h-screen w-screen flex-col items-center justify-center gap-6 bg-background" role="status" aria-live="polite">
       <div className="flex flex-col items-center gap-1.5">
@@ -13,9 +22,9 @@ export const RouteLoader: React.FC = () => {
       </div>
       <div className="flex w-64 flex-col gap-2.5">
         {/* 3 bars: 1st full length, 2nd 3/4 length, 3rd 1/2 length */}
-        <div className="h-[2.5px] w-full bg-[#0066B1] rounded-full animate-m-line-1" />
-        <div className="h-[2.5px] w-3/4 bg-[#1C69D4] rounded-full animate-m-line-2" />
-        <div className="h-[2.5px] w-1/2 bg-[#E22718] rounded-full animate-m-line-3" />
+        <div className={`h-[2.5px] w-full bg-[#0066B1] rounded-full origin-left ${shouldAnimate ? 'animate-m-line-1' : ''}`} />
+        <div className={`h-[2.5px] w-3/4 bg-[#1C69D4] rounded-full origin-left ${shouldAnimate ? 'animate-m-line-2' : ''}`} />
+        <div className={`h-[2.5px] w-1/2 bg-[#E22718] rounded-full origin-left ${shouldAnimate ? 'animate-m-line-3' : ''}`} />
       </div>
     </div>
   );
