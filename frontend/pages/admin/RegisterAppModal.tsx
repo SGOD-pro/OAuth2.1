@@ -17,9 +17,20 @@ interface FormState {
   enableEndSession: boolean;
 }
 
-interface CreatedClient {
+export interface CreatedClient {
   client_id: string;
   client_secret: string;
+  client_name?: string;
+  redirect_uris?: string[];
+  allowed_origins?: string[];
+  is_dev?: boolean;
+  is_public?: boolean;
+  isPublic?: boolean;
+  skip_consent?: boolean;
+  enable_end_session?: boolean;
+  createdAt?: string;
+  created_at?: string;
+  [key: string]: unknown;
 }
 
 interface RegisterAppModalProps {

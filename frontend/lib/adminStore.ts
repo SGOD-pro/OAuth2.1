@@ -31,6 +31,12 @@ export interface OAuthClient {
   };
   skip_consent: boolean;
   enable_end_session: boolean;
+  has_custom_admins?: boolean;
+  hasCustomAdmins?: boolean;
+  adminEmail?: string | null;
+  adminUserId?: string | null;
+  createdAt?: string | Date;
+  created_at?: string | Date;
 }
 
 export interface LogEntry {
@@ -106,7 +112,12 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
       const res = await apiFetch('/api/admin/clients');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: OAuthClient[] = await res.json();
-      set({ clients: { data, lastFetched: Date.now(), loading: false } });
+      const sorted = (data || []).sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
+        return timeB - timeA;
+      });
+      set({ clients: { data: sorted, lastFetched: Date.now(), loading: false } });
     } catch (err) {
       toast.error(String(err));
       set({ clients: { ...get().clients, loading: false } });
@@ -146,12 +157,25 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
   },
 
   addClientLocal: (client) => {
-    set((state) => ({
-      clients: {
-        ...state.clients,
-        data: [...(state.clients.data || []), client]
-      }
-    }));
+    const enriched: OAuthClient = {
+      ...client,
+      createdAt: client.createdAt || client.created_at || new Date().toISOString(),
+      created_at: client.createdAt || client.created_at || new Date().toISOString(),
+    };
+    set((state) => {
+      const remaining = (state.clients.data || []).filter((c) => c.client_id !== enriched.client_id);
+      const updated = [enriched, ...remaining].sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
+        return timeB - timeA;
+      });
+      return {
+        clients: {
+          ...state.clients,
+          data: updated,
+        },
+      };
+    });
     // Trigger background stats refresh
     void get().fetchStats(true);
   },

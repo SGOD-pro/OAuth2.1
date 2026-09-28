@@ -172,11 +172,22 @@ jobs:
         env:
           INTERNAL_GATEWAY_SECRET: ${{ secrets.INTERNAL_GATEWAY_SECRET }}
         run: |
-          sam deploy \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"
+          if [ -n "$INTERNAL_GATEWAY_SECRET" ]; then
+            echo "Deploying SAM stack with InternalGatewaySecret parameter override..."
+            sam deploy \
+              --no-confirm-changeset \
+              --no-fail-on-empty-changeset \
+              --parameter-overrides \
+                BetterAuthUrl="https://oauth21.vercel.app" \
+                GoogleClientId="851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com" \
+                FrontendUrl="https://oauth21.vercel.app" \
+                InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"
+          else
+            echo "INTERNAL_GATEWAY_SECRET secret not provided; deploying with default/existing parameter configuration..."
+            sam deploy \
+              --no-confirm-changeset \
+              --no-fail-on-empty-changeset
+          fi
 
       - name: Smoke Test Deployed Lambda Health Endpoint (Blocking Gate)
         run: |

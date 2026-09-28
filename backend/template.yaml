@@ -27,6 +27,7 @@ Parameters:
   InternalGatewaySecret:
     Type: String
     NoEcho: true
+    Default: ""
     Description: Shared secret between reverse-proxy gateway and Lambda Function URL
   TrustedProxyCidrs:
     Type: String

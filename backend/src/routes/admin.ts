@@ -34,12 +34,30 @@ admin.get("/clients", requireAdmin, async (c) => {
       ? { $or: [{ clientId: scopedClientId }, { client_id: scopedClientId }, { id: scopedClientId }] }
       : {};
 
-    const clients = await database.collection("oauthClient").find(query).toArray();
+    const [clients, appAdminClientIds] = await Promise.all([
+      database.collection("oauthClient").find(query).sort({ createdAt: -1, _id: -1 }).toArray(),
+      database.collection("app_admins").distinct("clientId"),
+    ]);
+
+    const appAdminSet = new Set((appAdminClientIds || []).map((id: any) => String(id)));
+
     const safeClients = clients.map((doc: any) => {
       const { clientSecret, client_secret, _id, ...rest } = doc;
+      const canonicalClientId = rest.clientId || rest.client_id || rest.id || String(_id);
+      const hasCustomAdmins = Boolean(
+        rest.adminEmail ||
+        rest.admin_email ||
+        rest.adminUserId ||
+        rest.admin_user_id ||
+        appAdminSet.has(canonicalClientId)
+      );
+
+      const rawDate = rest.createdAt || rest.created_at || (ObjectId.isValid(_id) ? new ObjectId(_id).getTimestamp() : new Date());
+      const createdAtIso = rawDate instanceof Date ? rawDate.toISOString() : (typeof rawDate === "string" ? rawDate : new Date(rawDate).toISOString());
+
       return {
         ...rest,
-        client_id: rest.clientId || rest.client_id || rest.id || String(_id),
+        client_id: canonicalClientId,
         client_name: rest.name || rest.client_name || "Application",
         redirect_uris: rest.redirectUris || rest.redirect_uris || [],
         allowed_origins: rest.allowedOrigins || rest.allowed_origins || [],
@@ -50,8 +68,19 @@ admin.get("/clients", requireAdmin, async (c) => {
         skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
         adminEmail: rest.adminEmail || rest.admin_email || null,
         adminUserId: rest.adminUserId || rest.admin_user_id || null,
+        has_custom_admins: hasCustomAdmins,
+        hasCustomAdmins: hasCustomAdmins,
+        createdAt: createdAtIso,
+        created_at: createdAtIso,
       };
     });
+
+    safeClients.sort((a, b) => {
+      const timeA = new Date(a.createdAt).getTime() || 0;
+      const timeB = new Date(b.createdAt).getTime() || 0;
+      return timeB - timeA;
+    });
+
     return c.json(safeClients);
   } catch (err: any) {
     console.error("[ADMIN_CLIENTS] Error listing clients:", err);
@@ -153,6 +182,7 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
   const clientId = result.client_id || result.clientId || result.id;
   const isPublic = typeof body.isPublic === "boolean" ? body.isPublic : (typeof body.is_public === "boolean" ? body.is_public : true);
 
+  const now = new Date();
   // Persist extra fields in MongoDB oauthClient collection
   const database = await getDb();
   await database.collection("oauthClient").updateOne(
@@ -164,9 +194,16 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
         isPublic,
         skipConsent: Boolean(body.skip_consent ?? body.skipConsent),
         enableEndSession: body.enable_end_session !== false && body.enableEndSession !== false,
-        updatedAt: new Date(),
+        updatedAt: now,
+      },
+      $setOnInsert: {
+        createdAt: now,
       },
     },
+  );
+  await database.collection("oauthClient").updateOne(
+    { $or: [{ clientId }, { id: clientId }, { client_id: clientId }], createdAt: { $exists: false } },
+    { $set: { createdAt: now } }
   );
 
   if (allowedOrigins.length > 0) {
@@ -181,7 +218,7 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     targetClientId: String(clientId),
     details: { name: clientName, client_id: clientId },
     ipAddress: getTrustedClientIp(c),
-    timestamp: new Date(),
+    timestamp: now,
   });
 
   const responsePayload = {
@@ -192,8 +229,12 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     redirect_uris: redirectUris,
     allowed_origins: allowedOrigins,
     is_dev: isDev,
+    is_public: isPublic,
+    isPublic: isPublic,
     skip_consent: Boolean(body.skip_consent ?? body.skipConsent),
     enable_end_session: body.enable_end_session !== false && body.enableEndSession !== false,
+    createdAt: now.toISOString(),
+    created_at: now.toISOString(),
   };
 
   return c.json(responsePayload, 201);
