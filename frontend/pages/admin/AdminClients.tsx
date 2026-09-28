@@ -17,7 +17,15 @@ import { apiFetch } from '@/lib/api';
 import { useAdminStore, type OAuthClient } from '@/lib/adminStore';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { Search, X, RotateCcw, Filter, ShieldCheck } from 'lucide-react';
-
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 const AUTH_ISSUER = import.meta.env.VITE_AUTH_URL ?? 'https://auth.yourdomain.com';
 
 export const AdminClients: React.FC = () => {
@@ -27,7 +35,7 @@ export const AdminClients: React.FC = () => {
   const fetchClients = useAdminStore((state) => state.fetchClients);
   const deleteClientLocal = useAdminStore((state) => state.deleteClientLocal);
   const addClientLocal = useAdminStore((state) => state.addClientLocal);
-  
+
   const rawClients = data;
   const clients = useMemo(() => rawClients || [], [rawClients]);
 
@@ -175,8 +183,8 @@ export const AdminClients: React.FC = () => {
             </DialogHeader>
             <DialogFooter className="mt-4">
               <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
-              <Button 
-                variant="destructive" 
+              <Button
+                variant="destructive"
                 onClick={() => confirmDelete && void handleDelete(confirmDelete)}
                 disabled={deletingId === confirmDelete?.client_id}
               >
@@ -239,16 +247,23 @@ export const AdminClients: React.FC = () => {
 
                 {/* Filter by Environment: Prod vs Dev */}
                 <div className="relative shrink-0">
-                  <select
-                    aria-label="Filter by environment"
-                    value={envFilter}
-                    onChange={(e) => setEnvFilter(e.target.value as 'all' | 'prod' | 'dev')}
-                    className="appearance-none rounded-md border border-border bg-secondary/30 dark:bg-[#16181D] px-3 py-1.5 pr-8 font-sans text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer h-9 w-full sm:w-auto"
-                  >
-                    <option value="all" className="bg-background text-foreground">All environments</option>
-                    <option value="prod" className="bg-background text-foreground">Production only</option>
-                    <option value="dev" className="bg-background text-foreground">Development only</option>
-                  </select>
+
+
+
+                  <Select value={envFilter} onValueChange={(e) => setEnvFilter(e as 'all' | 'prod' | 'dev')}>
+                    <SelectTrigger className="w-full max-w-48">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectLabel>Fruits</SelectLabel>
+                        <SelectItem value="all">All environments</SelectItem>
+                        <SelectItem value="prod">Production only</SelectItem>
+                        <SelectItem value="dev">Development only</SelectItem>
+
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                   <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="6 9 12 15 18 9" />
@@ -256,18 +271,21 @@ export const AdminClients: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Filter by Access Mode: Public vs Private */}
                 <div className="relative shrink-0">
-                  <select
-                    aria-label="Filter by access mode"
-                    value={accessFilter}
-                    onChange={(e) => setAccessFilter(e.target.value as 'all' | 'public' | 'private')}
-                    className="appearance-none rounded-md border border-border bg-secondary/30 dark:bg-[#16181D] px-3 py-1.5 pr-8 font-sans text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer h-9 w-full sm:w-auto"
-                  >
-                    <option value="all" className="bg-background text-foreground">All access modes</option>
-                    <option value="public" className="bg-background text-foreground">Public access</option>
-                    <option value="private" className="bg-background text-foreground">Private access</option>
-                  </select>
+                  <Select value={accessFilter} onValueChange={(e) => setAccessFilter(e as 'all' | 'public' | 'private')}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectLabel>Fruits</SelectLabel>
+                        <SelectItem value="all">All access modes</SelectItem>
+                        <SelectItem value="public">Public access</SelectItem>
+                        <SelectItem value="private">Private access</SelectItem>
+
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                   <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="6 9 12 15 18 9" />
@@ -337,7 +355,7 @@ export const AdminClients: React.FC = () => {
 
                       return (
                         <React.Fragment key={c.client_id}>
-                          <TableRow 
+                          <TableRow
                             className={`cursor-pointer transition-colors border-b border-border/70 ${isSelected ? 'bg-secondary/60' : 'hover:bg-secondary/30'}`}
                             onClick={() => setSelectedClient((s) => (s?.client_id === c.client_id ? null : c))}
                           >
@@ -356,10 +374,10 @@ export const AdminClients: React.FC = () => {
                                 </code>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <Button 
-                                      variant="ghost" 
-                                      size="icon" 
-                                      className="size-7 rounded-md text-muted-foreground hover:text-foreground" 
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="size-7 rounded-md text-muted-foreground hover:text-foreground"
                                       onClick={(e) => copyClientId(c.client_id, e)}
                                       aria-label="Copy Client ID"
                                     >
@@ -384,21 +402,21 @@ export const AdminClients: React.FC = () => {
                                 <Badge variant={c.disabled ? 'destructive' : 'success'}>
                                   {c.disabled ? 'Suspended' : 'Active'}
                                 </Badge>
-                                <Badge 
-                                  variant="outline" 
+                                <Badge
+                                  variant="outline"
                                   className={c.is_dev ? 'bg-amber-500/10 text-amber-500 border-amber-500/30 text-[11px]' : 'bg-primary/10 text-primary border-primary/30 text-[11px]'}
                                 >
                                   {c.is_dev ? 'Dev' : 'Prod'}
                                 </Badge>
-                                <Badge 
-                                  variant="outline" 
+                                <Badge
+                                  variant="outline"
                                   className={c.is_public !== false && c.isPublic !== false ? 'bg-sky-500/10 text-sky-500 border-sky-500/30 text-[11px]' : 'bg-purple-500/10 text-purple-500 border-purple-500/30 text-[11px]'}
                                 >
                                   {c.is_public !== false && c.isPublic !== false ? 'Public' : 'Private'}
                                 </Badge>
                                 {Boolean(c.has_custom_admins || c.hasCustomAdmins || c.adminEmail || c.adminUserId) && (
-                                  <Badge 
-                                    variant="outline" 
+                                  <Badge
+                                    variant="outline"
                                     className="bg-emerald-500/10 text-emerald-500 border-emerald-500/30 text-[11px] flex items-center gap-1"
                                     title="Custom application administrators assigned"
                                   >
@@ -408,117 +426,117 @@ export const AdminClients: React.FC = () => {
                                 )}
                               </div>
                             </TableCell>
-                          <TableCell className="text-right py-3.5" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex justify-end gap-1.5">
-                              <Button 
-                                size="sm" 
-                                variant="outline" 
-                                className="h-8 px-2.5 text-xs rounded-md"
-                                onClick={() => setEditClient(c)}
-                              >
-                                Edit
-                              </Button>
-                              <Button 
-                                size="sm" 
-                                variant="ghost" 
-                                className="h-8 px-2.5 text-xs rounded-md text-destructive hover:text-destructive hover:bg-destructive/10" 
-                                onClick={() => setConfirmDelete(c)}
-                              >
-                                Revoke
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-
-                        {isSelected && (
-                          <TableRow className="bg-secondary/20 hover:bg-secondary/20 border-b border-border">
-                            <TableCell colSpan={4} className="p-5 sm:p-6 whitespace-normal">
-                              <div className="space-y-5">
-                                <div className="flex items-center justify-between pb-3 border-b border-border">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-heading text-sm font-medium text-foreground">
-                                      Configuration for {c.client_name}
-                                    </span>
-                                  </div>
-                                </div>
-
-                                <div className="grid lg:grid-cols-2 gap-4 sm:gap-6">
-                                  <div className="space-y-1.5">
-                                    <span className="font-sans text-xs font-medium text-muted-foreground block">
-                                      Redirect URIs ({ (c.redirect_uris ?? c.redirectUris ?? []).length })
-                                    </span>
-                                    <div className="flex flex-wrap gap-1.5 p-3 rounded-md bg-background border border-border min-h-[42px]">
-                                      {(c.redirect_uris ?? c.redirectUris ?? []).length > 0 ? (
-                                        (c.redirect_uris ?? c.redirectUris ?? []).map((uri) => (
-                                          <code key={uri} className="font-mono text-xs bg-secondary px-2 py-0.5 rounded text-foreground border border-border/60">
-                                            {uri}
-                                          </code>
-                                        ))
-                                      ) : (
-                                        <span className="font-sans text-xs text-muted-foreground italic">No redirect URIs configured</span>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  <div className="space-y-1.5">
-                                    <span className="font-sans text-xs font-medium text-muted-foreground block">
-                                      Allowed CORS Origins ({ (c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).length })
-                                    </span>
-                                    <div className="flex flex-wrap gap-1.5 p-3 rounded-md bg-background border border-border min-h-[42px]">
-                                      {(c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).length > 0 ? (
-                                        (c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).map((origin) => (
-                                          <code key={origin} className="font-mono text-xs bg-secondary px-2 py-0.5 rounded text-primary border border-primary/20">
-                                            {origin}
-                                          </code>
-                                        ))
-                                      ) : (
-                                        <span className="font-sans text-xs text-muted-foreground italic">No allowed origins configured</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-
-                                <div className="grid lg:grid-cols-2 gap-4 sm:gap-6 pt-1">
-                                  <div className="space-y-1.5">
-                                    <span className="font-sans text-xs font-medium text-muted-foreground block">
-                                      Authorize Endpoint
-                                    </span>
-                                    <pre className="p-3 rounded-md bg-background border border-border text-xs font-mono text-foreground break-all whitespace-pre-wrap">
-                                      {AUTH_ISSUER}/api/auth/oauth2/authorize?client_id={c.client_id}&response_type=code&redirect_uri=YOUR_CALLBACK&scope=openid profile email
-                                    </pre>
-                                  </div>
-
-                                  <div className="space-y-1.5">
-                                    <span className="font-sans text-xs font-medium text-muted-foreground block">
-                                      Token Exchange Endpoint
-                                    </span>
-                                    <pre className="p-3 rounded-md bg-background border border-border text-xs font-mono text-foreground break-all whitespace-pre-wrap">
-                                      POST {AUTH_ISSUER}/api/auth/oauth2/token
-                                    </pre>
-                                  </div>
-                                </div>
-
-                                <div className="border-t border-border pt-4">
-                                  <AppAdminManager
-                                    clientId={c.client_id}
-                                    clientName={c.client_name}
-                                    allowedOrigins={c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []}
-                                    redirectUris={c.redirect_uris ?? c.redirectUris ?? []}
-                                  />
-                                </div>
+                            <TableCell className="text-right py-3.5" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex justify-end gap-1.5">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 px-2.5 text-xs rounded-md"
+                                  onClick={() => setEditClient(c)}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-8 px-2.5 text-xs rounded-md text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => setConfirmDelete(c)}
+                                >
+                                  Revoke
+                                </Button>
                               </div>
                             </TableCell>
                           </TableRow>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </div>
-      )}
+
+                          {isSelected && (
+                            <TableRow className="bg-secondary/20 hover:bg-secondary/20 border-b border-border">
+                              <TableCell colSpan={4} className="p-5 sm:p-6 whitespace-normal">
+                                <div className="space-y-5">
+                                  <div className="flex items-center justify-between pb-3 border-b border-border">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-heading text-sm font-medium text-foreground">
+                                        Configuration for {c.client_name}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid lg:grid-cols-2 gap-4 sm:gap-6">
+                                    <div className="space-y-1.5">
+                                      <span className="font-sans text-xs font-medium text-muted-foreground block">
+                                        Redirect URIs ({(c.redirect_uris ?? c.redirectUris ?? []).length})
+                                      </span>
+                                      <div className="flex flex-wrap gap-1.5 p-3 rounded-md bg-background border border-border min-h-[42px]">
+                                        {(c.redirect_uris ?? c.redirectUris ?? []).length > 0 ? (
+                                          (c.redirect_uris ?? c.redirectUris ?? []).map((uri) => (
+                                            <code key={uri} className="font-mono text-xs bg-secondary px-2 py-0.5 rounded text-foreground border border-border/60">
+                                              {uri}
+                                            </code>
+                                          ))
+                                        ) : (
+                                          <span className="font-sans text-xs text-muted-foreground italic">No redirect URIs configured</span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                      <span className="font-sans text-xs font-medium text-muted-foreground block">
+                                        Allowed CORS Origins ({(c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).length})
+                                      </span>
+                                      <div className="flex flex-wrap gap-1.5 p-3 rounded-md bg-background border border-border min-h-[42px]">
+                                        {(c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).length > 0 ? (
+                                          (c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []).map((origin) => (
+                                            <code key={origin} className="font-mono text-xs bg-secondary px-2 py-0.5 rounded text-primary border border-primary/20">
+                                              {origin}
+                                            </code>
+                                          ))
+                                        ) : (
+                                          <span className="font-sans text-xs text-muted-foreground italic">No allowed origins configured</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid lg:grid-cols-2 gap-4 sm:gap-6 pt-1">
+                                    <div className="space-y-1.5">
+                                      <span className="font-sans text-xs font-medium text-muted-foreground block">
+                                        Authorize Endpoint
+                                      </span>
+                                      <pre className="p-3 rounded-md bg-background border border-border text-xs font-mono text-foreground break-all whitespace-pre-wrap">
+                                        {AUTH_ISSUER}/api/auth/oauth2/authorize?client_id={c.client_id}&response_type=code&redirect_uri=YOUR_CALLBACK&scope=openid profile email
+                                      </pre>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                      <span className="font-sans text-xs font-medium text-muted-foreground block">
+                                        Token Exchange Endpoint
+                                      </span>
+                                      <pre className="p-3 rounded-md bg-background border border-border text-xs font-mono text-foreground break-all whitespace-pre-wrap">
+                                        POST {AUTH_ISSUER}/api/auth/oauth2/token
+                                      </pre>
+                                    </div>
+                                  </div>
+
+                                  <div className="border-t border-border pt-4">
+                                    <AppAdminManager
+                                      clientId={c.client_id}
+                                      clientName={c.client_name}
+                                      allowedOrigins={c.allowed_origins ?? c.allowedOrigins ?? c.metadata?.allowedOrigins ?? []}
+                                      redirectUris={c.redirect_uris ?? c.redirectUris ?? []}
+                                    />
+                                  </div>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        )}
 
         {showRegister && (
           <RegisterAppModal
