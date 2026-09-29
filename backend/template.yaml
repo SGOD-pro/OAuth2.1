@@ -27,7 +27,6 @@ Parameters:
   InternalGatewaySecret:
     Type: String
     NoEcho: true
-    Default: "swyra_internal_gateway_secret_32char_prod_key"
     Description: Shared secret between reverse-proxy gateway and Lambda Function URL
   TrustedProxyCidrs:
     Type: String

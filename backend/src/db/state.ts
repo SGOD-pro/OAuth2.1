@@ -84,6 +84,7 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("oauth_token_families", { familyId: 1 }, { unique: true }),
       safeIndex("oauth_token_families", { activeTokenHash: 1 }),
       safeIndex("oauth_token_families", { consumedTokenHashes: 1 }),
+      safeIndex("oauth_token_families", { clientId: 1, activeTokenHash: 1 }),
       safeIndex("oauthClient", { clientId: 1 }),
       safeIndex("oauthRefreshToken", { token: 1 }),
       safeIndex("oauthAccessToken", { token: 1 }),
@@ -213,12 +214,16 @@ export async function registerTokenFamily(
   userId: string | undefined,
   initialTokenHash: string
 ): Promise<void> {
+  const trimmedClientId = clientId?.trim();
+  if (!trimmedClientId) {
+    throw new Error("registerTokenFamily requires a non-empty clientId");
+  }
   await ensureTtlIndexes();
   const db = await getDb();
 
   await db.collection<TokenFamilyDoc>("oauth_token_families").insertOne({
     familyId,
-    clientId,
+    clientId: trimmedClientId,
     userId,
     activeTokenHash: initialTokenHash,
     consumedTokenHashes: [],
@@ -234,13 +239,15 @@ export async function verifyAndRotateTokenFamily(
   incomingTokenHash: string,
   newTokenHash: string,
   userId?: string,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  expectedClientId?: string
 ): Promise<{
   valid: boolean;
   replayed: boolean;
   familyId?: string;
   clientId?: string;
   userId?: string;
+  clientMismatch?: boolean;
 }> {
   await ensureTtlIndexes();
   const db = await getDb();
@@ -255,6 +262,21 @@ export async function verifyAndRotateTokenFamily(
 
   if (!doc) {
     return { valid: false, replayed: false };
+  }
+
+  // 1b. Defense-in-depth: Cross-client isolation boundary
+  // If an expectedClientId is specified, caller MUST own this token family.
+  // Under NO circumstances may an unauthenticated or cross-client caller rotate,
+  // lock, inspect, or cascade-revoke a family belonging to another client.
+  if (expectedClientId && doc.clientId && doc.clientId !== expectedClientId) {
+    return {
+      valid: false,
+      replayed: false,
+      familyId: doc.familyId,
+      clientId: doc.clientId,
+      userId: doc.userId,
+      clientMismatch: true,
+    };
   }
 
   // 2. Check if family is already revoked
@@ -278,7 +300,7 @@ export async function verifyAndRotateTokenFamily(
 
     // FAIL-SECURE: Immediately cascade-revoke the entire family on true replay theft
     await db.collection<TokenFamilyDoc>("oauth_token_families").updateOne(
-      { _id: doc._id },
+      { _id: doc._id, ...(doc.clientId ? { clientId: doc.clientId } : {}) },
       { $set: { status: "revoked", revokedAt: new Date() } }
     );
 
@@ -326,6 +348,7 @@ export async function verifyAndRotateTokenFamily(
         _id: doc._id,
         activeTokenHash: incomingTokenHash,
         status: "active",
+        ...(doc.clientId ? { clientId: doc.clientId } : {}),
       },
       {
         $push: { consumedTokenHashes: incomingTokenHash },

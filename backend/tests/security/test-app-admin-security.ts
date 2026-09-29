@@ -620,6 +620,7 @@ try {
       GOOGLE_CLIENT_ID: "google-id",
       GOOGLE_CLIENT_SECRET: "google-secret",
       FRONTEND_URL: "https://auth.example.com",
+      INTERNAL_GATEWAY_SECRET: "c".repeat(32),
     };
 
     // Missing APP_ADMIN_JWT_SECRET in production fails

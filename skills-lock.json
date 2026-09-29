@@ -1,3 +1,4 @@
+
 {
   "version": 1,
   "skills": {
@@ -4704,6 +4705,12 @@
       "sourceType": "github",
       "skillPath": "skills/securing-serverless-functions/SKILL.md",
       "computedHash": "4bbcb50518030c7b103199dcad5536d0af73400d4007c56169ba3c6bb529f4c7"
+    },
+    "security-audit": {
+      "source": "cloudflare/security-audit-skill",
+      "sourceType": "github",
+      "skillPath": "skills/security-audit/SKILL.md",
+      "computedHash": "98b97aad2873b3b9a8e064007c25e7827b493ba27fda8bfbdb41dab586767973"
     },
     "testing-android-intents-for-vulnerabilities": {
       "source": "mukul975/Anthropic-Cybersecurity-Skills",

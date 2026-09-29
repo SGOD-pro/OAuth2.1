@@ -359,12 +359,13 @@ await runTest("REFRESH-1: Concurrent refresh rotation on token family allows exa
   await registerTokenFamily(familyId, clientId, userId, tokenHash);
 
   // Fire 5 concurrent rotations with unique new hashes
+  const nowMs = Date.now();
   const results = await Promise.all([
-    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID()),
-    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID()),
-    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID()),
-    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID()),
-    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID()),
+    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID(), userId, nowMs, clientId),
+    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID(), userId, nowMs, clientId),
+    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID(), userId, nowMs, clientId),
+    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID(), userId, nowMs, clientId),
+    verifyAndRotateTokenFamily(tokenHash, crypto.randomUUID(), userId, nowMs, clientId),
   ]);
 
   const successCount = results.filter((r) => r.valid).length;
@@ -391,10 +392,11 @@ await runTest("REFRESH-2: Missing userId never triggers client-wide deletion", a
     token: "refresh_user_b_active",
   });
 
-  // Create a token family without userId
+  // Create a token family without userId with fixed deterministic timestamps
   const familyId = crypto.randomUUID();
   const tokenHash = crypto.randomUUID();
   const consumedHash = crypto.randomUUID();
+  const baseTime = 1700000000000;
 
   await db.collection("oauth_token_families").insertOne({
     familyId,
@@ -403,12 +405,12 @@ await runTest("REFRESH-2: Missing userId never triggers client-wide deletion", a
     activeTokenHash: tokenHash,
     consumedTokenHashes: [consumedHash],
     status: "active",
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    createdAt: new Date(baseTime - 10000),
+    updatedAt: new Date(baseTime),
   });
 
-  // Trigger replay on family without userId
-  const replayRes = await verifyAndRotateTokenFamily(consumedHash, crypto.randomUUID());
+  // Trigger replay on family without userId with deterministic nowMs (past 2000ms grace window)
+  const replayRes = await verifyAndRotateTokenFamily(consumedHash, crypto.randomUUID(), undefined, baseTime + 5000, clientId);
   assert.equal(replayRes.replayed, true, "Replay must be detected");
 
   // Verify that User B's active tokens were NOT deleted!

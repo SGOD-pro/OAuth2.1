@@ -18,7 +18,7 @@ process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
 process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
 process.env.TOTP_ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || "c".repeat(32);
-process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "swyra_internal_gateway_secret_32char_prod_key";
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "test_adversarial_gateway_secret_32_characters";
 
 const jose = await import("jose");
 const { default: app } = await import("../../src/app");
@@ -109,7 +109,7 @@ function getTestHeaders(extra: Record<string, string> = {}) {
   return {
     "Content-Type": "application/json",
     "x-forwarded-for": `${ip}, 10.0.0.1`,
-    "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "swyra_internal_gateway_secret_32char_prod_key",
+    "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "test_adversarial_gateway_secret_32_characters",
     Origin: process.env.FRONTEND_URL || "http://localhost:5174",
     ...extra,
   };
@@ -514,6 +514,26 @@ await runTest(4, "Refresh-token concurrency: 5 simultaneous requests produce exa
   assert.equal(secondFamilyDoc.status, "active", "Family must remain active after R2 rotation");
   assert.ok(secondFamilyDoc.consumedTokenHashes.includes(winnerHash), "consumedTokenHashes must contain R1");
 
+  // Negative cross-client test: App A refresh token presented with App B credentials
+  const basicB = Buffer.from(`${appB_id}:${appB_secret}`).toString("base64");
+  const crossRefreshRes = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicB}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: secondSuccessorToken,
+    }).toString(),
+  });
+  assert.ok(crossRefreshRes.status >= 400, "App A refresh token with App B credentials must be rejected");
+
+  // Invariant: App A family remains untouched and active
+  const appAFamCheck = await db.collection("oauth_token_families").findOne({ activeTokenHash: secondHash });
+  assert.ok(appAFamCheck, "App A family must remain intact");
+  assert.equal(appAFamCheck.status, "active", "App A family must remain active after cross-client attempt");
+
   // Replaying R1 must now fail
   const replayR1 = await app.request("/api/auth/oauth2/token", {
     method: "POST",
@@ -542,26 +562,6 @@ await runTest(4, "Refresh-token concurrency: 5 simultaneous requests produce exa
   });
   assert.ok(replayR0.status >= 400, "Replaying consumed R0 must fail");
 
-  // Negative cross-client test: App A refresh token presented with App B credentials
-  const basicB = Buffer.from(`${appB_id}:${appB_secret}`).toString("base64");
-  const crossRefreshRes = await app.request("/api/auth/oauth2/token", {
-    method: "POST",
-    headers: getTestHeaders({
-      Authorization: `Basic ${basicB}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    }),
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: secondSuccessorToken,
-    }).toString(),
-  });
-  assert.ok(crossRefreshRes.status >= 400, "App A refresh token with App B credentials must be rejected");
-
-  // Invariant: App A family remains untouched and active
-  const appAFamCheck = await db.collection("oauth_token_families").findOne({ activeTokenHash: secondHash });
-  assert.ok(appAFamCheck, "App A family must remain intact");
-  assert.equal(appAFamCheck.status, "active", "App A family must remain active after cross-client attempt");
-
   // Update activeRefreshToken to R2 for subsequent tests
   activeRefreshToken = secondSuccessorToken;
 });
@@ -587,7 +587,7 @@ await runTest(5, "Refresh-token replay: isolated synthetic fixtures for 1999ms, 
     updatedAt: new Date(baseTime),
   });
 
-  const res1999 = await verifyAndRotateTokenFamily(consumed1999, "dummy", undefined, baseTime + 1999);
+  const res1999 = await verifyAndRotateTokenFamily(consumed1999, "dummy", undefined, baseTime + 1999, appA_id);
   assert.equal(res1999.replayed, false, "At 1999ms (within 2000ms grace), request must NOT trigger replay revocation");
   const doc1999 = await db.collection("oauth_token_families").findOne({ familyId: fam1999Id });
   assert.equal(doc1999?.status, "active", "Family at 1999ms must remain active");
@@ -607,7 +607,7 @@ await runTest(5, "Refresh-token replay: isolated synthetic fixtures for 1999ms, 
     updatedAt: new Date(baseTime),
   });
 
-  const res2000 = await verifyAndRotateTokenFamily(consumed2000, "dummy", undefined, baseTime + 2000);
+  const res2000 = await verifyAndRotateTokenFamily(consumed2000, "dummy", undefined, baseTime + 2000, appA_id);
   assert.equal(res2000.replayed, true, "At 2000ms (grace window ended), replay attempt must trigger revocation");
   const doc2000 = await db.collection("oauth_token_families").findOne({ familyId: fam2000Id });
   assert.equal(doc2000?.status, "revoked", "Family at 2000ms must be marked revoked");
@@ -627,7 +627,7 @@ await runTest(5, "Refresh-token replay: isolated synthetic fixtures for 1999ms, 
     updatedAt: new Date(baseTime),
   });
 
-  const res2001 = await verifyAndRotateTokenFamily(consumed2001, "dummy", undefined, baseTime + 2001);
+  const res2001 = await verifyAndRotateTokenFamily(consumed2001, "dummy", undefined, baseTime + 2001, appA_id);
   assert.equal(res2001.replayed, true, "At 2001ms (past grace window), replay attempt must trigger revocation");
   const doc2001 = await db.collection("oauth_token_families").findOne({ familyId: fam2001Id });
   assert.equal(doc2001?.status, "revoked", "Family at 2001ms must be marked revoked");

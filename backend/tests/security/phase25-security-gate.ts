@@ -324,11 +324,11 @@ async function main() {
       ]);
 
       // Legitimate rotation for User 1: token 1 -> token 2
-      const rot = await verifyAndRotateTokenFamily(user1TokenHash1, user1TokenHash2);
+      const rot = await verifyAndRotateTokenFamily(user1TokenHash1, user1TokenHash2, user1Id, Date.now(), sharedClientId);
       assert.equal(rot.valid, true, "Legitimate rotation should succeed");
 
-      // Replay attack with User 1's consumed token 1!
-      const replay = await verifyAndRotateTokenFamily(user1TokenHash1, "attacker-new-hash");
+      // Replay attack with User 1's consumed token 1 (past 2000ms grace window)!
+      const replay = await verifyAndRotateTokenFamily(user1TokenHash1, "attacker-new-hash", user1Id, Date.now() + 2500, sharedClientId);
       assert.equal(replay.replayed, true, "Replay must be detected");
 
       // Verify User 1 tokens were deleted
@@ -360,9 +360,10 @@ async function main() {
       await registerTokenFamily(crypto.randomUUID(), testClientId, testUserId, activeHash);
 
       // Run two simultaneous rotations on the same activeHash
+      const nowMs = Date.now();
       const [resA, resB] = await Promise.all([
-        verifyAndRotateTokenFamily(activeHash, nextHashA),
-        verifyAndRotateTokenFamily(activeHash, nextHashB),
+        verifyAndRotateTokenFamily(activeHash, nextHashA, testUserId, nowMs, testClientId),
+        verifyAndRotateTokenFamily(activeHash, nextHashB, testUserId, nowMs, testClientId),
       ]);
 
       // Exactly one must succeed with valid: true

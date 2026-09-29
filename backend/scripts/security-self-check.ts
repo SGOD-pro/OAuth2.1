@@ -7,6 +7,7 @@ process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.GOOGLE_CLIENT_ID = "test";
 process.env.GOOGLE_CLIENT_SECRET = "test";
 process.env.FRONTEND_URL = "http://localhost:5173";
+process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION = "true";
 
 const {
   getTrustedClientIp,
@@ -17,6 +18,94 @@ const {
   safeCallbackURL,
   validateRedirectUri,
 } = await import("../src/utils/security");
+
+const { envSchema } = await import("../src/config/schema");
+
+// --------------------------------------------------------------------------
+// 1. Production Configuration Contract Validation
+// --------------------------------------------------------------------------
+
+const baseProdConfig = {
+  NODE_ENV: "production",
+  PORT: 3000,
+  MONGO_URI: "mongodb://127.0.0.1:27017/prod_db",
+  BETTER_AUTH_SECRET: "s".repeat(32),
+  BETTER_AUTH_URL: "https://auth.example.com",
+  FRONTEND_URL: "https://auth.example.com",
+  GOOGLE_CLIENT_ID: "google-prod-id",
+  GOOGLE_CLIENT_SECRET: "google-prod-secret",
+  APP_ADMIN_JWT_SECRET: "a".repeat(32),
+  APP_ADMIN_TOTP_KEY: "b".repeat(32),
+  INTERNAL_GATEWAY_SECRET: "g".repeat(32),
+  ALLOW_DEV_CLIENTS_IN_PRODUCTION: "false",
+};
+
+// 1A: Production + missing INTERNAL_GATEWAY_SECRET => rejected
+const missingGatewayRes = envSchema.safeParse({
+  ...baseProdConfig,
+  INTERNAL_GATEWAY_SECRET: undefined,
+});
+assert.equal(missingGatewayRes.success, false, "Production without INTERNAL_GATEWAY_SECRET must fail closed");
+
+// 1B: Production + weak INTERNAL_GATEWAY_SECRET (< 32 chars) => rejected
+const weakGatewayRes = envSchema.safeParse({
+  ...baseProdConfig,
+  INTERNAL_GATEWAY_SECRET: "too-short-secret-under-32-chars",
+});
+assert.equal(weakGatewayRes.success, false, "Production with weak INTERNAL_GATEWAY_SECRET must fail closed");
+
+// 1C: Production + valid INTERNAL_GATEWAY_SECRET (>= 32 chars) => accepted
+const validGatewayRes = envSchema.safeParse(baseProdConfig);
+assert.equal(validGatewayRes.success, true, "Production with valid configuration must pass");
+
+// 1D: Development / test modes remain compatible without mandatory gateway secret
+const validDevConfig = envSchema.safeParse({
+  NODE_ENV: "development",
+  MONGO_URI: "mongodb://127.0.0.1:27017/dev_db",
+  BETTER_AUTH_SECRET: "d".repeat(32),
+  BETTER_AUTH_URL: "http://localhost:3000",
+  FRONTEND_URL: "http://localhost:5173",
+  GOOGLE_CLIENT_ID: "google-dev-id",
+  GOOGLE_CLIENT_SECRET: "google-dev-secret",
+});
+assert.equal(validDevConfig.success, true, "Development mode without gateway secret must be accepted");
+
+// --------------------------------------------------------------------------
+// 2. ALLOW_DEV_CLIENTS_IN_PRODUCTION Enforcement
+// --------------------------------------------------------------------------
+
+// When ALLOW_DEV_CLIENTS_IN_PRODUCTION is false: dev client with loopback redirect is rejected in production
+assert.equal(
+  validateRedirectUri("http://localhost:3001/api/auth/callback", { isDev: true, env: "production", allowDevInProd: false }),
+  false,
+  "Dev client loopback MUST be rejected in production when allowDevInProd is false"
+);
+assert.equal(
+  validateRedirectUri("https://app.example.com/callback", { isDev: true, env: "production", allowDevInProd: false }),
+  true,
+  "Public HTTPS client remains valid when allowDevInProd is false"
+);
+
+// When ALLOW_DEV_CLIENTS_IN_PRODUCTION is true: dev client loopback is permitted, but private networks remain blocked
+assert.equal(
+  validateRedirectUri("http://localhost:3001/api/auth/callback", { isDev: true, env: "production", allowDevInProd: true }),
+  true,
+  "Dev client loopback is permitted in production when allowDevInProd is true"
+);
+assert.equal(
+  validateRedirectUri("http://192.168.1.1/api/auth/callback", { isDev: true, env: "production", allowDevInProd: true }),
+  false,
+  "Private RFC1918 network must NEVER be permitted in production even with allowDevInProd=true"
+);
+assert.equal(
+  validateRedirectUri("http://169.254.169.254/cb", { isDev: true, env: "production", allowDevInProd: true }),
+  false,
+  "AWS/Cloud metadata IP must NEVER be permitted in production"
+);
+
+// --------------------------------------------------------------------------
+// 3. General Security Utilities Validation
+// --------------------------------------------------------------------------
 
 assert.equal(originMatchesRedirectUri("https://evil.com", "https://evil.com.attacker.test/cb"), false);
 assert.equal(originMatchesRedirectUri("https://app.example.com", "https://app.example.com/cb"), true);
@@ -31,13 +120,6 @@ assert.equal(isLoopbackHost("::1"), true);
 assert.equal(isLoopbackHost("app.localhost"), true);
 assert.equal(isLoopbackHost("192.168.1.1"), false);
 assert.equal(isLoopbackHost("169.254.169.254"), false);
-
-// Production mode with isDev: true (allows localhost loopback, blocks private networks)
-assert.equal(validateRedirectUri("http://localhost:3001/api/auth/callback", { isDev: true, env: "production" }), true);
-assert.equal(validateRedirectUri("http://127.0.0.1:3001/api/auth/callback", { isDev: true, env: "production" }), true);
-assert.equal(validateRedirectUri("http://192.168.1.1/api/auth/callback", { isDev: true, env: "production" }), false);
-assert.equal(validateRedirectUri("http://169.254.169.254/cb", { isDev: true, env: "production" }), false);
-assert.equal(validateRedirectUri("https://app.example.com/cb", { isDev: true, env: "production" }), true);
 
 // Production mode with isDev: false (strictly HTTPS, blocks localhost and private networks)
 assert.equal(validateRedirectUri("http://localhost:3001/api/auth/callback", { isDev: false, env: "production" }), false);

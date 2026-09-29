@@ -167,12 +167,26 @@ jobs:
         working-directory: backend
         run: sam build
 
+      - name: Validate Production Gateway Secret Preflight (Fail-Closed)
+        run: |
+          if [ -z "${INTERNAL_GATEWAY_SECRET}" ]; then
+            echo "FATAL: secrets.INTERNAL_GATEWAY_SECRET is missing. Production deployments fail closed."
+            exit 1
+          fi
+          SECRET_LEN=${#INTERNAL_GATEWAY_SECRET}
+          if [ "$SECRET_LEN" -lt 32 ]; then
+            echo "FATAL: secrets.INTERNAL_GATEWAY_SECRET must be at least 32 characters (got $SECRET_LEN)."
+            exit 1
+          fi
+          echo "Preflight check passed: INTERNAL_GATEWAY_SECRET is present and >= 32 characters."
+        env:
+          INTERNAL_GATEWAY_SECRET: ${{ secrets.INTERNAL_GATEWAY_SECRET }}
+
       - name: Deploy Stack via AWS SAM
         working-directory: backend
         env:
           INTERNAL_GATEWAY_SECRET: ${{ secrets.INTERNAL_GATEWAY_SECRET }}
         run: |
-          GATEWAY_SECRET="${INTERNAL_GATEWAY_SECRET:-swyra_internal_gateway_secret_32char_prod_key}"
           echo "Deploying SAM stack with parameter overrides..."
           sam deploy \
             --no-confirm-changeset \
@@ -181,7 +195,7 @@ jobs:
               BetterAuthUrl="https://oauth21.vercel.app" \
               GoogleClientId="851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com" \
               FrontendUrl="https://oauth21.vercel.app" \
-              InternalGatewaySecret="${GATEWAY_SECRET}"
+              InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"
 
       - name: Smoke Test Deployed Lambda Health Endpoint (Blocking Gate)
         run: |

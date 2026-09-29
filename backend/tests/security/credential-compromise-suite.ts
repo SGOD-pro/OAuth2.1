@@ -141,13 +141,13 @@ await runTest("CRED-2: Stolen refresh token replay triggers immediate family cas
   // Legitimate rotation: R0 -> R1
   const r1 = "r1_" + crypto.randomBytes(16).toString("hex");
   const r1Hash = crypto.createHash("sha256").update(r1).digest("hex");
-  const rotation1 = await verifyAndRotateTokenFamily(r0Hash, r1Hash, userId);
+  const rotation1 = await verifyAndRotateTokenFamily(r0Hash, r1Hash, userId, Date.now(), clientId);
   assert.equal(rotation1.valid, true, "First rotation R0 -> R1 must succeed");
   assert.equal(rotation1.replayed, false);
 
   // Attacker uses stolen R0 after legitimate rotation (Replay Theft Attack!)
   // Force time beyond grace window to simulate post-rotation theft
-  const theftCheck = await verifyAndRotateTokenFamily(r0Hash, "dummy", userId, Date.now() + 5000);
+  const theftCheck = await verifyAndRotateTokenFamily(r0Hash, "dummy", userId, Date.now() + 5000, clientId);
   assert.equal(theftCheck.replayed, true, "Replaying R0 must detect theft");
 
   // Verify family status is revoked in MongoDB
@@ -178,19 +178,19 @@ await runTest("CRED-3: Sequential rotation maintains exact 1 active successor; p
   await registerTokenFamily(familyId, clientId, userId, h0);
 
   // R0 -> R1
-  const rot1 = await verifyAndRotateTokenFamily(h0, h1, userId);
+  const rot1 = await verifyAndRotateTokenFamily(h0, h1, userId, Date.now(), clientId);
   assert.equal(rot1.valid, true, "R0 -> R1 must succeed");
 
   // R1 -> R2
-  const rot2 = await verifyAndRotateTokenFamily(h1, h2, userId);
+  const rot2 = await verifyAndRotateTokenFamily(h1, h2, userId, Date.now(), clientId);
   assert.equal(rot2.valid, true, "R1 -> R2 must succeed");
 
   // Verify R2 is currently valid
-  const checkR2 = await verifyAndRotateTokenFamily(h2, "dummy", userId);
+  const checkR2 = await verifyAndRotateTokenFamily(h2, "dummy", userId, Date.now(), clientId);
   assert.equal(checkR2.valid, true, "Active successor R2 must be valid");
 
   // Replay of consumed R1 fails
-  const replayR1 = await verifyAndRotateTokenFamily(h1, "dummy", userId, Date.now() + 5000);
+  const replayR1 = await verifyAndRotateTokenFamily(h1, "dummy", userId, Date.now() + 5000, clientId);
   assert.equal(replayR1.replayed, true, "R1 replay must fail and detect theft");
 });
 

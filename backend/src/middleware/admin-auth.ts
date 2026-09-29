@@ -1,6 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import { authProvider } from "../utils/auth";
-import { getHeaders, resolveOAuthClient } from "../utils/security";
+import { getHeaders, resolveOAuthClient, timingSafeEqualStr } from "../utils/security";
 import { getDb } from "../db/mongo";
 import { config } from "../config";
 
@@ -45,7 +45,7 @@ export const requireAdmin = createMiddleware(async (c, next) => {
   // If not authenticated via admin session, require internal gateway secret for server-to-server boundary
   if (config.internalGatewaySecret) {
     const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
-    if (!gatewayHeader || gatewayHeader !== config.internalGatewaySecret) {
+    if (!gatewayHeader || !timingSafeEqualStr(gatewayHeader, config.internalGatewaySecret)) {
       return c.json(
         { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
         403

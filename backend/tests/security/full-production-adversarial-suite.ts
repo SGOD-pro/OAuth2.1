@@ -96,12 +96,13 @@ await runTest("GATE-2: Concurrent race rotation on R0 results in exactly 1 winne
   await registerTokenFamily(familyId, clientId, userId, r0Hash);
 
   // Send 5 parallel rotation attempts
+  const nowMs = Date.now();
   const parallelAttempts = await Promise.all([
-    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ1").digest("hex"), userId),
-    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ2").digest("hex"), userId),
-    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ3").digest("hex"), userId),
-    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ4").digest("hex"), userId),
-    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ5").digest("hex"), userId),
+    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ1").digest("hex"), userId, nowMs, clientId),
+    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ2").digest("hex"), userId, nowMs, clientId),
+    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ3").digest("hex"), userId, nowMs, clientId),
+    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ4").digest("hex"), userId, nowMs, clientId),
+    verifyAndRotateTokenFamily(r0Hash, crypto.createHash("sha256").update("succ5").digest("hex"), userId, nowMs, clientId),
   ]);
 
   const successes = parallelAttempts.filter((res) => res.valid);
@@ -130,17 +131,17 @@ await runTest("GATE-3: Token family replay boundary strictly enforces 2000ms gra
   const h1A = crypto.createHash("sha256").update("h1A").digest("hex");
 
   await registerTokenFamily(familyA, clientId, userId, h0A);
-  await verifyAndRotateTokenFamily(h0A, h1A, userId);
+  await verifyAndRotateTokenFamily(h0A, h1A, userId, Date.now(), clientId);
 
   const updatedDocA = await db.collection("oauth_token_families").findOne({ familyId: familyA });
   const rotTimeA = new Date(updatedDocA?.updatedAt || 0).getTime();
 
   // Test at exactly +1999ms
-  const check1999 = await verifyAndRotateTokenFamily(h0A, "dummy", userId, rotTimeA + 1999);
+  const check1999 = await verifyAndRotateTokenFamily(h0A, "dummy", userId, rotTimeA + 1999, clientId);
   assert.equal(check1999.replayed, false, "1999ms must be treated as inside grace window");
 
   // Sub-case B: 2000ms -> At boundary (theft detected!)
-  const check2000 = await verifyAndRotateTokenFamily(h0A, "dummy", userId, rotTimeA + 2000);
+  const check2000 = await verifyAndRotateTokenFamily(h0A, "dummy", userId, rotTimeA + 2000, clientId);
   assert.equal(check2000.replayed, true, "2000ms must trigger replay theft cascade revocation");
 
   // Sub-case C: 2001ms -> Outside grace window (theft detected!)
@@ -150,11 +151,11 @@ await runTest("GATE-3: Token family replay boundary strictly enforces 2000ms gra
   const h1C = crypto.createHash("sha256").update("h1C").digest("hex");
 
   await registerTokenFamily(familyC, clientId, userId, h0C);
-  await verifyAndRotateTokenFamily(h0C, h1C, userId);
+  await verifyAndRotateTokenFamily(h0C, h1C, userId, Date.now(), clientId);
   const updatedDocC = await db.collection("oauth_token_families").findOne({ familyId: familyC });
   const rotTimeC = new Date(updatedDocC?.updatedAt || 0).getTime();
 
-  const check2001 = await verifyAndRotateTokenFamily(h0C, "dummy", userId, rotTimeC + 2001);
+  const check2001 = await verifyAndRotateTokenFamily(h0C, "dummy", userId, rotTimeC + 2001, clientId);
   assert.equal(check2001.replayed, true, "2001ms must trigger replay theft detection");
 });
 

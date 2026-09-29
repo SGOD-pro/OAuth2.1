@@ -7,7 +7,7 @@ s3_prefix = "oauth"
 profile = "aws"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "BetterAuthUrl=\"https://oauth21.vercel.app\" GoogleClientId=\"851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com\" FrontendUrl=\"https://oauth21.vercel.app\" InternalGatewaySecret=\"swyra_internal_gateway_secret_32char_prod_key\""
+parameter_overrides = "BetterAuthUrl=\"https://oauth21.vercel.app\" GoogleClientId=\"851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com\" FrontendUrl=\"https://oauth21.vercel.app\""
 image_repositories = []
 
 [default.global.parameters]

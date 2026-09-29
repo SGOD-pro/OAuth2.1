@@ -583,10 +583,23 @@ auth.post("/oauth2/token", async (c) => {
     if (grantType === "refresh_token" && refreshToken) {
         const incomingHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
 
-        // Fail-Closed: Check if this token family was already marked revoked
+        // Fail-Closed: Check if this token family exists and belongs to the authenticated client
         const existingFamily = await database.collection("oauth_token_families").findOne({
             $or: [{ activeTokenHash: incomingHash }, { consumedTokenHashes: incomingHash }]
         });
+
+        // Cross-client defense: Verify the token family belongs to the authenticated client
+        // Do NOT leak whether the token exists, is consumed, or is revoked to an unauthorized client
+        if (existingFamily && existingFamily.clientId && existingFamily.clientId !== canonicalClientId) {
+            return c.json(
+                {
+                    error: "invalid_grant",
+                    error_description: "Refresh token was not issued to the authenticated client",
+                },
+                400
+            );
+        }
+
         if (existingFamily && existingFamily.status === "revoked") {
             return c.json(
                 {
@@ -598,10 +611,11 @@ auth.post("/oauth2/token", async (c) => {
         }
 
         // Atomic compare-and-swap to claim rotation rights for this token family
-        // This ensures exactly 1 in-flight request attempts rotation, preventing Better Auth from purging on collision
+        // Scoped strictly by canonicalClientId to prevent cross-client CAS contention
         const claim = await database.collection("oauth_token_families").findOneAndUpdate(
             {
                 activeTokenHash: incomingHash,
+                clientId: canonicalClientId,
                 status: "active",
                 rotating: { $ne: true },
             },
@@ -612,8 +626,9 @@ auth.post("/oauth2/token", async (c) => {
         );
 
         if (!claim) {
-            // Check if rotation is currently in-flight by the winning concurrent request
+            // Check if rotation is currently in-flight by the winning concurrent request for this client
             const currentDoc = await database.collection("oauth_token_families").findOne({
+                clientId: canonicalClientId,
                 $or: [{ activeTokenHash: incomingHash }, { consumedTokenHashes: incomingHash }]
             });
 
@@ -628,7 +643,7 @@ auth.post("/oauth2/token", async (c) => {
             }
 
             // Otherwise, token was already rotated; check if within grace window or replay theft
-            const check = await verifyAndRotateTokenFamily(incomingHash, "dummy");
+            const check = await verifyAndRotateTokenFamily(incomingHash, "dummy", undefined, Date.now(), canonicalClientId);
             if (check.replayed) {
                 return c.json(
                     {
@@ -663,7 +678,7 @@ auth.post("/oauth2/token", async (c) => {
             res = await authProvider.handler(reqToForward);
         } catch (handlerErr) {
             await database.collection("oauth_token_families").updateOne(
-                { activeTokenHash: incomingHash, rotating: true },
+                { activeTokenHash: incomingHash, clientId: canonicalClientId, rotating: true },
                 { $set: { rotating: false } }
             ).catch(() => {});
             throw handlerErr;
@@ -743,7 +758,7 @@ auth.post("/oauth2/token", async (c) => {
                 }
 
                 const newHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
-                const rotationResult = await verifyAndRotateTokenFamily(incomingHash, newHash, resolvedUserId);
+                const rotationResult = await verifyAndRotateTokenFamily(incomingHash, newHash, resolvedUserId, Date.now(), canonicalClientId);
 
                 if (rotationResult.replayed) {
                     return c.json(
@@ -758,12 +773,12 @@ auth.post("/oauth2/token", async (c) => {
         } else {
             // Unset rotating on failure
             await database.collection("oauth_token_families").updateOne(
-                { activeTokenHash: incomingHash, rotating: true },
+                { activeTokenHash: incomingHash, clientId: canonicalClientId, rotating: true },
                 { $set: { rotating: false } }
             ).catch(() => {});
 
             // Check if failure was due to replaying an already consumed token
-            const check = await verifyAndRotateTokenFamily(incomingHash, "dummy");
+            const check = await verifyAndRotateTokenFamily(incomingHash, "dummy", undefined, Date.now(), canonicalClientId);
             if (check.replayed) {
                 return c.json(
                     {
