@@ -54,6 +54,8 @@ admin.get("/clients", requireAdmin, async (c) => {
 
       const rawDate = rest.createdAt || rest.created_at || (ObjectId.isValid(_id) ? new ObjectId(_id).getTimestamp() : new Date());
       const createdAtIso = rawDate instanceof Date ? rawDate.toISOString() : (typeof rawDate === "string" ? rawDate : new Date(rawDate).toISOString());
+      const rawUpdateDate = rest.updatedAt || rest.updated_at || rawDate;
+      const updatedAtIso = rawUpdateDate instanceof Date ? rawUpdateDate.toISOString() : (typeof rawUpdateDate === "string" ? rawUpdateDate : new Date(rawUpdateDate).toISOString());
 
       return {
         ...rest,
@@ -72,6 +74,8 @@ admin.get("/clients", requireAdmin, async (c) => {
         hasCustomAdmins: hasCustomAdmins,
         createdAt: createdAtIso,
         created_at: createdAtIso,
+        updatedAt: updatedAtIso,
+        updated_at: updatedAtIso,
       };
     });
 
@@ -235,6 +239,8 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     enable_end_session: body.enable_end_session !== false && body.enableEndSession !== false,
     createdAt: now.toISOString(),
     created_at: now.toISOString(),
+    updatedAt: now.toISOString(),
+    updated_at: now.toISOString(),
   };
 
   return c.json(responsePayload, 201);
@@ -531,6 +537,11 @@ admin.get("/clients/:id", requireScopedAdmin, async (c) => {
     if (!clientDoc) return c.json({ error: "Client not found" }, 404);
 
     const { clientSecret, client_secret, _id, ...rest } = clientDoc;
+    const rawDate = rest.createdAt || rest.created_at || (ObjectId.isValid(_id) ? new ObjectId(_id).getTimestamp() : new Date());
+    const createdAtIso = rawDate instanceof Date ? rawDate.toISOString() : (typeof rawDate === "string" ? rawDate : new Date(rawDate).toISOString());
+    const rawUpdateDate = rest.updatedAt || rest.updated_at || rawDate;
+    const updatedAtIso = rawUpdateDate instanceof Date ? rawUpdateDate.toISOString() : (typeof rawUpdateDate === "string" ? rawUpdateDate : new Date(rawUpdateDate).toISOString());
+
     return c.json({
       ...rest,
       client_id: rest.clientId || rest.client_id || rest.id || String(_id),
@@ -540,6 +551,10 @@ admin.get("/clients/:id", requireScopedAdmin, async (c) => {
       disabled: Boolean(rest.disabled),
       is_dev: Boolean(rest.isDev || rest.is_dev),
       skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
+      createdAt: createdAtIso,
+      created_at: createdAtIso,
+      updatedAt: updatedAtIso,
+      updated_at: updatedAtIso,
     });
   } catch (err: any) {
     return c.json({ error: "Client not found" }, 404);
@@ -723,6 +738,10 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     is_dev: Boolean(updatedDoc?.isDev),
     skip_consent: Boolean(updatedDoc?.skipConsent),
     enable_end_session: Boolean(updatedDoc?.enableEndSession ?? true),
+    createdAt: (updatedDoc?.createdAt instanceof Date ? updatedDoc.createdAt.toISOString() : (typeof updatedDoc?.createdAt === "string" ? updatedDoc.createdAt : (ObjectId.isValid(updatedDoc?._id) ? new ObjectId(updatedDoc._id).getTimestamp().toISOString() : new Date().toISOString()))),
+    created_at: (updatedDoc?.createdAt instanceof Date ? updatedDoc.createdAt.toISOString() : (typeof updatedDoc?.createdAt === "string" ? updatedDoc.createdAt : (ObjectId.isValid(updatedDoc?._id) ? new ObjectId(updatedDoc._id).getTimestamp().toISOString() : new Date().toISOString()))),
+    updatedAt: (updatedDoc?.updatedAt instanceof Date ? updatedDoc.updatedAt.toISOString() : (typeof updatedDoc?.updatedAt === "string" ? updatedDoc.updatedAt : new Date().toISOString())),
+    updated_at: (updatedDoc?.updatedAt instanceof Date ? updatedDoc.updatedAt.toISOString() : (typeof updatedDoc?.updatedAt === "string" ? updatedDoc.updatedAt : new Date().toISOString())),
   };
 
   const { client_secret: _omit, clientSecret: _omit2, _id: _omit3, ...safeResult } = finalResult as any;

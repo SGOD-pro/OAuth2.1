@@ -30,6 +30,8 @@ export interface CreatedClient {
   enable_end_session?: boolean;
   createdAt?: string;
   created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
   [key: string]: unknown;
 }
 

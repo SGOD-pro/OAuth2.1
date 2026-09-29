@@ -163,7 +163,9 @@ export const authProvider = betterAuth({
                     adminUserId: { type: "string", required: false },
                     adminEmail: { type: "string", required: false },
                     isDev: { type: "boolean", required: false },
-                    is_dev: { type: "boolean", required: false }
+                    is_dev: { type: "boolean", required: false },
+                    createdAt: { type: "date", required: false },
+                    updatedAt: { type: "date", required: false }
                 }
             }
         }),

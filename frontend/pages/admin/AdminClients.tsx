@@ -26,7 +26,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
+
 const AUTH_ISSUER = import.meta.env.VITE_AUTH_URL ?? 'https://auth.yourdomain.com';
+
+function formatAppDate(isoString?: string | Date) {
+  if (!isoString) return { dateStr: '—', timeStr: '', fullIso: '' };
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return { dateStr: '—', timeStr: '', fullIso: '' };
+    const dateStr = d.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+    const timeStr = d.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return { dateStr, timeStr, fullIso: d.toISOString() };
+  } catch {
+    return { dateStr: '—', timeStr: '', fullIso: '' };
+  }
+}
 
 export const AdminClients: React.FC = () => {
   usePageTitle('Applications');
@@ -53,6 +83,10 @@ export const AdminClients: React.FC = () => {
   const [accessFilter, setAccessFilter] = useState<'all' | 'public' | 'private'>('all');
   const [hasAdminsOnly, setHasAdminsOnly] = useState(false);
 
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
   // Debounce search term by 250ms
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -74,6 +108,7 @@ export const AdminClients: React.FC = () => {
     setEnvFilter('all');
     setAccessFilter('all');
     setHasAdminsOnly(false);
+    setCurrentPage(1);
   }, []);
 
   // Compute filtered clients based on debounced search and active filters
@@ -118,6 +153,49 @@ export const AdminClients: React.FC = () => {
       return timeB - timeA;
     });
   }, [clients, debouncedSearch, envFilter, accessFilter, hasAdminsOnly]);
+
+  const totalItems = filteredClients.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+
+  // Reset currentPage to 1 when filters or search change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, envFilter, accessFilter, hasAdminsOnly, pageSize]);
+
+  // Ensure currentPage does not exceed totalPages
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const paginatedClients = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredClients.slice(start, start + pageSize);
+  }, [filteredClients, currentPage, pageSize]);
+
+  const getPageNumbers = useCallback(() => {
+    if (totalPages <= 5) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    const pages: (number | 'ellipsis')[] = [];
+    pages.push(1);
+    if (currentPage > 3) {
+      pages.push('ellipsis');
+    }
+    const start = Math.max(2, currentPage - 1);
+    const end = Math.min(totalPages - 1, currentPage + 1);
+    for (let i = start; i <= end; i++) {
+      pages.push(i);
+    }
+    if (currentPage < totalPages - 2) {
+      pages.push('ellipsis');
+    }
+    if (totalPages > 1) {
+      pages.push(totalPages);
+    }
+    return pages;
+  }, [totalPages, currentPage]);
 
   useEffect(() => { void fetchClients(); }, [fetchClients]);
 
@@ -247,50 +325,36 @@ export const AdminClients: React.FC = () => {
 
                 {/* Filter by Environment: Prod vs Dev */}
                 <div className="relative shrink-0">
-
-
-
                   <Select value={envFilter} onValueChange={(e) => setEnvFilter(e as 'all' | 'prod' | 'dev')}>
-                    <SelectTrigger className="w-full max-w-48">
-                      <SelectValue />
+                    <SelectTrigger className="w-full sm:w-44 text-xs">
+                      <SelectValue placeholder="Environment" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        <SelectLabel>Fruits</SelectLabel>
+                        <SelectLabel>Environment</SelectLabel>
                         <SelectItem value="all">All environments</SelectItem>
                         <SelectItem value="prod">Production only</SelectItem>
                         <SelectItem value="dev">Development only</SelectItem>
-
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </div>
                 </div>
 
+                {/* Filter by Access Mode: Public vs Private */}
                 <div className="relative shrink-0">
                   <Select value={accessFilter} onValueChange={(e) => setAccessFilter(e as 'all' | 'public' | 'private')}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
+                    <SelectTrigger className="w-full sm:w-44 text-xs">
+                      <SelectValue placeholder="Access mode" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        <SelectLabel>Fruits</SelectLabel>
+                        <SelectLabel>Access</SelectLabel>
                         <SelectItem value="all">All access modes</SelectItem>
                         <SelectItem value="public">Public access</SelectItem>
                         <SelectItem value="private">Private access</SelectItem>
-
                       </SelectGroup>
                     </SelectContent>
                   </Select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </div>
                 </div>
 
                 {/* Checkbox: Assigned custom admins */}
@@ -343,14 +407,15 @@ export const AdminClients: React.FC = () => {
                 <Table>
                   <TableHeader className="bg-secondary/40 border-b border-border">
                     <TableRow>
-                      <TableHead className="w-[32%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Application</TableHead>
-                      <TableHead className="w-[36%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Client ID</TableHead>
-                      <TableHead className="w-[16%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</TableHead>
+                      <TableHead className="w-[28%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Application</TableHead>
+                      <TableHead className="w-[26%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Client ID</TableHead>
+                      <TableHead className="w-[18%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</TableHead>
+                      <TableHead className="w-[14%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Created</TableHead>
                       <TableHead className="text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredClients.map((c) => {
+                    {paginatedClients.map((c) => {
                       const isSelected = selectedClient?.client_id === c.client_id;
 
                       return (
@@ -426,6 +491,28 @@ export const AdminClients: React.FC = () => {
                                 )}
                               </div>
                             </TableCell>
+                            <TableCell className="py-3.5">
+                              {(() => {
+                                const { dateStr, timeStr, fullIso } = formatAppDate(c.createdAt || c.created_at);
+                                if (!dateStr || dateStr === '—') return <span className="text-muted-foreground text-xs">—</span>;
+                                return (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div className="flex flex-col text-xs cursor-default">
+                                        <span className="font-medium text-foreground whitespace-nowrap">{dateStr}</span>
+                                        <span className="text-[11px] text-muted-foreground whitespace-nowrap">{timeStr}</span>
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="text-xs">
+                                      <div><span className="font-semibold">Registered:</span> {fullIso}</div>
+                                      {(c.updatedAt || c.updated_at) && (
+                                        <div className="mt-0.5"><span className="font-semibold">Updated:</span> {new Date(c.updatedAt || c.updated_at!).toISOString()}</div>
+                                      )}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                );
+                              })()}
+                            </TableCell>
                             <TableCell className="text-right py-3.5" onClick={(e) => e.stopPropagation()}>
                               <div className="flex justify-end gap-1.5">
                                 <Button
@@ -450,7 +537,7 @@ export const AdminClients: React.FC = () => {
 
                           {isSelected && (
                             <TableRow className="bg-secondary/20 hover:bg-secondary/20 border-b border-border">
-                              <TableCell colSpan={4} className="p-5 sm:p-6 whitespace-normal">
+                              <TableCell colSpan={5} className="p-5 sm:p-6 whitespace-normal">
                                 <div className="space-y-5">
                                   <div className="flex items-center justify-between pb-3 border-b border-border">
                                     <div className="flex items-center gap-2">
@@ -533,6 +620,76 @@ export const AdminClients: React.FC = () => {
                     })}
                   </TableBody>
                 </Table>
+
+                {/* Pagination Controls */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-3.5 border-t border-border bg-card">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground order-2 sm:order-1">
+                    <span>
+                      Showing <span className="font-medium text-foreground">{totalItems > 0 ? (currentPage - 1) * pageSize + 1 : 0}</span> to{' '}
+                      <span className="font-medium text-foreground">{Math.min(currentPage * pageSize, totalItems)}</span> of{' '}
+                      <span className="font-medium text-foreground">{totalItems}</span> app{totalItems === 1 ? '' : 's'}
+                    </span>
+
+                    <div className="flex items-center gap-1.5 ml-2">
+                      <span>Rows per page</span>
+                      <Select
+                        value={String(pageSize)}
+                        onValueChange={(val) => {
+                          setPageSize(Number(val));
+                          setCurrentPage(1);
+                        }}
+                      >
+                        <SelectTrigger className="h-8 w-[70px] text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent side="top">
+                          <SelectItem value="5">5</SelectItem>
+                          <SelectItem value="10">10</SelectItem>
+                          <SelectItem value="25">25</SelectItem>
+                          <SelectItem value="50">50</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {totalPages > 1 && (
+                    <Pagination className="mx-0 w-auto justify-end order-1 sm:order-2">
+                      <PaginationContent>
+                        <PaginationItem>
+                          <PaginationPrevious
+                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                            disabled={currentPage === 1}
+                            className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                          />
+                        </PaginationItem>
+                        {getPageNumbers().map((p, idx) =>
+                          p === 'ellipsis' ? (
+                            <PaginationItem key={`ellipsis-${idx}`}>
+                              <PaginationEllipsis />
+                            </PaginationItem>
+                          ) : (
+                            <PaginationItem key={p}>
+                              <PaginationLink
+                                isActive={currentPage === p}
+                                onClick={() => setCurrentPage(p)}
+                                className="cursor-pointer"
+                              >
+                                {p}
+                              </PaginationLink>
+                            </PaginationItem>
+                          )
+                        )}
+                        <PaginationItem>
+                          <PaginationNext
+                            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                            disabled={currentPage === totalPages}
+                            className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                          />
+                        </PaginationItem>
+                      </PaginationContent>
+                    </Pagination>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -557,6 +714,8 @@ export const AdminClients: React.FC = () => {
                   enable_end_session: created.enable_end_session !== false && created.enableEndSession !== false,
                   createdAt: created.createdAt || created.created_at || new Date().toISOString(),
                   created_at: created.createdAt || created.created_at || new Date().toISOString(),
+                  updatedAt: created.updatedAt || created.updated_at || new Date().toISOString(),
+                  updated_at: created.updatedAt || created.updated_at || new Date().toISOString(),
                 });
               }
               void fetchClients(true);

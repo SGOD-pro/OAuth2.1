@@ -37,6 +37,8 @@ export interface OAuthClient {
   adminUserId?: string | null;
   createdAt?: string | Date;
   created_at?: string | Date;
+  updatedAt?: string | Date;
+  updated_at?: string | Date;
 }
 
 export interface LogEntry {
