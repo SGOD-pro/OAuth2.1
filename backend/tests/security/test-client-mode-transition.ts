@@ -1,6 +1,13 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+// Ensure test verifies production IdP security invariants (even when CI runner specifies NODE_ENV=test)
+process.env.NODE_ENV = "production";
+process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION = "false";
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
+process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
+process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
+
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
