@@ -169,7 +169,7 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
     setSuccess(false);
 
     try {
-      const payload: Record<string, any> = {
+      const payload: Record<string, unknown> = {
         is_dev: isDev,
         isDev: isDev,
         is_public: isPublic,
