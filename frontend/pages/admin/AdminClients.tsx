@@ -729,7 +729,7 @@ export const AdminClients: React.FC = () => {
             onClose={() => setEditClient(null)}
             onSuccess={() => {
               setEditClient(null);
-              void fetchClients();
+              void fetchClients(true);
             }}
           />
         )}

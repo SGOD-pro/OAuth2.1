@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -118,15 +118,50 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
+  // If redirect URIs or allowed origins were not loaded in list view, fetch full client details
+  useEffect(() => {
+    let isMounted = true;
+    if (initialRedirectUris.length === 0 || initialAllowedOrigins.length === 0) {
+      apiFetch(`/api/admin/clients/${client.client_id}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!isMounted || !data) return;
+          const uris = (data.redirect_uris ?? data.redirectUris ?? []) as string[];
+          const origins = (data.allowed_origins ?? data.allowedOrigins ?? data.metadata?.allowedOrigins ?? []) as string[];
+          if (uris.length > 0) {
+            setRedirectUris((prev) => (prev.length === 0 ? uris : prev));
+          }
+          if (origins.length > 0) {
+            setAllowedOrigins((prev) => (prev.length === 0 ? origins : prev));
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [client.client_id, initialRedirectUris.length, initialAllowedOrigins.length]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (redirectUris.length === 0) {
-      setError('At least one redirect URI is required.');
-      return;
+
+    // In edit mode, redirect URIs and allowed origins are optional if only updating checkboxes.
+    // If provided, format validation is applied.
+    if (redirectUris.length > 0) {
+      for (const uri of redirectUris) {
+        if (!validateUri(uri)) {
+          setError(`Invalid redirect URI format: "${uri}"`);
+          return;
+        }
+      }
     }
-    if (allowedOrigins.length === 0) {
-      setError('At least one allowed CORS origin is required.');
-      return;
+    if (allowedOrigins.length > 0) {
+      for (const origin of allowedOrigins) {
+        if (!validateUri(origin)) {
+          setError(`Invalid allowed origin format: "${origin}"`);
+          return;
+        }
+      }
     }
 
     setLoading(true);
@@ -134,28 +169,36 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
     setSuccess(false);
 
     try {
+      const payload: Record<string, any> = {
+        is_dev: isDev,
+        isDev: isDev,
+        is_public: isPublic,
+        isPublic: isPublic,
+        skip_consent: skipConsent,
+        skipConsent: skipConsent,
+        enable_end_session: enableEndSession,
+        enableEndSession: enableEndSession,
+        is_active: isActive,
+        disabled: !isActive,
+      };
+
+      if (redirectUris.length > 0) {
+        payload.redirect_uris = redirectUris;
+        payload.redirectUris = redirectUris;
+      }
+
+      if (allowedOrigins.length > 0) {
+        payload.allowed_origins = allowedOrigins;
+        payload.allowedOrigins = allowedOrigins;
+      }
+
       const res = await apiFetch(`/api/admin/clients/${client.client_id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
           ...csrfHeaders(),
         },
-        body: JSON.stringify({
-          redirect_uris: redirectUris,
-          redirectUris: redirectUris,
-          allowed_origins: allowedOrigins,
-          allowedOrigins: allowedOrigins,
-          is_dev: isDev,
-          isDev: isDev,
-          is_public: isPublic,
-          isPublic: isPublic,
-          skip_consent: skipConsent,
-          skipConsent: skipConsent,
-          enable_end_session: enableEndSession,
-          enableEndSession: enableEndSession,
-          is_active: isActive,
-          disabled: !isActive,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
@@ -213,6 +256,11 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
               onAdd={(v) => setRedirectUris((u) => [...u, v])}
               onRemove={(v) => setRedirectUris((u) => u.filter((r) => r !== v))}
             />
+            {redirectUris.length === 0 && (
+              <p className="font-sans text-[11px] text-muted-foreground mt-1">
+                Existing redirect URIs are preserved if left empty.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -232,8 +280,8 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
               onRemove={(v) => setAllowedOrigins((o) => o.filter((r) => r !== v))}
             />
             {allowedOrigins.length === 0 && (
-              <p className="font-sans text-xs text-amber-500 dark:text-amber-400 mt-1">
-                Notice: At least one allowed origin is required for SPAs to make cross-origin token requests.
+              <p className="font-sans text-[11px] text-muted-foreground mt-1">
+                Existing allowed origins are preserved if left empty.
               </p>
             )}
           </div>

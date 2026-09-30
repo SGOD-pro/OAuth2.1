@@ -61,8 +61,10 @@ admin.get("/clients", requireAdmin, async (c) => {
         ...rest,
         client_id: canonicalClientId,
         client_name: rest.name || rest.client_name || "Application",
-        redirect_uris: rest.redirectUris || rest.redirect_uris || [],
-        allowed_origins: rest.allowedOrigins || rest.allowed_origins || [],
+        redirect_uris: rest.redirectUris || rest.redirect_uris || doc.redirectUris || doc.redirect_uris || [],
+        redirectUris: rest.redirectUris || rest.redirect_uris || doc.redirectUris || doc.redirect_uris || [],
+        allowed_origins: rest.allowedOrigins || rest.allowed_origins || doc.allowedOrigins || doc.allowed_origins || [],
+        allowedOrigins: rest.allowedOrigins || rest.allowed_origins || doc.allowedOrigins || doc.allowed_origins || [],
         disabled: Boolean(rest.disabled),
         is_dev: Boolean(rest.isDev || rest.is_dev),
         is_public: doc.isPublic !== false && doc.is_public !== false,
@@ -194,6 +196,9 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     {
       $set: {
         allowedOrigins,
+        allowed_origins: allowedOrigins,
+        redirectUris,
+        redirect_uris: redirectUris,
         isDev,
         isPublic,
         skipConsent: Boolean(body.skip_consent ?? body.skipConsent),
@@ -546,8 +551,10 @@ admin.get("/clients/:id", requireScopedAdmin, async (c) => {
       ...rest,
       client_id: rest.clientId || rest.client_id || rest.id || String(_id),
       client_name: rest.name || rest.client_name || "Application",
-      redirect_uris: rest.redirectUris || rest.redirect_uris || [],
-      allowed_origins: rest.allowedOrigins || rest.allowed_origins || [],
+      redirect_uris: rest.redirectUris || rest.redirect_uris || clientDoc.redirectUris || clientDoc.redirect_uris || [],
+      redirectUris: rest.redirectUris || rest.redirect_uris || clientDoc.redirectUris || clientDoc.redirect_uris || [],
+      allowed_origins: rest.allowedOrigins || rest.allowed_origins || clientDoc.allowedOrigins || clientDoc.allowed_origins || [],
+      allowedOrigins: rest.allowedOrigins || rest.allowed_origins || clientDoc.allowedOrigins || clientDoc.allowed_origins || [],
       disabled: Boolean(rest.disabled),
       is_dev: Boolean(rest.isDev || rest.is_dev),
       skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
@@ -607,10 +614,10 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     }, 400);
   }
 
-  if (Array.isArray(redirectUris)) {
-    if (redirectUris.length === 0) {
-      return c.json({ error: "At least one redirect URI is required" }, 400);
-    }
+  // In edit mode (PATCH), redirect URIs and allowed origins are optional:
+  // if not provided or empty, skip validation and preserve existing values.
+  const hasNewRedirectUris = Array.isArray(redirectUris) && redirectUris.length > 0;
+  if (hasNewRedirectUris) {
     const invalidUri = validateRedirectUris(redirectUris, { isDev, allowDevInProd: config.allowDevClientsInProduction });
     if (invalidUri) {
       return c.json({
@@ -619,10 +626,8 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     }
   }
 
-  if (Array.isArray(allowedOrigins)) {
-    if (allowedOrigins.length === 0) {
-      return c.json({ error: "At least one allowed origin is required" }, 400);
-    }
+  const hasNewAllowedOrigins = Array.isArray(allowedOrigins) && allowedOrigins.length > 0;
+  if (hasNewAllowedOrigins) {
     const invalidOrigin = validateRedirectUris(allowedOrigins, { isDev });
     if (invalidOrigin) {
       return c.json({
@@ -631,7 +636,11 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     }
   }
 
-  const hasLoopback = redirectUris?.some((uri) => {
+  const effectiveRedirectUris = hasNewRedirectUris
+    ? redirectUris
+    : ((oldClient?.redirectUris || oldClient?.redirect_uris || []) as string[]);
+
+  const hasLoopback = effectiveRedirectUris.some((uri: string) => {
     try {
       const u = new URL(uri);
       return (
@@ -645,12 +654,12 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     }
   });
 
-  const applicationType = body.application_type || ((isDev || hasLoopback) ? "native" : (redirectUris ? "web" : undefined));
+  const applicationType = body.application_type || ((isDev || hasLoopback) ? "native" : (effectiveRedirectUris.length > 0 ? "web" : undefined));
 
   const updatePayload: any = {};
   if (typeof body.client_name === "string") updatePayload.client_name = body.client_name;
   if (typeof body.name === "string") updatePayload.client_name = body.name;
-  if (redirectUris) updatePayload.redirect_uris = redirectUris;
+  if (hasNewRedirectUris) updatePayload.redirect_uris = redirectUris;
   if (applicationType) updatePayload.application_type = applicationType;
   if (typeof body.skip_consent === "boolean") updatePayload.skip_consent = body.skip_consent;
   if (typeof body.skipConsent === "boolean") updatePayload.skip_consent = body.skipConsent;
@@ -672,7 +681,10 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   // Fallback / sync direct update to DB for custom fields (allowedOrigins, isDev, etc.)
   const database = await getDb();
   const dbUpdates: any = { updatedAt: new Date() };
-  if (allowedOrigins) dbUpdates.allowedOrigins = allowedOrigins;
+  if (hasNewAllowedOrigins) {
+    dbUpdates.allowedOrigins = allowedOrigins;
+    dbUpdates.allowed_origins = allowedOrigins;
+  }
   if (isSuperAdmin(sessionUser)) {
     if (typeof (body.isDev ?? body.is_dev) === "boolean") dbUpdates.isDev = isDev;
     if (typeof (body.isPublic ?? body.is_public) === "boolean") dbUpdates.isPublic = Boolean(body.isPublic ?? body.is_public);
@@ -680,7 +692,10 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   if (typeof updatePayload.skip_consent === "boolean") dbUpdates.skipConsent = updatePayload.skip_consent;
   if (typeof updatePayload.enable_end_session === "boolean") dbUpdates.enableEndSession = updatePayload.enable_end_session;
   if (typeof updatePayload.disabled === "boolean") dbUpdates.disabled = updatePayload.disabled;
-  if (redirectUris) dbUpdates.redirectUris = redirectUris;
+  if (hasNewRedirectUris) {
+    dbUpdates.redirectUris = redirectUris;
+    dbUpdates.redirect_uris = redirectUris;
+  }
   if (applicationType) dbUpdates.applicationType = applicationType;
   if (updatePayload.client_name) dbUpdates.name = updatePayload.client_name;
 
@@ -699,7 +714,7 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   if (oldClient && Array.isArray(oldClient.allowed_origins)) {
     oldClient.allowed_origins.forEach((o: string) => originsToInvalidate.add(o));
   }
-  if (Array.isArray(allowedOrigins)) {
+  if (hasNewAllowedOrigins) {
     allowedOrigins.forEach((o: string) => originsToInvalidate.add(o));
   }
   if (originsToInvalidate.size > 0) {
