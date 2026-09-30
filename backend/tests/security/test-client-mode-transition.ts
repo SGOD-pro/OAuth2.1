@@ -461,6 +461,85 @@ await runTest("TRANS-8: validateOAuthClientConfiguration direct policy matrix", 
   assert.equal(res6.valid, true);
 });
 
+// --------------------------------------------------------------------------
+// TEST 9: Application Type Override Rejection (Native App Safety)
+// --------------------------------------------------------------------------
+await runTest("TRANS-9: Caller cannot force application_type='web' on dev/loopback client", async () => {
+  const clientId = "client-apptype-" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    clientSecret: "secret-hash-9",
+    name: "AppType Client",
+    redirectUris: ["https://initial.example.com/callback"],
+    allowedOrigins: ["https://initial.example.com"],
+    isDev: false,
+    isPublic: true,
+    disabled: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  // Attempt to transition to dev mode with loopback URI but forcing application_type="web"
+  const patchRes = await app.request(`/api/admin/clients/${clientId}`, {
+    method: "PATCH",
+    headers: getTestHeaders({ Cookie: superAdminCookie, "x-csrf-token": "any" }),
+    body: JSON.stringify({
+      isDev: true,
+      redirect_uris: ["http://localhost:3000/callback"],
+      allowed_origins: ["http://localhost:3000"],
+      application_type: "web",
+    }),
+  });
+
+  assert.equal(patchRes.status, 200, "PATCH must succeed with 200");
+
+  const doc = await db.collection("oauthClient").findOne({ clientId });
+  assert.equal(doc?.applicationType, "native", "applicationType must be forced to native despite caller asking for web");
+  assert.equal(doc?.application_type, "native", "application_type must be forced to native");
+});
+
+// --------------------------------------------------------------------------
+// TEST 10: Parameter Tampering & Privilege Escalation Stripping
+// --------------------------------------------------------------------------
+await runTest("TRANS-10: Critical privilege and identity fields are stripped on client PATCH", async () => {
+  const clientId = "client-tamper-" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    clientSecret: "secret-hash-10",
+    name: "Tamper Target Client",
+    redirectUris: ["https://tamper.example.com/callback"],
+    allowedOrigins: ["https://tamper.example.com"],
+    isDev: false,
+    isPublic: false,
+    disabled: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  // Caller attempts to inject arbitrary clientId, userId, role, or change clientSecret
+  const patchRes = await app.request(`/api/admin/clients/${clientId}`, {
+    method: "PATCH",
+    headers: getTestHeaders({ Cookie: superAdminCookie, "x-csrf-token": "any" }),
+    body: JSON.stringify({
+      client_name: "Tamper Target Client Renamed",
+      client_id: "forged-client-id",
+      id: "forged-id",
+      userId: "forged-user-id",
+      role: "superadmin_backdoor",
+    }),
+  });
+
+  assert.equal(patchRes.status, 200);
+
+  const doc = await db.collection("oauthClient").findOne({ clientId });
+  assert.equal(doc?.clientId, clientId, "clientId must NOT be modified");
+  assert.equal(doc?.name, "Tamper Target Client Renamed", "Allowed field name must be updated");
+  assert.equal((doc as any)?.role, undefined, "Injected role field must not exist");
+  assert.equal(doc?.clientSecret, "secret-hash-10", "clientSecret must not be changed");
+});
+
 console.log("================================================================");
 console.log(`  TRANSITION SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");

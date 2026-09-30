@@ -133,7 +133,9 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     return c.json({ error: validation.error }, 400);
   }
 
-  const applicationType = body.application_type || validation.effectiveApplicationType;
+  const applicationType = validation.effectiveApplicationType === "native"
+    ? "native"
+    : (body.application_type || validation.effectiveApplicationType);
 
   const createBody: any = {
     client_name: clientName,
@@ -634,7 +636,9 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     return c.json({ error: validation.error }, 400);
   }
 
-  const applicationType = body.application_type || validation.effectiveApplicationType;
+  const applicationType = validation.effectiveApplicationType === "native"
+    ? "native"
+    : (body.application_type || validation.effectiveApplicationType);
 
   const updatePayload: any = {};
   if (targetClientName) updatePayload.client_name = targetClientName;
@@ -680,7 +684,10 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     dbUpdates.redirectUris = targetRedirectUris;
     dbUpdates.redirect_uris = targetRedirectUris;
   }
-  if (applicationType) dbUpdates.applicationType = applicationType;
+  if (applicationType) {
+    dbUpdates.applicationType = applicationType;
+    dbUpdates.application_type = applicationType;
+  }
   if (targetClientName) dbUpdates.name = targetClientName;
 
   await database.collection("oauthClient").updateOne(
@@ -731,8 +738,8 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     ...(updatedDoc || {}),
     client_id: updatedDoc?.clientId || id,
     client_name: updatedDoc?.name || result?.client_name || "Application",
-    redirect_uris: updatedDoc?.redirectUris || redirectUris || [],
-    allowed_origins: updatedDoc?.allowedOrigins || allowedOrigins || [],
+    redirect_uris: updatedDoc?.redirectUris || targetRedirectUris || [],
+    allowed_origins: updatedDoc?.allowedOrigins || targetAllowedOrigins || [],
     disabled: Boolean(updatedDoc?.disabled),
     is_dev: Boolean(updatedDoc?.isDev),
     skip_consent: Boolean(updatedDoc?.skipConsent),
