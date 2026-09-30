@@ -20,7 +20,10 @@ When `NODE_ENV=production`, the application applies strict startup validation (`
 | `BETTER_AUTH_URL` | **Yes** | - | Canonical public URL of the auth backend API (e.g. `https://api.auth.yourdomain.com`). Must be HTTPS and non-loopback in production. |
 | `FRONTEND_URL` | **Yes** | - | Canonical public origin of the frontend UI (e.g. `https://auth.yourdomain.com`). Must be HTTPS and non-loopback in production. Strictly origin without path. |
 | `TRUSTED_PROXY_CIDRS` | Recommended | - | Comma-separated list of trusted upstream proxy / reverse proxy CIDRs (e.g. Cloudflare / ALB / API Gateway ranges) for client IP extraction. |
-| `ALLOW_DEV_CLIENTS_IN_PRODUCTION` | Optional | - | Set to `'true'` to permit OAuth clients with `localhost` redirect URIs in production (defaults to `'false'`). |
+| `ALLOW_DEV_CLIENTS_IN_PRODUCTION` | Optional | `false` | Controls whether brand-new development OAuth clients (`isDev: true`) with loopback URIs can be created in production. Defaults to `'false'`. Existing registered applications can be transitioned between development and production modes individually by authorized administrators. |
+
+> [!NOTE]
+> **IdP Runtime (`NODE_ENV`) vs Client Mode (`isDev`)**: The IdP runtime environment (`NODE_ENV=production`) is separate from per-client development mode (`isDev`). A production IdP strictly enforces HTTPS on production clients (`isDev: false`), while permitting loopback URIs (`localhost`, `127.0.0.1`) on explicitly authorized development clients (`isDev: true`). Setting `ALLOW_DEV_CLIENTS_IN_PRODUCTION=true` is only needed if creating brand-new dev clients in production.
 
 > [!IMPORTANT]
 > In `development` and `test` modes only, `APP_ADMIN_JWT_SECRET`, `APP_ADMIN_TOTP_KEY`, and `INTERNAL_GATEWAY_SECRET` have permissive fallbacks for zero-friction local setup. In `production`, all four secrets are **strictly mandatory**.

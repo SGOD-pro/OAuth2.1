@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import crypto from "crypto";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
-import { getHeaders, isStrongPassword, validateRedirectUris, getTrustedClientIp, resolveOAuthClient } from "../utils/security";
+import { getHeaders, isStrongPassword, validateRedirectUris, validateOAuthClientConfiguration, getTrustedClientIp, resolveOAuthClient } from "../utils/security";
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
 import { requireAdmin, requireSuperAdmin, requireScopedAdmin, isSuperAdmin } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
@@ -107,54 +107,33 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
 
   const redirectUris = (body.redirect_uris || body.redirectUris || []) as string[];
   const allowedOrigins = (body.allowed_origins || body.allowedOrigins || []) as string[];
-
-  if (redirectUris.length === 0) {
-    return c.json({ error: "At least one redirect URI is required" }, 400);
-  }
+  const isPublic = typeof body.isPublic === "boolean" ? body.isPublic : (typeof body.is_public === "boolean" ? body.is_public : true);
 
   if (allowedOrigins.length === 0) {
     return c.json({ error: "At least one allowed origin is required" }, 400);
   }
 
-  if (config.env === "production" && !config.allowDevClientsInProduction && isDev) {
-    return c.json({
-      error: "Development clients with loopback URIs are disabled in production environment",
-    }, 400);
-  }
+  const targetState = {
+    client_name: clientName,
+    redirect_uris: redirectUris,
+    allowed_origins: allowedOrigins,
+    isDev,
+    isPublic,
+    skip_consent: Boolean(body.skip_consent ?? body.skipConsent),
+    enable_end_session: body.enable_end_session !== false && body.enableEndSession !== false,
+  };
 
-  const invalidUri = validateRedirectUris(redirectUris, { isDev, allowDevInProd: config.allowDevClientsInProduction });
-  if (invalidUri) {
-    return c.json({
-      error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
-    }, 400);
-  }
-
-  const invalidOrigin = validateRedirectUris(allowedOrigins, { isDev });
-  if (invalidOrigin) {
-    return c.json({
-      error: `Invalid allowed origin: "${invalidOrigin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
-    }, 400);
-  }
-
-  // Determine application_type:
-  // If redirect_uris contain loopback (localhost, 127.0.0.1, [::1]) or if isDev is enabled,
-  // Better Auth mandates application_type: "native" because RFC 8252 requires loopback redirect URIs to be native.
-  // "web" strictly forbids loopback redirect URIs.
-  const hasLoopback = redirectUris.some((uri) => {
-    try {
-      const u = new URL(uri);
-      return (
-        u.hostname === "localhost" ||
-        u.hostname === "127.0.0.1" ||
-        u.hostname === "[::1]" ||
-        u.protocol === "http:"
-      );
-    } catch {
-      return false;
-    }
+  const validation = validateOAuthClientConfiguration(targetState, {
+    serverEnvironment: config.env,
+    isNewClient: true,
+    allowDevClientsInProduction: config.allowDevClientsInProduction,
   });
 
-  const applicationType = body.application_type || ((isDev || hasLoopback) ? "native" : "web");
+  if (!validation.valid) {
+    return c.json({ error: validation.error }, 400);
+  }
+
+  const applicationType = body.application_type || validation.effectiveApplicationType;
 
   const createBody: any = {
     client_name: clientName,
@@ -186,7 +165,6 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
   }
 
   const clientId = result.client_id || result.clientId || result.id;
-  const isPublic = typeof body.isPublic === "boolean" ? body.isPublic : (typeof body.is_public === "boolean" ? body.is_public : true);
 
   const now = new Date();
   // Persist extra fields in MongoDB oauthClient collection
@@ -596,70 +574,71 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   }
 
   let oldClient: any = null;
+  const database = await getDb();
   try {
-    oldClient = await authApi.getOAuthClient({
-      headers: getHeaders(c),
-      query: { client_id: id },
-    });
+    oldClient = await resolveOAuthClient(database, id);
+    if (!oldClient) {
+      oldClient = await authApi.getOAuthClient({
+        headers: getHeaders(c),
+        query: { client_id: id },
+      });
+    }
   } catch {}
 
-  const isDev = Boolean(body.isDev ?? body.is_dev ?? oldClient?.isDev ?? oldClient?.is_dev);
-
-  const redirectUris = (body.redirect_uris || body.redirectUris) as string[] | undefined;
-  const allowedOrigins = (body.allowed_origins || body.allowedOrigins) as string[] | undefined;
-
-  if (config.env === "production" && !config.allowDevClientsInProduction && isDev) {
-    return c.json({
-      error: "Development clients with loopback URIs are disabled in production environment",
-    }, 400);
+  if (!oldClient) {
+    return c.json({ error: "Client not found" }, 404);
   }
 
-  // In edit mode (PATCH), redirect URIs and allowed origins are optional:
-  // if not provided or empty, skip validation and preserve existing values.
-  const hasNewRedirectUris = Array.isArray(redirectUris) && redirectUris.length > 0;
-  if (hasNewRedirectUris) {
-    const invalidUri = validateRedirectUris(redirectUris, { isDev, allowDevInProd: config.allowDevClientsInProduction });
-    if (invalidUri) {
-      return c.json({
-        error: `Invalid redirect URI: "${invalidUri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
-      }, 400);
-    }
-  }
+  const hasNewRedirectUris = Array.isArray(body.redirect_uris || body.redirectUris) && (body.redirect_uris || body.redirectUris).length > 0;
+  const targetRedirectUris: string[] = hasNewRedirectUris
+    ? ((body.redirect_uris || body.redirectUris) as string[])
+    : ((oldClient.redirectUris || oldClient.redirect_uris || []) as string[]);
 
-  const hasNewAllowedOrigins = Array.isArray(allowedOrigins) && allowedOrigins.length > 0;
-  if (hasNewAllowedOrigins) {
-    const invalidOrigin = validateRedirectUris(allowedOrigins, { isDev });
-    if (invalidOrigin) {
-      return c.json({
-        error: `Invalid allowed origin: "${invalidOrigin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.`,
-      }, 400);
-    }
-  }
+  const hasNewAllowedOrigins = Array.isArray(body.allowed_origins || body.allowedOrigins) && (body.allowed_origins || body.allowedOrigins).length > 0;
+  const targetAllowedOrigins: string[] = hasNewAllowedOrigins
+    ? ((body.allowed_origins || body.allowedOrigins) as string[])
+    : ((oldClient.allowedOrigins || oldClient.allowed_origins || []) as string[]);
 
-  const effectiveRedirectUris = hasNewRedirectUris
-    ? redirectUris
-    : ((oldClient?.redirectUris || oldClient?.redirect_uris || []) as string[]);
+  const targetIsDev = isSuperAdmin(sessionUser) && typeof (body.isDev ?? body.is_dev) === "boolean"
+    ? Boolean(body.isDev ?? body.is_dev)
+    : Boolean(oldClient.isDev ?? oldClient.is_dev);
 
-  const hasLoopback = effectiveRedirectUris.some((uri: string) => {
-    try {
-      const u = new URL(uri);
-      return (
-        u.hostname === "localhost" ||
-        u.hostname === "127.0.0.1" ||
-        u.hostname === "[::1]" ||
-        u.protocol === "http:"
-      );
-    } catch {
-      return false;
-    }
+  const targetIsPublic = isSuperAdmin(sessionUser) && typeof (body.isPublic ?? body.is_public) === "boolean"
+    ? Boolean(body.isPublic ?? body.is_public)
+    : Boolean(oldClient.isPublic ?? oldClient.is_public ?? true);
+
+  const targetClientName = typeof body.client_name === "string" ? body.client_name.trim() : (typeof body.name === "string" ? body.name.trim() : oldClient.name);
+
+  // Construct target state to validate final desired client configuration atomically
+  const targetState = {
+    ...oldClient,
+    name: targetClientName,
+    client_name: targetClientName,
+    redirectUris: targetRedirectUris,
+    redirect_uris: targetRedirectUris,
+    allowedOrigins: targetAllowedOrigins,
+    allowed_origins: targetAllowedOrigins,
+    isDev: targetIsDev,
+    is_dev: targetIsDev,
+    isPublic: targetIsPublic,
+    is_public: targetIsPublic,
+  };
+
+  const validation = validateOAuthClientConfiguration(targetState, {
+    serverEnvironment: config.env,
+    isNewClient: false,
+    allowDevClientsInProduction: config.allowDevClientsInProduction,
   });
 
-  const applicationType = body.application_type || ((isDev || hasLoopback) ? "native" : (effectiveRedirectUris.length > 0 ? "web" : undefined));
+  if (!validation.valid) {
+    return c.json({ error: validation.error }, 400);
+  }
+
+  const applicationType = body.application_type || validation.effectiveApplicationType;
 
   const updatePayload: any = {};
-  if (typeof body.client_name === "string") updatePayload.client_name = body.client_name;
-  if (typeof body.name === "string") updatePayload.client_name = body.name;
-  if (hasNewRedirectUris) updatePayload.redirect_uris = redirectUris;
+  if (targetClientName) updatePayload.client_name = targetClientName;
+  if (hasNewRedirectUris) updatePayload.redirect_uris = targetRedirectUris;
   if (applicationType) updatePayload.application_type = applicationType;
   if (typeof body.skip_consent === "boolean") updatePayload.skip_consent = body.skip_consent;
   if (typeof body.skipConsent === "boolean") updatePayload.skip_consent = body.skipConsent;
@@ -679,25 +658,30 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   }
 
   // Fallback / sync direct update to DB for custom fields (allowedOrigins, isDev, etc.)
-  const database = await getDb();
   const dbUpdates: any = { updatedAt: new Date() };
   if (hasNewAllowedOrigins) {
-    dbUpdates.allowedOrigins = allowedOrigins;
-    dbUpdates.allowed_origins = allowedOrigins;
+    dbUpdates.allowedOrigins = targetAllowedOrigins;
+    dbUpdates.allowed_origins = targetAllowedOrigins;
   }
   if (isSuperAdmin(sessionUser)) {
-    if (typeof (body.isDev ?? body.is_dev) === "boolean") dbUpdates.isDev = isDev;
-    if (typeof (body.isPublic ?? body.is_public) === "boolean") dbUpdates.isPublic = Boolean(body.isPublic ?? body.is_public);
+    if (typeof (body.isDev ?? body.is_dev) === "boolean") {
+      dbUpdates.isDev = targetIsDev;
+      dbUpdates.is_dev = targetIsDev;
+    }
+    if (typeof (body.isPublic ?? body.is_public) === "boolean") {
+      dbUpdates.isPublic = targetIsPublic;
+      dbUpdates.is_public = targetIsPublic;
+    }
   }
   if (typeof updatePayload.skip_consent === "boolean") dbUpdates.skipConsent = updatePayload.skip_consent;
   if (typeof updatePayload.enable_end_session === "boolean") dbUpdates.enableEndSession = updatePayload.enable_end_session;
   if (typeof updatePayload.disabled === "boolean") dbUpdates.disabled = updatePayload.disabled;
   if (hasNewRedirectUris) {
-    dbUpdates.redirectUris = redirectUris;
-    dbUpdates.redirect_uris = redirectUris;
+    dbUpdates.redirectUris = targetRedirectUris;
+    dbUpdates.redirect_uris = targetRedirectUris;
   }
   if (applicationType) dbUpdates.applicationType = applicationType;
-  if (updatePayload.client_name) dbUpdates.name = updatePayload.client_name;
+  if (targetClientName) dbUpdates.name = targetClientName;
 
   await database.collection("oauthClient").updateOne(
     { $or: [{ clientId: id }, { client_id: id }, { id }] },
@@ -715,7 +699,7 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     oldClient.allowed_origins.forEach((o: string) => originsToInvalidate.add(o));
   }
   if (hasNewAllowedOrigins) {
-    allowedOrigins.forEach((o: string) => originsToInvalidate.add(o));
+    targetAllowedOrigins.forEach((o: string) => originsToInvalidate.add(o));
   }
   if (originsToInvalidate.size > 0) {
     await invalidateOriginCache(Array.from(originsToInvalidate));
@@ -804,22 +788,87 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
     delete body[field];
   }
 
+  const database = await getDb();
+  let oldClient: any = await resolveOAuthClient(database, clientId);
+  if (!oldClient) {
+    try {
+      oldClient = await authApi.getOAuthClient({
+        headers: getHeaders(c),
+        query: { client_id: clientId },
+      });
+    } catch {}
+  }
+  if (!oldClient) return c.json({ error: "Application not found" }, 404);
+
+  const hasNewRedirectUris = Array.isArray(body.redirect_uris || body.redirectUris) && (body.redirect_uris || body.redirectUris).length > 0;
+  const targetRedirectUris: string[] = hasNewRedirectUris
+    ? ((body.redirect_uris || body.redirectUris) as string[])
+    : ((oldClient.redirectUris || oldClient.redirect_uris || []) as string[]);
+
+  const hasNewAllowedOrigins = Array.isArray(body.allowed_origins || body.allowedOrigins) && (body.allowed_origins || body.allowedOrigins).length > 0;
+  const targetAllowedOrigins: string[] = hasNewAllowedOrigins
+    ? ((body.allowed_origins || body.allowedOrigins) as string[])
+    : ((oldClient.allowedOrigins || oldClient.allowed_origins || []) as string[]);
+
+  const targetIsDev = isSuperAdmin(sessionUser) && typeof (body.is_dev ?? body.isDev) === "boolean"
+    ? Boolean(body.is_dev ?? body.isDev)
+    : Boolean(oldClient.isDev ?? oldClient.is_dev);
+
+  const targetIsPublic = isSuperAdmin(sessionUser) && typeof (body.is_public ?? body.isPublic) === "boolean"
+    ? Boolean(body.is_public ?? body.isPublic)
+    : Boolean(oldClient.isPublic ?? oldClient.is_public ?? true);
+
+  const targetClientName = typeof body.client_name === "string" ? body.client_name.trim() : (typeof body.name === "string" ? body.name.trim() : oldClient.name);
+
+  const targetState = {
+    ...oldClient,
+    name: targetClientName,
+    client_name: targetClientName,
+    redirectUris: targetRedirectUris,
+    redirect_uris: targetRedirectUris,
+    allowedOrigins: targetAllowedOrigins,
+    allowed_origins: targetAllowedOrigins,
+    isDev: targetIsDev,
+    is_dev: targetIsDev,
+    isPublic: targetIsPublic,
+    is_public: targetIsPublic,
+  };
+
+  const validation = validateOAuthClientConfiguration(targetState, {
+    serverEnvironment: config.env,
+    isNewClient: false,
+    allowDevClientsInProduction: config.allowDevClientsInProduction,
+  });
+
+  if (!validation.valid) {
+    return c.json({ error: validation.error }, 400);
+  }
+
   // Construct explicitly allowlisted update object
-  const safeUpdate: Record<string, any> = {};
-  if (typeof body.name === "string") safeUpdate.name = body.name.trim();
-  if (typeof body.client_name === "string") safeUpdate.client_name = body.client_name.trim();
-  if (Array.isArray(body.redirect_uris)) safeUpdate.redirect_uris = body.redirect_uris;
-  if (Array.isArray(body.redirectUris)) safeUpdate.redirectUris = body.redirectUris;
-  if (Array.isArray(body.allowed_origins)) safeUpdate.allowed_origins = body.allowed_origins;
-  if (Array.isArray(body.allowedOrigins)) safeUpdate.allowedOrigins = body.allowedOrigins;
+  const safeUpdate: Record<string, any> = { updatedAt: new Date() };
+  if (targetClientName) {
+    safeUpdate.name = targetClientName;
+    safeUpdate.client_name = targetClientName;
+  }
+  if (hasNewRedirectUris) {
+    safeUpdate.redirect_uris = targetRedirectUris;
+    safeUpdate.redirectUris = targetRedirectUris;
+  }
+  if (hasNewAllowedOrigins) {
+    safeUpdate.allowed_origins = targetAllowedOrigins;
+    safeUpdate.allowedOrigins = targetAllowedOrigins;
+  }
+  safeUpdate.applicationType = validation.effectiveApplicationType;
+  safeUpdate.application_type = validation.effectiveApplicationType;
+
   if (isSuperAdmin(sessionUser)) {
     if (typeof (body.is_dev ?? body.isDev) === "boolean") {
-      safeUpdate.is_dev = Boolean(body.is_dev ?? body.isDev);
-      safeUpdate.isDev = Boolean(body.is_dev ?? body.isDev);
+      safeUpdate.is_dev = targetIsDev;
+      safeUpdate.isDev = targetIsDev;
     }
     if (typeof (body.is_public ?? body.isPublic) === "boolean") {
-      safeUpdate.is_public = Boolean(body.is_public ?? body.isPublic);
-      safeUpdate.isPublic = Boolean(body.is_public ?? body.isPublic);
+      safeUpdate.is_public = targetIsPublic;
+      safeUpdate.isPublic = targetIsPublic;
     }
   }
   if (typeof (body.skip_consent ?? body.skipConsent) === "boolean") {
@@ -843,10 +892,9 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
       body: { client_id: clientId, update: safeUpdate },
     });
   } catch {
-    const database = await getDb();
     await database.collection("oauthClient").updateOne(
       { $or: [{ clientId }, { client_id: clientId }, { id: clientId }] },
-      { $set: { ...safeUpdate, updatedAt: new Date() } }
+      { $set: safeUpdate }
     );
     result = await database.collection("oauthClient").findOne({
       $or: [{ clientId }, { client_id: clientId }, { id: clientId }],

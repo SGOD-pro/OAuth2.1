@@ -22,7 +22,7 @@ These variables configure the Hono + Better Auth identity engine (`backend/src/c
 | `APP_ADMIN_TOTP_KEY` | **Yes** | Derived in dev | String (min 32) | Dedicated AES-256-GCM encryption key for securing App Admin TOTP secrets and backup codes at rest in MongoDB. |
 | `INTERNAL_GATEWAY_SECRET` | **Yes** | Derived in dev | String (min 32) | Shared secret required to invoke protected internal management routes and shield direct Lambda invocations. |
 | `TRUSTED_PROXY_CIDRS` | Recommended | `""` | String | Comma-separated list of trusted upstream proxy CIDRs (e.g. Cloudflare / ALB / API Gateway) for client IP extraction. |
-| `ALLOW_DEV_CLIENTS_IN_PRODUCTION` | No | `false` | Boolean | When set to `true`, permits OAuth clients with `localhost` redirect URIs in production. |
+| `ALLOW_DEV_CLIENTS_IN_PRODUCTION` | No | `false` | Boolean | When set to `true`, permits creating brand-new OAuth clients with loopback URIs in production. Existing clients can be transitioned between development and production modes individually by authorized administrators. |
 | `AUTH_PUBLIC_SIGNUP_ENABLED` | No | `true` | Boolean | Set to `false` to disable public self-registration globally. |
 | `AUTH_EMAIL_VERIFICATION_ENABLED` | No | `false` | Boolean | Set to `true` to require mandatory email verification before login. |
 | `UPSTASH_REDIS_REST_URL` | No | - | String | Upstash Redis REST endpoint for distributed rate limiting & token caching. |

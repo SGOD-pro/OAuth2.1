@@ -71,6 +71,239 @@ export function validateRedirectUris(
   return null;
 }
 
+export interface TargetOAuthClientConfig {
+  client_name?: string;
+  name?: string;
+  redirect_uris?: string[];
+  redirectUris?: string[];
+  allowed_origins?: string[];
+  allowedOrigins?: string[];
+  isDev?: boolean;
+  is_dev?: boolean;
+  isPublic?: boolean;
+  is_public?: boolean;
+  application_type?: string;
+  applicationType?: string;
+  [key: string]: any;
+}
+
+export interface ClientConfigValidationOptions {
+  serverEnvironment?: string;
+  isNewClient?: boolean;
+  allowDevClientsInProduction?: boolean;
+}
+
+export interface ClientConfigValidationResult {
+  valid: boolean;
+  error?: string;
+  effectiveRedirectUris: string[];
+  effectiveAllowedOrigins: string[];
+  effectiveIsDev: boolean;
+  effectiveIsPublic: boolean;
+  effectiveApplicationType: "native" | "web";
+}
+
+/**
+ * Central Policy Function: Validates OAuth client configuration across
+ * IdP server environment (NODE_ENV) and target OAuth client mode (isDev).
+ *
+ * Enforces per-client security boundary:
+ * - Production client (isDev: false): loopback and non-HTTPS are strictly forbidden.
+ * - Development client (isDev: true): loopback URIs (localhost, 127.0.0.1, ::1, *.localhost)
+ *   are permitted per RFC 8252, while intranet/private IPs remain forbidden.
+ * - Application type is automatically resolved to "native" when loopback or dev mode is active.
+ * - isDev and isPublic remain completely independent.
+ */
+export function validateOAuthClientConfiguration(
+  targetState: TargetOAuthClientConfig,
+  options: ClientConfigValidationOptions = {},
+): ClientConfigValidationResult {
+  const serverEnv = options.serverEnvironment ?? config.env;
+  const isNewClient = Boolean(options.isNewClient);
+  const allowDevInProd = options.allowDevClientsInProduction ?? config.allowDevClientsInProduction;
+
+  const effectiveIsDev = Boolean(targetState.isDev ?? targetState.is_dev);
+  const effectiveIsPublic = targetState.isPublic !== false && targetState.is_public !== false;
+
+  const rawRedirectUris = targetState.redirect_uris || targetState.redirectUris;
+  const effectiveRedirectUris = Array.isArray(rawRedirectUris) ? rawRedirectUris : [];
+
+  const rawAllowedOrigins = targetState.allowed_origins || targetState.allowedOrigins;
+  const effectiveAllowedOrigins = Array.isArray(rawAllowedOrigins) ? rawAllowedOrigins : [];
+
+  const defaultFailResult: ClientConfigValidationResult = {
+    valid: false,
+    effectiveRedirectUris,
+    effectiveAllowedOrigins,
+    effectiveIsDev,
+    effectiveIsPublic,
+    effectiveApplicationType: "web",
+  };
+
+  // Must have at least one redirect URI
+  if (effectiveRedirectUris.length === 0) {
+    return {
+      ...defaultFailResult,
+      error: "At least one redirect URI is required",
+    };
+  }
+
+  // When creating a new client in production, enforce global allowDevClientsInProduction safety policy
+  if (isNewClient && serverEnv === "production" && !allowDevInProd && effectiveIsDev) {
+    return {
+      ...defaultFailResult,
+      error: "Development clients with loopback URIs are disabled in production environment. To permit local testing clients in production, set ALLOW_DEV_CLIENTS_IN_PRODUCTION=true in server environment.",
+    };
+  }
+
+  // Validate redirect URIs against target client configuration
+  for (const uri of effectiveRedirectUris) {
+    if (!uri || typeof uri !== "string") {
+      return { ...defaultFailResult, error: "Redirect URI must be a non-empty string" };
+    }
+    if (uri.includes("*")) {
+      return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Wildcards are strictly forbidden.` };
+    }
+    if (uri.includes("#")) {
+      return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Redirection endpoint URI MUST NOT include a fragment component.` };
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(uri);
+    } catch {
+      return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Must be a valid URL.` };
+    }
+
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Scheme must be http: or https:.` };
+    }
+    if (parsedUrl.username || parsedUrl.password) {
+      return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Userinfo components are strictly forbidden.` };
+    }
+    if (!parsedUrl.hostname) {
+      return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Missing hostname.` };
+    }
+
+    const isLoopback = isLoopbackHost(parsedUrl.hostname);
+    const isPrivate = isPrivateOrLocalHost(parsedUrl.hostname);
+
+    if (serverEnv === "production") {
+      if (!effectiveIsDev) {
+        // Production client: strictly HTTPS, no loopback, no private IPs
+        if (isLoopback) {
+          return {
+            ...defaultFailResult,
+            error: "Loopback redirect URIs are permitted only for development-mode OAuth clients. Switch the application to Development Mode or provide HTTPS redirect URIs.",
+          };
+        }
+        if (isPrivate) {
+          return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Private and intranet IP addresses are forbidden.` };
+        }
+        if (parsedUrl.protocol !== "https:") {
+          return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Production OAuth clients require HTTPS redirect URIs.` };
+        }
+      } else {
+        // Development client in production: loopback allowed with http/https; non-loopback requires HTTPS and non-private
+        if (isLoopback) {
+          // Permitted per RFC 8252
+        } else {
+          if (isPrivate) {
+            return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Private and intranet IP addresses are forbidden even in Development Mode.` };
+          }
+          if (parsedUrl.protocol !== "https:") {
+            return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.` };
+          }
+        }
+      }
+    } else {
+      // Development server (NODE_ENV !== "production")
+      if (!isLoopback && isPrivate) {
+        return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Private intranet IP addresses are forbidden.` };
+      }
+    }
+  }
+
+  // Validate allowed origins against target client configuration
+  for (const origin of effectiveAllowedOrigins) {
+    if (!origin || typeof origin !== "string") {
+      return { ...defaultFailResult, error: "Allowed origin must be a non-empty string" };
+    }
+    if (origin.includes("*")) {
+      return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Wildcards are strictly forbidden.` };
+    }
+    if (origin.includes("#")) {
+      return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Fragments are forbidden.` };
+    }
+
+    let parsedOrigin: URL;
+    try {
+      parsedOrigin = new URL(origin);
+    } catch {
+      return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Must be a valid URL.` };
+    }
+
+    if (parsedOrigin.protocol !== "http:" && parsedOrigin.protocol !== "https:") {
+      return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Scheme must be http: or https:.` };
+    }
+    if (parsedOrigin.username || parsedOrigin.password) {
+      return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Userinfo components are forbidden.` };
+    }
+
+    const isLoopback = isLoopbackHost(parsedOrigin.hostname);
+    const isPrivate = isPrivateOrLocalHost(parsedOrigin.hostname);
+
+    if (serverEnv === "production") {
+      if (!effectiveIsDev) {
+        if (isLoopback) {
+          return {
+            ...defaultFailResult,
+            error: "Loopback origins are permitted only for development-mode OAuth clients. Switch the application to Development Mode or provide HTTPS origins.",
+          };
+        }
+        if (isPrivate) {
+          return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Private and intranet IP addresses are forbidden.` };
+        }
+        if (parsedOrigin.protocol !== "https:") {
+          return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Production OAuth clients require HTTPS allowed origins.` };
+        }
+      } else {
+        if (isLoopback) {
+          // Permitted
+        } else {
+          if (isPrivate) {
+            return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Private and intranet IP addresses are forbidden even in Development Mode.` };
+          }
+          if (parsedOrigin.protocol !== "https:") {
+            return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.` };
+          }
+        }
+      }
+    }
+  }
+
+  // Application type determination
+  const hasLoopback = effectiveRedirectUris.some((u) => {
+    try {
+      const parsed = new URL(u);
+      return isLoopbackHost(parsed.hostname) || parsed.protocol === "http:";
+    } catch {
+      return false;
+    }
+  });
+
+  const effectiveApplicationType: "native" | "web" = (effectiveIsDev || hasLoopback) ? "native" : "web";
+
+  return {
+    valid: true,
+    effectiveRedirectUris,
+    effectiveAllowedOrigins,
+    effectiveIsDev,
+    effectiveIsPublic,
+    effectiveApplicationType,
+  };
+}
+
 export function isStrongPassword(password: string): boolean {
   // Minimum 12 chars ?" must match emailAndPassword.minPasswordLength in auth.ts
   if (password.length < 12 || password.length > 128) return false;
