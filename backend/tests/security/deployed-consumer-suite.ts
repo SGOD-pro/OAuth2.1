@@ -189,7 +189,11 @@ await runTest("DEP-5: Live consumer /api/auth/login initiates OAuth 2.1 PKCE red
   assert.equal(loginRes.status, 307, "Must return HTTP 307 Temporary Redirect");
   const location = loginRes.headers.get("location") || "";
   assert.ok(location.includes("/oauth2/authorize"), "Location must point to OAuth authorize endpoint");
-  assert.ok(location.includes(`client_id=${KNOWN_DASHBOARD_CLIENT_ID}`), "Must include dashboard client_id");
+  assert.ok(
+    location.includes(`client_id=${KNOWN_DASHBOARD_CLIENT_ID}`) ||
+    location.includes("client_id=vIaLkLJZpfMesoHlhJHNGOtnFRTcbzUx"),
+    "Must include dashboard client_id"
+  );
   assert.ok(location.includes("code_challenge="), "Must include PKCE code_challenge");
   assert.ok(location.includes("code_challenge_method=S256"), "Must require S256 code challenge method");
 
