@@ -53,6 +53,7 @@ function getTestHeaders(overrides: Record<string, string> = {}): Headers {
   const randSub = Math.floor(reqCounter / 5);
   reqCounter++;
   h.set("x-forwarded-for", `10.66.${randSub}.${reqCounter % 200}`);
+  h.set("x-gateway-secret", process.env.INTERNAL_GATEWAY_SECRET || "test_adversarial_gateway_secret_32_characters");
   for (const [k, v] of Object.entries(overrides)) {
     if (v === "") h.delete(k);
     else if (k.toLowerCase() === "origin" && v === "https://app.example.com") h.set(k, TEST_ORIGIN);

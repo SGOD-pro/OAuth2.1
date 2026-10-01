@@ -1,6 +1,7 @@
 # System Architecture & Protocol Specification
 **Version:** 2.1.0  
-**Status:** Authoritative Architectural Design
+**Status:** Supporting Architectural Specification  
+**Normative Reference:** For the single authoritative security architecture, perimeter gateway trust, and canonical terminology, refer strictly to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
 
 SWYRA Auth is a self-hosted, multi-tenant OAuth 2.1 and OpenID Connect (OIDC) Identity Provider. It provides zero-coupling identity federation, centralized session management, multi-tenant application isolation, and cryptographic token verification.
 

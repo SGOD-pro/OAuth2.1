@@ -40,7 +40,7 @@ async function runTest(name: string, fn: () => Promise<void> | void) {
   }
 }
 
-const KNOWN_DASHBOARD_CLIENT_ID = "WpruQjczIYMHwzwcntshzKsdkMnkrvWS";
+const KNOWN_DASHBOARD_CLIENT_ID = "vIaLkLJZpfMesoHlhJHNGOtnFRTcbzUx";
 const KNOWN_DASHBOARD_DEPLOYED_URL = "https://77gqzhgn4k3iaiticbaxdkndi40whzjp.lambda-url.ap-south-1.on.aws";
 
 // Seed fixture in local test database to mirror production configuration

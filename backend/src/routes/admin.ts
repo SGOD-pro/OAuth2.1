@@ -4,7 +4,7 @@ import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { getHeaders, isStrongPassword, validateRedirectUris, validateOAuthClientConfiguration, getTrustedClientIp, resolveOAuthClient } from "../utils/security";
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
-import { requireAdmin, requireSuperAdmin, requireScopedAdmin, isSuperAdmin } from "../middleware/admin-auth";
+import { requireAdmin, requireSuperAdmin, requireScopedAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
@@ -20,6 +20,9 @@ export const admin = new Hono<{
     scopedClientId: string | null;
   };
 }>();
+
+// Gateway trust perimeter: enforce trusted gateway boundary on all admin endpoints
+admin.use("*", requireGatewayTrust);
 
 // -- Super-Admin Only Routes ---------------------------------------------
 

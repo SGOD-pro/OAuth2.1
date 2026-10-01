@@ -82,6 +82,7 @@ Complete technical documentation, integration contracts, and operational runbook
 
 | Document | Description |
 |---|---|
+| 🛡️ **[Canonical Security Specification](docs/SECURITY_CANONICAL.md)** | **Normative standard** and single source of truth for security architecture, gateway trust, and authorization models. |
 | 🤖 **[AI Agent Integration Contract](docs/AI_AGENT_INTEGRATION_CONTRACT.md)** | **Normative specification** for AI coding agents and automated integration systems. |
 | ⚡ **[AGENTS.md](AGENTS.md)** | Quick-reference cheat sheet for AI agents and developers. |
 | 🔌 **[Consumer Integration Guide](docs/INTEGRATION_GUIDE.md)** | Integration recipes for Next.js BFF, React SPA, React + FastAPI, Express, and App Admin auth. |
@@ -92,7 +93,7 @@ Complete technical documentation, integration contracts, and operational runbook
 | 👑 **[Admin Console & App Management](docs/ADMIN_GUIDE.md)** | Registering applications, CORS management, private user assignment, App Admin provisioning, and CLI utilities. |
 | 🚀 **[Multi-Cloud Deployment Guide](docs/DEPLOYMENT.md)** | Production deployment runbooks for AWS Lambda (SAM), Linux VPS/EC2, Docker Compose, GCP, Azure, and Vercel. |
 | 🔄 **[CI/CD & Auto Deployment](docs/CICD.md)** | Automated GitHub Actions pipelines for AWS Lambda (SAM) and Vercel edge deployment. |
-| 🔍 **[Security Investigations Report](docs/SECURITY_INVESTIGATIONS.md)** | *Non-normative* post-mortem analysis of past consumer integration behaviors. |
+| 🔍 **[Security Investigations Report](docs/SECURITY_INVESTIGATIONS.md)** | *Non-normative / Historical* post-mortem analysis of past consumer integration behaviors. |
 
 ---
 
@@ -127,13 +128,17 @@ From the project root:
 
 ---
 
-## 🧪 Security Test Suite
+## 🧪 Security Test Suite & Documentation Consistency
 
-SWYRA Auth includes an automated security gate with **11 test suites** executing **118 security tests** (covering OAuth 2.1 boundary checks, token family rotation with CAS concurrency, private application isolation, App Admin cross-app token rejection, TOTP MFA challenge flows, token purpose enforcement, atomic backup code consumption, and production environment schema validation):
+SWYRA Auth includes an automated security gate with **14 blocking security test suites** defined in [`docs/security/security-suite-manifest.json`](docs/security/security-suite-manifest.json) executing against the complete production authorization, tenant isolation, CAS rotation, and gateway perimeter models:
 
 ```bash
 cd backend
+# Execute the full 14-suite master security gate
 npm run test:all-security
+
+# Execute automated documentation and route manifest consistency verification
+npm run security:docs-check
 ```
 
 ---

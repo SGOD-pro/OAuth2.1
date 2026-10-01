@@ -590,7 +590,8 @@ auth.post("/oauth2/token", async (c) => {
 
         // Cross-client defense: Verify the token family belongs to the authenticated client
         // Do NOT leak whether the token exists, is consumed, or is revoked to an unauthorized client
-        if (existingFamily && existingFamily.clientId && existingFamily.clientId !== canonicalClientId) {
+        // FAIL-CLOSED: A token family without a matching clientId is strictly rejected
+        if (existingFamily && (!existingFamily.clientId || existingFamily.clientId !== canonicalClientId)) {
             return c.json(
                 {
                     error: "invalid_grant",

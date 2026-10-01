@@ -1,5 +1,7 @@
 # Admin Console & Application Management Guide
 
+> **Normative Reference**: For the single authoritative security architecture, administrative roles (Super-Admin vs Scoped-Admin vs App-Admin), and gateway trust perimeter, refer strictly to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
+
 The SWYRA Auth Admin Console provides an interface for registering OAuth 2.1 applications, managing allowed CORS origins, assigning scoped administrators, and monitoring real-time authentication events.
 
 ---

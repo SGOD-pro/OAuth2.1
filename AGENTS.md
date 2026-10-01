@@ -8,9 +8,10 @@ This repository contains **SWYRA Auth**, a production-grade, multi-tenant **OAut
 
 ## ⚠️ Mandatory Precedence & Normative Contract
 
-Before writing, modifying, or reviewing any integration code for consumer applications, you **MUST** read and adhere to the authoritative contract:
+Before writing, modifying, or reviewing any integration code for consumer applications, you **MUST** read and adhere to the authoritative contracts:
 
-👉 **[docs/AI_AGENT_INTEGRATION_CONTRACT.md](file:///home/swyra/projects/OAuth2.1/docs/AI_AGENT_INTEGRATION_CONTRACT.md)**
+👉 **[docs/SECURITY_CANONICAL.md](file:///home/swyra/projects/OAuth2.1/docs/SECURITY_CANONICAL.md)** (Normative Security Architecture & Trust Model)  
+👉 **[docs/AI_AGENT_INTEGRATION_CONTRACT.md](file:///home/swyra/projects/OAuth2.1/docs/AI_AGENT_INTEGRATION_CONTRACT.md)** (Normative Integration Specification)
 
 ---
 

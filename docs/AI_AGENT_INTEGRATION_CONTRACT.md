@@ -1,7 +1,8 @@
 # SWYRA Auth — Framework-Agnostic AI Agent Integration Contract
 **Version:** 2.1.0  
 **Status:** Normative Specification  
-**Authority:** Authoritative reference for AI coding agents and automated integration systems.
+**Authority:** Authoritative reference for AI coding agents and automated integration systems.  
+**Companion Standard:** For the internal IdP security architecture, gateway trust boundary, and tenant isolation model, refer to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
 
 ---
 

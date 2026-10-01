@@ -1,6 +1,7 @@
 # Configuration & Environment Specification
 **Version:** 2.1.0  
-**Status:** Authoritative Configuration Guide
+**Status:** Supporting Configuration Guide  
+**Normative Reference:** For the single authoritative security architecture, perimeter gateway trust, and client mode lifecycle, refer strictly to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
 
 This document provides a comprehensive reference for configuring the **SWYRA Auth** identity provider in development, testing, and production environments.
 

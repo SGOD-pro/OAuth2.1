@@ -1,0 +1,169 @@
+{
+  "$schema": "./schema/security-suite-manifest.schema.json",
+  "version": "1.0.0",
+  "generated_at": "2026-10-02T00:00:00Z",
+  "master_command": "npm run test:all-security",
+  "total_blocking_suites": 14,
+  "suites": [
+    {
+      "name": "test-client-mode-transition",
+      "file": "tests/security/test-client-mode-transition.ts",
+      "command": "npm run test:client-mode-transition",
+      "purpose": "Verifies client lifecycle mode transitions, strict loopback boundaries (127.0.0.1, [::1], localhost), rejection of private RFC1918/link-local/spoofed origins for dev clients, dev-to-prod promotion requirements, and field independence.",
+      "blocking": true,
+      "classification": "client_lifecycle_and_boundary"
+    },
+    {
+      "name": "cross-client-refresh-matrix",
+      "file": "tests/security/cross-client-refresh-matrix.ts",
+      "command": "npm run test:cross-client-refresh",
+      "purpose": "Verifies cross-client refresh token theft prevention, atomic Compare-and-Swap (CAS) token rotation, and 2000ms grace window concurrency handling.",
+      "blocking": true,
+      "classification": "token_security_and_rotation"
+    },
+    {
+      "name": "full-production-adversarial-suite",
+      "file": "tests/security/full-production-adversarial-suite.ts",
+      "command": "npm run test:prod-config",
+      "purpose": "Verifies production hardening against adversarial attack vectors including token replay, header spoofing, and privilege escalation.",
+      "blocking": true,
+      "classification": "adversarial_penetration"
+    },
+    {
+      "name": "final-adversarial-gate",
+      "file": "tests/security/final-adversarial-gate.ts",
+      "command": "npm run test:security-gate",
+      "purpose": "Master 28-check adversarial security gate verifying multi-tenant isolation, scoped admin restrictions, CSRF, and CAS.",
+      "blocking": true,
+      "classification": "master_gate"
+    },
+    {
+      "name": "direct-backend-access-suite",
+      "file": "tests/security/direct-backend-access-suite.ts",
+      "command": "npm run test:direct-backend",
+      "purpose": "Verifies direct Lambda Function URL isolation, public protocol endpoint accessibility (curl), and GATEWAY-1 through GATEWAY-5 conjunctive trust boundary.",
+      "blocking": true,
+      "classification": "gateway_and_protocol_boundary"
+    },
+    {
+      "name": "session-hijacking-suite",
+      "file": "tests/security/session-hijacking-suite.ts",
+      "command": "npm run test:session-hijack",
+      "purpose": "Verifies session theft defense, password rotation session invalidation, account deactivation, and CSRF protection.",
+      "blocking": true,
+      "classification": "session_security"
+    },
+    {
+      "name": "oauth-transaction-suite",
+      "file": "tests/security/oauth-transaction-suite.ts",
+      "command": "npm run test:oauth-tx",
+      "purpose": "Verifies multi-tab OAuth transaction isolation, state parameter CAS, and authorization code single-use guarantees.",
+      "blocking": true,
+      "classification": "oauth_transaction_integrity"
+    },
+    {
+      "name": "credential-compromise-suite",
+      "file": "tests/security/credential-compromise-suite.ts",
+      "command": "npm run test:credential-comp",
+      "purpose": "Verifies blast radius containment when individual user or app admin credentials are leaked or compromised.",
+      "blocking": true,
+      "classification": "credential_compromise"
+    },
+    {
+      "name": "cross-tenant-matrix",
+      "file": "tests/security/cross-tenant-matrix.ts",
+      "command": "npm run test:cross-tenant",
+      "purpose": "Verifies multi-tenant database partitioning, ensuring tenant A credentials, users, and scoped admins cannot access tenant B resources.",
+      "blocking": true,
+      "classification": "tenant_isolation"
+    },
+    {
+      "name": "production-vs-development-suite",
+      "file": "tests/security/production-vs-development-suite.ts",
+      "command": "npm run test:prod-vs-dev",
+      "purpose": "Verifies production clients require HTTPS public FQDNs while development clients require strict loopback addresses.",
+      "blocking": true,
+      "classification": "client_environment_separation"
+    },
+    {
+      "name": "deployed-consumer-suite",
+      "file": "tests/security/deployed-consumer-suite.ts",
+      "command": "npm run test:deployed-consumer",
+      "purpose": "End-to-end integration tests verifying production IdP endpoints, discovery, JWKS, and real deployed consumer application integration.",
+      "blocking": true,
+      "classification": "deployed_consumer_integration"
+    },
+    {
+      "name": "aws-dashboard-integration-suite",
+      "file": "tests/security/aws-dashboard-integration-suite.ts",
+      "command": "npm run test:aws-dashboard",
+      "purpose": "Validates the deployed AWS Dashboard consumer client authorization code exchange, token lifecycle, and userinfo flow.",
+      "blocking": true,
+      "classification": "consumer_app_integration"
+    },
+    {
+      "name": "test-app-management-auth",
+      "file": "tests/security/test-app-management-auth.ts",
+      "command": "npm run test:app-mgmt-auth",
+      "purpose": "Verifies application creation, mutation, and deletion require strict Super-Admin authentication, blocking unauthenticated, client credentials, user tokens, app-admin JWTs, and scoped admins.",
+      "blocking": true,
+      "classification": "management_authorization_audit"
+    },
+    {
+      "name": "e2e-oidc-interop",
+      "file": "tests/security/e2e-oidc-interop.test.ts",
+      "command": "npm run test:oidc-interop",
+      "purpose": "Verifies OpenID Connect discovery, RS256 token signing, JWKS publication, and standards compliance for downstream consumers.",
+      "blocking": true,
+      "classification": "oidc_interoperability"
+    },
+    {
+      "name": "load-and-performance",
+      "file": "tests/security/load-and-performance.test.ts",
+      "command": "npm run test:load",
+      "purpose": "Benchmark suite measuring throughput and latency on OAuth hot paths (authorize, token, userinfo). Non-blocking for CI.",
+      "blocking": false,
+      "classification": "performance_benchmark"
+    },
+    {
+      "name": "test-production-config",
+      "file": "tests/security/test-production-config.ts",
+      "command": "npm run test:prod-config",
+      "purpose": "Local configuration validation suite. Informational.",
+      "blocking": false,
+      "classification": "configuration_check"
+    },
+    {
+      "name": "phase25-security-gate",
+      "file": "tests/security/phase25-security-gate.ts",
+      "command": "npm run test:gate",
+      "purpose": "Historical phase 25 regression suite (subsumed by final-adversarial-gate). Informational.",
+      "blocking": false,
+      "classification": "historical_regression"
+    },
+    {
+      "name": "second-pass-security-suite",
+      "file": "tests/security/second-pass-security-suite.ts",
+      "command": "npm run test:second-pass",
+      "purpose": "Historical second pass audit suite. Informational.",
+      "blocking": false,
+      "classification": "historical_regression"
+    },
+    {
+      "name": "security-remediation-test",
+      "file": "tests/security/security-remediation-test.ts",
+      "command": "npx tsx tests/security/security-remediation-test.ts",
+      "purpose": "Historical remediation regression checks. Informational.",
+      "blocking": false,
+      "classification": "historical_regression"
+    },
+    {
+      "name": "test-app-admin-security",
+      "file": "tests/security/test-app-admin-security.ts",
+      "command": "npm run test:security",
+      "purpose": "Focused unit tests for app-admin TOTP and password rotation endpoints. Informational.",
+      "blocking": false,
+      "classification": "unit_test"
+    }
+  ]
+}

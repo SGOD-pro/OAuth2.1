@@ -34,29 +34,48 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
   return { user: fullUser, session: session.session };
 }
 
+/**
+ * Gateway Trust Perimeter Helper:
+ * Validates that requests entering management surfaces originate from the trusted
+ * API Gateway / reverse proxy when config.internalGatewaySecret is configured.
+ */
+function verifyGatewaySecret(c: any): boolean {
+  if (!config.internalGatewaySecret) {
+    return true;
+  }
+  const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
+  return Boolean(gatewayHeader && timingSafeEqualStr(gatewayHeader, config.internalGatewaySecret));
+}
+
+/**
+ * Standalone middleware to enforce Gateway Trust on management endpoints.
+ */
+export const requireGatewayTrust = createMiddleware(async (c, next) => {
+  if (!verifyGatewaySecret(c)) {
+    return c.json(
+      { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+      403
+    );
+  }
+  return next();
+});
+
 export const requireAdmin = createMiddleware(async (c, next) => {
+  // 1. Enforce Gateway Trust Boundary
+  if (!verifyGatewaySecret(c)) {
+    return c.json(
+      { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+      403
+    );
+  }
+
+  // 2. Enforce User Authentication
   const auth = await getAuthenticatedUser(c);
-
-  // If already authenticated as an administrator via session cookie, permit access
-  if (auth && auth.user?.role === "admin") {
-    return next();
-  }
-
-  // If not authenticated via admin session, require internal gateway secret for server-to-server boundary
-  if (config.internalGatewaySecret) {
-    const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
-    if (!gatewayHeader || !timingSafeEqualStr(gatewayHeader, config.internalGatewaySecret)) {
-      return c.json(
-        { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
-        403
-      );
-    }
-  }
-
   if (!auth) {
     return c.json({ error: "Authentication required" }, 401);
   }
 
+  // 3. Enforce Admin Role
   const role = auth.user?.role;
   if (role !== "admin") {
     return c.json({ error: "Admin access required" }, 403);
@@ -74,17 +93,27 @@ export function isSuperAdmin(user: any): boolean {
  * Super-Admin Middleware: Global operations only (client creation, user provisioning, global stats/logs)
  */
 export const requireSuperAdmin = createMiddleware(async (c, next) => {
-  const auth = await getAuthenticatedUser(c);
+  // 1. Enforce Gateway Trust Boundary
+  if (!verifyGatewaySecret(c)) {
+    return c.json(
+      { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+      403
+    );
+  }
 
+  // 2. Enforce User Authentication
+  const auth = await getAuthenticatedUser(c);
   if (!auth) {
     return c.json({ error: "Authentication required" }, 401);
   }
 
+  // 3. Enforce Admin Role
   const role = auth.user?.role;
   if (role !== "admin") {
     return c.json({ error: "Admin access required" }, 403);
   }
 
+  // 4. Enforce Super-Admin Privilege Scope
   if (!isSuperAdmin(auth.user)) {
     return c.json(
       {
@@ -102,18 +131,27 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
  * Scoped-Admin Middleware: App-level operations only (managing own client config)
  */
 export const requireScopedAdmin = createMiddleware(async (c, next) => {
-  const auth = await getAuthenticatedUser(c);
+  // 1. Enforce Gateway Trust Boundary
+  if (!verifyGatewaySecret(c)) {
+    return c.json(
+      { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+      403
+    );
+  }
 
+  // 2. Enforce User Authentication
+  const auth = await getAuthenticatedUser(c);
   if (!auth) {
     return c.json({ error: "Authentication required" }, 401);
   }
 
+  // 3. Enforce Admin Role
   const role = auth.user?.role;
   if (role !== "admin") {
     return c.json({ error: "Admin access required" }, 403);
   }
 
-  // Enforce mandatory password change for freshly provisioned temporary accounts
+  // 4. Enforce mandatory password change for freshly provisioned temporary accounts
   if (auth.user?.mustChangePassword === true) {
     return c.json(
       {
@@ -124,6 +162,7 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
     );
   }
 
+  // 5. Enforce Scoped Tenant Boundaries
   const scopedClientId = auth.user?.scopedClientId;
   const targetClientId = c.req.param("id") || c.req.param("clientId");
 

@@ -17,6 +17,7 @@ process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-goo
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
 process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
 process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
@@ -284,6 +285,135 @@ await runTest("DIR-10: Gateway secret enforces server-to-server boundary when co
       delete process.env.INTERNAL_GATEWAY_SECRET;
     }
   }
+});
+
+// --------------------------------------------------------------------------
+// TEST 11-15: GATEWAY-1 through GATEWAY-5 (Conjunctive Gateway Trust Matrix)
+// --------------------------------------------------------------------------
+const db = await getDb();
+const superAdminEmail = `gw_super_${crypto.randomBytes(4).toString("hex")}@example.com`;
+const superAdminPass = "SuperAdmin@1234!";
+await authProvider.api.signUpEmail({
+  body: { email: superAdminEmail, password: superAdminPass, name: "Gateway Super Admin" },
+});
+await db.collection("user").updateOne({ email: superAdminEmail }, { $set: { role: "admin", scopedClientId: null } });
+
+const superLoginRes = await app.request("/api/auth/sign-in/email", {
+  method: "POST",
+  headers: getTestHeaders({ Origin: process.env.FRONTEND_URL || "https://app.example.com" }),
+  body: JSON.stringify({ email: superAdminEmail, password: superAdminPass }),
+});
+assert.equal(superLoginRes.status, 200);
+const superCookie = superLoginRes.headers.get("set-cookie") || "";
+
+const scopedAdminEmail = `gw_scoped_${crypto.randomBytes(4).toString("hex")}@example.com`;
+const scopedAdminPass = "ScopedAdmin@1234!";
+const tenantA = `gw_app_a_${crypto.randomBytes(4).toString("hex")}`;
+const tenantB = `gw_app_b_${crypto.randomBytes(4).toString("hex")}`;
+
+await Promise.all([
+  db.collection("oauthClient").insertOne({
+    clientId: tenantA,
+    name: "Gateway App A",
+    redirectUris: ["https://app-a.example.com/cb"],
+    allowedOrigins: ["https://app-a.example.com"],
+    isDev: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
+  db.collection("oauthClient").insertOne({
+    clientId: tenantB,
+    name: "Gateway App B",
+    redirectUris: ["https://app-b.example.com/cb"],
+    allowedOrigins: ["https://app-b.example.com"],
+    isDev: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
+]);
+
+await authProvider.api.signUpEmail({
+  body: { email: scopedAdminEmail, password: scopedAdminPass, name: "Gateway Scoped Admin" },
+});
+await db.collection("user").updateOne({ email: scopedAdminEmail }, { $set: { role: "admin", scopedClientId: tenantA } });
+
+const scopedLoginRes = await app.request("/api/auth/sign-in/email", {
+  method: "POST",
+  headers: getTestHeaders({ Origin: process.env.FRONTEND_URL || "https://app.example.com" }),
+  body: JSON.stringify({ email: scopedAdminEmail, password: scopedAdminPass }),
+});
+assert.equal(scopedLoginRes.status, 200);
+const scopedCookie = scopedLoginRes.headers.get("set-cookie") || "";
+
+const trustedGatewaySecret = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
+
+await runTest("GATEWAY-1: Direct Lambda URL + Valid Admin Session + No Gateway Secret => DENIED (403)", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: superCookie,
+      Origin: process.env.FRONTEND_URL || "https://app.example.com",
+      "x-gateway-secret": "",
+    }),
+  });
+  assert.equal(res.status, 403, "Direct access with admin session but no gateway secret must return 403");
+  const data = await res.json();
+  assert.equal(data.error, "forbidden");
+});
+
+await runTest("GATEWAY-2: Direct Lambda URL + Gateway Secret Only + No User Session => DENIED (401)", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({
+      "x-gateway-secret": trustedGatewaySecret,
+      Cookie: "",
+    }),
+  });
+  assert.equal(res.status, 401, "Gateway secret without admin session must return 401");
+  const data = await res.json();
+  assert.equal(data.error, "Authentication required");
+});
+
+await runTest("GATEWAY-3: Gateway Secret + Valid Super Admin Session => ALLOWED (200)", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: superCookie,
+      Origin: process.env.FRONTEND_URL || "https://app.example.com",
+      "x-gateway-secret": trustedGatewaySecret,
+    }),
+  });
+  assert.equal(res.status, 200, "Valid gateway secret and super admin session must be allowed (200)");
+  const data = await res.json();
+  assert.ok(Array.isArray(data), "Must return array of clients");
+});
+
+await runTest("GATEWAY-4: Forged x-gateway-secret from untrusted client => DENIED (403)", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: superCookie,
+      Origin: process.env.FRONTEND_URL || "https://app.example.com",
+      "x-gateway-secret": "forged_untrusted_gateway_secret_value_attempting_bypass",
+    }),
+  });
+  assert.equal(res.status, 403, "Forged gateway secret must return 403 forbidden");
+  const data = await res.json();
+  assert.equal(data.error, "forbidden");
+});
+
+await runTest("GATEWAY-5: Valid Scoped-Admin Session + Valid Gateway + Target Other Client => DENIED (403)", async () => {
+  const res = await app.request(`/api/admin/clients/${tenantB}`, {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: scopedCookie,
+      Origin: process.env.FRONTEND_URL || "https://app.example.com",
+      "x-gateway-secret": trustedGatewaySecret,
+    }),
+  });
+  assert.equal(res.status, 403, "Scoped admin targeting other client must return 403 forbidden");
+  const data = await res.json();
+  assert.equal(data.error, "forbidden");
 });
 
 console.log(`  DIRECT BACKEND SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);

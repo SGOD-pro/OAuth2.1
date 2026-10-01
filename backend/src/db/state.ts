@@ -268,7 +268,8 @@ export async function verifyAndRotateTokenFamily(
   // If an expectedClientId is specified, caller MUST own this token family.
   // Under NO circumstances may an unauthenticated or cross-client caller rotate,
   // lock, inspect, or cascade-revoke a family belonging to another client.
-  if (expectedClientId && doc.clientId && doc.clientId !== expectedClientId) {
+  // FAIL-CLOSED: doc.clientId must exist and match expectedClientId exactly.
+  if (expectedClientId && (!doc.clientId || doc.clientId !== expectedClientId)) {
     return {
       valid: false,
       replayed: false,
@@ -348,7 +349,7 @@ export async function verifyAndRotateTokenFamily(
         _id: doc._id,
         activeTokenHash: incomingTokenHash,
         status: "active",
-        ...(doc.clientId ? { clientId: doc.clientId } : {}),
+        ...(expectedClientId ? { clientId: expectedClientId } : (doc.clientId ? { clientId: doc.clientId } : {})),
       },
       {
         $push: { consumedTokenHashes: incomingTokenHash },

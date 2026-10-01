@@ -1,6 +1,7 @@
 # Security Architecture & Abuse Defense Specification
 **Version:** 2.1.0  
-**Status:** Authoritative Security Specification
+**Status:** Supporting Security Specification  
+**Normative Reference:** For the single authoritative security architecture, perimeter gateway trust, and canonical terminology, refer strictly to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
 
 This document details the security model, cryptographic guarantees, threat mitigation mechanisms, and operational scope boundaries of the **SWYRA Auth Identity Provider**.
 

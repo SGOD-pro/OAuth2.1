@@ -1,8 +1,14 @@
 # Implementation Plan: Comprehensive Remediation of OAuth 2.1 Security Checkpoints
 
+> [!CAUTION]
+> **HISTORICAL / NON-NORMATIVE DOCUMENT**  
+> This remediation plan records point-in-time remediation actions from September 2026. It is **non-normative**.  
+> For the current verified state and single source of truth, see:  
+> 👉 **[docs/SECURITY_CANONICAL.md](docs/SECURITY_CANONICAL.md)** (Authoritative Specification)
+
 > **Repository File:** `SECURITY_REMEDIATION_PLAN.md`  
 > **Source Spec:** [User Request / Security Contract](file:///home/swyra/projects/OAuth2.1/AGENTS.md)  
-> **Target Date:** September 2026  
+> **Target Date:** September 2026 (Historical)  
 
 ---
 

@@ -1,6 +1,7 @@
 # Environment Variables Reference
 **Version:** 2.1.0  
-**Status:** Authoritative Environment Schema Reference
+**Status:** Supporting Environment Schema Reference  
+**Normative Reference:** For the single authoritative security architecture, perimeter gateway trust, and client mode lifecycle, refer strictly to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
 
 This document provides a complete reference for all environment variables used by the SWYRA Auth backend, frontend gateway, and consumer applications.
 
