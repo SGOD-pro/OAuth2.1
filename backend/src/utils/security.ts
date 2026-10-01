@@ -91,6 +91,13 @@ export interface ClientConfigValidationOptions {
   serverEnvironment?: string;
   isNewClient?: boolean;
   allowDevClientsInProduction?: boolean;
+  /**
+   * Set to true when the caller is a verified Super Admin.
+   * When true AND all redirect URIs are strict loopback (localhost, 127.0.0.1, ::1),
+   * a new isDev=true client may be created on a production IdP without requiring
+   * ALLOW_DEV_CLIENTS_IN_PRODUCTION=true globally.
+   */
+  isSuperAdminOp?: boolean;
 }
 
 export interface ClientConfigValidationResult {
@@ -148,12 +155,34 @@ export function validateOAuthClientConfiguration(
     };
   }
 
-  // When creating a new client in production, enforce global allowDevClientsInProduction safety policy
-  if (isNewClient && serverEnv === "production" && !allowDevInProd && effectiveIsDev) {
-    return {
-      ...defaultFailResult,
-      error: "Development clients with loopback URIs are disabled in production environment. To permit local testing clients in production, set ALLOW_DEV_CLIENTS_IN_PRODUCTION=true in server environment.",
-    };
+  // When creating a new client in production with isDev=true:
+  // - If caller is a verified Super Admin (isSuperAdminOp=true) AND all redirect URIs and origins are strict loopback: permit.
+  // - Otherwise, fail closed unless ALLOW_DEV_CLIENTS_IN_PRODUCTION=true is explicitly set.
+  if (isNewClient && serverEnv === "production" && effectiveIsDev) {
+    const allLoopback = effectiveRedirectUris.every((u) => {
+      try {
+        return isLoopbackHost(new URL(u).hostname);
+      } catch {
+        return false;
+      }
+    }) && effectiveAllowedOrigins.every((o) => {
+      try {
+        return isLoopbackHost(new URL(o).hostname);
+      } catch {
+        return false;
+      }
+    });
+
+    if (options.isSuperAdminOp && allLoopback) {
+      // Super Admin explicitly creating a localhost-only dev client on production IdP: permitted
+    } else if (!allowDevInProd) {
+      return {
+        ...defaultFailResult,
+        error: !options.isSuperAdminOp
+          ? "Only Super Admins may create new OAuth clients in development mode."
+          : "Development clients may use only loopback redirect URIs and origins (localhost, 127.0.0.1, [::1]).",
+      };
+    }
   }
 
   // Validate redirect URIs against target client configuration
@@ -204,16 +233,12 @@ export function validateOAuthClientConfiguration(
           return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Production OAuth clients require HTTPS redirect URIs.` };
         }
       } else {
-        // Development client in production: loopback allowed with http/https; non-loopback requires HTTPS and non-private
-        if (isLoopback) {
-          // Permitted per RFC 8252
-        } else {
-          if (isPrivate) {
-            return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Private and intranet IP addresses are forbidden even in Development Mode.` };
-          }
-          if (parsedUrl.protocol !== "https:") {
-            return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". In production, non-HTTPS URLs are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.` };
-          }
+        // Development client in production: loopback ONLY per strict dev client policy
+        if (!isLoopback) {
+          return {
+            ...defaultFailResult,
+            error: `Invalid redirect URI: "${uri}". Development clients may use only loopback redirect URIs (localhost, 127.0.0.1, [::1]). For external domains, disable Development Mode and use HTTPS.`,
+          };
         }
       }
     } else {
@@ -268,15 +293,12 @@ export function validateOAuthClientConfiguration(
           return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Production OAuth clients require HTTPS allowed origins.` };
         }
       } else {
-        if (isLoopback) {
-          // Permitted
-        } else {
-          if (isPrivate) {
-            return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Private and intranet IP addresses are forbidden even in Development Mode.` };
-          }
-          if (parsedOrigin.protocol !== "https:") {
-            return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". In production, non-HTTPS origins are only permitted on loopback addresses (localhost, 127.0.0.1) when Development Mode is enabled.` };
-          }
+        // Development client in production: loopback ONLY
+        if (!isLoopback) {
+          return {
+            ...defaultFailResult,
+            error: `Invalid allowed origin: "${origin}". Development clients may use only loopback CORS origins (localhost, 127.0.0.1, [::1]). For external domains, disable Development Mode and use HTTPS.`,
+          };
         }
       }
     }

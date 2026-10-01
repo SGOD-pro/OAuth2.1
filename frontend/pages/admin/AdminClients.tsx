@@ -393,7 +393,7 @@ export const AdminClients: React.FC = () => {
                     <Filter className="size-5" />
                   </div>
                   <h3 className="font-heading text-lg font-medium text-foreground mb-1">No matching applications</h3>
-                  <p className="font-sans text-sm text-muted-foreground mb-4 max-w-sm">
+                  <p className="font-sans text-sm text-muted-foreground mb-4">
                     No registered applications match your current search and filter settings.
                   </p>
                   <Button variant="outline" size="sm" onClick={resetFilters} className="gap-1.5">

@@ -127,15 +127,15 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     serverEnvironment: config.env,
     isNewClient: true,
     allowDevClientsInProduction: config.allowDevClientsInProduction,
+    isSuperAdminOp: isSuperAdmin(sessionUser),
   });
 
   if (!validation.valid) {
     return c.json({ error: validation.error }, 400);
   }
 
-  const applicationType = validation.effectiveApplicationType === "native"
-    ? "native"
-    : (body.application_type || validation.effectiveApplicationType);
+  // application_type is strictly security-derived; request body cannot override
+  const applicationType = validation.effectiveApplicationType;
 
   const createBody: any = {
     client_name: clientName,
@@ -630,15 +630,15 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     serverEnvironment: config.env,
     isNewClient: false,
     allowDevClientsInProduction: config.allowDevClientsInProduction,
+    isSuperAdminOp: isSuperAdmin(sessionUser),
   });
 
   if (!validation.valid) {
     return c.json({ error: validation.error }, 400);
   }
 
-  const applicationType = validation.effectiveApplicationType === "native"
-    ? "native"
-    : (body.application_type || validation.effectiveApplicationType);
+  // application_type is strictly security-derived; request body cannot override
+  const applicationType = validation.effectiveApplicationType;
 
   const updatePayload: any = {};
   if (targetClientName) updatePayload.client_name = targetClientName;
@@ -845,6 +845,7 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
     serverEnvironment: config.env,
     isNewClient: false,
     allowDevClientsInProduction: config.allowDevClientsInProduction,
+    isSuperAdminOp: isSuperAdmin(sessionUser),
   });
 
   if (!validation.valid) {

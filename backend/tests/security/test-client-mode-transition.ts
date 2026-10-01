@@ -461,7 +461,24 @@ await runTest("TRANS-8: validateOAuthClientConfiguration direct policy matrix", 
     { serverEnvironment: "production", isNewClient: true, allowDevClientsInProduction: false }
   );
   assert.equal(res5.valid, false);
-  assert.ok(res5.error?.includes("Development clients with loopback URIs are disabled in production environment"));
+  assert.ok(
+    res5.error?.includes("Only Super Admins may create new OAuth clients in development mode") ||
+    res5.error?.includes("Development clients with loopback URIs are disabled in production environment")
+  );
+
+  // New client creation in production with isSuperAdminOp=true and loopback URIs -> permitted
+  const res5b = validateOAuthClientConfiguration(
+    { isDev: true, redirectUris: ["http://localhost:3000/callback"], allowedOrigins: ["http://localhost:3000"] },
+    { serverEnvironment: "production", isNewClient: true, allowDevClientsInProduction: false, isSuperAdminOp: true }
+  );
+  assert.equal(res5b.valid, true);
+
+  // New client creation in production with isSuperAdminOp=true but non-loopback -> rejected
+  const res5c = validateOAuthClientConfiguration(
+    { isDev: true, redirectUris: ["https://example.com/callback"], allowedOrigins: ["https://example.com"] },
+    { serverEnvironment: "production", isNewClient: true, allowDevClientsInProduction: false, isSuperAdminOp: true }
+  );
+  assert.equal(res5c.valid, false);
 
   // Existing client update in production with allowDevClientsInProduction=false -> permitted
   const res6 = validateOAuthClientConfiguration(
@@ -548,6 +565,234 @@ await runTest("TRANS-10: Critical privilege and identity fields are stripped on 
   assert.equal(doc?.name, "Tamper Target Client Renamed", "Allowed field name must be updated");
   assert.equal((doc as any)?.role, undefined, "Injected role field must not exist");
   assert.equal(doc?.clientSecret, "secret-hash-10", "clientSecret must not be changed");
+});
+
+// --------------------------------------------------------------------------
+// TEST A: Super Admin creates new dev client with localhost redirect
+// --------------------------------------------------------------------------
+await runTest("TRANS-A: Super Admin can create dev client with localhost redirect on production IdP", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      name: "Dev App A-" + crypto.randomBytes(3).toString("hex"),
+      isDev: true,
+      redirect_uris: ["http://localhost:3000/callback"],
+      allowed_origins: ["http://localhost:3000"],
+    }),
+  });
+  assert.equal(res.status, 201, "Super Admin can create dev client with localhost URI");
+  const data = await res.json();
+  assert.equal(data.is_dev, true, "Client must be persisted as dev mode");
+});
+
+// --------------------------------------------------------------------------
+// TEST B: Super Admin creates new dev client with 127.0.0.1 redirect
+// --------------------------------------------------------------------------
+await runTest("TRANS-B: Super Admin can create dev client with 127.0.0.1 redirect on production IdP", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      name: "Dev App B-" + crypto.randomBytes(3).toString("hex"),
+      isDev: true,
+      redirect_uris: ["http://127.0.0.1:8080/cb"],
+      allowed_origins: ["http://127.0.0.1:8080"],
+    }),
+  });
+  assert.equal(res.status, 201, "Super Admin can create dev client with 127.0.0.1 URI");
+});
+
+// --------------------------------------------------------------------------
+// TEST C: Super Admin creates dev client with ::1 redirect
+// --------------------------------------------------------------------------
+await runTest("TRANS-C: Super Admin can create dev client with ::1 redirect on production IdP", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      name: "Dev App C-" + crypto.randomBytes(3).toString("hex"),
+      isDev: true,
+      redirect_uris: ["http://[::1]:5000/cb"],
+      allowed_origins: ["http://[::1]:5000"],
+    }),
+  });
+  assert.equal(res.status, 201, "Super Admin can create dev client with ::1 URI");
+});
+
+// --------------------------------------------------------------------------
+// TEST D: isDev=true + non-loopback HTTP -> must fail
+// --------------------------------------------------------------------------
+await runTest("TRANS-D: Super Admin cannot create dev client with non-loopback HTTP redirect", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      name: "Dev App D-" + crypto.randomBytes(3).toString("hex"),
+      isDev: true,
+      redirect_uris: ["http://example.com/callback"],
+      allowed_origins: ["http://example.com"],
+    }),
+  });
+  assert.equal(res.status, 400, "Non-loopback HTTP must be rejected even in dev mode");
+});
+
+// --------------------------------------------------------------------------
+// TEST E: isDev=true + private IP -> must fail
+// --------------------------------------------------------------------------
+await runTest("TRANS-E: Super Admin cannot create dev client with private IP redirect", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      name: "Dev App E-" + crypto.randomBytes(3).toString("hex"),
+      isDev: true,
+      redirect_uris: ["http://192.168.1.10:3000/callback"],
+      allowed_origins: ["http://192.168.1.10:3000"],
+    }),
+  });
+  assert.equal(res.status, 400, "Private IP must be rejected in dev mode");
+});
+
+// --------------------------------------------------------------------------
+// TEST F: isDev=true + cloud metadata IP -> must fail
+// --------------------------------------------------------------------------
+await runTest("TRANS-F: Super Admin cannot create dev client with cloud metadata IP redirect", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      name: "Dev App F-" + crypto.randomBytes(3).toString("hex"),
+      isDev: true,
+      redirect_uris: ["http://169.254.169.254/latest/meta-data/"],
+      allowed_origins: ["http://169.254.169.254"],
+    }),
+  });
+  assert.equal(res.status, 400, "Cloud metadata IP must be rejected in dev mode");
+});
+
+// --------------------------------------------------------------------------
+// TEST G: isDev=true + lookalike hostname -> must fail
+// --------------------------------------------------------------------------
+await runTest("TRANS-G: Super Admin cannot create dev client with localhost.evil.com redirect", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      name: "Dev App G-" + crypto.randomBytes(3).toString("hex"),
+      isDev: true,
+      redirect_uris: ["http://localhost.evil.com/callback"],
+      allowed_origins: ["http://localhost.evil.com"],
+    }),
+  });
+  assert.equal(res.status, 400, "localhost.evil.com must be rejected");
+});
+
+// --------------------------------------------------------------------------
+// TEST H: Production client (isDev=false) + localhost redirect -> must fail
+// --------------------------------------------------------------------------
+await runTest("TRANS-H: Production client cannot use localhost redirect URI", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      name: "Prod App H-" + crypto.randomBytes(3).toString("hex"),
+      isDev: false,
+      redirect_uris: ["http://localhost:3000/callback"],
+      allowed_origins: ["http://localhost:3000"],
+    }),
+  });
+  assert.equal(res.status, 400, "Production client must not allow localhost redirect");
+});
+
+// --------------------------------------------------------------------------
+// TEST I: Unauthenticated caller cannot create dev client
+// --------------------------------------------------------------------------
+await runTest("TRANS-I: Unauthenticated caller cannot create dev client", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({
+      name: "Unauth Dev App-" + crypto.randomBytes(3).toString("hex"),
+      isDev: true,
+      redirect_uris: ["http://localhost:3000/callback"],
+      allowed_origins: ["http://localhost:3000"],
+    }),
+  });
+  assert.ok(res.status === 401 || res.status === 403, "Unauthenticated must be rejected");
+});
+
+// --------------------------------------------------------------------------
+// TEST J: Normal user (non-admin) cannot create dev client
+// --------------------------------------------------------------------------
+await runTest("TRANS-J: Normal user cannot create dev client", async () => {
+  const normalEmail = `user_${crypto.randomBytes(3).toString("hex")}@example.com`;
+  await authProvider.api.signUpEmail({ body: { email: normalEmail, password: "UserPass@1234!", name: "Normal User" } });
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: normalEmail, password: "UserPass@1234!" }),
+  });
+  const userCookie = loginRes.headers.get("set-cookie") || "";
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: userCookie }),
+    body: JSON.stringify({
+      name: "Normal User Dev App",
+      isDev: true,
+      redirect_uris: ["http://localhost:3000/callback"],
+      allowed_origins: ["http://localhost:3000"],
+    }),
+  });
+  assert.ok(res.status === 401 || res.status === 403, "Normal user must be rejected from creating clients");
+});
+
+// --------------------------------------------------------------------------
+// TEST K: Scoped Admin cannot create a new global client
+// --------------------------------------------------------------------------
+await runTest("TRANS-K: Scoped Admin cannot create a new global dev client", async () => {
+  const scopedEmail2 = `scopedk_${crypto.randomBytes(3).toString("hex")}@example.com`;
+  const scopedPass2 = "ScopedK@1234!";
+  const tempClientId = "temp-client-k-" + crypto.randomBytes(4).toString("hex");
+  await db.collection("oauthClient").insertOne({
+    clientId: tempClientId, clientSecret: "secret-k", name: "Temp K",
+    redirectUris: ["https://k.example.com/cb"], allowedOrigins: ["https://k.example.com"],
+    isDev: false, isPublic: false, disabled: false, createdAt: new Date(), updatedAt: new Date(),
+  });
+  await authProvider.api.signUpEmail({ body: { email: scopedEmail2, password: scopedPass2, name: "Scoped K" } });
+  await db.collection("user").updateOne({ email: scopedEmail2 }, { $set: { role: "admin", scopedClientId: tempClientId, emailVerified: true } });
+  const loginRes = await app.request("/api/auth/sign-in/email", { method: "POST", headers: getTestHeaders(), body: JSON.stringify({ email: scopedEmail2, password: scopedPass2 }) });
+  const scopedCookieK = loginRes.headers.get("set-cookie") || "";
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: scopedCookieK }),
+    body: JSON.stringify({
+      name: "Scoped Dev App", isDev: true,
+      redirect_uris: ["http://localhost:3000/callback"], allowed_origins: ["http://localhost:3000"],
+    }),
+  });
+  assert.ok(res.status === 401 || res.status === 403, "Scoped admin cannot create global clients");
+});
+
+// --------------------------------------------------------------------------
+// TEST Q: isDev change must not modify isPublic
+// --------------------------------------------------------------------------
+await runTest("TRANS-Q: Changing isDev must not silently change isPublic", async () => {
+  const clientIdQ = "client-isdev-q-" + crypto.randomBytes(4).toString("hex");
+  await db.collection("oauthClient").insertOne({
+    clientId: clientIdQ, clientSecret: "secret-q", name: "IsPublic Guard",
+    redirectUris: ["https://q.example.com/cb"], allowedOrigins: ["https://q.example.com"],
+    isDev: false, isPublic: false, disabled: false, createdAt: new Date(), updatedAt: new Date(),
+  });
+  const patchRes = await app.request(`/api/admin/clients/${clientIdQ}`, {
+    method: "PATCH",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({ isDev: true, redirect_uris: ["http://localhost:3000/cb"], allowed_origins: ["http://localhost:3000"] }),
+  });
+  assert.equal(patchRes.status, 200, "Transition to dev mode must succeed");
+  const doc = await db.collection("oauthClient").findOne({ clientId: clientIdQ });
+  assert.equal(doc?.isDev, true, "isDev must be updated");
+  assert.equal(doc?.isPublic, false, "isPublic must remain unchanged");
 });
 
 console.log("================================================================");

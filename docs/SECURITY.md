@@ -102,3 +102,23 @@ In production deployments, you **MUST** deploy an upstream CDN / WAF in front of
 - **Cloudflare** (with Turnstile / Bot Management / DDoS Protection)
 - **AWS CloudFront + AWS WAF + AWS Shield**
 - **Google Cloud Armor / Azure Front Door**
+
+---
+
+## 7. Mandatory Operational Security: Credential Rotation Notice
+
+> [!CAUTION]
+> **Database Credential Rotation Required**  
+> If database credentials, URIs, or secrets were ever exposed in screenshots, development environments, or external logs, operators **MUST** assume those credentials compromised and execute the following rotation protocol immediately:
+> 
+> 1. **MongoDB Atlas / Database User Password Rotation**:
+>    - Log in to MongoDB Atlas (or your database provider control panel).
+>    - Navigate to **Security** &rarr; **Database Access**.
+>    - Edit the database user and generate a new high-entropy password (minimum 32 characters).
+>    - Terminate all active database connections in Atlas &rarr; Metrics / Real-Time view.
+> 2. **Environment Variable Update**:
+>    - Update `MONGO_URI` across all hosting providers (AWS SAM / Lambda parameter store, Vercel environment variables, container secrets).
+>    - Ensure `.env` is never committed to version control and matches `.gitignore`.
+> 3. **Secret Verification & Audit**:
+>    - Audit git commit logs to verify no production secrets (`BETTER_AUTH_SECRET`, `INTERNAL_GATEWAY_SECRET`, `APP_ADMIN_JWT_SECRET`, `APP_ADMIN_TOTP_KEY`, `MONGO_URI`) exist in history.
+>    - Redeploy the application stack with the updated connection string.
