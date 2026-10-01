@@ -26,6 +26,7 @@ export const envSchema = z.object({
 
     UPSTASH_REDIS_REST_URL: z.string().optional(),
     UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
+    UPSTASH_REDIS_API_KEY: z.string().optional(),
     REDIS_URL: z.string().optional(),
     REDIS_TOKEN: z.string().optional(),
 

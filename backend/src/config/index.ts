@@ -23,7 +23,7 @@ export const config = {
             return process.env.UPSTASH_REDIS_REST_URL || process.env.REDIS_URL || parsedEnv.UPSTASH_REDIS_REST_URL || parsedEnv.REDIS_URL
         },
         get token() {
-            return process.env.UPSTASH_REDIS_REST_TOKEN || process.env.REDIS_TOKEN || parsedEnv.UPSTASH_REDIS_REST_TOKEN || parsedEnv.REDIS_TOKEN
+            return process.env.UPSTASH_REDIS_REST_TOKEN || process.env.UPSTASH_REDIS_API_KEY || process.env.REDIS_TOKEN || parsedEnv.UPSTASH_REDIS_REST_TOKEN || (parsedEnv as any).UPSTASH_REDIS_API_KEY || parsedEnv.REDIS_TOKEN
         },
         get enabled(): boolean {
             return Boolean(this.url && this.token)
