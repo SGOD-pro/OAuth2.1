@@ -18,6 +18,7 @@ import {
 import { rateLimiters, checkRateLimit } from "../cache/redis";
 import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration } from "../utils/security";
 import { config } from "../config";
+import { emergencyRateLimiter } from "../middleware/rate-limit";
 
 export const auth = new Hono();
 
@@ -167,33 +168,51 @@ auth.post("/sign-in/email", async (c) => {
         const normalizedEmail = body.email.toLowerCase().trim();
 
         // 1. Target-Keyed Rate Limiting (IP-Rotation Resistant Defense)
+        let targetAllowed = true;
+        const targetHash = crypto.createHash("sha256").update(normalizedEmail).digest("hex");
+        const targetKey = `TARGET#${targetHash}`;
+        const targetWindowMs = 300 * 1000;
+        const targetLimit = 15;
+
+        let redisEvaluated = false;
         if (rateLimiters?.credentialStuffingTarget) {
             const targetResult = await checkRateLimit(
                 rateLimiters.credentialStuffingTarget,
                 `email:${normalizedEmail}`
             );
-            if (targetResult.remaining !== -1 && !targetResult.allowed) {
-                return c.json(
-                    {
-                        error: "too_many_requests",
-                        message: "Too many sign-in attempts for this account. Please try again later.",
-                    },
-                    429
-                );
+            if (targetResult.remaining !== -1) {
+                redisEvaluated = true;
+                if (!targetResult.allowed) {
+                    targetAllowed = false;
+                }
             }
-        } else {
-            // MongoDB fallback (graceful degradation)
-            const targetKey = `TARGET#${crypto.createHash("sha256").update(normalizedEmail).digest("hex")}`;
-            const entry = await incrementRateLimit(targetKey, Date.now(), 300 * 1000);
-            if (entry.count > 15) {
-                return c.json(
-                    {
-                        error: "too_many_requests",
-                        message: "Too many sign-in attempts for this account. Please try again later.",
-                    },
-                    429
-                );
+        }
+
+        if (!redisEvaluated) {
+            try {
+                // Secondary: MongoDB Sliding-Window TTL Collection
+                const entry = await incrementRateLimit(targetKey, Date.now(), targetWindowMs);
+                if (entry.count > targetLimit) {
+                    targetAllowed = false;
+                }
+            } catch (mongoErr) {
+                console.warn("[AUTH] Target rate limit store error, engaging emergency limiter:", mongoErr);
+                // Tertiary: Bounded in-process emergency limiter
+                const emergResult = emergencyRateLimiter.increment(targetKey, Date.now(), targetWindowMs, targetLimit);
+                if (!emergResult.allowed) {
+                    targetAllowed = false;
+                }
             }
+        }
+
+        if (!targetAllowed) {
+            return c.json(
+                {
+                    error: "too_many_requests",
+                    message: "Too many sign-in attempts for this account. Please try again later.",
+                },
+                429
+            );
         }
 
         const user = await database.collection("user").findOne({ email: normalizedEmail });

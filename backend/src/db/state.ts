@@ -114,11 +114,21 @@ export async function recordAdminAudit(event: AdminAuditEvent): Promise<void> {
   }
 }
 
+let rateLimitStoreFailureSimulated = false;
+
+export function __simulateRateLimitStoreFailure(enable: boolean): void {
+  rateLimitStoreFailureSimulated = enable;
+}
+
 export async function incrementRateLimit(
   ip: string,
   now: number,
   windowMs: number,
 ): Promise<RateLimitEntry> {
+  if (rateLimitStoreFailureSimulated) {
+    throw new Error("Simulated rate limit backing store failure / database connection failure");
+  }
+
   await ensureTtlIndexes();
 
   const db = await getDb();

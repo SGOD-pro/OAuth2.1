@@ -64,10 +64,17 @@ check("Security suite manifest matches package.json test scripts", () => {
       testAllSecurity.includes(suite.file),
       `test:all-security must execute blocking suite: ${suite.file}`
     );
+  }
+
+  for (const suite of manifest.suites) {
     const scriptName = suite.command.replace("npm run ", "");
     assert.ok(
       pkg.scripts[scriptName],
       `package.json must define individual script '${scriptName}' for suite ${suite.name}`
+    );
+    assert.ok(
+      pkg.scripts[scriptName].includes(suite.file),
+      `package.json script '${scriptName}' ("${pkg.scripts[scriptName]}") must execute declared file: ${suite.file}`
     );
   }
 });

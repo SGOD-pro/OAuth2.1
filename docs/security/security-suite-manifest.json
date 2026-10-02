@@ -24,7 +24,7 @@
     {
       "name": "full-production-adversarial-suite",
       "file": "tests/security/full-production-adversarial-suite.ts",
-      "command": "npm run test:prod-config",
+      "command": "npm run test:full-adversarial",
       "purpose": "Verifies production hardening against adversarial attack vectors including token replay, header spoofing, and privilege escalation.",
       "blocking": true,
       "classification": "adversarial_penetration"
@@ -152,7 +152,7 @@
     {
       "name": "security-remediation-test",
       "file": "tests/security/security-remediation-test.ts",
-      "command": "npx tsx tests/security/security-remediation-test.ts",
+      "command": "npm run test:remediation",
       "purpose": "Historical remediation regression checks. Informational.",
       "blocking": false,
       "classification": "historical_regression"
@@ -164,6 +164,14 @@
       "purpose": "Focused unit tests for app-admin TOTP and password rotation endpoints. Informational.",
       "blocking": false,
       "classification": "unit_test"
+    },
+    {
+      "name": "test-rate-limit-failure-modes",
+      "file": "tests/security/test-rate-limit-failure-modes.ts",
+      "command": "npm run test:rate-limit-failure",
+      "purpose": "Verifies rate limiter failure modes: Mongo fallback, fail-closed admin defense, and bounded emergency in-process limiter under dual-store outage.",
+      "blocking": false,
+      "classification": "adversarial_penetration"
     }
   ]
 }

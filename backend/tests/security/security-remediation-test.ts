@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import assert from "node:assert/strict";
 
 process.env.NODE_ENV = "test";
@@ -133,16 +136,28 @@ await test("P1-9: Body size limit rejects payloads > 100KB (413)", async () => {
   assert.equal(res.status, 413, `Expected 413 Payload Too Large, got ${res.status}`);
 });
 
-// 9. Test P0-2: GET /api/admin/clients requires admin session and never leaks client_secret
-await test("P0-2: GET /api/admin/clients rejects unauthenticated requests (401)", async () => {
-  const res = await app.request("/api/admin/clients", {
+// 9. Test P0-2: GET /api/admin/clients requires gateway trust and admin session
+await test("P0-2: GET /api/admin/clients rejects unauthenticated requests (403 without gateway, 401 with gateway)", async () => {
+  // Direct request without gateway secret fails closed at perimeter (403)
+  const resNoGateway = await app.request("/api/admin/clients", {
     method: "GET",
     headers: { "Origin": "http://localhost:5174" },
   });
-  assert.equal(res.status, 401, `Expected 401 Unauthorized, got ${res.status}`);
+  assert.equal(resNoGateway.status, 403, `Expected 403 Forbidden without gateway secret, got ${resNoGateway.status}`);
+
+  // Request with gateway trust but no admin session fails at auth layer (401)
+  const resWithGateway = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: {
+      "Origin": "http://localhost:5174",
+      "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "",
+    },
+  });
+  assert.equal(resWithGateway.status, 401, `Expected 401 Unauthorized with gateway but no session, got ${resWithGateway.status}`);
 });
 
 console.log("");
 console.log(`================================================================`);
 console.log(` ALL ${passed} AUTOMATED SECURITY REMEDIATION TESTS PASSED!`);
 console.log(`================================================================`);
+process.exit(0);

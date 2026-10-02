@@ -8,6 +8,7 @@ import { config } from "../config";
 import { incrementRateLimit } from "../db/state";
 import { redis, redisEnabled } from "../cache/redis";
 import { getTrustedClientIp, resolveOAuthClient } from "../utils/security";
+import { emergencyRateLimiter } from "../middleware/rate-limit";
 import {
 	generateTotpSecret,
 	verifyTotpCode,
@@ -121,18 +122,34 @@ async function checkAppAdminRateLimit(
 		}
 	}
 
-	// MongoDB sliding-window rate limit fallback
-	const ipKey = `APP_ADMIN_${action.toUpperCase()}_IP#${ip}`;
-	const ipEntry = await incrementRateLimit(ipKey, Date.now(), options.ipWindowSec * 1000);
-	if (ipEntry.count > options.ipLimit) return false;
+	// MongoDB sliding-window rate limit fallback with emergency in-memory barrier
+	try {
+		const ipKey = `APP_ADMIN_${action.toUpperCase()}_IP#${ip}`;
+		const ipEntry = await incrementRateLimit(ipKey, Date.now(), options.ipWindowSec * 1000);
+		if (ipEntry.count > options.ipLimit) return false;
 
-	if (targetHash && options.targetLimit && options.targetWindowSec) {
-		const targetKey = `APP_ADMIN_${action.toUpperCase()}_TARGET#${targetHash}`;
-		const targetEntry = await incrementRateLimit(targetKey, Date.now(), options.targetWindowSec * 1000);
-		if (targetEntry.count > options.targetLimit) return false;
+		if (targetHash && options.targetLimit && options.targetWindowSec) {
+			const targetKey = `APP_ADMIN_${action.toUpperCase()}_TARGET#${targetHash}`;
+			const targetEntry = await incrementRateLimit(targetKey, Date.now(), options.targetWindowSec * 1000);
+			if (targetEntry.count > options.targetLimit) return false;
+		}
+
+		return true;
+	} catch (mongoErr) {
+		console.warn(`[APP_ADMIN_AUTH] Backing rate limit store error on ${action}, engaging bounded emergency limiter:`, mongoErr);
+		const now = Date.now();
+		const ipKey = `emergency:app_admin_${action}:ip:${ip}`;
+		const ipResult = emergencyRateLimiter.increment(ipKey, now, options.ipWindowSec * 1000, options.ipLimit);
+		if (!ipResult.allowed) return false;
+
+		if (targetHash && options.targetLimit && options.targetWindowSec) {
+			const targetKey = `emergency:app_admin_${action}:target:${targetHash}`;
+			const targetResult = emergencyRateLimiter.increment(targetKey, now, options.targetWindowSec * 1000, options.targetLimit);
+			if (!targetResult.allowed) return false;
+		}
+
+		return true;
 	}
-
-	return true;
 }
 
 /**
