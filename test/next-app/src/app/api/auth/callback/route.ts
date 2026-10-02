@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
-import { exchangeCodeForTokens, getUserInfo } from '@/lib/oauth';
+import { exchangeCodeForTokens, getUserInfo, requireEnv } from '@/lib/oauth';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const error = searchParams.get('error');
   const errorDescription = searchParams.get('error_description');
 
-  const redirectUri = process.env.AUTH_CALLBACK_URL || 'http://localhost:3001/api/auth/callback';
+  const redirectUri = requireEnv('AUTH_CALLBACK_URL');
 
   if (error) {
     return NextResponse.redirect(

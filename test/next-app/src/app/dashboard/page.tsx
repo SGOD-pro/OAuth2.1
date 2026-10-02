@@ -68,7 +68,7 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        <LogoutButton issuer={process.env.AUTH_ISSUER || 'http://localhost:3000'} />
+        <LogoutButton issuer={process.env.AUTH_ISSUER || ''} />
       </div>
 
       {/* Main Grid: Live Telemetry + Token Claims */}

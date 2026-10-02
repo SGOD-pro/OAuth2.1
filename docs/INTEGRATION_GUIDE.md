@@ -1,11 +1,14 @@
 # Consumer Application Integration Guide
 **Version:** 2.1.0  
-**Protocol:** OAuth 2.1 (PKCE + Authorization Code Grant) & OpenID Connect Core 1.0
+**Protocol:** OAuth 2.1 (PKCE + Authorization Code Grant) & OpenID Connect Core 1.0  
+**Normative Standard:** [docs/AI_AGENT_INTEGRATION_CONTRACT.md](AI_AGENT_INTEGRATION_CONTRACT.md)  
+**Machine-Readable Policy:** [docs/security/integration-policy.json](security/integration-policy.json)
 
-This guide provides end-to-end integration instructions, code recipes, and security best practices for connecting any web application or backend service to the **SWYRA Auth Identity Provider (IdP)**.
+This guide provides end-to-end integration instructions, code recipes, and security best practices for connecting web applications and backend services to the **SWYRA Auth Identity Provider (IdP)**.
 
 > [!IMPORTANT]
-> If you are an **AI coding agent** (or developing automated integrations), you **MUST** also review the **[AI Agent Integration Contract](file:///home/swyra/projects/OAuth2.1/docs/AI_AGENT_INTEGRATION_CONTRACT.md)** and **[AGENTS.md](file:///home/swyra/projects/OAuth2.1/AGENTS.md)** before writing code.
+> If you are an **AI coding agent** (or developing automated integrations), you **MUST** adhere to the **[AI Agent Integration Contract](file:///home/swyra/projects/OAuth2.1/docs/AI_AGENT_INTEGRATION_CONTRACT.md)** and **[AGENTS.md](file:///home/swyra/projects/OAuth2.1/AGENTS.md)** before writing code.
+> The integration must pass the contract linter: `npm run security:integration-check`.
 
 ---
 
@@ -31,10 +34,11 @@ SWYRA Auth operates as an external, multi-tenant Identity Provider. Consumer app
 ```
 
 ### Core Invariants:
-1. **Zero Database Sharing**: Consumer applications NEVER connect to or query the SWYRA Auth MongoDB cluster.
-2. **No Duplicate Identity Engines**: Do not install Better Auth, NextAuth / Auth.js, Passport.js, or Supabase inside the consumer application.
+1. **Zero Database Sharing**: Consumer applications NEVER connect to or query the SWYRA Auth MongoDB cluster (`MONGO_URI` is IdP-private).
+2. **No Duplicate Identity Engines**: Do not install Better Auth, NextAuth / Auth.js, Passport.js, Supabase, or Lucia inside the consumer application.
 3. **Offline JWT Verification**: Consumer backends validate RS256 Access Tokens locally using cached public keys from `/.well-known/jwks.json`.
 4. **PKCE Required**: All OAuth authorization flows must utilize PKCE (`code_challenge` + `code_verifier`) with `code_challenge_method=S256`.
+5. **Fail-Closed Configuration**: Missing configuration must fail closed; fallback literals (`|| "http://localhost..."`) are strictly prohibited.
 
 ---
 
@@ -43,22 +47,21 @@ SWYRA Auth operates as an external, multi-tenant Identity Provider. Consumer app
 ### For Confidential Clients (Next.js BFF, Express, FastAPI, Django)
 These variables MUST be stored in server-only environments (e.g. `.env`, AWS Parameter Store, Secrets Manager). **NEVER prefix them with `NEXT_PUBLIC_` or expose them to browsers.**
 
-| Variable | Required | Description | Example Value |
-|---|---|---|---|
-| `AUTH_ISSUER` | **Yes** | Base URL of the SWYRA Auth IdP | `https://oauth21.vercel.app` |
-| `JWKS_URL` | **Yes** | Public RS256 key set endpoint | `https://oauth21.vercel.app/.well-known/jwks.json` |
-| `CLIENT_ID` | **Yes** | Unique OAuth 2.1 Client ID | `qMoXkZwvWnZJRmFhpiTyzLMozZYrwvlF` |
-| `CLIENT_SECRET` | **Yes** | Plaintext secret for confidential client auth | `HQEFWhArRpYvjySBrzSbtBBlOpeZDpHY` |
-| `REDIRECT_URI` | **Yes** | Whitelisted callback URL | `https://app.example.com/api/auth/callback` |
+| Variable | Required | Description | Development Example | Production Example |
+|---|---|---|---|---|
+| `AUTH_ISSUER` | **Yes** | Base URL of the SWYRA Auth IdP | `http://localhost:3000` | `https://auth.example.com` |
+| `CLIENT_ID` | **Yes** | Unique OAuth 2.1 Client ID | `registered_dev_client_id` | `registered_prod_client_id` |
+| `CLIENT_SECRET` | **Yes** | Secret for confidential client auth | `registered_dev_secret` | `registered_prod_secret` |
+| `AUTH_CALLBACK_URL` | **Yes** | Whitelisted callback URL | `http://localhost:3001/api/auth/callback` | `https://app.example.com/api/auth/callback` |
 
 ### For Public Clients (Pure React / Vite / Vue / Mobile SPAs)
 Public clients cannot protect secrets. **They do not possess a `CLIENT_SECRET`.**
 
-| Variable | Required | Description | Example Value |
-|---|---|---|---|
-| `VITE_AUTH_ISSUER` | **Yes** | Base URL of the SWYRA Auth IdP | `https://oauth21.vercel.app` |
-| `VITE_CLIENT_ID` | **Yes** | Unique OAuth 2.1 Client ID | `qMoXkZwvWnZJRmFhpiTyzLMozZYrwvlF` |
-| `VITE_REDIRECT_URI` | **Yes** | Whitelisted callback route | `http://localhost:5173/auth/callback` |
+| Variable | Required | Description | Development Example | Production Example |
+|---|---|---|---|---|
+| `VITE_AUTH_ISSUER` | **Yes** | Base URL of the SWYRA Auth IdP | `http://localhost:3000` | `https://auth.example.com` |
+| `VITE_CLIENT_ID` | **Yes** | Unique OAuth 2.1 Client ID | `registered_dev_spa_id` | `registered_prod_spa_id` |
+| `VITE_REDIRECT_URI` | **Yes** | Whitelisted callback route | `http://localhost:5173/auth/callback` | `https://spa.example.com/auth/callback` |
 
 ---
 
@@ -100,14 +103,33 @@ All protocol endpoints are rooted at `${AUTH_ISSUER}`:
 
 ## 5. Integration Recipe 1: Next.js 14+ (App Router) BFF Pattern
 
-The **Backend-For-Frontend (BFF)** pattern is the recommended integration model for Next.js. The server route handlers interact with SWYRA Auth, while the browser receives only secure, encrypted `HttpOnly` session cookies.
+The **Backend-For-Frontend (BFF)** pattern is the recommended integration model for Next.js. Server route handlers interact with SWYRA Auth, while the browser receives only secure, encrypted `HttpOnly` session cookies.
+
+### Configuration (`lib/auth/config.ts`)
+```typescript
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value || value.trim() === '') {
+    throw new Error(`[Configuration Error] Missing required environment variable: ${name}`);
+  }
+  return value.trim();
+}
+
+export const authConfig = {
+  issuer: requireEnv('AUTH_ISSUER'),
+  clientId: requireEnv('CLIENT_ID'),
+  clientSecret: requireEnv('CLIENT_SECRET'),
+  callbackUrl: requireEnv('AUTH_CALLBACK_URL'),
+};
+```
 
 ### Step 1: Login Route (`app/api/auth/login/route.ts`)
 ```typescript
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import crypto from 'node:crypto';
+import { authConfig } from '@/lib/auth/config';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   // 1. Generate CSRF state and PKCE parameters
   const state = crypto.randomBytes(32).toString('hex');
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
@@ -116,10 +138,15 @@ export async function GET() {
     .update(codeVerifier)
     .digest('base64url');
 
+  const rawReturnTo = request.nextUrl.searchParams.get('returnTo');
+  const returnTo = rawReturnTo && rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//')
+    ? rawReturnTo
+    : '/dashboard';
+
   // 2. Build authorization URL
-  const authUrl = new URL(`${process.env.AUTH_ISSUER}/api/auth/oauth2/authorize`);
-  authUrl.searchParams.set('client_id', process.env.CLIENT_ID!);
-  authUrl.searchParams.set('redirect_uri', process.env.REDIRECT_URI!);
+  const authUrl = new URL(`${authConfig.issuer}/api/auth/oauth2/authorize`);
+  authUrl.searchParams.set('client_id', authConfig.clientId);
+  authUrl.searchParams.set('redirect_uri', authConfig.callbackUrl);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('code_challenge', codeChallenge);
   authUrl.searchParams.set('code_challenge_method', 'S256');
@@ -137,6 +164,7 @@ export async function GET() {
   };
   response.cookies.set('oauth_state', state, cookieOpts);
   response.cookies.set('oauth_verifier', codeVerifier, cookieOpts);
+  response.cookies.set('oauth_return_to', returnTo, cookieOpts);
 
   return response;
 }
@@ -144,15 +172,16 @@ export async function GET() {
 
 ### Step 2: Callback Route (`app/api/auth/callback/route.ts`)
 ```typescript
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { authConfig } from '@/lib/auth/config';
 
 const JWKS = createRemoteJWKSet(
-  new URL(`${process.env.AUTH_ISSUER}/.well-known/jwks.json`)
+  new URL(`${authConfig.issuer}/.well-known/jwks.json`)
 );
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
   const state = searchParams.get('state');
@@ -162,9 +191,10 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(error)}`, request.url));
   }
 
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const storedState = cookieStore.get('oauth_state')?.value;
   const codeVerifier = cookieStore.get('oauth_verifier')?.value;
+  const returnTo = cookieStore.get('oauth_return_to')?.value || '/dashboard';
 
   // Verify CSRF state and verifier presence
   if (!code || !state || !storedState || state !== storedState || !codeVerifier) {
@@ -173,10 +203,10 @@ export async function GET(request: Request) {
 
   // Exchange code for tokens using Basic Auth
   const basicAuth = Buffer.from(
-    `${process.env.CLIENT_ID}:${process.env.CLIENT_SECRET}`
+    `${authConfig.clientId}:${authConfig.clientSecret}`
   ).toString('base64');
 
-  const tokenRes = await fetch(`${process.env.AUTH_ISSUER}/api/auth/oauth2/token`, {
+  const tokenRes = await fetch(`${authConfig.issuer}/api/auth/oauth2/token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -185,29 +215,32 @@ export async function GET(request: Request) {
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code,
-      redirect_uri: process.env.REDIRECT_URI!,
+      redirect_uri: authConfig.callbackUrl,
       code_verifier: codeVerifier,
     }),
   });
 
   if (!tokenRes.ok) {
-    return NextResponse.json({ error: 'token_exchange_failed' }, { status: 400 });
+    const errorBody = await tokenRes.text();
+    return NextResponse.json({ error: 'token_exchange_failed', details: errorBody }, { status: 400 });
   }
 
   const tokens = await tokenRes.json();
 
   // Validate the access token offline using JWKS
   await jwtVerify(tokens.access_token, JWKS, {
-    issuer: process.env.AUTH_ISSUER,
-    audience: process.env.CLIENT_ID,
+    issuer: authConfig.issuer,
+    audience: authConfig.clientId,
+    algorithms: ['RS256'],
   });
 
   // Set session cookie and remove transient cookies
-  const response = NextResponse.redirect(new URL('/dashboard', request.url));
+  const response = NextResponse.redirect(new URL(returnTo, request.url));
   response.cookies.delete('oauth_state');
   response.cookies.delete('oauth_verifier');
+  response.cookies.delete('oauth_return_to');
 
-  response.cookies.set('session_token', tokens.access_token, {
+  response.cookies.set('app_session', tokens.access_token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
@@ -223,7 +256,7 @@ export async function GET(request: Request) {
 
 ## 6. Integration Recipe 2: Pure React SPA (Vite / CRA) with PKCE
 
-For browser-only Single-Page Applications where no custom backend server exists:
+For browser-only Single-Page Applications:
 
 ### Step 1: PKCE Helper (`src/lib/pkce.ts`)
 ```typescript
@@ -253,14 +286,23 @@ import { generatePKCE } from '../lib/pkce';
 
 export function LoginButton() {
   const handleLogin = async () => {
+    const issuer = import.meta.env.VITE_AUTH_ISSUER;
+    const clientId = import.meta.env.VITE_CLIENT_ID;
+    const redirectUri = import.meta.env.VITE_REDIRECT_URI;
+
+    if (!issuer || !clientId || !redirectUri) {
+      console.error('Missing required VITE public environment configuration');
+      return;
+    }
+
     const { codeVerifier, codeChallenge, state } = await generatePKCE();
 
     sessionStorage.setItem('oauth_verifier', codeVerifier);
     sessionStorage.setItem('oauth_state', state);
 
-    const authUrl = new URL(`${import.meta.env.VITE_AUTH_ISSUER}/api/auth/oauth2/authorize`);
-    authUrl.searchParams.set('client_id', import.meta.env.VITE_CLIENT_ID);
-    authUrl.searchParams.set('redirect_uri', import.meta.env.VITE_REDIRECT_URI);
+    const authUrl = new URL(`${issuer}/api/auth/oauth2/authorize`);
+    authUrl.searchParams.set('client_id', clientId);
+    authUrl.searchParams.set('redirect_uri', redirectUri);
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set('code_challenge', codeChallenge);
     authUrl.searchParams.set('code_challenge_method', 'S256');
@@ -291,20 +333,29 @@ export function CallbackPage() {
       const storedState = sessionStorage.getItem('oauth_state');
       const codeVerifier = sessionStorage.getItem('oauth_verifier');
 
-      if (!code || state !== storedState || !codeVerifier) {
+      if (!code || !state || state !== storedState || !codeVerifier) {
         setError('CSRF validation failed or invalid authorization code');
         return;
       }
 
-      // Public client: NO client_secret
-      const res = await fetch(`${import.meta.env.VITE_AUTH_ISSUER}/api/auth/oauth2/token`, {
+      const issuer = import.meta.env.VITE_AUTH_ISSUER;
+      const clientId = import.meta.env.VITE_CLIENT_ID;
+      const redirectUri = import.meta.env.VITE_REDIRECT_URI;
+
+      if (!issuer || !clientId || !redirectUri) {
+        setError('Missing required public configuration');
+        return;
+      }
+
+      // Public client: NO client_secret is sent
+      const res = await fetch(`${issuer}/api/auth/oauth2/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
           grant_type: 'authorization_code',
-          client_id: import.meta.env.VITE_CLIENT_ID,
+          client_id: clientId,
           code,
-          redirect_uri: import.meta.env.VITE_REDIRECT_URI,
+          redirect_uri: redirectUri,
           code_verifier: codeVerifier,
         }),
       });
@@ -349,8 +400,14 @@ from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-AUTH_ISSUER = os.environ.get("AUTH_ISSUER", "https://oauth21.vercel.app")
-CLIENT_ID = os.environ["CLIENT_ID"]
+def require_env(name: str) -> str:
+    val = os.getenv(name)
+    if not val:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return val
+
+AUTH_ISSUER = require_env("AUTH_ISSUER")
+CLIENT_ID = require_env("CLIENT_ID")
 JWKS_URL = f"{AUTH_ISSUER}/.well-known/jwks.json"
 
 jwks_client = PyJWKClient(JWKS_URL)
@@ -412,11 +469,25 @@ npm install jose express
 import type { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
-const AUTH_ISSUER = process.env.AUTH_ISSUER!;
-const CLIENT_ID = process.env.CLIENT_ID!;
+function requireEnv(name: string): string {
+  const val = process.env[name];
+  if (!val) throw new Error(`Missing environment variable: ${name}`);
+  return val;
+}
+
+const AUTH_ISSUER = requireEnv('AUTH_ISSUER');
+const CLIENT_ID = requireEnv('CLIENT_ID');
 const JWKS = createRemoteJWKSet(new URL(`${AUTH_ISSUER}/.well-known/jwks.json`));
 
-export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+export interface AuthenticatedRequest extends Request {
+  user?: {
+    sub: string;
+    clientId: string;
+    scope?: string;
+  };
+}
+
+export async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'unauthorized', message: 'Missing Bearer token' });
@@ -431,7 +502,11 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       algorithms: ['RS256'],
     });
 
-    (req as any).user = payload;
+    req.user = {
+      sub: payload.sub as string,
+      clientId: (payload.aud || payload.client_id) as string,
+      scope: payload.scope as string,
+    };
     next();
   } catch (err: any) {
     return res.status(401).json({ error: 'invalid_token', message: err.message });
@@ -514,3 +589,4 @@ If an unassigned user attempts to authenticate through `/api/auth/oauth2/authori
 | **`invalid_token: jwt audience invalid`** | Resource server did not match the token's `aud` or `client_id` claim | Ensure the backend verifies that `payload.aud === process.env.CLIENT_ID`. |
 | **`invalid_client` on token exchange** | Bad `client_id` or `client_secret`, or sent `client_secret` from a public client | Verify credentials; omit secret for public SPA clients. |
 | **CORS errors in browser** | Origin is not in the registered `allowed_origins` list for this client | Add the consumer's web origin (e.g. `https://app.example.com`) to the client's Allowed Origins list. |
+| **Insecure fallback error** | Configuration contains `|| "http://localhost..."` | Use fail-closed environment variable loading (`requireEnv`). |

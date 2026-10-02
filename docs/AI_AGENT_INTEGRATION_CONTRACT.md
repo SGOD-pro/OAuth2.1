@@ -1,255 +1,484 @@
-# SWYRA Auth — Framework-Agnostic AI Agent Integration Contract
+# SWYRA Auth — Canonical AI Agent Integration Contract
 **Version:** 2.1.0  
-**Status:** Normative Specification  
-**Authority:** Authoritative reference for AI coding agents and automated integration systems.  
-**Companion Standard:** For the internal IdP security architecture, gateway trust boundary, and tenant isolation model, refer to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
+**Status:** Normative Specification & Master Contract  
+**Authority:** Single Source of Truth for AI Coding Agents and Human Developers integrating with SWYRA Auth IdP  
+**Machine-Readable Policy:** [docs/security/integration-policy.json](security/integration-policy.json)  
+**Companion Standards:** [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md) (Internal IdP Security Architecture & Perimeter Model)
 
 ---
 
-## 1. Specification Authority & Purpose
+## 1. Canonical Architecture
 
-This contract specifies the **non-negotiable integration requirements** for any AI coding agent (e.g., Google Antigravity, Claude Code, GitHub Copilot Workspace, Cursor, Devin) or human developer integrating an existing or new consumer application with the **SWYRA Auth Identity Provider (IdP)**.
-
-When acting on behalf of a consumer application, **AI agents MUST conform to this specification**. Agents must never guess authentication flows, install duplicate identity engines, attempt direct database connections, or invent proprietary protocols.
-
----
-
-## 2. Core Philosophy & System Boundaries
-
-SWYRA Auth is a centralized, multi-tenant **OAuth 2.1 and OpenID Connect (OIDC)** Identity Provider built on RFC 6749, RFC 7636 (PKCE), RFC 8414, and OpenID Connect Core 1.0.
+The integration architecture follows a strict centralized identity model:
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        SWYRA AUTH IDP BOUNDARY                         │
-│                                                                        │
-│  - User database & password hashes (MongoDB Atlas)                     │
-│  - Session management & OAuth token state                              │
-│  - Token Family Rotation engine with CAS concurrency protection        │
-│  - Asymmetric RSA Key Pair & JWKS endpoint                             │
-│  - Application Admin credential storage & TOTP MFA engine              │
-│  - Abuse defense (target-keyed rate limiting, constant-time scrypt)   │
-└────────────────────────────────────────────────────────────────────────┘
+                      CENTRALIZED IDENTITY PROVIDER
+                               (SWYRA Auth)
                                     │
-                  STANDARD OAUTH 2.1 / OIDC PROTOCOL
-                       (HTTP / JSON / RS256 JWTs)
+                         OAuth 2.1 / OpenID Connect
+                        (HTTPS / JSON / RS256 JWTs)
                                     │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                      CONSUMER APPLICATION BOUNDARY                     │
-│                                                                        │
-│  - Stores its OWN business domain data (e.g., PostgreSQL, DynamoDB)    │
-│  - Validates incoming JWTs offline via SWYRA Auth JWKS endpoint        │
-│  - Manages its own local session cookies or passes Bearer tokens       │
-│  - Zero knowledge of SWYRA Auth database credentials                   │
-│  - Zero duplicate user password hashes or local auth libraries         │
-└────────────────────────────────────────────────────────────────────────┘
+           ┌────────────────────────┼────────────────────────┐
+           ▼                        ▼                        ▼
+      Next.js BFF               React SPA                 Backend
+     (Confidential)             (Public)           (Express / FastAPI /
+                                                     Django Resource Server)
 ```
 
-### Responsibility Matrix
+The consumer application does **NOT** become an Identity Provider. The boundaries of ownership are absolute:
 
-| Feature / Responsibility | SWYRA Auth IdP | Consumer Application |
-|---|---|---|
-| User sign-up & password storage | **Owns** (scrypt) | **Forbidden** (never store passwords) |
-| OAuth 2.1 grant negotiation & PKCE | **Owns** | **Initiates / exchanges** |
-| JWT signing & Key rotation (RS256) | **Owns** (private RSA key) | **Validates offline** (via JWKS) |
-| Refresh token family rotation & CAS | **Owns** (MongoDB state) | **Stores & rotates** securely |
-| User profile & identity claims | **Authoritative source** | **Caches / references** by `sub` |
-| Application-specific business roles | Authenticates identity | **Owns** business permissions |
-| App Admin credentials & TOTP MFA | **Owns & verifies** | **Relays via backend REST** |
-| IdP MongoDB connection | **Exclusive access** | **STRICTLY FORBIDDEN** |
+### The IdP Owns:
+- Centralized user identity and account credentials (scrypt hashes)
+- User authentication and multi-factor authentication (RFC 6238 TOTP)
+- OAuth 2.1 client registrations and policy enforcement
+- Authorization code issuance and single-use invalidation
+- RS256 Access Token and OIDC ID Token issuance
+- Refresh token issuance and RFC 6749 Token Family Rotation with CAS concurrency
+- JSON Web Key Sets (JWKS) and asymmetric RSA key pair management
+- OpenID Connect Discovery metadata (`/.well-known/openid-configuration`)
+- UserInfo endpoint (`/api/auth/oauth2/userinfo`)
+- Centralized Single Sign-On (SSO) session state
 
----
-
-## 3. The 7 Golden Rules for AI Coding Agents
-
-Every AI agent integrating an application with SWYRA Auth must abide by these 7 inviolable rules:
-
-1. **RULE 1: NEVER connect to or query the SWYRA Auth MongoDB database.**  
-   Consumer applications never receive `MONGO_URI` or database credentials. All interactions occur exclusively via standard HTTP OAuth 2.1/OIDC or App-Admin REST endpoints.
-2. **RULE 2: NEVER install duplicate authentication frameworks in consumer apps.**  
-   Do NOT install Better Auth, NextAuth / Auth.js, Passport.js, Supabase Auth, Lucia, or Firebase inside the consumer app. The consumer needs only a lightweight OAuth client or JWT validator (`jose`, `pyjwt`, `requests`, or standard `fetch`).
-3. **RULE 3: NEVER route OAuth authorization requests to `/auth`.**  
-   The protocol authorization endpoint is **`/api/auth/oauth2/authorize`**. The path `/auth` is an internal IdP frontend Single Page Application view. Pointing OAuth redirects to `/auth` is an architectural defect.
-4. **RULE 4: NEVER expose `client_secret` to client-side code.**  
-   Never prefix secrets with `NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, or embed them in browser bundles, mobile apps, or git commits. Public clients (SPAs) do not use a `client_secret`; confidential clients (Node, Python, Go backends) keep it in server-only environment variables.
-5. **RULE 5: ALWAYS use PKCE (`code_challenge` + `code_verifier`) and `state`.**  
-   OAuth 2.1 deprecates legacy authorization code flows without PKCE. Every authorization request MUST include a cryptographically random `state` (for CSRF defense) and an `S256` PKCE `code_challenge`.
-6. **RULE 6: ALWAYS validate Access Tokens offline using the JWKS endpoint.**  
-   Resource servers and backend APIs MUST verify RS256 signatures offline against `${AUTH_ISSUER}/.well-known/jwks.json`. Never call an introspect endpoint for every API request when offline JWT validation is available. Always verify `iss`, `aud` (matching consumer `CLIENT_ID`), and `exp`.
-7. **RULE 7: Maintain clean separation of concerns.**  
-   Do not modify the consumer app's primary data models, database schemas, or ORMs to accommodate SWYRA Auth. Store only the user's permanent subject identifier (`sub` claim) as a foreign key on your application's domain objects (e.g., `user_id = jwt.sub`).
+### Consumer Applications Own:
+- Local consumer application sessions (e.g., encrypted HttpOnly cookies)
+- Local business domain authorization and role-based access control (RBAC/ABAC)
+- Business domain tables and application databases (PostgreSQL, MySQL, DynamoDB, etc.)
+- Application-specific roles, permissions, tenant workspaces, and feature entitlements
 
 ---
 
-## 4. OAuth Client Type vs Application Access Mode
+## 2. The 10 Golden Rules for AI Coding Agents
 
-A common point of confusion is conflating **OAuth Client Type** with **Application Access Mode**. They are independent dimensions:
+Every AI coding agent and developer integrating a consumer application MUST adhere strictly to these 10 inviolable rules:
+
+1. **RULE 1: NEVER create another authentication system when the centralized IdP is already configured.**  
+   Do not install or spin up local identity stores, user registration tables, or authentication engines in the consumer repository.
+2. **RULE 2: NEVER connect a consumer directly to the IdP's MongoDB for normal authentication.**  
+   Consumer applications never receive `MONGO_URI`. All communication occurs exclusively over standard HTTP OAuth 2.1, OIDC, or App-Admin REST endpoints.
+3. **RULE 3: NEVER copy password/session/token tables from the IdP.**  
+   Centralized credentials and token family state belong exclusively to SWYRA Auth. Do not duplicate or mirror IdP internal tables into consumer databases.
+4. **RULE 4: NEVER expose CLIENT_SECRET to browser code.**  
+   Confidential clients keep secrets in server-only environments. Public clients (SPAs, mobile apps) do not use or possess client secrets.
+5. **RULE 5: NEVER put confidential secrets in public environment variables or client storage.**  
+   Never place confidential credentials in `NEXT_PUBLIC_*`, `VITE_*`, `REACT_APP_*`, `localStorage`, `sessionStorage`, or frontend source code.
+6. **RULE 6: NEVER create a localhost production fallback.**  
+   Expressions such as `AUTH_CALLBACK_URL || "http://localhost:3000/callback"` or `CLIENT_ID || "dev-client"` are strictly forbidden. Missing configuration must fail closed.
+7. **RULE 7: NEVER treat NODE_ENV=production as "all OAuth clients are production".**  
+   The IdP server runtime environment (`NODE_ENV`) is distinct from the client mode (`isDev`). A production IdP hosts both production and development clients.
+8. **RULE 8: NEVER treat isDev as isPublic.**  
+   `isDev` governs loopback URI permissions; `isPublic` governs whether the client possesses a secret or has open tenant access. They are completely independent dimensions.
+9. **RULE 9: NEVER treat authentication as application authorization.**  
+   Authenticating "Who is this user?" via OAuth does not determine "What may this user do?" in the consumer app. Consumer apps must enforce their own business authorization.
+10. **RULE 10: NEVER bypass the IdP's redirect URI / PKCE / state validation.**  
+    OAuth 2.1 mandates PKCE (`S256`) and cryptographically random `state` on all flows. Never attempt to disable or bypass protocol parameters.
+
+---
+
+## 3. Client Type Decision Tree
+
+To determine the exact integration profile, evaluate these three independent dimensions sequentially:
 
 ```
-                            APPLICATION ACCESS MODE (Multi-Tenancy)
-                           ┌─────────────────────────┬─────────────────────────┐
-                           │   Public (isPublic=true) │  Private (isPublic=false)│
-┌──────────────────────────┼─────────────────────────┼─────────────────────────┤
-│ Confidential Client      │ Any platform user       │ Only explicitly assigned│
-│ (Backend with Secret)    │ can log in.             │ users can log in.       │
-│ Examples: Next.js BFF,   │ Secret held securely    │ Secret held securely    │
-│ FastAPI, Express, Django │ in server backend.      │ in server backend.      │
-├──────────────────────────┼─────────────────────────┼─────────────────────────┤
-│ Public Client            │ Any platform user       │ Only explicitly assigned│
-│ (No Secret, PKCE only)   │ can log in.             │ users can log in.       │
-│ Examples: React SPA,     │ PKCE S256 enforced;     │ PKCE S256 enforced;     │
-│ Vue, Mobile, Desktop     │ NO secret stored.       │ NO secret stored.       │
-└──────────────────────────┴─────────────────────────┴─────────────────────────┘
+                           DIMENSION 1: CLIENT CONFIDENTIALITY
+                       Is the runtime environment able to keep a secret?
+                                       │
+                      ┌────────────────┴────────────────┐
+                      ▼                                 ▼
+               PUBLIC CLIENT                   CONFIDENTIAL CLIENT
+          Browser SPA, Mobile App,           Next.js BFF, Express Server,
+          Desktop Native App                 FastAPI, Django, Backend Service
+          - NO client_secret                 - REQUIRES client_secret
+          - Mandatory PKCE (S256)            - Server-side token exchange
+          - In-memory / transient tokens     - HttpOnly secure session cookies
+                      │                                 │
+                      └────────────────┬────────────────┘
+                                       │
+                         DIMENSION 2: CLIENT MODE
+                   Is this client for development or production?
+                                       │
+                      ┌────────────────┴────────────────┐
+                      ▼                                 ▼
+          DEVELOPMENT (isDev: true)          PRODUCTION (isDev: false)
+          - Allowed: http://localhost:*      - Allowed: https://<valid-fqdn>/*
+          - Allowed: http://127.0.0.1:*      - FORBIDDEN: http://localhost
+          - Allowed: http://[::1]:*          - FORBIDDEN: plaintext http://
+          - FORBIDDEN: external domains      - FORBIDDEN: private/intranet IPs
+                      │                                 │
+                      └────────────────┬────────────────┘
+                                       │
+                    DIMENSION 3: APPLICATION ACCESS MODE
+                   Who is permitted to authenticate to this app?
+                                       │
+                      ┌────────────────┴────────────────┐
+                      ▼                                 ▼
+            PUBLIC (isPublic: true)           PRIVATE (isPublic: false)
+          Open to all registered IdP        Enterprise tenant isolation.
+          users. Association recorded       Only explicitly assigned users
+          on first login.                   can log in (403 for unassigned).
 ```
 
-### Dimension 1: OAuth Client Confidentiality
-* **Confidential Client**: Deployed on a server that can keep credentials confidential (e.g., Next.js BFF, Express backend, FastAPI, AWS Lambda). Authenticates to token endpoints using `client_id` + `client_secret`.
-* **Public Client**: Executed in an environment that cannot protect secrets (e.g., Browser Single-Page Applications, mobile apps). Uses `client_id` and PKCE (`code_challenge_method=S256`). Does **not** possess a `client_secret`.
-
-### Dimension 2: Application Access Mode (`isPublic` in IdP Database)
-* **Public Application (`isPublic: true`)**: Any registered user in SWYRA Auth can authenticate and access the application. User assignment to the application is automatically recorded upon first login.
-* **Private Application (`isPublic: false`)**: Strict enterprise tenant isolation. Only users who have been explicitly provisioned or assigned to the application via the Super Admin API (`POST /api/admin/clients/:clientId/users`) are permitted to authenticate. Unassigned users receive `403 Forbidden` (`registration_disabled`).
+### Invariant: Dimension Independence
+- `isDev` does **NOT** imply `isPublic`. A confidential development application remains confidential and requires a `client_secret`.
+- A public production application (e.g. hosted React SPA on `https://app.example.com`) is `isDev: false, isPublic: true` and has **no secret**.
+- A confidential production application (e.g. Next.js BFF on `https://app.example.com`) is `isDev: false, isPublic: false` (or `true` if public tenant) and **holds a secret**.
 
 ---
 
-## 5. Authoritative Protocol Endpoints Directory
+## 4. Production vs Development Separation
 
-All protocol URLs are rooted at `${AUTH_ISSUER}` (e.g., `https://oauth21.vercel.app` or custom domain).
+The IdP runtime environment (`NODE_ENV`) and the OAuth client mode (`isDev`) are separate concerns:
 
-| Endpoint | Method | Classification | Protocol Standard | Description |
-|---|---|---|---|---|
-| `/.well-known/openid-configuration` | `GET` | Discovery | RFC 8414 / OIDC | Machine-readable OpenID Provider metadata. |
-| `/.well-known/jwks.json` | `GET` | Discovery | RFC 7517 | Public RS256 cryptographic keys for offline token verification. |
-| `/api/auth/oauth2/authorize` | `GET` | OAuth Protocol | RFC 6749 / RFC 7636 | Initiates OAuth 2.1 login. Browser redirect. |
-| `/api/auth/oauth2/token` | `POST` | OAuth Protocol | RFC 6749 / RFC 7636 | Exchanges authorization code or refresh token for JWTs. |
-| `/api/auth/oauth2/userinfo` | `GET` | OIDC Protocol | OIDC Core 1.0 | Returns authenticated user claims via Bearer access token. |
-| `/api/auth/oauth2/revoke` | `POST` | OAuth Protocol | RFC 7009 | Revokes an access or refresh token. |
-| `/api/auth/app-admin/login` | `POST` | App Admin REST | Proprietary REST | Authenticates application administrator credentials. |
-| `/api/auth/app-admin/verify` | `POST` | App Admin REST | Proprietary REST | Validates active app admin session and JTI revocation. |
-| `/api/auth/app-admin/logout` | `POST` | App Admin REST | Proprietary REST | Revokes app admin token and adds JTI to revocation list. |
-| `/api/auth/app-admin/mfa/verify-login` | `POST` | App Admin REST | RFC 6238 TOTP | Verifies 6-digit TOTP code during step-up MFA login. |
+| Dimension | Managed By | Values | Meaning |
+|---|---|---|---|
+| **IdP Runtime** (`NODE_ENV`) | System DevOps | `production` / `development` | The execution environment of the SWYRA Auth server itself. The production IdP runs with `NODE_ENV=production`. |
+| **OAuth Client Mode** (`isDev`) | Super-Admin Client Registration | `true` / `false` | The mode assigned to a specific consumer client record in the IdP database. |
 
-> [!CAUTION]
-> **NEVER construct authorization URLs pointing to `/auth`**.  
-> The path `/auth` is a frontend UI route. The ONLY valid OAuth 2.1 authorization endpoint is `/api/auth/oauth2/authorize`.
+A single production IdP instance (`NODE_ENV=production`) accommodates:
+1. **Production Clients (`isDev: false`)**: Serving live end users over HTTPS.
+2. **Development Clients (`isDev: true`)**: Permitting consumer app engineers to test locally on `http://localhost:*` against the production IdP without compromising production client boundaries.
 
 ---
 
-## 6. Token Lifecycle & Cryptographic Specifications
+## 5. Development Client Rules
 
-### 6.1 Token Types & Formats
-1. **Access Token**: Compact RS256-signed JWT. Lifespan: typically **1 hour (3600 seconds)**. Validated offline by resource servers.
-2. **ID Token**: OIDC-compliant RS256 JWT containing user profile claims (`sub`, `email`, `name`, etc.).
-3. **Refresh Token**: Opaque, cryptographically random, high-entropy string. Single-use with Token Family Rotation.
+For development clients (`isDev: true`):
+- **Permitted Redirect URIs & Origins**:
+  - `http://localhost:<port>/*`
+  - `http://127.0.0.1:<port>/*`
+  - `http://[::1]:<port>/*`
+- **Strictly Prohibited**:
+  - Lookalike or spoofed loopback domains (e.g., `http://localhost.evil.com`, `http://127.0.0.1.evil.com`)
+  - Intranet / Private RFC 1918 IP addresses (`10.x.x.x`, `172.16.x.x`, `192.168.x.x`)
+  - Cloud metadata service IPs (`169.254.169.254`)
+  - Arbitrary external HTTP domains (`http://example.com`)
+  - Wildcard redirect URIs (`http://localhost:*` as a literal wildcard entry)
+- A development client registration does **NOT** mean "anything goes." URIs must be explicitly whitelisted loopback addresses.
 
-### 6.2 Access Token Payload Structure
-```json
-{
-  "iss": "https://oauth21.vercel.app",
-  "sub": "usr_66e74b21d8b2a1a4567e8901",
-  "aud": "qMoXkZwvWnZJRmFhpiTyzLMozZYrwvlF",
-  "client_id": "qMoXkZwvWnZJRmFhpiTyzLMozZYrwvlF",
-  "azp": "qMoXkZwvWnZJRmFhpiTyzLMozZYrwvlF",
-  "scope": "openid profile email",
-  "jti": "b479ca52-4467-4a0d-85f2-9e206f47738f",
-  "iat": 1710590000,
-  "exp": 1710593600
+---
+
+## 6. Production Client Rules
+
+For production clients (`isDev: false`):
+- **Permitted Redirect URIs & Origins**:
+  - Strictly public, fully qualified domain names with `https://` (e.g. `https://app.example.com/api/auth/callback`).
+- **Strictly Prohibited**:
+  - Any loopback address (`http://localhost`, `http://127.0.0.1`, `http://[::1]`)
+  - Plaintext `http://` schemes
+  - Wildcard domains (`https://*.example.com`) or wildcard paths (`https://app.example.com/*`)
+  - IP addresses (public or private)
+
+---
+
+## 7. Local vs Production Consumer Configuration
+
+Consumer applications must maintain strictly isolated configuration profiles between environments:
+
+### Local Development (`.env.local` / `.env.development`)
+```env
+AUTH_ISSUER="http://localhost:3000"
+CLIENT_ID="registered_dev_client_id"
+CLIENT_SECRET="registered_dev_client_secret"
+AUTH_CALLBACK_URL="http://localhost:3001/api/auth/callback"
+```
+
+### Production Deployment (Server Environment / Secret Store)
+```env
+AUTH_ISSUER="https://auth.example.com"
+CLIENT_ID="registered_prod_client_id"
+CLIENT_SECRET="registered_prod_client_secret"
+AUTH_CALLBACK_URL="https://app.example.com/api/auth/callback"
+```
+
+Production environments **MUST NOT** inherit local development configuration or share development client credentials.
+
+---
+
+## 8. Zero Production Fallbacks (Fail Closed)
+
+AI agents and developers **MUST NOT** write code containing fallback literals:
+
+```typescript
+// ❌ WRONG: Insecure fallback to localhost
+const callbackUrl = process.env.AUTH_CALLBACK_URL || "http://localhost:3000/callback";
+const clientId = process.env.CLIENT_ID || "dev-client";
+const clientSecret = process.env.CLIENT_SECRET || "test-secret";
+```
+
+```typescript
+// ✅ CORRECT: Fail-closed configuration assertion
+function getRequiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value || value.trim() === '') {
+    throw new Error(`[FATAL] Missing required security configuration: ${name}`);
+  }
+  return value.trim();
+}
+
+const callbackUrl = getRequiredEnv('AUTH_CALLBACK_URL');
+const clientId = getRequiredEnv('CLIENT_ID');
+const clientSecret = getRequiredEnv('CLIENT_SECRET');
+```
+
+If any security-critical environment variable is missing, the application **MUST fail to start or return an immediate HTTP 500 error**. Silent fallbacks are catastrophic security vulnerabilities.
+
+---
+
+## 9. Canonical OAuth 2.1 / OIDC Flow
+
+All integrations must execute this exact protocol sequence:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as End User
+    participant Browser as User Browser
+    participant Consumer as Consumer App (BFF / Server)
+    participant IdP as SWYRA Auth IdP (/api/auth/oauth2)
+
+    User->>Consumer: Click "Sign In"
+    Note over Consumer: 1. Generate random state (32B)<br/>2. Generate code_verifier (32B)<br/>3. Compute code_challenge = S256(verifier)<br/>4. Store verifier & state in short-lived HttpOnly cookie
+    Consumer-->>Browser: 302 Redirect to /api/auth/oauth2/authorize
+    Browser->>IdP: GET /api/auth/oauth2/authorize?<br/>client_id=...&redirect_uri=...&state=...<br/>&code_challenge=...&code_challenge_method=S256&scope=openid profile email
+
+    IdP->>Browser: Render Login / Consent UI
+    User->>IdP: Submit Credentials & TOTP (if required)
+    Note over IdP: Authenticate user & issue single-use authorization code
+    IdP-->>Browser: 302 Redirect to Consumer redirect_uri?code=...&state=...
+
+    Browser->>Consumer: GET /api/auth/callback?code=...&state=...
+    Note over Consumer: 1. Compare returned state with stored cookie state (CSRF guard)<br/>2. Read stored code_verifier from cookie<br/>3. Invalidate/delete state & verifier cookies
+    Consumer->>IdP: POST /api/auth/oauth2/token<br/>grant_type=authorization_code&code=...<br/>&code_verifier=...&redirect_uri=...<br/>(Authorization: Basic client_id:client_secret if confidential)
+
+    IdP-->>Consumer: 200 OK { access_token (RS256), id_token, refresh_token, expires_in }
+    Note over Consumer: 1. Validate RS256 access_token offline via IdP JWKS<br/>2. Verify iss == AUTH_ISSUER<br/>3. Verify aud == CLIENT_ID<br/>4. Verify exp > now<br/>5. Establish local consumer application session
+    Consumer-->>Browser: Set secure application session cookie & redirect to /dashboard
+```
+
+---
+
+## 10. State and PKCE Rules
+
+OAuth 2.1 deprecates legacy authorization code flows without PKCE:
+- **`code_verifier`**: Cryptographically random string between 43 and 128 characters from the unreserved character set `[A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"`. Recommended: 32 random bytes, base64url-encoded.
+- **`code_challenge`**: Strictly computed as `BASE64URL(SHA256(code_verifier))`.
+- **`code_challenge_method`**: Strictly set to `S256`. The use of `plain` is **STRICTLY PROHIBITED**.
+- **`state`**: Cryptographically random high-entropy token (minimum 128 bits of entropy) stored in a short-lived (`maxAge <= 300s`), HttpOnly, SameSite=Lax cookie or server session.
+- **State Validation**: Upon callback, the returned `state` parameter must be compared using constant-time comparison against the stored state. If mismatched, missing, or empty, reject immediately with HTTP 400.
+- **Transaction Invalidation**: Immediately delete the temporary `state` and `code_verifier` credentials once consumed. Never reuse them.
+
+---
+
+## 11. Confidential Client Rule
+
+For server-side applications (Next.js BFF, Express, FastAPI, Django):
+- **`CLIENT_SECRET`** is stored **ONLY** in server-side configuration.
+- The browser never receives or transmits the `CLIENT_SECRET`.
+- The token exchange (`POST /api/auth/oauth2/token`) occurs directly between the consumer server and the IdP over TLS.
+- Client authentication is performed using HTTP Basic Auth (`Authorization: Basic base64(client_id:client_secret)`) or via secure POST body parameters.
+
+---
+
+## 12. Public Client Rule
+
+For client-side applications (React SPA, Vite, mobile apps):
+- Public clients cannot protect secrets. **Do NOT register or embed a `client_secret` in a public client.**
+- Public clients rely exclusively on PKCE (`S256`) and cryptographically random `state` for token exchange integrity.
+- Never prefix secrets with `NEXT_PUBLIC_` or `VITE_` pretending that an embedded secret provides confidential security.
+
+---
+
+## 13. JWT Validation Rule (Offline Verification)
+
+Resource servers and backend APIs validating SWYRA Auth Access Tokens MUST follow these offline invariants:
+
+1. **Algorithm Pinning**: Strictly pinned to `RS256`. Reject algorithm `none`, symmetric algorithms (`HS256`), and unexpected key types.
+2. **Key Retrieval**: Fetch public keys from `${AUTH_ISSUER}/.well-known/jwks.json`. Cache the JWKS with a sensible TTL (e.g., 10 to 60 minutes) to avoid network overhead.
+3. **Issuer (`iss`)**: Must exactly match `${AUTH_ISSUER}` without trailing slash discrepancies.
+4. **Audience (`aud`)**: Must match the consumer application's own registered `CLIENT_ID`. Never treat audience mismatch as a warning.
+5. **Expiration (`exp`)**: Reject tokens where `currentTime >= exp + clockTolerance` (maximum tolerance: 60 seconds).
+6. **No Unverified Trust**: Never decode a JWT payload and trust its claims without cryptographic signature verification against the JWKS.
+
+---
+
+## 14. Session Rule
+
+Distinguish the IdP OAuth token from the Consumer Application Session:
+- **OAuth Token**: An IdP-issued credential used to access the UserInfo endpoint or resource servers.
+- **Application Session**: A consumer-managed credential (e.g. encrypted session cookie) representing the user's active session in the consumer application.
+
+In server-side architectures (BFF), the backend exchanges the authorization code for tokens, verifies the Access Token offline, extracts the permanent subject (`sub`), and establishes its own local application session. The browser does not need direct access to raw IdP tokens.
+
+---
+
+## 15. Logout Rule
+
+Distinguish Local Application Logout from IdP SSO Logout:
+- **Local Application Logout**: Purges the consumer app's local session cookie or stored tokens. The user remains authenticated at the IdP.
+- **RP-Initiated IdP Logout**: Redirects the user's browser to the IdP logout endpoint to terminate the centralized SSO session across all connected applications.
+
+Do not assume that deleting a local cookie terminates the IdP session. Follow the application's documented logout requirements.
+
+---
+
+## 16. Application Authorization vs Identity Authentication
+
+Authentication and Authorization are separate concerns:
+- **Authentication ("Who is this user?")**: Provided authoritatively by SWYRA Auth via the `sub`, `email`, and `profile` claims in the token.
+- **Application Authorization ("What can this user do?")**: Managed exclusively by the consumer application.
+
+An authenticated user is **NOT** automatically an application administrator. Consumer applications must query their own database to resolve permissions, tenant roles, and capabilities based on `jwt.sub`.
+
+---
+
+## 17. Application Admin Rule
+
+Application Administrator credentials (`/api/auth/app-admin/login`) are separate from OAuth user identities:
+- App Admin credentials authenticate delegated tenant staff via `{ client_id, client_secret, email, password }`.
+- App Admin JWTs contain an individual JWT ID (`jti`) and are revocable via `/api/auth/app-admin/logout`.
+- An App Admin JWT issued for Client A **MUST NOT** be accepted as an administrative credential for Client B.
+
+---
+
+## 18. Database Ownership Rule
+
+The SWYRA Auth MongoDB cluster is an internal, private IdP datastore:
+- Consumer applications **MUST NEVER** connect to the SWYRA Auth MongoDB database.
+- Consumer applications **MUST NEVER** query or mutate `oauthClient`, `sessions`, `oauth_token_families`, `users`, or `oauth_codes` via direct database drivers (`mongodb`, `mongoose`).
+- All interactions must occur via the official HTTP endpoints (`/api/auth/oauth2/*` and `/api/auth/app-admin/*`).
+
+---
+
+## 19. Redirect URI Rule
+
+The `redirect_uri` is a critical security perimeter:
+- Must be an **exact static match** with a URI registered in the IdP client profile.
+- **NEVER** construct the `redirect_uri` dynamically using incoming request headers (`Host`, `X-Forwarded-Host`) or arbitrary user query parameters.
+- **NEVER** use wildcards (`*`) or fragments (`#`) in registered redirect URIs.
+
+---
+
+## 20. Return-To Destination Rule
+
+When redirecting users back to their requested page after successful login:
+- The `returnTo` path must be strictly validated as a safe local relative path (e.g. `/dashboard` or `/settings`).
+- **NEVER** permit absolute URLs (e.g., `https://evil.com`) or protocol-relative paths (e.g., `//evil.com`), as these create Open Redirect vulnerabilities.
+
+```typescript
+function getSafeReturnTo(returnTo: string | null | undefined): string {
+  if (!returnTo || !returnTo.startsWith('/') || returnTo.startsWith('//')) {
+    return '/dashboard';
+  }
+  return returnTo;
 }
 ```
 
-### 6.3 Offline Cryptographic Verification Invariants
-Resource servers and backend services verifying tokens MUST enforce all of the following:
-1. **Signature**: Validated using the public key downloaded from `${AUTH_ISSUER}/.well-known/jwks.json`.
-2. **Algorithm**: Strictly pinned to `RS256`. Reject `none`, symmetric algorithms, or unexpected types.
-3. **Issuer (`iss`)**: Must exactly match `${AUTH_ISSUER}` (no trailing slash discrepancies).
-4. **Audience (`aud` or `client_id` or `azp`)**: Must match the consumer application's own registered `CLIENT_ID`. This prevents cross-application token replay attacks.
-5. **Expiration (`exp`)**: Reject tokens where `now() > exp + clock_tolerance` (recommended tolerance: <= 60 seconds).
+---
 
-### 6.4 Refresh Token Rotation & Concurrency Guarantees
-SWYRA Auth implements RFC 6749 Section 10.4 Token Family Rotation with atomic Compare-And-Swap (CAS) state tracking:
-* Every refresh request consumes the current refresh token ($R_0$) and issues a successor ($R_1$).
-* **Replay Detection**: If an already-consumed refresh token ($R_0$) is presented again outside the 2-second network-hazard grace window, SWYRA Auth treats it as an adversarial replay and **immediately revokes the entire token family**.
-* **Concurrency Protection**: Under concurrent refresh bursts, SWYRA Auth executes an atomic in-flight CAS operation. Exactly one request succeeds; competing concurrent requests fail safely without corrupting the family tree.
+## 21. CORS Rule
+
+Cross-Origin Resource Sharing (CORS) is distinct from redirect URIs:
+- Do not configure wildcard origins (`Access-Control-Allow-Origin: *`) to "fix OAuth".
+- The authorization endpoint `/api/auth/oauth2/authorize` is accessed via browser navigation (302 redirect), **not** via AJAX/Fetch, and therefore does not require CORS.
+- Token and UserInfo endpoints strictly validate origins against the client's registered `allowed_origins`.
 
 ---
 
-## 7. Decision Tree: Choosing the Right Integration Architecture
+## 22. CSRF Rule
 
-```
-Is the consumer application a...
-│
-├─► Full-Stack Web App with a Server Backend (Next.js, Remix, SvelteKit, Nuxt)
-│   └─► USE: Recipe A (Backend-For-Frontend / BFF Pattern)
-│       - Confidential Client
-│       - OAuth flow handled in server route handlers
-│       - Tokens stored in HttpOnly, Secure, SameSite=Lax cookies
-│       - Browser never sees raw tokens or client secret
-│
-├─► Decoupled SPA (React, Vue, Vite, Angular) + Separate Backend API (Node, Python, Go)
-│   ├─► Option 1 (Recommended): BFF Proxy in Backend
-│   │   - Backend handles OAuth code exchange and manages cookie sessions
-│   │   - Frontend calls backend with standard session cookies
-│   │
-│   └─► Option 2: Pure SPA Public Client + Bearer Token API
-│       - SPA performs PKCE authorization flow directly with SWYRA Auth
-│       - SPA stores Access Token in memory, passes as `Authorization: Bearer <token>`
-│       - Backend validates Bearer token offline via JWKS
-│
-├─► Pure Backend API / Microservice / Resource Server
-│   └─► USE: Recipe E (Stateless Offline JWT Verification)
-│       - Validates incoming `Authorization: Bearer <token>`
-│       - Caches JWKS keys from IdP
-│       - Zero session state
-│
-└─► Dedicated Consumer Admin Portal (Staff / Operations)
-    └─► USE: Recipe F (Application Administrator API)
-        - Uses `/api/auth/app-admin/login`, `/verify`, and `/logout`
-        - Authenticated via `client_id` + `client_secret` + admin email/password
-        - Supports step-up RFC 6238 TOTP MFA
-```
+Browser state-changing endpoints in consumer applications must retain Cross-Site Request Forgery (CSRF) defenses:
+- For OAuth authorization, CSRF protection is provided by the cryptographically random `state` parameter and SameSite cookie policies.
+- Do not disable CSRF globally in consumer frameworks to accommodate OAuth.
 
 ---
 
-## 8. Concrete Integration Recipes
+## 23. Authorization Header Rule
 
-### Recipe A: Next.js 14+ (App Router) Backend-For-Frontend (BFF)
+When accessing protected backend APIs:
+- Transmit the token in the standard HTTP header:  
+  `Authorization: Bearer <access_token>`
+- Never accept an arbitrary user-supplied `client_id` or `user_id` in request headers or bodies as proof of identity. The subject identity is derived exclusively from the cryptographically verified `sub` claim of the Bearer token.
 
-**Client Type:** Confidential Client  
-**Required Environment Variables:**
-```env
-# Server-only (DO NOT prefix with NEXT_PUBLIC_)
-AUTH_ISSUER="https://oauth21.vercel.app"
-CLIENT_ID="your_registered_client_id"
-CLIENT_SECRET="your_registered_client_secret"
-REDIRECT_URI="https://your-app.com/api/auth/callback"
-SESSION_SECRET="at-least-32-chars-random-secret-for-cookie-encryption"
+---
+
+## 24. Environment Variable Rules
+
+Strictly isolate environment variables by security classification:
+
+| Classification | Framework Prefixes | Permitted Variables | Forbidden Variables |
+|---|---|---|---|
+| **Server-Only (Confidential)** | (No public prefix) | `AUTH_ISSUER`, `CLIENT_ID`, `CLIENT_SECRET`, `AUTH_CALLBACK_URL`, `SESSION_SECRET` | None |
+| **Client-Safe (Public)** | `NEXT_PUBLIC_*`, `VITE_*` | `NEXT_PUBLIC_AUTH_ISSUER`, `NEXT_PUBLIC_CLIENT_ID`, `VITE_AUTH_ISSUER`, `VITE_CLIENT_ID` | `*_CLIENT_SECRET`, `*_SESSION_SECRET`, `*_GATEWAY_SECRET` |
+
+---
+
+## 25. Error Handling & Fail-Closed Invariants
+
+All authentication and token verification paths must fail closed:
+- If token signature verification fails, reject immediately with HTTP 401.
+- If audience or issuer does not match, reject immediately with HTTP 401.
+- **NEVER** catch a token validation exception, log a warning, and proceed as authenticated.
+- **NEVER** fall back to dummy mock users in production when IdP endpoints are unreachable.
+
+---
+
+## 26. Performance & Caching Rules
+
+To ensure high performance and avoid denial-of-service on IdP endpoints:
+- **Cache JWKS**: Use a caching JWKS client (e.g. `jose.createRemoteJWKSet` or `pyjwt.PyJWKClient`) that caches public keys in memory and rotates keys on unknown `kid`.
+- **Do Not Introspect on Every Request**: Access tokens are self-contained RS256 JWTs designed for offline verification. Do not make network calls to `/userinfo` or an introspection endpoint on every API call.
+- **Session Lifetimes**: Do not cache local authorization decisions beyond the token's remaining validity period.
+
+---
+
+## 27. Concrete Framework Integration Recipes
+
+### Recipe A: Next.js 14+ (App Router) BFF
+
+**Architecture:** Confidential client using Next.js Route Handlers. All token exchanges and secrets remain server-side.
+
+#### Configuration (`lib/auth/config.ts`)
+```typescript
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value || value.trim() === '') {
+    throw new Error(`[Configuration Error] Missing required server environment variable: ${name}`);
+  }
+  return value.trim();
+}
+
+export const authConfig = {
+  issuer: requireEnv('AUTH_ISSUER'),
+  clientId: requireEnv('CLIENT_ID'),
+  clientSecret: requireEnv('CLIENT_SECRET'),
+  callbackUrl: requireEnv('AUTH_CALLBACK_URL'),
+};
 ```
 
 #### Step 1: Initiate OAuth Login (`app/api/auth/login/route.ts`)
 ```typescript
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import crypto from 'node:crypto';
+import { authConfig } from '@/lib/auth/config';
 
-export async function GET(request: Request) {
-  // 1. Generate cryptographic state and PKCE verifier/challenge
+export async function GET(request: NextRequest) {
   const state = crypto.randomBytes(32).toString('hex');
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
-  const codeChallenge = crypto
-    .createHash('sha256')
-    .update(codeVerifier)
-    .digest('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
 
-  // 2. Build RFC-compliant authorization URL pointing to /api/auth/oauth2/authorize
-  const authUrl = new URL(`${process.env.AUTH_ISSUER}/api/auth/oauth2/authorize`);
-  authUrl.searchParams.set('client_id', process.env.CLIENT_ID!);
-  authUrl.searchParams.set('redirect_uri', process.env.REDIRECT_URI!);
+  const rawReturnTo = request.nextUrl.searchParams.get('returnTo');
+  const returnTo = rawReturnTo && rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//')
+    ? rawReturnTo
+    : '/dashboard';
+
+  const authUrl = new URL(`${authConfig.issuer}/api/auth/oauth2/authorize`);
+  authUrl.searchParams.set('client_id', authConfig.clientId);
+  authUrl.searchParams.set('redirect_uri', authConfig.callbackUrl);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('code_challenge', codeChallenge);
   authUrl.searchParams.set('code_challenge_method', 'S256');
   authUrl.searchParams.set('scope', 'openid profile email');
   authUrl.searchParams.set('state', state);
 
-  // 3. Store state and code_verifier in short-lived HttpOnly cookies
   const response = NextResponse.redirect(authUrl.toString());
   const cookieOptions = {
     httpOnly: true,
@@ -258,25 +487,26 @@ export async function GET(request: Request) {
     maxAge: 300, // 5 minutes
     path: '/',
   };
+
   response.cookies.set('oauth_state', state, cookieOptions);
   response.cookies.set('oauth_code_verifier', codeVerifier, cookieOptions);
+  response.cookies.set('oauth_return_to', returnTo, cookieOptions);
 
   return response;
 }
 ```
 
-#### Step 2: Handle OAuth Callback & Token Exchange (`app/api/auth/callback/route.ts`)
+#### Step 2: Handle Callback (`app/api/auth/callback/route.ts`)
 ```typescript
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { authConfig } from '@/lib/auth/config';
 
-const JWKS = createRemoteJWKSet(
-  new URL(`${process.env.AUTH_ISSUER}/.well-known/jwks.json`)
-);
+const JWKS = createRemoteJWKSet(new URL(`${authConfig.issuer}/.well-known/jwks.json`));
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
   const code = searchParams.get('code');
   const state = searchParams.get('state');
   const error = searchParams.get('error');
@@ -285,21 +515,19 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(error)}`, request.url));
   }
 
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const storedState = cookieStore.get('oauth_state')?.value;
   const codeVerifier = cookieStore.get('oauth_code_verifier')?.value;
+  const returnTo = cookieStore.get('oauth_return_to')?.value || '/dashboard';
 
-  // Verify state parameter to prevent CSRF
+  // State & PKCE validation
   if (!code || !state || !storedState || state !== storedState || !codeVerifier) {
-    return NextResponse.json({ error: 'invalid_state', message: 'CSRF validation failed' }, { status: 400 });
+    return NextResponse.json({ error: 'invalid_request', message: 'CSRF or PKCE validation failed' }, { status: 400 });
   }
 
-  // Confidential client token exchange with Basic Auth
-  const basicAuth = Buffer.from(
-    `${process.env.CLIENT_ID}:${process.env.CLIENT_SECRET}`
-  ).toString('base64');
-
-  const tokenResponse = await fetch(`${process.env.AUTH_ISSUER}/api/auth/oauth2/token`, {
+  // Confidential client token exchange
+  const basicAuth = Buffer.from(`${authConfig.clientId}:${authConfig.clientSecret}`).toString('base64');
+  const tokenResponse = await fetch(`${authConfig.issuer}/api/auth/oauth2/token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -308,7 +536,7 @@ export async function GET(request: Request) {
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code,
-      redirect_uri: process.env.REDIRECT_URI!,
+      redirect_uri: authConfig.callbackUrl,
       code_verifier: codeVerifier,
     }),
   });
@@ -320,18 +548,20 @@ export async function GET(request: Request) {
 
   const tokens = await tokenResponse.json();
 
-  // Validate the received Access Token offline via JWKS
+  // Validate Access Token offline via JWKS
   const { payload } = await jwtVerify(tokens.access_token, JWKS, {
-    issuer: process.env.AUTH_ISSUER,
-    audience: process.env.CLIENT_ID,
+    issuer: authConfig.issuer,
+    audience: authConfig.clientId,
+    algorithms: ['RS256'],
   });
 
-  // Set secure session cookie and clean up OAuth transient cookies
-  const response = NextResponse.redirect(new URL('/dashboard', request.url));
+  const response = NextResponse.redirect(new URL(returnTo, request.url));
   response.cookies.delete('oauth_state');
   response.cookies.delete('oauth_code_verifier');
+  response.cookies.delete('oauth_return_to');
 
-  response.cookies.set('session_token', tokens.access_token, {
+  // Establish local application session cookie
+  response.cookies.set('app_session', tokens.access_token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
@@ -345,17 +575,18 @@ export async function GET(request: Request) {
 
 ---
 
-### Recipe B: Pure React SPA (Vite / CRA) with PKCE
+### Recipe B: Pure React SPA (Vite) Public Client with PKCE
 
-**Client Type:** Public Client (No `client_secret`!)  
-**Required Environment Variables:**
+**Architecture:** Public client running entirely in browser. No client secret. Uses PKCE `S256`.
+
+#### Environment Setup (`.env.production`)
 ```env
-VITE_AUTH_ISSUER="https://oauth21.vercel.app"
-VITE_CLIENT_ID="your_registered_client_id"
-VITE_REDIRECT_URI="http://localhost:5173/auth/callback"
+VITE_AUTH_ISSUER=https://auth.example.com
+VITE_CLIENT_ID=registered_spa_client_id
+VITE_REDIRECT_URI=https://spa.example.com/callback
 ```
 
-#### Step 1: Utility for PKCE Generation (`src/lib/pkce.ts`)
+#### PKCE Utilities (`src/lib/pkce.ts`)
 ```typescript
 export async function generatePKCE() {
   const array = new Uint8Array(32);
@@ -378,34 +609,7 @@ export async function generatePKCE() {
 }
 ```
 
-#### Step 2: Login Initiation (`src/components/LoginButton.tsx`)
-```typescript
-import { generatePKCE } from '../lib/pkce';
-
-export function LoginButton() {
-  const handleLogin = async () => {
-    const { codeVerifier, codeChallenge, state } = await generatePKCE();
-
-    sessionStorage.setItem('oauth_verifier', codeVerifier);
-    sessionStorage.setItem('oauth_state', state);
-
-    const authUrl = new URL(`${import.meta.env.VITE_AUTH_ISSUER}/api/auth/oauth2/authorize`);
-    authUrl.searchParams.set('client_id', import.meta.env.VITE_CLIENT_ID);
-    authUrl.searchParams.set('redirect_uri', import.meta.env.VITE_REDIRECT_URI);
-    authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('code_challenge', codeChallenge);
-    authUrl.searchParams.set('code_challenge_method', 'S256');
-    authUrl.searchParams.set('scope', 'openid profile email');
-    authUrl.searchParams.set('state', state);
-
-    window.location.href = authUrl.toString();
-  };
-
-  return <button onClick={handleLogin}>Sign In with SWYRA</button>;
-}
-```
-
-#### Step 3: SPA Callback Handler (`src/pages/Callback.tsx`)
+#### Callback Handler (`src/pages/Callback.tsx`)
 ```typescript
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -422,20 +626,29 @@ export function CallbackPage() {
       const storedState = sessionStorage.getItem('oauth_state');
       const codeVerifier = sessionStorage.getItem('oauth_verifier');
 
-      if (!code || state !== storedState || !codeVerifier) {
+      if (!code || !state || state !== storedState || !codeVerifier) {
         setError('CSRF validation failed or invalid authorization code');
         return;
       }
 
-      // Public client: NO client_secret sent
-      const response = await fetch(`${import.meta.env.VITE_AUTH_ISSUER}/api/auth/oauth2/token`, {
+      const issuer = import.meta.env.VITE_AUTH_ISSUER;
+      const clientId = import.meta.env.VITE_CLIENT_ID;
+      const redirectUri = import.meta.env.VITE_REDIRECT_URI;
+
+      if (!issuer || !clientId || !redirectUri) {
+        setError('Missing required public OAuth configuration');
+        return;
+      }
+
+      // Public client: NO client_secret is sent
+      const response = await fetch(`${issuer}/api/auth/oauth2/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
           grant_type: 'authorization_code',
-          client_id: import.meta.env.VITE_CLIENT_ID,
+          client_id: clientId,
           code,
-          redirect_uri: import.meta.env.VITE_REDIRECT_URI,
+          redirect_uri: redirectUri,
           code_verifier: codeVerifier,
         }),
       });
@@ -449,7 +662,7 @@ export function CallbackPage() {
       sessionStorage.removeItem('oauth_state');
       sessionStorage.removeItem('oauth_verifier');
 
-      // Store access token in memory or secure client state
+      // Store in memory or transient storage; pass as Authorization: Bearer <token>
       sessionStorage.setItem('access_token', tokens.access_token);
       navigate('/dashboard');
     }
@@ -457,8 +670,8 @@ export function CallbackPage() {
     exchangeToken();
   }, [params, navigate]);
 
-  if (error) return <div className="error-alert">{error}</div>;
-  return <div>Completing sign in...</div>;
+  if (error) return <div className="error">{error}</div>;
+  return <div>Authenticating...</div>;
 }
 ```
 
@@ -466,9 +679,8 @@ export function CallbackPage() {
 
 ### Recipe C: React SPA + Python FastAPI Backend
 
-**Architecture:** React SPA passes `Authorization: Bearer <access_token>` to FastAPI. FastAPI validates the token offline against SWYRA Auth JWKS.
+**Architecture:** Frontend passes Bearer token. FastAPI verifies token offline against SWYRA Auth JWKS.
 
-#### FastAPI Token Verification Dependency (`server/auth.py`)
 ```python
 import os
 import jwt
@@ -476,8 +688,14 @@ from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-AUTH_ISSUER = os.environ["AUTH_ISSUER"]
-CLIENT_ID = os.environ["CLIENT_ID"]
+def require_env(name: str) -> str:
+    val = os.getenv(name)
+    if not val:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return val
+
+AUTH_ISSUER = require_env("AUTH_ISSUER")
+CLIENT_ID = require_env("CLIENT_ID")
 JWKS_URL = f"{AUTH_ISSUER}/.well-known/jwks.json"
 
 jwks_client = PyJWKClient(JWKS_URL)
@@ -508,33 +726,24 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         )
 ```
 
-#### Protected Endpoint (`server/main.py`)
-```python
-from fastapi import FastAPI, Depends
-from auth import get_current_user
-
-app = FastAPI()
-
-@app.get("/api/profile")
-async def profile(user: dict = Depends(get_current_user)):
-    return {
-        "user_id": user["sub"],
-        "client_id": user["aud"],
-        "scope": user.get("scope", "")
-    }
-```
-
 ---
 
 ### Recipe D: React SPA + Node.js / Express Backend
 
-**Express Middleware for Offline Verification (`middleware/requireAuth.ts`)**:
+**Architecture:** Express middleware for offline RS256 JWT validation using `jose`.
+
 ```typescript
 import type { Request, Response, NextFunction } from 'express';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
-const AUTH_ISSUER = process.env.AUTH_ISSUER!;
-const CLIENT_ID = process.env.CLIENT_ID!;
+function requireEnv(name: string): string {
+  const val = process.env[name];
+  if (!val) throw new Error(`Missing environment variable: ${name}`);
+  return val;
+}
+
+const AUTH_ISSUER = requireEnv('AUTH_ISSUER');
+const CLIENT_ID = requireEnv('CLIENT_ID');
 const JWKS = createRemoteJWKSet(new URL(`${AUTH_ISSUER}/.well-known/jwks.json`));
 
 export interface AuthenticatedRequest extends Request {
@@ -545,11 +754,7 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-export async function requireAuth(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-) {
+export async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'unauthorized', message: 'Missing Bearer token' });
@@ -580,32 +785,8 @@ export async function requireAuth(
 
 ### Recipe E: Per-Application Administrator Authentication
 
-For consumer applications that have designated administrators provisioned via the SWYRA Auth Admin Console (`/admin/clients`):
+For designated application administrators provisioned via the SWYRA Auth Admin Console:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Admin as App Admin
-    participant Frontend as App Frontend
-    participant Backend as App Backend (BFF)
-    participant IdP as SWYRA Auth IdP
-
-    Admin->>Frontend: Enter Admin Email & Password
-    Frontend->>Backend: POST /api/admin/login
-    Backend->>IdP: POST /api/auth/app-admin/login<br/>{ client_id, client_secret, email, password }
-    Note over IdP: Authenticates admin credentials<br/>Checks status & rate limit<br/>Issues HS256 admin session JWT
-    IdP-->>Backend: 200 OK { token, admin, redirectUrl }
-    Backend-->>Frontend: Set HttpOnly admin session cookie
-    Frontend-->>Admin: Redirect to /admin/dashboard
-
-    Note over Frontend,Backend: Protected Admin Operation
-    Admin->>Backend: GET /api/admin/operations
-    Backend->>IdP: POST /api/auth/app-admin/verify<br/>{ client_id, client_secret, token }
-    IdP-->>Backend: 200 OK { valid: true, admin }
-    Backend-->>Frontend: Operational Data
-```
-
-#### Step 1: Admin Login Endpoint (`server/admin.ts`)
 ```typescript
 export async function authenticateAppAdmin(email: string, pass: string) {
   const res = await fetch(`${process.env.AUTH_ISSUER}/api/auth/app-admin/login`, {
@@ -624,7 +805,6 @@ export async function authenticateAppAdmin(email: string, pass: string) {
     throw new Error(data.message || 'Admin authentication failed');
   }
 
-  // If MFA is required, prompt for TOTP code
   if (data.mfa_required) {
     return { mfaRequired: true, mfaToken: data.mfa_token };
   }
@@ -635,33 +815,127 @@ export async function authenticateAppAdmin(email: string, pass: string) {
 
 ---
 
-## 9. Critical Anti-Patterns & Common Failure Modes
+## 28. Integration Implementation Checklist
 
-Avoid these specific implementation mistakes:
+### Phase 1: Pre-Flight Verification
+- [ ] Determine client model (Public vs Confidential).
+- [ ] Determine client mode (Development `isDev: true` vs Production `isDev: false`).
+- [ ] Register client in SWYRA Auth Admin Dashboard.
+- [ ] Verify exact callback URI in client registration (HTTPS for prod, loopback for dev).
+- [ ] Store credentials securely without public prefixes.
 
-| Anti-Pattern | Severity | Why It Fails | Correct Solution |
-|---|---|---|---|
-| **Redirecting to `/auth`** | 🔴 Critical | `/auth` is an internal React SPA page. Unregistered clients load the page instead of returning protocol errors. | Always redirect to `/api/auth/oauth2/authorize`. |
-| **`NEXT_PUBLIC_CLIENT_SECRET`** | 🔴 Critical | Exposes confidential client secret in browser JavaScript bundles. | Keep `CLIENT_SECRET` in server-only environment variables. |
-| **Skipping `state` verification** | 🔴 Critical | Leaves callback endpoint vulnerable to CSRF login attacks. | Generate random `state` in cookie/session, verify upon callback. |
-| **Omitting PKCE in code flow** | 🔴 Critical | Violates OAuth 2.1; tokens can be intercepted by malicious apps. | Generate `code_verifier` and SHA-256 `code_challenge` for all flows. |
-| **Connecting to IdP MongoDB** | 🔴 Critical | Violates tenant isolation, exposes global user data, breaks architectural boundary. | Consumer app MUST NOT know or use `MONGO_URI`. |
-| **Installing duplicate Auth engines** | 🟠 High | Installing Better Auth or NextAuth inside the consumer creates dual state and confuses sessions. | Consumer only requires standard HTTP calls and JWT verification. |
-| **Accepting `none` or `HS256` for tokens** | 🔴 Critical | Algorithm confusion allows attackers to forge tokens using public keys. | Pin verification algorithm strictly to `RS256`. |
-| **Ignoring `aud` claim validation** | 🔴 Critical | Allows token issued for App A to be accepted by App B (cross-tenant token replay). | Verify `payload.aud === CLIENT_ID` in all resource servers. |
+### Phase 2: Implementation Invariants
+- [ ] Code flow implements PKCE with `code_challenge_method=S256`.
+- [ ] State parameter is cryptographically random and verified on callback.
+- [ ] Authorization requests hit `/api/auth/oauth2/authorize` (never `/auth`).
+- [ ] Access Tokens are validated offline against `/.well-known/jwks.json`.
+- [ ] Token validation pins algorithm to `RS256`.
+- [ ] Token validation verifies `iss` and `aud`.
+- [ ] Return-to paths are constrained to relative paths.
+- [ ] Missing configuration fails closed with an immediate error.
 
 ---
 
-## 10. AI Agent Phase 20 Verification Checklist
+## 29. Prohibited Integration Patterns
 
-Before reporting completion of any SWYRA Auth integration, an AI agent MUST verify:
+AI agents and developers **MUST NOT**:
+1. Connect consumer apps to the SWYRA Auth MongoDB.
+2. Install duplicate authentication engines (`better-auth`, `next-auth`, `passport`, `lucia`).
+3. Copy password/session/token tables from the IdP.
+4. Expose `CLIENT_SECRET` in client-side bundles or public environment variables.
+5. Create localhost fallbacks in production configuration.
+6. Treat `NODE_ENV=production` as "all OAuth clients are production".
+7. Treat `isDev` as `isPublic`.
+8. Treat authentication as application authorization.
+9. Construct redirect URIs dynamically from the HTTP `Host` header.
+10. Allow unconstrained external post-login redirects (`returnTo`).
+11. Enable global CORS wildcards (`*`) to resolve OAuth integration issues.
+12. Add `DISABLE_AUTH` or `NODE_ENV`-based authentication bypasses.
+13. Accept algorithm `none` or `HS256` for IdP RS256 JWTs.
+14. Skip audience verification during token validation.
+15. Redirect users to `/auth` for OAuth authorization.
 
-- [ ] **1. Clean Boundary**: No MongoDB connection strings, database drivers, or schema files belonging to SWYRA Auth exist in the consumer app.
-- [ ] **2. No Duplicate Auth**: No Better Auth or redundant identity engines are installed in consumer `package.json` or `pyproject.toml`.
-- [ ] **3. Protocol Endpoint Accuracy**: All authorization requests hit `${AUTH_ISSUER}/api/auth/oauth2/authorize` (NEVER `/auth`).
-- [ ] **4. PKCE Implementation**: The authorization request provides `code_challenge` and `code_challenge_method=S256`.
-- [ ] **5. CSRF State Protection**: A secure random `state` is generated, temporarily stored, and verified upon callback.
-- [ ] **6. Secret Secrecy**: No client secrets exist in client-side bundles, `NEXT_PUBLIC_` vars, or version control.
-- [ ] **7. Offline Verification**: Backend endpoints verify RS256 JWTs offline using `${AUTH_ISSUER}/.well-known/jwks.json`.
-- [ ] **8. Audience Validation**: Backend verifies `aud` matches the consumer's registered `CLIENT_ID`.
-- [ ] **9. Clean Local Test**: Integration passes build and unit/integration test gates without mock leakage.
+---
+
+## 30. AI Agent Change Boundary
+
+Before modifying any existing consumer application codebase:
+1. **Inspect Existing Authentication**: Check for existing OAuth clients, cookies, and middleware.
+2. **Smallest Secure Change**: Do not rebuild or rewrite the application's auth architecture if a secure integration exists.
+3. **Preserve Business Logic**: Only touch identity exchange and session establishment; leave application business authorization intact.
+
+---
+
+## 31. The 18 Security Review Questions for Agents
+
+Before declaring an integration task complete, every question must be answered with proof:
+
+1. Is the client public or confidential?
+2. Is this client development or production?
+3. Is the callback URI exactly registered in the IdP?
+4. Is the production callback HTTPS?
+5. Is localhost used only for explicitly configured development?
+6. Is `CLIENT_SECRET` strictly server-side?
+7. Is PKCE `S256` enabled on all authorization code flows?
+8. Is `state` generated randomly and verified upon callback?
+9. Is `iss` validated against `AUTH_ISSUER`?
+10. Is `aud` validated against `CLIENT_ID`?
+11. Is the JWT cryptographically verified against the IdP JWKS?
+12. Is `returnTo` constrained to safe relative paths?
+13. Is local application logout distinguished from IdP logout?
+14. Is application authorization enforced independently of authentication?
+15. Is IdP MongoDB completely untouched?
+16. Can authentication fail open on any code path?
+17. Is there an environment bypass that could activate in production?
+18. Are production and development configurations strictly isolated?
+
+---
+
+## 32. Canonical File Structure for Consumer Apps
+
+A standard consumer application should organize auth integration cleanly:
+
+```
+lib/
+  auth/
+    config.ts      # Fail-closed environment configuration
+    oauth.ts       # PKCE, state, and token exchange helpers
+    session.ts     # Local application session cookie management
+    jwt.ts         # Offline RS256 JWKS verification helper
+app/
+  api/
+    auth/
+      login/
+        route.ts   # Initiates OAuth flow with PKCE & state
+      callback/
+        route.ts   # Handles callback, token exchange, and session
+      logout/
+        route.ts   # Clears local session
+```
+
+---
+
+## 33. Documentation Consistency Rule
+
+This document is the **normative master contract**. All other documentation in this repository must align with the definitions, rules, and terminology established here without contradiction or divergence.
+
+---
+
+## 34. Machine-Readable Integration Policy
+
+This contract is accompanied by the machine-readable policy file:  
+`docs/security/integration-policy.json`
+
+Automated linters, CI gates, and AI verification tools validate integration code against this policy.
+
+---
+
+## 35. Integration Linter
+
+The repository provides an automated integration contract checker:
+
+```bash
+npm run security:integration-check
+```
+
+Implemented in `scripts/security/check-integration-contract.ts`, this linter detects forbidden fallback patterns, exposed client secrets, bypass flags, and policy violations across documentation and consumer applications.

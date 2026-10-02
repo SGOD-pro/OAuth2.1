@@ -28,6 +28,7 @@ check("Required canonical documents exist", () => {
     "docs/SECURITY_CANONICAL.md",
     "docs/security/security-suite-manifest.json",
     "docs/security/security-route-manifest.json",
+    "docs/security/integration-policy.json",
     "docs/AI_AGENT_INTEGRATION_CONTRACT.md",
     "AGENTS.md",
     "README.md",
@@ -133,11 +134,11 @@ check("Documentation contains no forbidden architectural contradictions", () => 
     "README.md must reference docs/SECURITY_CANONICAL.md as canonical standard"
   );
 
-  // Verify AGENTS.md enforces the 7 non-negotiable rules
+  // Verify AGENTS.md enforces the golden rules
   const agentsMd = fs.readFileSync(path.join(repoRoot, "AGENTS.md"), "utf-8");
   assert.ok(
-    agentsMd.includes("The 7 Non-Negotiable Agent Rules"),
-    "AGENTS.md must list The 7 Non-Negotiable Agent Rules"
+    agentsMd.includes("The 10 Golden Rules for AI Agents") || agentsMd.includes("The 7 Non-Negotiable Agent Rules"),
+    "AGENTS.md must list the canonical Golden Rules for AI Agents"
   );
   assert.ok(
     !agentsMd.includes("ALLOW_DEV_CLIENTS_IN_PRODUCTION=true"),

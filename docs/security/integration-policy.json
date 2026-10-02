@@ -1,0 +1,326 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "version": "2.1.0",
+  "title": "SWYRA Auth Canonical Machine-Readable Integration Policy",
+  "authority": "NORMATIVE / AUTHORITATIVE",
+  "canonicalSpecification": "docs/AI_AGENT_INTEGRATION_CONTRACT.md",
+  "canonicalArchitecture": {
+    "identityProvider": {
+      "name": "SWYRA Auth",
+      "owns": [
+        "identity",
+        "user_authentication",
+        "oauth_clients",
+        "authorization_codes",
+        "access_tokens",
+        "refresh_tokens",
+        "oidc_id_tokens",
+        "jwks",
+        "discovery",
+        "userinfo",
+        "centralized_session_identity"
+      ]
+    },
+    "consumerApplication": {
+      "owns": [
+        "application_session",
+        "local_business_authorization",
+        "business_data",
+        "application_specific_roles"
+      ],
+      "forbidden": [
+        "direct_database_connection",
+        "duplicate_authentication_engines",
+        "storing_central_passwords"
+      ]
+    }
+  },
+  "goldenRules": [
+    {
+      "ruleNumber": 1,
+      "name": "NO_DUPLICATE_AUTH_SYSTEM",
+      "statement": "NEVER create another authentication system when the centralized IdP is already configured."
+    },
+    {
+      "ruleNumber": 2,
+      "name": "NO_DIRECT_MONGO_ACCESS",
+      "statement": "NEVER connect a consumer directly to the IdP's MongoDB for normal authentication."
+    },
+    {
+      "ruleNumber": 3,
+      "name": "NO_TABLE_COPYING",
+      "statement": "NEVER copy password/session/token tables from the IdP."
+    },
+    {
+      "ruleNumber": 4,
+      "name": "NO_BROWSER_CLIENT_SECRET",
+      "statement": "NEVER expose CLIENT_SECRET to browser code."
+    },
+    {
+      "ruleNumber": 5,
+      "name": "NO_PUBLIC_CONFIDENTIAL_SECRETS",
+      "statement": "NEVER put confidential secrets in NEXT_PUBLIC_*, VITE_*, localStorage, sessionStorage, or frontend source."
+    },
+    {
+      "ruleNumber": 6,
+      "name": "NO_LOCALHOST_PRODUCTION_FALLBACK",
+      "statement": "NEVER create a localhost production fallback."
+    },
+    {
+      "ruleNumber": 7,
+      "name": "NO_RUNTIME_CLIENT_CONFLATION",
+      "statement": "NEVER treat NODE_ENV=production as 'all OAuth clients are production'."
+    },
+    {
+      "ruleNumber": 8,
+      "name": "NO_ISDEV_ISPUBLIC_CONFLATION",
+      "statement": "NEVER treat isDev as isPublic."
+    },
+    {
+      "ruleNumber": 9,
+      "name": "NO_AUTHN_AUTHZ_CONFLATION",
+      "statement": "NEVER treat authentication as application authorization."
+    },
+    {
+      "ruleNumber": 10,
+      "name": "NO_PROTOCOL_VALIDATION_BYPASS",
+      "statement": "NEVER bypass the IdP's redirect URI / PKCE / state validation."
+    }
+  ],
+  "clientTypes": {
+    "public": {
+      "description": "Executed in untrusted client environments (SPAs, mobile apps, desktop native apps) where credentials cannot be kept confidential.",
+      "requiresClientSecret": false,
+      "requiresPKCE": true,
+      "pkceMethods": ["S256"],
+      "tokenExchangeLocation": "browser_or_client",
+      "storageRecommendations": ["in_memory", "transient_session_storage"],
+      "forbiddenStorage": ["local_storage_long_term", "public_environment_variables_for_secrets"],
+      "allowedFrameworks": ["React SPA", "Vite", "Vue", "Angular", "iOS Native", "Android Native"]
+    },
+    "confidential": {
+      "description": "Executed in secure server-side environments (Next.js server, Express, FastAPI, Django, backend services) capable of protecting secrets.",
+      "requiresClientSecret": true,
+      "requiresPKCE": true,
+      "pkceMethods": ["S256"],
+      "tokenExchangeLocation": "server_side_only",
+      "clientAuthenticationMethods": ["client_secret_basic", "client_secret_post"],
+      "storageRecommendations": ["http_only_secure_same_site_cookies", "server_side_session_store"],
+      "allowedFrameworks": ["Next.js App Router BFF", "Express Node.js", "Python FastAPI", "Django", "Go Gin/Fiber", "Spring Boot"]
+    }
+  },
+  "clientModes": {
+    "production": {
+      "flag": { "isDev": false },
+      "targetWorkload": "live_user_facing",
+      "redirectUriProtocol": "https",
+      "allowLoopback": false,
+      "allowPrivateIPs": false,
+      "allowWildcards": false,
+      "enforceHttps": true
+    },
+    "development": {
+      "flag": { "isDev": true },
+      "targetWorkload": "local_consumer_software_development",
+      "allowedHosts": ["localhost", "127.0.0.1", "[::1]"],
+      "redirectUriProtocol": "http",
+      "allowLoopback": true,
+      "allowPrivateIPs": false,
+      "allowWildcards": false,
+      "forbiddenHosts": ["localhost.evil.com", "127.0.0.1.evil.com", "169.254.169.254"]
+    }
+  },
+  "callbackRules": {
+    "production": {
+      "allowedProtocols": ["https:"],
+      "forbiddenHosts": ["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "169.254.169.254"],
+      "forbiddenSchemes": ["http:"],
+      "allowWildcards": false,
+      "allowFragments": false,
+      "requireExactMatch": true
+    },
+    "development": {
+      "allowedProtocols": ["http:", "https:"],
+      "allowedLoopbackHosts": ["localhost", "127.0.0.1", "[::1]"],
+      "forbiddenHosts": ["localhost.evil.com", "127.0.0.1.evil.com", "169.254.169.254"],
+      "forbiddenNetworks": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"],
+      "allowWildcards": false,
+      "allowFragments": false,
+      "requireExactMatch": true
+    },
+    "globalForbidden": [
+      "dynamic_host_header_construction",
+      "arbitrary_request_parameter_construction",
+      "wildcard_subdomains",
+      "wildcard_paths",
+      "url_fragments_in_redirect_uri",
+      "open_redirect_unconstrained_return_to"
+    ]
+  },
+  "credentialRules": {
+    "serverOnly": [
+      "AUTH_ISSUER",
+      "CLIENT_ID",
+      "CLIENT_SECRET",
+      "SESSION_SECRET",
+      "INTERNAL_GATEWAY_SECRET"
+    ],
+    "clientSafe": [
+      "NEXT_PUBLIC_AUTH_ISSUER",
+      "NEXT_PUBLIC_CLIENT_ID",
+      "VITE_AUTH_ISSUER",
+      "VITE_CLIENT_ID"
+    ],
+    "prohibitedPrefixes": [
+      "NEXT_PUBLIC_CLIENT_SECRET",
+      "NEXT_PUBLIC_APP_SECRET",
+      "VITE_CLIENT_SECRET",
+      "VITE_APP_SECRET",
+      "REACT_APP_CLIENT_SECRET"
+    ],
+    "failClosedPolicy": "Missing sensitive configuration must throw an unrecoverable startup error or fail closed. Silent fallbacks to localhost or placeholder secrets are strictly prohibited."
+  },
+  "tokenValidationRules": {
+    "algorithms": {
+      "allowed": ["RS256"],
+      "forbidden": ["none", "HS256", "HS384", "HS512", "RS384", "RS512", "ES256", "ES384", "ES512", "EdDSA"]
+    },
+    "requiredClaims": ["iss", "sub", "aud", "exp", "iat"],
+    "offlineVerification": {
+      "jwksEndpoint": "/.well-known/jwks.json",
+      "cacheJwks": true,
+      "clockToleranceSeconds": 60,
+      "enforceAudience": true,
+      "enforceIssuer": true,
+      "enforceExpiration": true,
+      "rejectAlgorithmMismatch": true
+    }
+  },
+  "forbiddenPatterns": [
+    {
+      "id": "FP-01",
+      "name": "IDP_DIRECT_MONGO_ACCESS",
+      "severity": "CRITICAL",
+      "description": "Connecting consumer applications directly to IdP MongoDB or referencing MONGO_URI.",
+      "remediation": "Interact exclusively via standard OAuth 2.1 / OIDC HTTP endpoints."
+    },
+    {
+      "id": "FP-02",
+      "name": "DUPLICATE_AUTH_ENGINE",
+      "severity": "CRITICAL",
+      "description": "Installing duplicate auth engines (Better Auth, NextAuth, Auth.js, Passport, Supabase, Lucia) in consumer applications.",
+      "remediation": "Use lightweight OAuth client or JWT verification libraries (jose, pyjwt)."
+    },
+    {
+      "id": "FP-03",
+      "name": "EXPOSED_CLIENT_SECRET",
+      "severity": "CRITICAL",
+      "description": "Exposing CLIENT_SECRET to client-side bundles (NEXT_PUBLIC_*, VITE_*, localStorage).",
+      "remediation": "Confidential clients hold secrets server-side only; public clients use PKCE with no secret."
+    },
+    {
+      "id": "FP-04",
+      "name": "LOCALHOST_PRODUCTION_FALLBACK",
+      "severity": "CRITICAL",
+      "description": "Writing fallback expressions like AUTH_CALLBACK_URL || 'http://localhost:3000/callback' or CLIENT_ID || 'dev-client'.",
+      "remediation": "Configuration must fail closed: throw an explicit error on missing environment variables."
+    },
+    {
+      "id": "FP-05",
+      "name": "AUTH_PATH_MISDIRECTION",
+      "severity": "CRITICAL",
+      "description": "Redirecting authorization requests to the internal SPA path '/auth' instead of '/api/auth/oauth2/authorize'.",
+      "remediation": "Always use the protocol authorization endpoint '/api/auth/oauth2/authorize'."
+    },
+    {
+      "id": "FP-06",
+      "name": "OMITTED_PKCE_OR_STATE",
+      "severity": "CRITICAL",
+      "description": "Skipping PKCE (code_challenge / code_verifier) or state parameter in authorization requests.",
+      "remediation": "Generate S256 PKCE challenge and cryptographically random state for every flow."
+    },
+    {
+      "id": "FP-07",
+      "name": "ALGORITHM_CONFUSION_OR_NONE",
+      "severity": "CRITICAL",
+      "description": "Accepting algorithm 'none' or symmetric 'HS256' when verifying IdP RS256 JWTs.",
+      "remediation": "Pin algorithm strictly to RS256 in offline JWT verification options."
+    },
+    {
+      "id": "FP-08",
+      "name": "AUDIENCE_VALIDATION_BYPASS",
+      "severity": "CRITICAL",
+      "description": "Omitting audience validation or treating audience mismatch as a warning.",
+      "remediation": "Strictly verify that token 'aud' matches the consumer application's registered CLIENT_ID."
+    },
+    {
+      "id": "FP-09",
+      "name": "DYNAMIC_REDIRECT_HOST_INJECTION",
+      "severity": "CRITICAL",
+      "description": "Constructing redirect_uri dynamically using the incoming request Host header or untrusted query parameters.",
+      "remediation": "Use explicit, statically configured redirect_uri matching the IdP client registration."
+    },
+    {
+      "id": "FP-10",
+      "name": "OPEN_REDIRECT_RETURN_TO",
+      "severity": "HIGH",
+      "description": "Permitting post-login returnTo destinations pointing to external URLs (https://evil.com or //evil.com).",
+      "remediation": "Validate that returnTo is a relative path starting with '/' and not '//'."
+    },
+    {
+      "id": "FP-11",
+      "name": "GLOBAL_CORS_WILDCARD",
+      "severity": "HIGH",
+      "description": "Configuring Access-Control-Allow-Origin: '*' to 'fix OAuth'.",
+      "remediation": "Configure CORS origins strictly per registered client policy; do not conflate CORS origin with redirect URI."
+    },
+    {
+      "id": "FP-12",
+      "name": "ENV_BASED_AUTH_BYPASS",
+      "severity": "CRITICAL",
+      "description": "Bypassing authentication or token checks when NODE_ENV !== 'production'.",
+      "remediation": "Enforce authentication unconditionally; use mock providers or test harnesses in tests instead of code bypasses."
+    },
+    {
+      "id": "FP-13",
+      "name": "DISABLE_AUTH_FLAG",
+      "severity": "CRITICAL",
+      "description": "Introducing DISABLE_AUTH or SKIP_AUTH flags into application logic or production configuration.",
+      "remediation": "Remove all authentication bypass flags; security controls must remain intact across all environments."
+    },
+    {
+      "id": "FP-14",
+      "name": "CONFLATING_ISDEV_WITH_ISPUBLIC",
+      "severity": "HIGH",
+      "description": "Treating isDev as isPublic or assuming development clients are public SPAs.",
+      "remediation": "isDev controls loopback URI permission; isPublic controls whether client possesses a secret or has open tenant access."
+    },
+    {
+      "id": "FP-15",
+      "name": "CONFLATING_AUTHN_WITH_AUTHZ",
+      "severity": "HIGH",
+      "description": "Treating successful IdP authentication as application authorization or administrator access.",
+      "remediation": "Implement consumer-level business authorization checks independently of IdP identity."
+    }
+  ],
+  "securityReviewQuestions": [
+    "1. Is the client public or confidential?",
+    "2. Is this client development or production?",
+    "3. Is the callback URI exactly registered?",
+    "4. Is the production callback HTTPS?",
+    "5. Is localhost used only for explicitly configured development?",
+    "6. Is CLIENT_SECRET server-only?",
+    "7. Is PKCE S256 enabled?",
+    "8. Is state validated?",
+    "9. Is issuer validated?",
+    "10. Is audience validated?",
+    "11. Is the JWT cryptographically verified?",
+    "12. Is returnTo constrained?",
+    "13. Is logout correctly separated?",
+    "14. Is application authorization separate from authentication?",
+    "15. Is IdP MongoDB untouched?",
+    "16. Can auth fail open?",
+    "17. Is there a development bypass that can activate in production?",
+    "18. Are production and development configuration isolated?"
+  ]
+}

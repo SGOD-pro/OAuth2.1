@@ -1,11 +1,11 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { generateCodeVerifier, generateCodeChallenge, generateState } from '@/lib/oauth';
+import { generateCodeVerifier, generateCodeChallenge, generateState, requireEnv } from '@/lib/oauth';
 
 export async function GET() {
-  const issuer = process.env.AUTH_ISSUER || 'http://localhost:3000';
-  const clientId = process.env.CLIENT_ID || '';
-  const redirectUri = process.env.AUTH_CALLBACK_URL || 'http://localhost:3001/api/auth/callback';
+  const issuer = requireEnv('AUTH_ISSUER');
+  const clientId = requireEnv('CLIENT_ID');
+  const redirectUri = requireEnv('AUTH_CALLBACK_URL');
 
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);

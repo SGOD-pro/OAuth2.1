@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 const CLIENT_ID   = import.meta.env.VITE_CLIENT_ID   || '(not set)';
 
 interface UserProfile {

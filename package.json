@@ -1,0 +1,11 @@
+{
+  "name": "swyra-auth-monorepo",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "security:integration-check": "./backend/node_modules/.bin/tsx scripts/security/check-integration-contract.ts",
+    "security:docs-check": "npm --prefix backend run security:docs-check",
+    "test:all-security": "npm --prefix backend run test:all-security"
+  }
+}

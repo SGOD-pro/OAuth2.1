@@ -58,7 +58,7 @@ SWYRA Auth runs on serverless compute (AWS Lambda / Vercel Serverless) where dir
      |       4. Scoped/Super Admin Authorization Checks --------> NO  --> 403 Forbidden
      |       5. Authorized Mutation & Audit Log
      |
-     +---> Public Protocol Surface (/oauth2/authorize, /token, /userinfo, /.well-known/*)
+     +---> Public Protocol Surface (/api/auth/oauth2/authorize, /api/auth/oauth2/token, /api/auth/oauth2/userinfo, /.well-known/*)
              Intentionally public protocol surface; exempted from gateway secret;
              protected by TLS, PKCE, CORS, and per-IP rate limiting.
 ```
@@ -158,17 +158,20 @@ SWYRA Auth implements RFC 6749 and OAuth 2.1 draft specifications for refresh to
 
 ---
 
-## 7. The 7 Non-Negotiable Rules for Consumer Applications
+## 7. The 10 Non-Negotiable Golden Rules for Consumer Applications
 
 Consumer applications integrating with SWYRA Auth MUST adhere to these rules:
 
 1. **NEVER connect to or query the SWYRA Auth MongoDB database.** All interaction occurs via standard OAuth 2.1 / OIDC or App-Admin HTTP endpoints.
 2. **NEVER install duplicate authentication engines in consumer apps.** Do NOT install Better Auth, NextAuth/Auth.js, Passport, or Supabase Auth in consumer apps. Use lightweight JWT/JWKS verification (`jose`, `pyjwt`).
-3. **NEVER redirect authorization requests to `/auth`.** The OAuth 2.1 authorization endpoint is `/api/auth/oauth2/authorize`.
+3. **NEVER copy password/session/token tables from the IdP.** Centralized identity and token state belong exclusively to the IdP.
 4. **NEVER expose `client_secret` to client-side code.** Public clients (SPAs) do not have secrets. Confidential backends keep secrets in server-only environment variables.
-5. **ALWAYS use PKCE (`code_challenge` + `code_verifier`) and `state`.** OAuth 2.1 mandates PKCE for all authorization flows.
-6. **ALWAYS validate Access Tokens offline using the JWKS endpoint.** Resource servers verify RS256 JWTs against `${AUTH_ISSUER}/.well-known/jwks.json`, checking `iss`, `aud`, and `exp`.
-7. **Maintain clean separation of concerns.** Reference users solely by their permanent subject identifier (`sub` claim).
+5. **NEVER put confidential secrets in public environment variables or client storage.** Do not use `NEXT_PUBLIC_*`, `VITE_*`, `localStorage`, or `sessionStorage` for secrets.
+6. **NEVER create a localhost production fallback.** Missing configuration must fail closed (`AUTH_CALLBACK_URL || "http://localhost..."` is strictly forbidden).
+7. **NEVER treat NODE_ENV=production as "all OAuth clients are production".** The IdP runtime environment is separate from client mode (`isDev`).
+8. **NEVER treat isDev as isPublic.** `isDev` governs loopback URI permissions; `isPublic` governs tenant access and secret requirement. They are independent dimensions.
+9. **NEVER treat authentication as application authorization.** The IdP provides identity authentication; consumer apps own application permissions and roles.
+10. **NEVER bypass the IdP's redirect URI / PKCE / state validation.** OAuth 2.1 mandates PKCE (`S256`) and cryptographically random `state` on all flows.
 
 ---
 
@@ -195,18 +198,23 @@ The repository executes 14 blocking security test suites via `npm run test:all-s
 
 ---
 
-## 9. Automated Documentation Consistency Gate
+## 9. Automated Documentation & Integration Consistency Gates
 
-Any modifications to code, routes, test suites, or documentation are validated using:
+Any modifications to code, routes, test suites, or documentation are validated using automated gates:
 
 ```bash
+# Documentation consistency gate
 npm run security:docs-check
+
+# AI Agent Integration Contract and policy gate
+npm run security:integration-check
 ```
 
-This gate enforces that:
-- All required canonical documents and manifests exist.
+These gates enforce that:
+- All required canonical documents and manifests exist (`SECURITY_CANONICAL.md`, `integration-policy.json`, etc.).
 - `package.json` test scripts match `docs/security/security-suite-manifest.json`.
 - `test:all-security` includes all blocking suites.
 - Terminology across all markdown files adheres to this canonical standard.
 - Environment variables in documentation match `src/config/schema.ts`.
 - Route descriptions match `docs/security/security-route-manifest.json`.
+- Consumer code templates and documentation strictly obey `docs/security/integration-policy.json` with zero localhost fallbacks.

@@ -13,7 +13,7 @@ export default async function HomePage(props: {
   }
 
 
-  const issuer = process.env.AUTH_ISSUER || 'http://localhost:3000';
+  const issuer = process.env.AUTH_ISSUER || '(Not set)';
   const clientId = process.env.CLIENT_ID || '(Not set)';
 
   return (

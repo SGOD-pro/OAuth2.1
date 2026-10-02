@@ -21,14 +21,22 @@ export function generateState(): string {
   return crypto.randomBytes(16).toString('base64url');
 }
 
+export function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value || value.trim() === '') {
+    throw new Error(`[Configuration Error] Missing required environment variable: ${name}`);
+  }
+  return value.trim();
+}
+
 export async function exchangeCodeForTokens(
   code: string,
   codeVerifier: string,
   redirectUri: string
 ): Promise<TokenResponse> {
-  const issuer = process.env.AUTH_ISSUER || 'http://localhost:3000';
-  const clientId = process.env.CLIENT_ID || '';
-  const clientSecret = process.env.CLIENT_SECRET || '';
+  const issuer = requireEnv('AUTH_ISSUER');
+  const clientId = requireEnv('CLIENT_ID');
+  const clientSecret = requireEnv('CLIENT_SECRET');
 
   const tokenEndpoint = `${issuer}/api/auth/oauth2/token`;
   const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -59,7 +67,7 @@ export async function exchangeCodeForTokens(
 }
 
 export async function getUserInfo(accessToken: string) {
-  const issuer = process.env.AUTH_ISSUER || 'http://localhost:3000';
+  const issuer = requireEnv('AUTH_ISSUER');
   const response = await fetch(`${issuer}/api/auth/oauth2/userinfo`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,

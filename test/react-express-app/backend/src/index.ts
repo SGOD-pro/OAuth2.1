@@ -11,10 +11,18 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '4000', 10);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5175';
 
-const AUTH_ISSUER = process.env.AUTH_ISSUER || 'http://localhost:3000';
-const CLIENT_ID = process.env.CLIENT_ID || '';
-const CLIENT_SECRET = process.env.CLIENT_SECRET || '';
-const CALLBACK_URL = process.env.AUTH_CALLBACK_URL || `http://localhost:${PORT}/auth/callback`;
+function requireEnv(key: string): string {
+  const val = process.env[key];
+  if (!val || val.trim() === '') {
+    throw new Error(`[Configuration Error] Missing required environment variable: ${key}`);
+  }
+  return val.trim();
+}
+
+const AUTH_ISSUER = requireEnv('AUTH_ISSUER');
+const CLIENT_ID = requireEnv('CLIENT_ID');
+const CLIENT_SECRET = requireEnv('CLIENT_SECRET');
+const CALLBACK_URL = requireEnv('AUTH_CALLBACK_URL');
 
 const allowedOrigins = [
   CLIENT_ORIGIN,

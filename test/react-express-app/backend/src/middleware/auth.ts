@@ -56,11 +56,14 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
     return next();
   }
 
-  const issuer = process.env.AUTH_ISSUER || 'http://localhost:3000';
-  const clientId = process.env.CLIENT_ID || '';
-  const clientSecret = process.env.CLIENT_SECRET || '';
+  const issuer = process.env.AUTH_ISSUER;
+  const clientId = process.env.CLIENT_ID;
+  const clientSecret = process.env.CLIENT_SECRET;
+  if (!issuer || !clientId) {
+    return res.status(500).json({ error: 'misconfigured', message: 'Missing AUTH_ISSUER or CLIENT_ID in environment' });
+  }
   const publicKey = process.env.PUBLIC_KEY ? process.env.PUBLIC_KEY.replace(/\\n/g, '\n') : '';
-  const jwksUrl = process.env.JWKS_URL || `${issuer}/api/auth/jwks`;
+  const jwksUrl = process.env.JWKS_URL || `${issuer}/.well-known/jwks.json`;
 
   try {
     // Approach 1: Fast Offline JWT Verification (via Public Key or JWKS)
