@@ -1132,8 +1132,8 @@ admin.post("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
   }
 });
 
-// 12. Update Application Admin
-admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c) => {
+// 12. Update Application Admin (supports PUT and PATCH)
+const updateAppAdminHandler = async (c: any) => {
   const clientId = c.req.param("clientId");
   const adminId = c.req.param("adminId");
   const body = await c.req.json().catch(() => ({}));
@@ -1264,7 +1264,9 @@ admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c)
     console.error("[ADMIN_UPDATE_APP_ADMIN] Error:", err);
     return c.json({ error: err?.message || "Failed to update administrator" }, 500);
   }
-});
+};
+admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, updateAppAdminHandler);
+admin.patch("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, updateAppAdminHandler);
 
 // 13. Delete Application Admin
 admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c) => {

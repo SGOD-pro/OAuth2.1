@@ -345,6 +345,19 @@ const scopedLoginRes = await app.request("/api/auth/sign-in/email", {
 assert.equal(scopedLoginRes.status, 200);
 const scopedCookie = scopedLoginRes.headers.get("set-cookie") || "";
 
+const normalUserEmail = `gw_user_${crypto.randomBytes(4).toString("hex")}@example.com`;
+const normalUserPass = "NormalUser@1234!";
+await authProvider.api.signUpEmail({
+  body: { email: normalUserEmail, password: normalUserPass, name: "Gateway Normal User" },
+});
+const normalLoginRes = await app.request("/api/auth/sign-in/email", {
+  method: "POST",
+  headers: getTestHeaders({ Origin: process.env.FRONTEND_URL || "https://app.example.com" }),
+  body: JSON.stringify({ email: normalUserEmail, password: normalUserPass }),
+});
+assert.equal(normalLoginRes.status, 200);
+const normalCookie = normalLoginRes.headers.get("set-cookie") || "";
+
 const trustedGatewaySecret = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 
 await runTest("GATEWAY-1: Direct Lambda URL + Valid Admin Session + No Gateway Secret => DENIED (403)", async () => {
@@ -414,6 +427,38 @@ await runTest("GATEWAY-5: Valid Scoped-Admin Session + Valid Gateway + Target Ot
   assert.equal(res.status, 403, "Scoped admin targeting other client must return 403 forbidden");
   const data = await res.json();
   assert.equal(data.error, "forbidden");
+});
+
+await runTest("GATEWAY-6: Gateway Secret + Normal User Session => DENIED (403)", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: normalCookie,
+      Origin: process.env.FRONTEND_URL || "https://app.example.com",
+      "x-gateway-secret": trustedGatewaySecret,
+    }),
+  });
+  assert.equal(res.status, 403, "Gateway secret with normal user session must return 403 forbidden");
+});
+
+await runTest("GATEWAY-7: Unconfigured Gateway Secret on Server => FAILS CLOSED (403)", async () => {
+  const orig = process.env.INTERNAL_GATEWAY_SECRET;
+  try {
+    process.env.INTERNAL_GATEWAY_SECRET = "";
+    const res = await app.request("/api/admin/clients", {
+      method: "GET",
+      headers: getTestHeaders({
+        Cookie: superCookie,
+        Origin: process.env.FRONTEND_URL || "https://app.example.com",
+        "x-gateway-secret": trustedGatewaySecret,
+      }),
+    });
+    assert.equal(res.status, 403, "Unconfigured gateway secret on server must fail closed with 403");
+  } finally {
+    if (orig !== undefined) {
+      process.env.INTERNAL_GATEWAY_SECRET = orig;
+    }
+  }
 });
 
 console.log(`  DIRECT BACKEND SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);

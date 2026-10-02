@@ -37,14 +37,28 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
 /**
  * Gateway Trust Perimeter Helper:
  * Validates that requests entering management surfaces originate from the trusted
- * API Gateway / reverse proxy when config.internalGatewaySecret is configured.
+ * API Gateway / reverse proxy.
+ *
+ * FAIL-CLOSED PRIMITIVE:
+ * - Missing configured gateway secret => FAILS (false)
+ * - Missing or invalid header => FAILS (false)
+ * - Valid secret => SUCCEEDS (true)
+ * Never allows missing secret to result in a trusted request.
  */
 function verifyGatewaySecret(c: any): boolean {
-  if (!config.internalGatewaySecret) {
-    return true;
+  try {
+    const configuredSecret = config.internalGatewaySecret;
+    if (!configuredSecret || typeof configuredSecret !== "string" || configuredSecret.length === 0) {
+      return false;
+    }
+    const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
+    if (!gatewayHeader || typeof gatewayHeader !== "string") {
+      return false;
+    }
+    return timingSafeEqualStr(gatewayHeader, configuredSecret);
+  } catch {
+    return false;
   }
-  const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
-  return Boolean(gatewayHeader && timingSafeEqualStr(gatewayHeader, config.internalGatewaySecret));
 }
 
 /**
