@@ -1,7 +1,7 @@
 import { Context, Next } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { config } from "../config";
-import { timingSafeEqualStr } from "../utils/security";
+import { isLoopbackHost, timingSafeEqualStr } from "../utils/security";
 
 const CSRF_HEADER = "x-csrf-token";
 const CSRF_COOKIE = "csrf_token";
@@ -45,19 +45,35 @@ export async function csrfProtection(c: Context, next: Next) {
       }
     }
 
+    // 3. For local development, permit loopback origins if the server itself is accessed on loopback or non-production
+    if (origin) {
+      try {
+        const originUrl = new URL(origin);
+        const hostHeader = c.req.header("host");
+        const hostName = hostHeader ? hostHeader.split(":")[0].replace(/^\[|\]$/g, "") : "";
+        const isServerLoopback = isLoopbackHost(hostName);
+        if (isLoopbackHost(originUrl.hostname) && (isServerLoopback || config.env !== "production")) {
+          return await next();
+        }
+      } catch {}
+    }
+
     return c.json({ error: "CSRF validation failed: Origin not authorized or missing token" }, 403);
   }
 
   let token = getCookie(c, CSRF_COOKIE);
   if (!token) {
     token = generateToken();
+    const proto = c.req.header("x-forwarded-proto") || (c.req.url.startsWith("https://") ? "https" : "http");
+    const isHttps = proto === "https";
     setCookie(c, CSRF_COOKIE, token, {
       httpOnly: false,
-      sameSite: config.env === "production" ? "none" : "lax",
-      secure: config.env === "production",
+      sameSite: isHttps && config.env === "production" ? "none" : "lax",
+      secure: isHttps && config.env === "production",
       path: "/",
     });
   }
 
   await next();
 }
+

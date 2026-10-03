@@ -1,16 +1,29 @@
 {
-  "rewrites": [
+  "routes": [
     {
-      "source": "/api/:path*",
-      "destination": "https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/api/:path*"
+      "src": "/api/(.*)",
+      "dest": "https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/api/$1",
+      "transforms": [
+        {
+          "type": "request.headers",
+          "op": "set",
+          "target": {
+            "key": "x-gateway-secret"
+          },
+          "args": "d5856917521ffced0389502158237cd3b33975ae92a2b584f324e5e63171ae58"
+        }
+      ]
     },
     {
-      "source": "/.well-known/:path*",
-      "destination": "https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/.well-known/:path*"
+      "src": "/.well-known/(.*)",
+      "dest": "https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/.well-known/$1"
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }

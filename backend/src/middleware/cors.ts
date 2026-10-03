@@ -93,8 +93,18 @@ export async function dynamicCors(c: Context, next: Next) {
   const normalizedOrigin = origin ? normalizeOrigin(origin) : null;
 
   // Allow internal frontend (and same-origin / non-browser requests without Origin)
-  // In development, also permit local loopback origins (localhost / 127.0.0.1)
-  const isDevLoopback = config.env !== "production" && normalizedOrigin && isLoopbackHost(new URL(normalizedOrigin).hostname);
+  // In development (or when server is accessed locally), also permit local loopback origins (localhost / 127.0.0.1)
+  const hostHeader = c.req.header("host");
+  const hostName = hostHeader ? hostHeader.split(":")[0].replace(/^\[|\]$/g, "") : "";
+  const isServerLoopback = isLoopbackHost(hostName);
+  let isDevLoopback = false;
+  if (normalizedOrigin && (config.env !== "production" || isServerLoopback)) {
+    try {
+      isDevLoopback = isLoopbackHost(new URL(normalizedOrigin).hostname);
+    } catch {
+      isDevLoopback = false;
+    }
+  }
   if (!normalizedOrigin || normalizedOrigin === ownFrontend || isDevLoopback) {
     applyCorsHeaders(c, normalizedOrigin || ownFrontend);
 

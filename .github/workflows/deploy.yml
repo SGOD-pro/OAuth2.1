@@ -256,10 +256,15 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          INTERNAL_GATEWAY_SECRET: ${{ secrets.INTERNAL_GATEWAY_SECRET }}
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
             echo "::error::VERCEL_TOKEN secret is not set in GitHub repository secrets. Deployment skipped."
             exit 1
+          fi
+
+          if [ -n "$INTERNAL_GATEWAY_SECRET" ]; then
+            node scripts/prepare-vercel-config.mjs
           fi
 
           echo "Linking Vercel Project..."

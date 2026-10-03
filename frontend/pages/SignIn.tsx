@@ -104,13 +104,18 @@ export const SignIn: React.FC = () => {
 
       if (res?.error) {
         setRedirecting(false);
-        if (res.error.message?.toLowerCase().includes("two factor") || res.error.status === 403) {
+        setLoading(false);
+        const is2FA =
+          res.error.message?.toLowerCase().includes("two factor") ||
+          res.error.message?.toLowerCase().includes("two-factor") ||
+          (res.error as unknown as { code?: string }).code === "TWO_FACTOR_REQUIRED";
+        if (is2FA) {
+          toast.info('Two-factor authentication required. Please complete verification.');
           return;
         }
         const msg = res.error.message || 'Invalid email or password. Please check your credentials.';
         setError(msg);
         toast.error(msg);
-        setLoading(false);
       } else {
         const dest = (res?.data as { url?: string } | undefined)?.url || callbackURL;
         if (dest) {

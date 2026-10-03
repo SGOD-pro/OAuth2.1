@@ -4,7 +4,7 @@ import { admin, jwt, twoFactor } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { client, database } from "../db/mongo";
-import { isStrongPassword } from "./security";
+import { isLoopbackHost, isStrongPassword } from "./security";
 
 
 export const AUTH_INSTANCE = Symbol("AUTH_INSTANCE");
@@ -13,11 +13,33 @@ export type AuthInstance = ReturnType<typeof betterAuth>;
 export const authProvider = betterAuth({
     appName: "SWYRA Auth", // TOTP issuer label shown in authenticator apps
     baseURL: config.auth.baseURL,
-    trustedOrigins: [
-        config.frontendUrl,
-        ...(config.env !== "production" ? ["http://localhost:5173", "http://localhost:3000", "https://app.example.com"] : []),
-        "https://oauth21.vercel.app"
-    ].filter(Boolean),
+    trustedOrigins: async (request?: Request) => {
+        const origins = new Set<string>([
+            config.frontendUrl,
+            "https://oauth21.vercel.app",
+            "https://app.example.com",
+            "http://localhost:5174",
+            "http://localhost:5173",
+            "http://localhost:3000",
+            "http://localhost:5175",
+            "http://localhost:3001",
+            "http://127.0.0.1:5174",
+            "http://127.0.0.1:3000",
+        ].filter(Boolean));
+
+        if (request) {
+            const reqOrigin = request.headers.get("origin");
+            if (reqOrigin) {
+                try {
+                    const u = new URL(reqOrigin);
+                    if (isLoopbackHost(u.hostname)) {
+                        origins.add(u.origin);
+                    }
+                } catch {}
+            }
+        }
+        return Array.from(origins);
+    },
     secret: config.auth.secret,
 
     emailAndPassword: {

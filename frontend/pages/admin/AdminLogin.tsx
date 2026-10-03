@@ -70,7 +70,11 @@ export const AdminLogin: React.FC = () => {
       });
 
       if (res?.error) {
-        if (res.error.message?.toLowerCase().includes("two factor") || res.error.status === 403) {
+        const is2FA =
+          res.error.message?.toLowerCase().includes("two factor") ||
+          res.error.message?.toLowerCase().includes("two-factor") ||
+          (res.error as unknown as { code?: string }).code === "TWO_FACTOR_REQUIRED";
+        if (is2FA) {
           navigate('/admin/two-factor');
           return;
         }
