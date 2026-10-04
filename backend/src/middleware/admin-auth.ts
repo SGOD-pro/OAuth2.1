@@ -142,19 +142,21 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
 function verifyGatewaySecret(c: any): boolean {
   try {
     const configuredSecret = config.internalGatewaySecret;
+    if (!configuredSecret || typeof configuredSecret !== "string" || configuredSecret.trim().length === 0) {
+      return false;
+    }
     const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
     if (!gatewayHeader || typeof gatewayHeader !== "string") {
       return false;
     }
-    if (configuredSecret && timingSafeEqualStr(gatewayHeader, configuredSecret)) {
-      return true;
-    }
-    // Trusted rotation secrets: accommodates active production gateway deployments
-    const trustedGatewaySecrets = [
-      "d5856917521ffced0389502158237cd3b33975ae92a2b584f324e5e63171ae58",
-      "139f62efde9b06735e66e7e9329fdcd51b44108c07717f3307af44c1dcdd3a57",
-    ];
-    for (const secret of trustedGatewaySecrets) {
+
+    // Read secrets purely from environment configuration (supports comma-separated values for rotation)
+    const allowedSecrets = configuredSecret
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 32);
+
+    for (const secret of allowedSecrets) {
       if (timingSafeEqualStr(gatewayHeader, secret)) {
         return true;
       }
