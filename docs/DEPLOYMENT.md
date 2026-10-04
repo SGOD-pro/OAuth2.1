@@ -86,7 +86,7 @@ The `INTERNAL_GATEWAY_SECRET` authenticates the edge proxy to the Lambda functio
    ```bash
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
-2. **Update AWS Lambda:** Update the `InternalGatewaySecret` parameter in `backend/samconfig.toml` and redeploy the Lambda function.
+2. **Update AWS Lambda:** Provide the new `INTERNAL_GATEWAY_SECRET` via CI/CD secret injection or `--parameter-overrides InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"` during SAM deploy (never commit the plaintext secret to `samconfig.toml`).
 3. **Update Vercel:** Update `INTERNAL_GATEWAY_SECRET` in Vercel Project Settings and re-run deployment.
 4. **Update `backend/.env`:** Update the local environment file for testing.
 5. **Verify Perimeter:** Execute `npm run test:direct-backend` to ensure the new secret is active and invalid secrets are rejected (403).
@@ -107,7 +107,7 @@ Before directing live user traffic to SWYRA Auth, verify:
 - [ ] `NODE_ENV` is set to `production` on both Lambda and edge environments.
 - [ ] `ALLOW_DEV_CLIENTS_IN_PRODUCTION` is set to `false`.
 - [ ] `INTERNAL_GATEWAY_SECRET` is non-empty, high-entropy, and matches between Vercel and Lambda.
-- [ ] `INTERNAL_GATEWAY_SECRET` is NOT hardcoded in git-tracked `vercel.json` files.
+- [ ] `INTERNAL_GATEWAY_SECRET` is NOT hardcoded in git-tracked `vercel.json` or `samconfig.toml` files.
 - [ ] `TRUSTED_PROXY_CIDRS` is configured with the proxy IP ranges.
 - [ ] MongoDB connection uses TLS and connects to a replica set with transaction support.
 - [ ] All 15 security test suites pass: `npm run test:all-security`.

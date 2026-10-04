@@ -15,8 +15,6 @@ process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com"
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
-process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
-process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
 process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 
 const { default: app } = await import("../../src/app");
@@ -185,33 +183,14 @@ await runTest("DIR-6: Stolen regular user session DENIED on admin endpoints", as
 // --------------------------------------------------------------------------
 // TEST 7: App Admin Endpoints Require Bearer Token and Reject Direct Curl
 // --------------------------------------------------------------------------
-await runTest("DIR-7: App Admin management endpoints DENY unauthenticated direct curl", async () => {
+await runTest("DIR-7: App Admin legacy endpoints return HTTP 410 Gone", async () => {
   const res = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
     headers: getTestHeaders({ "User-Agent": "curl/8.5.0", Origin: "" }),
   });
-  assert.ok(
-    res.status === 400 || res.status === 401,
-    `App admin verify must reject unauthenticated direct curl, got ${res.status}`
-  );
+  assert.equal(res.status, 410, "App admin legacy verify must return 410 Gone");
   const data = await res.json();
-  assert.equal(data.valid, false);
-
-  const forgedRes = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders({
-      "User-Agent": "curl/8.5.0",
-      Authorization: "Bearer forged-jwt-token-string",
-    }),
-    body: JSON.stringify({
-      client_id: "any-client",
-      client_secret: "any-secret",
-      token: "forged-jwt-token-string",
-    }),
-  });
-  assert.equal(forgedRes.status, 401, "Forged Bearer token must return 401");
-  const forgedData = await forgedRes.json();
-  assert.equal(forgedData.valid, false);
+  assert.equal(data.error, "endpoint_retired");
 });
 
 // --------------------------------------------------------------------------

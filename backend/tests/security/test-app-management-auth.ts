@@ -8,8 +8,6 @@ process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "http://localhost:3000";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
 process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
-process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
-process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "127.0.0.1/32,10.0.0.0/8";
 
 import assert from "node:assert/strict";
@@ -176,8 +174,8 @@ const appAdminLoginRes = await app.request("/api/auth/app-admin/login", {
     password: appAdminPass,
   }),
 });
-const appAdminLoginData = await appAdminLoginRes.json();
-const appAdminJwt = appAdminLoginData.token || "";
+assert.equal(appAdminLoginRes.status, 410, "Legacy app-admin login endpoint must be retired (410)");
+const appAdminJwt = "legacy-retired-app-admin-token";
 
 // 5. Fake OAuth Access Token
 const oauthAccessToken = "swyra_at_" + crypto.randomBytes(24).toString("hex");

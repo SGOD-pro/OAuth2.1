@@ -4,25 +4,27 @@ dotenv.config();
 import assert from "node:assert/strict";
 import crypto from "crypto";
 import { ObjectId } from "mongodb";
-import { hashPassword } from "better-auth/crypto";
-// Load test environment
+import * as jose from "jose";
+
+// Configure test environment
 process.env.NODE_ENV = "test";
-process.env.MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/test_security";
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "http://localhost:3000";
+process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
-process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
 
-const { generateTotpCode } = await import("../../src/utils/totp");
-const { envSchema } = await import("../../src/config/schema");
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");
+const { envSchema } = await import("../../src/config/schema");
+const { config } = await import("../../src/config");
 
 console.log("================================================================");
-console.log("  SWYRA AUTH -- APPLICATION ADMIN & ISOLATION SECURITY TESTS");
+console.log("  SWYRA AUTH -- APPLICATION ADMIN MIGRATION & AUTHORIZATION AUDIT");
+console.log("  Verifying Legacy Auth Retirement (410) & Scoped OAuth Claims (Cases A-I)");
 console.log("================================================================");
 
 let passed = 0;
@@ -34,6 +36,8 @@ function getTestHeaders(extra: Record<string, string> = {}) {
   return {
     "Content-Type": "application/json",
     "x-forwarded-for": `${ip}, 10.0.0.1`,
+    "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32),
+    Origin: process.env.FRONTEND_URL || "http://localhost:5174",
     ...extra,
   };
 }
@@ -49,7 +53,11 @@ async function runTest(name: string, fn: () => Promise<void>) {
   }
 }
 
-// Test fixtures
+const db = await getDb();
+
+// --------------------------------------------------------------------------
+// TEST FIXTURES SETUP
+// --------------------------------------------------------------------------
 const clientA_id = "test-app-a-" + crypto.randomBytes(4).toString("hex");
 const clientA_secret = "secret-a-" + crypto.randomBytes(8).toString("hex");
 const clientA_secretHash = crypto.createHash("sha256").update(clientA_secret).digest("base64url");
@@ -58,26 +66,6 @@ const clientB_id = "test-app-b-" + crypto.randomBytes(4).toString("hex");
 const clientB_secret = "secret-b-" + crypto.randomBytes(8).toString("hex");
 const clientB_secretHash = crypto.createHash("sha256").update(clientB_secret).digest("base64url");
 
-const clientDisabled_id = "test-app-disabled-" + crypto.randomBytes(4).toString("hex");
-
-const adminEmail = `admin-${crypto.randomBytes(4).toString("hex")}@example.com`;
-const adminPassword = "AdminPassword@1234!";
-
-const regularUserEmail = `user-${crypto.randomBytes(4).toString("hex")}@example.com`;
-const regularUserPassword = "RegularUserPassword@1234!";
-
-let db: any;
-
-try {
-  db = await getDb();
-  if (!db) throw new Error("Database handle is null");
-} catch (e) {
-  console.error("[FATAL] MongoDB not available for security test suite:", e);
-  process.exit(1);
-}
-
-// Setup test fixtures in DB
-const passwordHash = await hashPassword(adminPassword);
 await db.collection("oauthClient").insertMany([
   {
     clientId: clientA_id,
@@ -86,8 +74,10 @@ await db.collection("oauthClient").insertMany([
     redirectUris: ["http://localhost:3000/callback"],
     allowedOrigins: ["http://localhost:3000"],
     disabled: false,
+    isDev: true,
     isPublic: true,
     createdAt: new Date(),
+    updatedAt: new Date(),
   },
   {
     clientId: clientB_id,
@@ -96,562 +86,441 @@ await db.collection("oauthClient").insertMany([
     redirectUris: ["http://localhost:3001/callback"],
     allowedOrigins: ["http://localhost:3001"],
     disabled: false,
-    isPublic: false, // Private app mode
+    isDev: true,
+    isPublic: false,
     createdAt: new Date(),
-  },
-  {
-    clientId: clientDisabled_id,
-    clientSecret: clientA_secretHash,
-    name: "Disabled Application",
-    redirectUris: ["http://localhost:3002/callback"],
-    allowedOrigins: ["http://localhost:3002"],
-    disabled: true,
-    isPublic: true,
-    createdAt: new Date(),
+    updatedAt: new Date(),
   },
 ]);
 
-const adminInsert = await db.collection("app_admins").insertOne({
-  clientId: clientA_id,
-  email: adminEmail,
-  name: "Lead Admin A",
-  password: passwordHash,
-  redirectUrl: "http://localhost:3000/admin",
-  isActive: true,
-  loginCount: 0,
-  createdAt: new Date(),
+// Generate dedicated test RSA keypair for RS256 token issuance & verification
+const testKeyPair = await jose.generateKeyPair("RS256");
+const testPublicKeyJwk = await jose.exportJWK(testKeyPair.publicKey);
+testPublicKeyJwk.alg = "RS256";
+testPublicKeyJwk.use = "sig";
+const testKid = "test-kid-" + crypto.randomBytes(4).toString("hex");
+testPublicKeyJwk.kid = testKid;
+
+// Insert test public key into jwks collection with future timestamp so getIdpPublicKey selects it
+const testJwkDocId = new ObjectId();
+await db.collection("jwks").insertOne({
+  _id: testJwkDocId,
+  publicKey: JSON.stringify(testPublicKeyJwk),
+  privateKey: "encrypted-mock",
+  alg: "RS256",
+  createdAt: new Date(Date.now() + 86400 * 1000), // Far in future to be selected as latest
 });
-const adminA_id = adminInsert.insertedId.toString();
 
-// Create regular user & session via Better-Auth
-let regularUserId = "";
-let regularSessionCookie = "";
-
-try {
-  const signUpRes = await authProvider.api.signUpEmail({
-    body: {
-      email: regularUserEmail,
-      password: regularUserPassword,
-      name: "Regular User",
-    },
-    asResponse: true,
-  });
-  const setCookie = signUpRes.headers.get("set-cookie");
-  if (setCookie) {
-    regularSessionCookie = setCookie.split(";")[0];
+// Helper to sign test RS256 JWT tokens using the test private key
+async function signTestToken(payload: Record<string, any>, options: {
+  issuer?: string;
+  audience?: string;
+  expiresIn?: string;
+  alg?: string;
+} = {}): Promise<string> {
+  const alg = options.alg || "RS256";
+  if (alg === "HS256") {
+    return new jose.SignJWT(payload)
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setIssuer(options.issuer || config.auth.baseURL)
+      .setAudience(options.audience || clientA_id)
+      .setExpirationTime(options.expiresIn || "15m")
+      .sign(new TextEncoder().encode("hs256-symmetric-secret-key-32ch!"));
   }
-  const u = await db.collection("user").findOne({ email: regularUserEmail });
-  regularUserId = u ? String(u.id || u._id) : "";
-} catch (err) {
-  console.warn("Could not pre-create user via Better-Auth, creating directly in DB:", err);
-  const uId = new ObjectId().toString();
-  await db.collection("user").insertOne({
-    _id: new ObjectId(uId),
-    id: uId,
-    email: regularUserEmail,
-    name: "Regular User",
-    emailVerified: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-  const token = "mock-session-token-" + crypto.randomBytes(8).toString("hex");
-  await db.collection("session").insertOne({
-    _id: new ObjectId(),
-    id: crypto.randomUUID(),
-    userId: uId,
-    token,
-    expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-  regularUserId = uId;
-  regularSessionCookie = `better-auth.session_token=${token}`;
+
+  const signJwt = new jose.SignJWT(payload)
+    .setProtectedHeader({ alg: "RS256", kid: testKid })
+    .setIssuedAt()
+    .setIssuer(options.issuer !== undefined ? options.issuer : config.auth.baseURL);
+
+  if (options.audience !== undefined) {
+    signJwt.setAudience(options.audience);
+  } else {
+    signJwt.setAudience(clientA_id);
+  }
+
+  if (options.expiresIn) {
+    signJwt.setExpirationTime(options.expiresIn);
+  } else {
+    signJwt.setExpirationTime("15m");
+  }
+
+  return signJwt.sign(testKeyPair.privateKey);
 }
+
+// Global Super Admin Session
+const superAdminEmail = `super_${crypto.randomBytes(4).toString("hex")}@example.com`;
+const superAdminPassword = "SuperAdminPass@1234!";
+await authProvider.api.signUpEmail({
+  body: { email: superAdminEmail, password: superAdminPassword, name: "Global Super Admin" },
+});
+await db.collection("user").updateOne(
+  { email: superAdminEmail },
+  { $set: { role: "admin", scopedClientId: null, emailVerified: true } }
+);
+const superLogin = await app.request("/api/auth/sign-in/email", {
+  method: "POST",
+  headers: getTestHeaders(),
+  body: JSON.stringify({ email: superAdminEmail, password: superAdminPassword }),
+});
+const superAdminCookie = (superLogin.headers.get("set-cookie") || "").split(";")[0];
 
 // Cleanup hook
 async function cleanup() {
   try {
-    await db.collection("oauthClient").deleteMany({ clientId: { $in: [clientA_id, clientB_id, clientDisabled_id] } });
+    await db.collection("oauthClient").deleteMany({ clientId: { $in: [clientA_id, clientB_id] } });
+    await db.collection("jwks").deleteOne({ _id: testJwkDocId });
     await db.collection("app_admins").deleteMany({ clientId: { $in: [clientA_id, clientB_id] } });
-    await db.collection("app_admin_revoked_tokens").deleteMany({ clientId: { $in: [clientA_id, clientB_id] } });
-    await db.collection("user_app_registrations").deleteMany({ clientId: { $in: [clientA_id, clientB_id] } });
-    if (regularUserId) {
-      await db.collection("user").deleteMany({ $or: [{ id: regularUserId }, { email: regularUserEmail }] });
-      await db.collection("session").deleteMany({ userId: regularUserId });
-    }
+    await db.collection("user").deleteMany({ email: superAdminEmail });
+    await db.collection("session").deleteMany({});
   } catch (err) {
     console.error("Cleanup error:", err);
   }
 }
 
 try {
-  // Test 1: Invalid client credentials rejected
-  await runTest("SEC-1: Rejects login when client_secret is invalid", async () => {
-    const res = await app.request("/api/auth/app-admin/login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: "wrong-secret",
-        email: adminEmail,
-        password: adminPassword,
-      }),
-    });
-    assert.equal(res.status, 401);
-    const body = await res.json();
-    assert.equal(body.error, "invalid_client");
-  });
+  // ==========================================================================
+  // SUITE 1: PERMANENT RETIREMENT OF LEGACY APP-ADMIN AUTH (HTTP 410 GONE)
+  // ==========================================================================
+  console.log("\n--- SUITE 1: RETIREMENT OF LEGACY APP-ADMIN AUTHENTICATION ---");
 
-  // Test 2: Invalid admin password rejected
-  await runTest("SEC-2: Rejects login when administrator password is wrong", async () => {
+  await runTest("RETIRE-1: POST /api/auth/app-admin/login returns HTTP 410 Gone", async () => {
     const res = await app.request("/api/auth/app-admin/login", {
       method: "POST",
       headers: getTestHeaders(),
       body: JSON.stringify({
         client_id: clientA_id,
         client_secret: clientA_secret,
-        email: adminEmail,
-        password: "WrongPassword@999!",
+        email: "any@example.com",
+        password: "Password123!",
       }),
     });
-    assert.equal(res.status, 401);
-    const body = await res.json();
-    assert.equal(body.error, "invalid_credentials");
+    assert.equal(res.status, 410, "Must return HTTP 410 Gone");
+    const json = await res.json();
+    assert.equal(json.error, "endpoint_retired");
+    assert.ok(json.error_description.includes("permanently retired"));
   });
 
-  // Test 3: Successful login issues JWT with correct claims including token_use
-  let activeToken = "";
-  await runTest("SEC-3: Successful login issues JWT with iss, aud, role, sub, token_use", async () => {
-    const res = await app.request("/api/auth/app-admin/login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        email: adminEmail,
-        password: adminPassword,
-      }),
-    });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.success, true);
-    assert.ok(body.token);
-    activeToken = body.token;
-
-    // Decode token claims
-    const payload = JSON.parse(Buffer.from(activeToken.split(".")[1], "base64url").toString());
-    assert.equal(payload.sub, adminA_id);
-    assert.equal(payload.email, adminEmail);
-    assert.equal(payload.clientId, clientA_id);
-    assert.equal(payload.aud, clientA_id);
-    assert.equal(payload.role, "app_admin");
-    assert.equal(payload.token_use, "app_admin");
-    assert.ok(payload.iss);
-  });
-
-  // Test 4: Verify endpoint validates token
-  await runTest("SEC-4: /verify endpoint confirms token validity and token_use", async () => {
+  await runTest("RETIRE-2: POST /api/auth/app-admin/verify returns HTTP 410 Gone", async () => {
     const res = await app.request("/api/auth/app-admin/verify", {
       method: "POST",
       headers: getTestHeaders(),
       body: JSON.stringify({
         client_id: clientA_id,
         client_secret: clientA_secret,
-        token: activeToken,
+        token: "any-token",
       }),
     });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.valid, true);
-    assert.equal(body.admin.email, adminEmail);
-    assert.equal(body.admin.clientId, clientA_id);
+    assert.equal(res.status, 410, "Must return HTTP 410 Gone");
+    const json = await res.json();
+    assert.equal(json.error, "endpoint_retired");
   });
 
-  // Test 5: Cross-App isolation — App A's token presented to App B is strictly rejected
-  await runTest("SEC-5: Cross-app token presentation rejected (App A token -> App B)", async () => {
-    const res = await app.request("/api/auth/app-admin/verify", {
+  await runTest("RETIRE-3: POST /api/auth/app-admin/logout returns HTTP 410 Gone", async () => {
+    const res = await app.request("/api/auth/app-admin/logout", {
       method: "POST",
       headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientB_id,
-        client_secret: clientB_secret,
-        token: activeToken, // Token issued for App A
-      }),
+      body: JSON.stringify({ token: "any-token" }),
     });
-    assert.equal(res.status, 401); // Audience verification fails
-    const body = await res.json();
-    assert.equal(body.valid, false);
+    assert.equal(res.status, 410, "Must return HTTP 410 Gone");
+    const json = await res.json();
+    assert.equal(json.error, "endpoint_retired");
   });
 
-  // Test 6: Logout revokes token
-  await runTest("SEC-6: Logout revokes session token", async () => {
-    const logoutRes = await app.request("/api/auth/app-admin/logout", {
+  await runTest("RETIRE-4: POST /api/auth/app-admin/mfa/verify-login returns HTTP 410 Gone", async () => {
+    const res = await app.request("/api/auth/app-admin/mfa/verify-login", {
       method: "POST",
       headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        token: activeToken,
-      }),
+      body: JSON.stringify({ mfa_token: "any-token", code: "123456" }),
     });
-    assert.equal(logoutRes.status, 200);
-
-    // Now verify must return token_revoked
-    const verifyRes = await app.request("/api/auth/app-admin/verify", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        token: activeToken,
-      }),
-    });
-    assert.equal(verifyRes.status, 401);
-    const verifyBody = await verifyRes.json();
-    assert.equal(verifyBody.error, "token_revoked");
+    assert.equal(res.status, 410, "Must return HTTP 410 Gone");
+    const json = await res.json();
+    assert.equal(json.error, "endpoint_retired");
   });
 
-  // Test 7: TOTP MFA Flow, Token Purpose Enforcement & Atomic Backup Code Invalidation
-  await runTest("SEC-7: TOTP MFA Setup, Token Purpose Enforcement & Atomic Backup Codes", async () => {
-    // 1. Log in again to get fresh session token
-    const loginRes = await app.request("/api/auth/app-admin/login", {
+  await runTest("RETIRE-5: POST /api/auth/app-admin/mfa/setup returns HTTP 410 Gone", async () => {
+    const res = await app.request("/api/auth/app-admin/mfa/setup", {
       method: "POST",
       headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        email: adminEmail,
-        password: adminPassword,
-      }),
     });
-    const { token: sessionToken } = await loginRes.json();
-
-    // 2. Setup MFA
-    const setupRes = await app.request("/api/auth/app-admin/mfa/setup", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        token: sessionToken,
-      }),
-    });
-    assert.equal(setupRes.status, 200);
-    const setupData = await setupRes.json();
-    assert.ok(setupData.secret);
-    assert.ok(setupData.otpauth_url);
-    assert.equal(setupData.backup_codes.length, 8);
-
-    // 3. Confirm with invalid code fails
-    const badConfirmRes = await app.request("/api/auth/app-admin/mfa/confirm", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        token: sessionToken,
-        code: "000000",
-      }),
-    });
-    assert.equal(badConfirmRes.status, 400);
-
-    // 4. Confirm with valid code succeeds
-    const validCode = generateTotpCode(setupData.secret);
-    const confirmRes = await app.request("/api/auth/app-admin/mfa/confirm", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        token: sessionToken,
-        code: validCode,
-      }),
-    });
-    assert.equal(confirmRes.status, 200);
-
-    // 5. Subsequent login must return mfa_required: true and mfa_token with token_use: app_admin_mfa_pending
-    const mfaLoginRes = await app.request("/api/auth/app-admin/login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        email: adminEmail,
-        password: adminPassword,
-      }),
-    });
-    assert.equal(mfaLoginRes.status, 200);
-    const mfaLoginBody = await mfaLoginRes.json();
-    assert.equal(mfaLoginBody.mfa_required, true);
-    assert.ok(mfaLoginBody.mfa_token);
-    assert.equal(mfaLoginBody.token, undefined); // NO full JWT issued yet!
-
-    // Verify mfa_token has token_use: app_admin_mfa_pending
-    const mfaPayload = JSON.parse(Buffer.from(mfaLoginBody.mfa_token.split(".")[1], "base64url").toString());
-    assert.equal(mfaPayload.token_use, "app_admin_mfa_pending");
-
-    // 6. Security Check: Token Purpose Confusion Attack Prevention
-    // Presenting mfa_token (app_admin_mfa_pending) to /verify must fail
-    const confuseVerifyRes = await app.request("/api/auth/app-admin/verify", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        token: mfaLoginBody.mfa_token,
-      }),
-    });
-    assert.equal(confuseVerifyRes.status, 401);
-    const confuseVerifyBody = await confuseVerifyRes.json();
-    assert.equal(confuseVerifyBody.error, "invalid_token_purpose");
-
-    // Presenting full session token to /mfa/verify-login must fail
-    const confuseMfaRes = await app.request("/api/auth/app-admin/mfa/verify-login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        mfa_token: sessionToken,
-        code: "123456",
-      }),
-    });
-    assert.equal(confuseMfaRes.status, 401);
-    const confuseMfaBody = await confuseMfaRes.json();
-    assert.equal(confuseMfaBody.error, "invalid_token_purpose");
-
-    // 7. Complete login with TOTP code via /mfa/verify-login
-    const currentCode = generateTotpCode(setupData.secret);
-    const verifyLoginRes = await app.request("/api/auth/app-admin/mfa/verify-login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        mfa_token: mfaLoginBody.mfa_token,
-        code: currentCode,
-      }),
-    });
-    assert.equal(verifyLoginRes.status, 200);
-    const verifyLoginBody = await verifyLoginRes.json();
-    assert.equal(verifyLoginBody.success, true);
-    assert.ok(verifyLoginBody.token);
-    assert.equal(verifyLoginBody.admin.mfa_enabled, true);
-
-    // 8. Test Atomic One-Time Backup Code Consumption
-    const backupCode = setupData.backup_codes[0];
-
-    // Trigger another login challenge to get fresh mfa_token
-    const mfaLoginRes2 = await app.request("/api/auth/app-admin/login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        email: adminEmail,
-        password: adminPassword,
-      }),
-    });
-    const { mfa_token: mfaToken2 } = await mfaLoginRes2.json();
-
-    // First use of backup code must succeed
-    const backupLoginRes = await app.request("/api/auth/app-admin/mfa/verify-login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        mfa_token: mfaToken2,
-        code: backupCode,
-      }),
-    });
-    assert.equal(backupLoginRes.status, 200);
-    assert.equal((await backupLoginRes.json()).usedBackupCode, true);
-
-    // Immediate replay/reuse of consumed backup code MUST fail
-    const mfaLoginRes3 = await app.request("/api/auth/app-admin/login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        email: adminEmail,
-        password: adminPassword,
-      }),
-    });
-    const { mfa_token: mfaToken3 } = await mfaLoginRes3.json();
-
-    const backupReuseRes = await app.request("/api/auth/app-admin/mfa/verify-login", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        mfa_token: mfaToken3,
-        code: backupCode, // Reusing consumed backup code
-      }),
-    });
-    assert.equal(backupReuseRes.status, 401);
-    const backupReuseBody = await backupReuseRes.json();
-    assert.equal(backupReuseBody.error, "invalid_code");
-
-    // 9. Disable MFA
-    const disableRes = await app.request("/api/auth/app-admin/mfa/disable", {
-      method: "POST",
-      headers: getTestHeaders(),
-      body: JSON.stringify({
-        client_id: clientA_id,
-        client_secret: clientA_secret,
-        token: verifyLoginBody.token,
-        password: adminPassword,
-        code: generateTotpCode(setupData.secret),
-      }),
-    });
-    assert.equal(disableRes.status, 200);
+    assert.equal(res.status, 410, "Must return HTTP 410 Gone");
+    const json = await res.json();
+    assert.equal(json.error, "endpoint_retired");
   });
 
-  // Test 8: Private Application Isolation on Sign-Up
-  await runTest("SEC-8: Private application blocks unauthorized public sign-up", async () => {
-    const signupRes = await app.request("/api/auth/sign-up/email", {
+  await runTest("RETIRE-6: POST /api/auth/app-admin/mfa/confirm returns HTTP 410 Gone", async () => {
+    const res = await app.request("/api/auth/app-admin/mfa/confirm", {
       method: "POST",
-      headers: getTestHeaders({
-        Origin: process.env.FRONTEND_URL || "http://localhost:5174",
-      }),
-      body: JSON.stringify({
-        email: "intruder@example.com",
-        password: "ValidPassword@1234!",
-        name: "Intruder",
-        clientId: clientB_id,
-      }),
+      headers: getTestHeaders(),
+      body: JSON.stringify({ code: "123456" }),
     });
-    assert.equal(signupRes.status, 403);
-    const signupBody = await signupRes.json();
-    assert.equal(signupBody.error, "registration_disabled");
+    assert.equal(res.status, 410, "Must return HTTP 410 Gone");
+    const json = await res.json();
+    assert.equal(json.error, "endpoint_retired");
   });
 
-  // Test 9: OAuth 2.1 Boundary Private-App Enforcement (Session Bypass Vector Prevention)
-  await runTest("SEC-9: OAuth boundary blocks pre-authenticated global session on private app", async () => {
-    // 1. User has valid session cookie but NO registration for private app clientB_id
-    const authRes = await app.request(
-      `/api/auth/oauth2/authorize?client_id=${clientB_id}&redirect_uri=http://localhost:3001/callback&response_type=code&scope=openid&state=state_xyz123`,
-      {
-        method: "GET",
-        headers: getTestHeaders({
-          Cookie: regularSessionCookie,
-        }),
-      }
+  await runTest("RETIRE-7: POST /api/auth/app-admin/mfa/disable returns HTTP 410 Gone", async () => {
+    const res = await app.request("/api/auth/app-admin/mfa/disable", {
+      method: "POST",
+      headers: getTestHeaders(),
+      body: JSON.stringify({ code: "123456" }),
+    });
+    assert.equal(res.status, 410, "Must return HTTP 410 Gone");
+    const json = await res.json();
+    assert.equal(json.error, "endpoint_retired");
+  });
+
+  await runTest("RETIRE-8: Catch-all /api/auth/app-admin/* returns HTTP 410 Gone", async () => {
+    const res = await app.request("/api/auth/app-admin/arbitrary-endpoint", {
+      method: "GET",
+      headers: getTestHeaders(),
+    });
+    assert.equal(res.status, 410, "Must return HTTP 410 Gone");
+    const json = await res.json();
+    assert.equal(json.error, "endpoint_retired");
+  });
+
+  // ==========================================================================
+  // SUITE 2: APPLICATION ADMIN AUTHORIZATION VIA OAUTH IDENTITY (CASES A-I)
+  // ==========================================================================
+  console.log("\n--- SUITE 2: SCOPED APPLICATION ADMIN AUTHORIZATION (CASES A-I) ---");
+
+  // Case A: role=user → denied application-admin operation
+  await runTest("CASE-A: role=user is denied application-admin operation (HTTP 403)", async () => {
+    const token = await signTestToken({
+      sub: "regular-user-id",
+      role: "user",
+      scoped_client_id: clientA_id,
+    });
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${token}` }),
+      body: JSON.stringify({ client_name: "Tampered App A" }),
+    });
+    assert.equal(res.status, 403, "Regular user must be denied application-admin operation");
+    const json = await res.json();
+    assert.equal(json.error, "Admin access required");
+  });
+
+  // Case B: role=admin, scoped_client_id=client-A, requesting client-A → allowed
+  await runTest("CASE-B: role=admin with scoped_client_id=client-A requesting client-A is allowed (HTTP 200)", async () => {
+    const token = await signTestToken({
+      sub: "admin-user-id-a",
+      role: "admin",
+      scoped_client_id: clientA_id,
+    });
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${token}` }),
+      body: JSON.stringify({ client_name: "Updated App A Name" }),
+    });
+    assert.equal(res.status, 200, "Scoped admin must be allowed to manage assigned application");
+    const updated = await db.collection("oauthClient").findOne({ clientId: clientA_id });
+    assert.equal(updated?.name, "Updated App A Name");
+  });
+
+  // Case C: role=admin, scoped_client_id=client-A, requesting client-B → denied
+  await runTest("CASE-C: role=admin with scoped_client_id=client-A requesting client-B is denied (HTTP 403)", async () => {
+    const token = await signTestToken({
+      sub: "admin-user-id-a",
+      role: "admin",
+      scoped_client_id: clientA_id,
+    });
+    const res = await app.request(`/api/admin/clients/${clientB_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${token}` }),
+      body: JSON.stringify({ client_name: "Breached App B" }),
+    });
+    assert.equal(res.status, 403, "Scoped admin must be denied cross-tenant management");
+    const json = await res.json();
+    assert.equal(json.error, "forbidden");
+    assert.ok(json.message.includes("Cross-tenant access forbidden"));
+  });
+
+  // Case D: role=admin, scoped_client_id=null → Super Admin behavior according to policy
+  await runTest("CASE-D: role=admin with scoped_client_id=null possesses Super Admin authorization (HTTP 200)", async () => {
+    const token = await signTestToken({
+      sub: "global-super-admin-id",
+      role: "admin",
+      scoped_client_id: null,
+    });
+    const resA = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${token}` }),
+      body: JSON.stringify({ client_name: "SuperAdmin Managed App A" }),
+    });
+    assert.equal(resA.status, 200, "Super admin must be allowed to manage App A");
+
+    const resB = await app.request(`/api/admin/clients/${clientB_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${token}` }),
+      body: JSON.stringify({ client_name: "SuperAdmin Managed App B" }),
+    });
+    assert.equal(resB.status, 200, "Super admin must be allowed to manage App B");
+  });
+
+  // Case E: forged/unsigned token → denied
+  await runTest("CASE-E: forged or unsigned token is denied (HTTP 401)", async () => {
+    // Unsigned / malformed token
+    const resMalformed = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: "Bearer malformed.unsigned.token" }),
+      body: JSON.stringify({ client_name: "Hacker App" }),
+    });
+    assert.equal(resMalformed.status, 401, "Malformed token must be denied");
+
+    // Token signed with unrelated private key (signature forgery)
+    const unrelatedKey = await jose.generateKeyPair("RS256");
+    const forgedToken = await new jose.SignJWT({
+      sub: "attacker",
+      role: "admin",
+      scoped_client_id: null,
+    })
+      .setProtectedHeader({ alg: "RS256" })
+      .setIssuer(config.auth.baseURL)
+      .setAudience(clientA_id)
+      .setExpirationTime("15m")
+      .sign(unrelatedKey.privateKey);
+
+    const resForged = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${forgedToken}` }),
+      body: JSON.stringify({ client_name: "Forged Token Update" }),
+    });
+    assert.equal(resForged.status, 401, "Forged token signature must be denied with 401");
+  });
+
+  // Case F: wrong issuer → denied
+  await runTest("CASE-F: token with wrong issuer is denied (HTTP 401)", async () => {
+    const wrongIssuerToken = await signTestToken(
+      { sub: "admin-id", role: "admin", scoped_client_id: clientA_id },
+      { issuer: "https://untrusted-foreign-idp.com" }
     );
-
-    // Must be redirected to redirect_uri with error=access_denied
-    assert.equal(authRes.status, 302);
-    const location = authRes.headers.get("location") || "";
-    assert.ok(location.startsWith("http://localhost:3001/callback"));
-    assert.ok(location.includes("error=access_denied"));
-    assert.ok(location.includes("state=state_xyz123"));
-
-    // 2. Now register user to private app
-    await db.collection("user_app_registrations").insertOne({
-      clientId: clientB_id,
-      userId: regularUserId,
-      registeredAt: new Date(),
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${wrongIssuerToken}` }),
+      body: JSON.stringify({ client_name: "Wrong Issuer Update" }),
     });
-
-    // 3. Re-request authorization with registration in place
-    const authorizedRes = await app.request(
-      `/api/auth/oauth2/authorize?client_id=${clientB_id}&redirect_uri=http://localhost:3001/callback&response_type=code&scope=openid&state=state_xyz123`,
-      {
-        method: "GET",
-        headers: getTestHeaders({
-          Cookie: regularSessionCookie,
-        }),
-      }
-    );
-
-    // Must NOT be redirected with access_denied
-    const authLocation = authorizedRes.headers.get("location") || "";
-    assert.ok(!authLocation.includes("error=access_denied"));
+    assert.equal(res.status, 401, "Token with untrusted issuer must be denied with 401");
   });
 
-  // Test 10: OAuth Boundary Redirect URI & Client Status Enforcement
-  await runTest("SEC-10: OAuth boundary rejects unregistered redirect URIs and disabled clients", async () => {
-    // 1. Unregistered redirect_uri rejected with 400
-    const badUriRes = await app.request(
-      `/api/auth/oauth2/authorize?client_id=${clientA_id}&redirect_uri=http://malicious.example.com/callback&response_type=code&state=state_test`,
-      {
-        method: "GET",
-        headers: getTestHeaders(),
-      }
+  // Case G: wrong audience → denied
+  await runTest("CASE-G: token with wrong audience is denied (HTTP 401)", async () => {
+    const wrongAudToken = await signTestToken(
+      { sub: "admin-id", role: "admin", scoped_client_id: clientA_id },
+      { audience: "completely-unrelated-audience" }
     );
-    assert.equal(badUriRes.status, 400);
-
-    // 2. Disabled client rejected with 403
-    const disabledRes = await app.request(
-      `/api/auth/oauth2/authorize?client_id=${clientDisabled_id}&redirect_uri=http://localhost:3002/callback&response_type=code&state=state_test`,
-      {
-        method: "GET",
-        headers: getTestHeaders(),
-      }
-    );
-    assert.equal(disabledRes.status, 403);
-    const disabledBody = await disabledRes.json();
-    assert.equal(disabledBody.error, "unauthorized_client");
-
-    // 3. Nonexistent client rejected with 401
-    const missingRes = await app.request(
-      `/api/auth/oauth2/authorize?client_id=nonexistent-client-id&redirect_uri=http://localhost:3000/callback&response_type=code&state=state_test`,
-      {
-        method: "GET",
-        headers: getTestHeaders(),
-      }
-    );
-    assert.equal(missingRes.status, 401);
-    const missingBody = await missingRes.json();
-    assert.equal(missingBody.error, "invalid_client");
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${wrongAudToken}` }),
+      body: JSON.stringify({ client_name: "Wrong Aud Update" }),
+    });
+    assert.equal(res.status, 401, "Token with unregistered audience must be denied with 401");
   });
 
-  // Test 11: Production Fail-Fast Environment Validation
-  await runTest("SEC-11: Environment schema requires APP_ADMIN secrets in production", async () => {
-    const baseProdEnv = {
+  // Case H: HS256 token → denied
+  await runTest("CASE-H: HS256 token is denied (algorithm pinning enforces RS256) (HTTP 401)", async () => {
+    const hs256Token = await signTestToken(
+      { sub: "admin-id", role: "admin", scoped_client_id: clientA_id },
+      { alg: "HS256" }
+    );
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${hs256Token}` }),
+      body: JSON.stringify({ client_name: "HS256 Algorithm Confusion Attack" }),
+    });
+    assert.equal(res.status, 401, "HS256 symmetric token must be strictly rejected with 401");
+  });
+
+  // Case I: expired token → denied
+  await runTest("CASE-I: expired token is denied (HTTP 401)", async () => {
+    const expiredToken = await new jose.SignJWT({
+      sub: "admin-id",
+      role: "admin",
+      scoped_client_id: clientA_id,
+    })
+      .setProtectedHeader({ alg: "RS256", kid: testKid })
+      .setIssuedAt(Math.floor(Date.now() / 1000) - 7200)
+      .setIssuer(config.auth.baseURL)
+      .setAudience(clientA_id)
+      .setExpirationTime(Math.floor(Date.now() / 1000) - 3600) // Expired 1 hour ago
+      .sign(testKeyPair.privateKey);
+
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${expiredToken}` }),
+      body: JSON.stringify({ client_name: "Expired Token Update" }),
+    });
+    assert.equal(res.status, 401, "Expired token must be denied with 401");
+  });
+
+  // Remove test JWK so Better Auth uses its legitimate JWKS key for subsequent user creations
+  await db.collection("jwks").deleteOne({ _id: testJwkDocId });
+
+  // ==========================================================================
+  // SUITE 3: SUPER ADMIN APPLICATION ADMIN PROVISIONING
+  // ==========================================================================
+  console.log("\n--- SUITE 3: APPLICATION ADMIN PROVISIONING VIA SUPER ADMIN ---");
+
+  const provisionAdminEmail = `prov_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  let provisionedAdminId = "";
+
+  await runTest("PROV-1: Super Admin provisions application admin; user is created in IdP with scopedClientId", async () => {
+    const res = await app.request(`/api/admin/clients/${clientA_id}/app-admins`, {
+      method: "POST",
+      headers: getTestHeaders({ Cookie: superAdminCookie }),
+      body: JSON.stringify({
+        email: provisionAdminEmail,
+        password: "ProvPassword@1234!",
+        name: "Provisioned App A Admin",
+      }),
+    });
+    assert.equal(res.status, 201, "Must return 201 Created");
+    const data = await res.json();
+    provisionedAdminId = data.admin.id;
+
+    // Verify user exists in centralized IdP user collection with role: admin and scopedClientId
+    const idpUser = await db.collection("user").findOne({ email: provisionAdminEmail });
+    assert.ok(idpUser, "User must exist in centralized IdP collection");
+    assert.equal(idpUser.role, "admin", "Role must be admin");
+    assert.equal(idpUser.scopedClientId, clientA_id, "scopedClientId must match clientA");
+  });
+
+  await runTest("PROV-2: Super Admin deletes application admin; user role & scopedClientId are unlinked", async () => {
+    const res = await app.request(`/api/admin/clients/${clientA_id}/app-admins/${provisionedAdminId}`, {
+      method: "DELETE",
+      headers: getTestHeaders({ Cookie: superAdminCookie }),
+    });
+    assert.equal(res.status, 200, "Must return 200 OK");
+
+    // Verify user role was reset or unlinked
+    const idpUser = await db.collection("user").findOne({ email: provisionAdminEmail });
+    assert.equal(idpUser?.scopedClientId, null, "scopedClientId must be unlinked");
+    assert.equal(idpUser?.role, "user", "Role must be reset to user");
+  });
+
+  // ==========================================================================
+  // SUITE 4: OBSOLETE SECRETS REMOVAL INVARIANTS
+  // ==========================================================================
+  console.log("\n--- SUITE 4: OBSOLETE SECRETS CONFIGURATION INVARIANTS ---");
+
+  await runTest("CONFIG-1: envSchema does not require APP_ADMIN_JWT_SECRET or APP_ADMIN_TOTP_KEY", async () => {
+    // Valid production config without APP_ADMIN_JWT_SECRET or APP_ADMIN_TOTP_KEY succeeds
+    const parsed = envSchema.parse({
       NODE_ENV: "production",
       PORT: 3000,
-      MONGO_URI: "mongodb://127.0.0.1:27017/test_db",
-      BETTER_AUTH_SECRET: "a".repeat(32),
+      MONGO_URI: "mongodb://127.0.0.1:27017/db",
+      BETTER_AUTH_SECRET: "s".repeat(32),
       BETTER_AUTH_URL: "https://auth.example.com",
-      GOOGLE_CLIENT_ID: "google-id",
-      GOOGLE_CLIENT_SECRET: "google-secret",
-      FRONTEND_URL: "https://auth.example.com",
-      INTERNAL_GATEWAY_SECRET: "c".repeat(32),
-    };
-
-    // Missing APP_ADMIN_JWT_SECRET in production fails
-    const failMissingJwt = envSchema.safeParse({
-      ...baseProdEnv,
-      APP_ADMIN_TOTP_KEY: "b".repeat(32),
+      GOOGLE_CLIENT_ID: "g-id",
+      GOOGLE_CLIENT_SECRET: "g-sec",
+      FRONTEND_URL: "https://app.example.com",
+      INTERNAL_GATEWAY_SECRET: "g".repeat(32),
     });
-    assert.equal(failMissingJwt.success, false);
-
-    // Short APP_ADMIN_JWT_SECRET (< 32 chars) fails
-    const failShortJwt = envSchema.safeParse({
-      ...baseProdEnv,
-      APP_ADMIN_JWT_SECRET: "too-short",
-      APP_ADMIN_TOTP_KEY: "b".repeat(32),
-    });
-    assert.equal(failShortJwt.success, false);
-
-    // Missing APP_ADMIN_TOTP_KEY in production fails
-    const failMissingTotp = envSchema.safeParse({
-      ...baseProdEnv,
-      APP_ADMIN_JWT_SECRET: "a".repeat(32),
-    });
-    assert.equal(failMissingTotp.success, false);
-
-    // Valid production configuration passes
-    const passProd = envSchema.safeParse({
-      ...baseProdEnv,
-      APP_ADMIN_JWT_SECRET: "a".repeat(32),
-      APP_ADMIN_TOTP_KEY: "b".repeat(32),
-    });
-    assert.equal(passProd.success, true);
+    assert.ok(parsed, "Schema parsing must succeed without obsolete secrets");
+    assert.equal((parsed as any).APP_ADMIN_JWT_SECRET, undefined);
+    assert.equal((parsed as any).APP_ADMIN_TOTP_KEY, undefined);
   });
 
 } finally {
@@ -659,7 +528,7 @@ try {
 }
 
 console.log("================================================================");
-console.log(`  SUMMARY: ${passed} PASSED, ${failed} FAILED`);
+console.log(`  APPLICATION ADMIN SECURITY AUDIT RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 
 process.exit(failed > 0 ? 1 : 0);

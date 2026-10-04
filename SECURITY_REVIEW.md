@@ -151,8 +151,7 @@ Tenant separation is enforced at every layer:
 
 - **User Authentication:** Handled via Better Auth email/password and social login (Google). Passwords are protected using Argon2 / scrypt.
 - **Client Authentication:** Confidential clients must authenticate at `/oauth2/token` via HTTP Basic Auth or `client_secret_post`. Client secrets are stored as SHA-256 hashes with constant-time equality checks ([`verifyClientSecret`](file:///home/swyra/projects/OAuth2.1/backend/src/utils/security.ts#L254)).
-- **PKCE Verification:** Mandatory for all authorization code exchanges. The system verifies `code_verifier` against `code_challenge` using RFC 7636 S256 hashing.
-- **App Admin JWT Verification:** Signed with HS256 using [`APP_ADMIN_JWT_SECRET`](file:///home/swyra/projects/OAuth2.1/backend/src/routes/app-admin-auth.ts#L36). Tokens require valid signature, issuer, audience, and active account status in MongoDB.
+- **App Admin Authorization:** Handled exclusively via centralized OAuth 2.1 authorization code flow with PKCE. Application administrators receive signed RS256 tokens containing claims `role: "admin"` and `scoped_client_id: "<clientId>"`, verified offline against the IdP's JWKS. Legacy credential-relay endpoints are retired (410 Gone).
 
 ---
 
@@ -335,9 +334,6 @@ FRONTEND_URL=https://oauth21.vercel.app
 # Gateway Security & Dev Isolation
 INTERNAL_GATEWAY_SECRET=<min_32_char_shared_secret_between_gateway_and_lambda>
 ALLOW_DEV_CLIENTS_IN_PRODUCTION=false
-
-# App Admin Security
-APP_ADMIN_JWT_SECRET=<min_32_char_secret_for_app_admin_jwt_signing>
 
 # Proxy Network Security
 TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16

@@ -3,7 +3,7 @@
 ## 1. Pre-Deployment
 - [ ] MongoDB Atlas cluster is created.
 - [ ] MongoDB Atlas Network Access has `0.0.0.0/0` allowed (required for dynamic AWS Lambda egress IPs).
-- [ ] `backend/.env` has `MONGO_URI` and 32+ character `BETTER_AUTH_SECRET`, `APP_ADMIN_JWT_SECRET`, and `APP_ADMIN_TOTP_KEY`.
+- [ ] `backend/.env` has `MONGO_URI` and 32+ character `BETTER_AUTH_SECRET` and `INTERNAL_GATEWAY_SECRET`.
 - [ ] Run `cd backend && npm run db:setup` to initialize TTL indexes in MongoDB.
 - [ ] Google Cloud Console OAuth 2.0 Client ID and Secret created (if Google Auth is desired).
 

@@ -15,8 +15,6 @@ process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com"
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
-process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
-process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
 
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
@@ -261,9 +259,9 @@ await runTest("GATE-5: Multi-tab parallel OAuth flow resolves correct tenant per
 });
 
 // --------------------------------------------------------------------------
-// TEST 6: App Admin Complete Lifecycle Security
+// TEST 6: App Admin Legacy Endpoints Retired (410 Gone)
 // --------------------------------------------------------------------------
-await runTest("GATE-6: App Admin disable, re-enable, and delete lifecycle strictly invalidates JWTs", async () => {
+await runTest("GATE-6: Legacy app-admin credential relay endpoints are permanently retired (410 Gone)", async () => {
   const db = await getDb();
   const clientId = "lifecycle_client_" + crypto.randomBytes(4).toString("hex");
   const clientSecret = "secret-123";
@@ -282,95 +280,25 @@ await runTest("GATE-6: App Admin disable, re-enable, and delete lifecycle strict
   const adminEmail = `admin_life_${crypto.randomBytes(4).toString("hex")}@example.com`;
   const adminPass = "AdminLife@1234!";
 
-  const insertRes = await db.collection("app_admins").insertOne({
-    clientId,
-    email: adminEmail,
-    name: "Lifecycle Admin",
-    password: await hashPassword(adminPass),
-    isActive: true,
-    loginCount: 0,
-    createdAt: new Date(),
-  });
-  const adminId = insertRes.insertedId;
-
-  // 1. Initial login -> Valid JWT
-  const loginRes1 = await app.request("/api/auth/app-admin/login", {
+  // 1. Legacy login returns 410 Gone
+  const loginRes = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders({ Origin: "https://app.example.com" }),
     body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, email: adminEmail, password: adminPass }),
   });
-  assert.equal(loginRes1.status, 200);
-  const { token: jwt1 } = await loginRes1.json();
+  assert.equal(loginRes.status, 410, "Legacy app-admin login must return 410 Gone");
+  const loginJson = await loginRes.json();
+  assert.equal(loginJson.error, "endpoint_retired");
 
-  // Verify JWT1 -> Valid
-  const verify1 = await app.request("/api/auth/app-admin/verify", {
+  // 2. Legacy verify returns 410 Gone
+  const verifyRes = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
     headers: getTestHeaders(),
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, token: jwt1 }),
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, token: "any-legacy-token" }),
   });
-  assert.equal(verify1.status, 200);
-
-  // 2. Disable admin
-  await db.collection("app_admins").updateOne(
-    { _id: adminId },
-    { $set: { isActive: false, tokensRevokedBefore: new Date() } }
-  );
-
-  // Verify JWT1 after disable -> REJECTED (401)
-  const verifyDisabled = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, token: jwt1 }),
-  });
-  assert.equal(verifyDisabled.status, 401, "Disabled admin JWT must fail");
-
-  // Login while disabled -> REJECTED (403)
-  const loginDisabled = await app.request("/api/auth/app-admin/login", {
-    method: "POST",
-    headers: getTestHeaders({ Origin: "https://app.example.com" }),
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, email: adminEmail, password: adminPass }),
-  });
-  assert.equal(loginDisabled.status, 403, "Disabled admin login must fail");
-
-  // 3. Reactivate admin
-  await db.collection("app_admins").updateOne(
-    { _id: adminId },
-    { $set: { isActive: true } }
-  );
-
-  // Old JWT1 must STILL fail
-  const verifyOldAfterReactivate = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, token: jwt1 }),
-  });
-  assert.equal(verifyOldAfterReactivate.status, 401, "Pre-disable token must remain invalid");
-
-  // New login -> New JWT2 works
-  const loginRes2 = await app.request("/api/auth/app-admin/login", {
-    method: "POST",
-    headers: getTestHeaders({ Origin: "https://app.example.com" }),
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, email: adminEmail, password: adminPass }),
-  });
-  assert.equal(loginRes2.status, 200);
-  const { token: jwt2 } = await loginRes2.json();
-
-  const verifyNew = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, token: jwt2 }),
-  });
-  assert.equal(verifyNew.status, 200, "New token must verify");
-
-  // 4. Delete admin account
-  await db.collection("app_admins").deleteOne({ _id: adminId });
-
-  const verifyDeleted = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, token: jwt2 }),
-  });
-  assert.equal(verifyDeleted.status, 401, "Deleted admin token must fail");
+  assert.equal(verifyRes.status, 410, "Legacy app-admin verify must return 410 Gone");
+  const verifyJson = await verifyRes.json();
+  assert.equal(verifyJson.error, "endpoint_retired");
 });
 
 // --------------------------------------------------------------------------

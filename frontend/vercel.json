@@ -10,7 +10,7 @@
           "target": {
             "key": "x-gateway-secret"
           },
-          "args": ""
+          "args": "DYNAMIC_GATEWAY_SECRET"
         }
       ]
     },

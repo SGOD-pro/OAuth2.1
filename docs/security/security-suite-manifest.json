@@ -161,7 +161,7 @@
       "name": "test-app-admin-security",
       "file": "tests/security/test-app-admin-security.ts",
       "command": "npm run test:security",
-      "purpose": "Focused unit tests for app-admin TOTP and password rotation endpoints. Informational.",
+      "purpose": "Verifies retirement (410 Gone) of legacy app-admin credential-relay endpoints, OAuth-based admin authorization via signed RS256 claims, tenant scoping, and Super-Admin provisioning.",
       "blocking": false,
       "classification": "unit_test"
     },

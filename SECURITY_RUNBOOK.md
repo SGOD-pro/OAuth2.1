@@ -94,12 +94,9 @@
   3. Deploy updated environment variable to the AWS Lambda backend.
   4. Verify health check: `curl https://oauth21.vercel.app/health`.
 
-### 2.2 App Admin JWT Secret Rotation (`APP_ADMIN_JWT_SECRET`)
-- **Impact:** All active App Admin dashboard sessions will expire and require re-authentication.
-- **Procedure:**
-  1. Generate new secret: `openssl rand -hex 32`.
-  2. Update AWS Lambda environment variable `APP_ADMIN_JWT_SECRET`.
-  3. All subsequent calls to `/api/auth/app-admin/verify` will use the new key.
+### 2.2 Application Administrator Key Rotation
+- **Architecture Note:** The legacy `APP_ADMIN_JWT_SECRET` is permanently retired. Application administrators authenticate exclusively through centralized OAuth 2.1 with PKCE. Tokens are signed by the IdP's RS256 private key and verified against `/.well-known/jwks.json`.
+- **Procedure:** To rotate signing keys, rotate the IdP's RSA keypair in the `jwks` collection. Active public keys are published automatically at `/.well-known/jwks.json`.
 
 ### 2.3 Internal Gateway Secret Rotation (`INTERNAL_GATEWAY_SECRET`)
 - **Zero-Downtime Migration Pattern:**

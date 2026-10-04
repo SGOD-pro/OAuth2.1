@@ -1,11 +1,32 @@
 import { createMiddleware } from "hono/factory";
+import { importJWK, jwtVerify } from "jose";
 import { authProvider } from "../utils/auth";
 import { getHeaders, resolveOAuthClient, timingSafeEqualStr } from "../utils/security";
 import { getDb } from "../db/mongo";
 import { config } from "../config";
 
+let cachedPublicKey: any = null;
+let lastKeyFetch = 0;
+
+async function getIdpPublicKey(): Promise<any> {
+  const now = Date.now();
+  if (cachedPublicKey && now - lastKeyFetch < 60_000) {
+    return cachedPublicKey;
+  }
+  const database = await getDb();
+  const jwksRecord = await database.collection("jwks").findOne({}, { sort: { createdAt: -1 } });
+  if (!jwksRecord || !jwksRecord.publicKey) {
+    return null;
+  }
+  const jwk = typeof jwksRecord.publicKey === "string" ? JSON.parse(jwksRecord.publicKey) : jwksRecord.publicKey;
+  cachedPublicKey = await importJWK(jwk, "RS256");
+  lastKeyFetch = now;
+  return cachedPublicKey;
+}
+
 /**
  * Helper to fetch session and user document once per request and cache on context `c`
+ * Supports Better Auth cookie sessions AND signed OAuth 2.1 RS256 Bearer tokens.
  */
 async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any } | null> {
   const existingUser = c.get("user");
@@ -14,24 +35,97 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
     return { user: existingUser, session: existingSession };
   }
 
+  // 1. Try Better Auth Session (Cookie / Session token)
   const session = await authProvider.api.getSession({
     headers: getHeaders(c),
   });
 
-  if (!session || !session.user) {
-    return null;
+  if (session && session.user) {
+    const database = await getDb();
+    const userDoc = await database.collection("user").findOne({
+      $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
+    });
+
+    const fullUser = { ...session.user, ...userDoc };
+    c.set("user", fullUser);
+    c.set("session", session.session);
+
+    return { user: fullUser, session: session.session };
   }
 
-  const database = await getDb();
-  const userDoc = await database.collection("user").findOne({
-    $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
-  });
+  // 2. Try OAuth 2.1 RS256 Bearer Token
+  const authHeader = c.req.header("authorization") || c.req.header("Authorization");
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const token = authHeader.slice(7).trim();
+    if (!token) return null;
 
-  const fullUser = { ...session.user, ...userDoc };
-  c.set("user", fullUser);
-  c.set("session", session.session);
+    try {
+      const publicKey = await getIdpPublicKey();
+      if (!publicKey) return null;
 
-  return { user: fullUser, session: session.session };
+      // STRICT ALGORITHM PINNING: strictly require RS256 (rejects HS256, none, forged)
+      // STRICT ISSUER VALIDATION: iss must match baseURL
+      const { payload } = await jwtVerify(token, publicKey, {
+        algorithms: ["RS256"],
+        issuer: config.auth.baseURL,
+      });
+
+      // Strict Audience Validation
+      if (payload.aud) {
+        const audList = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+        const validAuds = new Set([
+          config.auth.baseURL,
+          config.frontendUrl,
+          "https://oauth21.vercel.app",
+        ]);
+
+        let audMatched = audList.some((a) => validAuds.has(a));
+        if (!audMatched) {
+          const database = await getDb();
+          const clientMatch = await database.collection("oauthClient").findOne({
+            $or: audList.map((a) => ({ clientId: a })),
+          });
+          if (clientMatch) {
+            audMatched = true;
+          }
+        }
+
+        if (!audMatched) {
+          return null; // Audience mismatch
+        }
+      }
+
+      const sub = payload.sub;
+      if (!sub) return null;
+
+      const database = await getDb();
+      const userDoc = await database.collection("user").findOne({
+        $or: [{ id: sub }, { _id: sub }, { email: sub }],
+      });
+
+      const role = (payload.role as string) || userDoc?.role || "user";
+      const scopedClientId = payload.scoped_client_id !== undefined
+        ? (payload.scoped_client_id as string | null)
+        : (userDoc?.scopedClientId || null);
+
+      const fullUser = {
+        ...(userDoc || {}),
+        id: sub,
+        role,
+        scopedClientId,
+      };
+
+      c.set("user", fullUser);
+      c.set("session", { id: `token-${sub}`, userId: sub });
+
+      return { user: fullUser, session: { id: `token-${sub}`, userId: sub } };
+    } catch {
+      // Invalid signature, wrong algorithm (e.g. HS256), expired token, wrong issuer, etc.
+      return null;
+    }
+  }
+
+  return null;
 }
 
 /**

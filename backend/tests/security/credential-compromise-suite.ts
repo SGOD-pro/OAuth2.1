@@ -15,8 +15,7 @@ process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com"
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
-process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
-process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
@@ -233,7 +232,7 @@ await runTest("CRED-4: App Admin JWT is strictly scoped to single app; password 
     createdAt: new Date(),
   });
 
-  // Login as App Admin
+  // Direct credential relay to legacy login endpoint fails with 410 Gone
   const loginRes = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders({ Origin: "https://app.example.com" }),
@@ -244,33 +243,23 @@ await runTest("CRED-4: App Admin JWT is strictly scoped to single app; password 
       password: initialPass,
     }),
   });
-  assert.equal(loginRes.status, 200);
-  const { token: appAdminToken } = await loginRes.json();
-  assert.ok(appAdminToken, "Must receive app admin JWT");
+  assert.equal(loginRes.status, 410, "Legacy credential-relay login must return 410 Gone");
+  const loginJson = await loginRes.json();
+  assert.equal(loginJson.error, "endpoint_retired");
 
-  // Verify App Admin JWT against App A -> SUCCESS
-  const verifyResA = await app.request("/api/auth/app-admin/verify", {
+  // Direct token verify against legacy endpoint fails with 410 Gone
+  const verifyRes = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
     headers: getTestHeaders(),
     body: JSON.stringify({
       client_id: clientA,
       client_secret: secretA,
-      token: appAdminToken,
+      token: "legacy-token",
     }),
   });
-  assert.equal(verifyResA.status, 200, "App Admin token must verify against App A");
-
-  // Verify App Admin JWT against App B -> FAILS (Cross-tenant isolation)
-  const verifyResB = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({
-      client_id: clientB,
-      client_secret: secretB,
-      token: appAdminToken,
-    }),
-  });
-  assert.equal(verifyResB.status, 401, "App Admin token from App A must fail against App B");
+  assert.equal(verifyRes.status, 410, "Legacy token verify must return 410 Gone");
+  const verifyJson = await verifyRes.json();
+  assert.equal(verifyJson.error, "endpoint_retired");
 });
 
 // --------------------------------------------------------------------------

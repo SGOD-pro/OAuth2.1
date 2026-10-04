@@ -15,8 +15,7 @@ process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com"
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
-process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
-process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
@@ -175,7 +174,7 @@ await runTest("X-TENANT-3: App Admin JWT for Tenant A is strictly rejected by Te
     createdAt: new Date(),
   });
 
-  // Login as Tenant A Admin
+  // Attempt login via retired endpoint
   const loginRes = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders({ Origin: "https://app.example.com" }),
@@ -186,22 +185,19 @@ await runTest("X-TENANT-3: App Admin JWT for Tenant A is strictly rejected by Te
       password: adminPass,
     }),
   });
-  assert.equal(loginRes.status, 200);
-  const { token } = await loginRes.json();
+  assert.equal(loginRes.status, 410, "Legacy app-admin login must return 410 Gone");
 
-  // Present Tenant A token to Tenant B
+  // Attempt verify via retired endpoint
   const verifyRes = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
     headers: getTestHeaders(),
     body: JSON.stringify({
       client_id: tenantB,
       client_secret: secretB,
-      token,
+      token: "dummy",
     }),
   });
-  assert.equal(verifyRes.status, 401, "Tenant A admin JWT must fail verification for Tenant B");
-  const data = await verifyRes.json();
-  assert.equal(data.valid, false);
+  assert.equal(verifyRes.status, 410, "Legacy app-admin verify must return 410 Gone");
 });
 
 // --------------------------------------------------------------------------

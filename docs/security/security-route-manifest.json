@@ -159,35 +159,35 @@
     {
       "method": "POST",
       "path": "/api/auth/app-admin/login",
-      "surface": "app_admin",
-      "auth_required": "client_and_staff_credentials",
+      "surface": "retired",
+      "auth_required": "none",
       "gateway_required": false,
       "csrf_protected": false,
-      "rate_limited": true,
-      "privilege_scope": "app_admin",
-      "description": "Application admin portal authentication endpoint exchanging staff credentials for scoped JWT."
+      "rate_limited": false,
+      "privilege_scope": "none",
+      "description": "Permanently retired legacy credential-relay authentication endpoint. Returns HTTP 410 Gone."
     },
     {
       "method": "POST",
       "path": "/api/auth/app-admin/verify",
-      "surface": "app_admin",
-      "auth_required": "bearer_app_admin_jwt",
+      "surface": "retired",
+      "auth_required": "none",
       "gateway_required": false,
       "csrf_protected": false,
-      "rate_limited": true,
-      "privilege_scope": "app_admin",
-      "description": "Verification endpoint for consumer portals validating app-admin bearer session tokens."
+      "rate_limited": false,
+      "privilege_scope": "none",
+      "description": "Permanently retired legacy token verification endpoint. Returns HTTP 410 Gone."
     },
     {
       "method": "POST",
       "path": "/api/auth/app-admin/logout",
-      "surface": "app_admin",
-      "auth_required": "bearer_app_admin_jwt",
+      "surface": "retired",
+      "auth_required": "none",
       "gateway_required": false,
       "csrf_protected": false,
-      "rate_limited": true,
-      "privilege_scope": "app_admin",
-      "description": "App admin logout endpoint revoking token JTI."
+      "rate_limited": false,
+      "privilege_scope": "none",
+      "description": "Permanently retired legacy logout endpoint. Returns HTTP 410 Gone."
     },
     {
       "method": "GET",

@@ -34,8 +34,6 @@ const baseProdConfig = {
   FRONTEND_URL: "https://auth.example.com",
   GOOGLE_CLIENT_ID: "google-prod-id",
   GOOGLE_CLIENT_SECRET: "google-prod-secret",
-  APP_ADMIN_JWT_SECRET: "a".repeat(32),
-  APP_ADMIN_TOTP_KEY: "b".repeat(32),
   INTERNAL_GATEWAY_SECRET: "g".repeat(32),
   ALLOW_DEV_CLIENTS_IN_PRODUCTION: "false",
 };

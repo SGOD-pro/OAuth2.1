@@ -16,7 +16,6 @@ process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
-process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
 process.env.TOTP_ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || "c".repeat(32);
 process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "test_adversarial_gateway_secret_32_characters";
 
@@ -703,13 +702,13 @@ await runTest(7, "App A vs App B token isolation: App A access token cannot acce
   const data = await res.json();
   const accessToken = data.access_token;
 
-  // App B admin verify cannot accept this token as an app admin token
+  // App B admin verify returns 410 (legacy endpoint retired)
   const verifyRes = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
     headers: getTestHeaders({ Authorization: `Bearer ${accessToken}` }),
     body: JSON.stringify({ client_id: appB_id, client_secret: appB_secret }),
   });
-  assert.equal(verifyRes.status, 401, "Token for App A cannot be used on App B app-admin endpoint");
+  assert.equal(verifyRes.status, 410, "Legacy app-admin verify endpoint must return 410 Gone");
 });
 
 // --------------------------------------------------------------------------
@@ -912,7 +911,7 @@ await runTest(12, "App Admin password invalidation: changing password immediatel
   const createdAdmin = await createRes.json();
   const adminId = createdAdmin.admin?.id || createdAdmin.adminId || createdAdmin.id;
 
-  // Login with old password -> obtain JWT
+  // Verify legacy app-admin login endpoint returns 410 Gone (retired)
   const loginRes = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders(),
@@ -923,18 +922,21 @@ await runTest(12, "App Admin password invalidation: changing password immediatel
       password: oldPass,
     }),
   });
-  assert.equal(loginRes.status, 200);
-  const { token: oldToken } = await loginRes.json();
+  assert.equal(loginRes.status, 410, "Legacy app-admin login endpoint must return 410 Gone");
+  const loginJson = await loginRes.json();
+  assert.equal(loginJson.error, "endpoint_retired");
 
-  // Verify OLD token -> 200
+  // Verify legacy app-admin verify endpoint returns 410 Gone (retired)
   const v1 = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${oldToken}` }),
+    headers: getTestHeaders({ Authorization: "Bearer legacy-token" }),
     body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
   });
-  assert.equal(v1.status, 200, "Old token must be valid initially");
+  assert.equal(v1.status, 410, "Legacy app-admin verify endpoint must return 410 Gone");
+  const v1Json = await v1.json();
+  assert.equal(v1Json.error, "endpoint_retired");
 
-  // Change password
+  // Change password via Super Admin
   const updateRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
     method: "PUT",
     headers: getTestHeaders({ Cookie: superAdminCookie }),
@@ -942,17 +944,7 @@ await runTest(12, "App Admin password invalidation: changing password immediatel
   });
   assert.equal(updateRes.status, 200);
 
-  // Verify OLD token after password change -> 401 token_expired!
-  const vOld = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${oldToken}` }),
-    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
-  });
-  assert.equal(vOld.status, 401, "Old token must be rejected after password change");
-  const oldJson = await vOld.json();
-  assert.equal(oldJson.error, "token_expired", "Must return token_expired machine-readable code");
-
-  // Login with new password -> obtain NEW JWT -> 200
+  // Legacy login still returns 410 Gone
   const loginNew = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders(),
@@ -963,15 +955,7 @@ await runTest(12, "App Admin password invalidation: changing password immediatel
       password: newPass,
     }),
   });
-  assert.equal(loginNew.status, 200);
-  const { token: newToken } = await loginNew.json();
-
-  const vNew = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${newToken}` }),
-    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
-  });
-  assert.equal(vNew.status, 200, "New token issued after password change must succeed");
+  assert.equal(loginNew.status, 410, "Legacy login endpoint must remain 410 Gone after password update");
 
   // Verify clearing/removing redirect URL on update & optional redirect URL on create
   const clearUrlRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
@@ -1036,6 +1020,7 @@ await runTest(13, "App Admin disable/re-enable lifecycle: deactivated admin fail
   const adminData = await createRes.json();
   const adminId = adminData.admin?.id || adminData.adminId || adminData.id;
 
+  // 1. Legacy login returns 410 Gone (retired)
   const loginRes = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders(),
@@ -1046,21 +1031,17 @@ await runTest(13, "App Admin disable/re-enable lifecycle: deactivated admin fail
       password: pass,
     }),
   });
-  assert.equal(loginRes.status, 200);
-  const { token: oldToken } = await loginRes.json();
+  assert.equal(loginRes.status, 410, "Legacy login must return 410 Gone");
 
-  // Verify initial token -> 200
+  // 2. Legacy verify returns 410 Gone (retired)
   const vInitial = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${oldToken}` }),
+    headers: getTestHeaders({ Authorization: "Bearer legacy-token" }),
     body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
   });
-  assert.equal(vInitial.status, 200, "Initial token must be valid");
+  assert.equal(vInitial.status, 410, "Legacy verify must return 410 Gone");
 
-  // Allow clock tick so iat < tokensRevokedBefore - 1000 holds deterministically
-  await new Promise((r) => setTimeout(r, 1100));
-
-  // 1. Deactivate admin
+  // 3. Deactivate admin via Super Admin
   const deactRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
     method: "PUT",
     headers: getTestHeaders({ Cookie: superAdminCookie }),
@@ -1068,15 +1049,7 @@ await runTest(13, "App Admin disable/re-enable lifecycle: deactivated admin fail
   });
   assert.equal(deactRes.status, 200);
 
-  // 2. Token verification fails
-  const vDeact = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${oldToken}` }),
-    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
-  });
-  assert.equal(vDeact.status, 401, "Deactivated admin token verification must fail with 401");
-
-  // 3. Login fails
+  // 4. Legacy endpoints remain 410 Gone
   const loginDeact = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders(),
@@ -1087,11 +1060,9 @@ await runTest(13, "App Admin disable/re-enable lifecycle: deactivated admin fail
       password: pass,
     }),
   });
-  assert.equal(loginDeact.status, 403, "Deactivated admin login must fail with 403 account_disabled");
-  const deactJson = await loginDeact.json();
-  assert.equal(deactJson.error, "account_disabled");
+  assert.equal(loginDeact.status, 410, "Legacy login must return 410 Gone");
 
-  // 4. Re-activate admin
+  // 5. Re-activate admin via Super Admin
   const reactRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
     method: "PUT",
     headers: getTestHeaders({ Cookie: superAdminCookie }),
@@ -1099,15 +1070,7 @@ await runTest(13, "App Admin disable/re-enable lifecycle: deactivated admin fail
   });
   assert.equal(reactRes.status, 200);
 
-  // 5. Old token STILL fails because tokensRevokedBefore was set during deactivation
-  const vOldAfterReact = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${oldToken}` }),
-    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
-  });
-  assert.equal(vOldAfterReact.status, 401, "Old token must remain invalid after reactivation");
-
-  // 6. Login with password now succeeds -> returns new token
+  // 6. Legacy endpoints remain 410 Gone
   const loginReact = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders(),
@@ -1118,16 +1081,7 @@ await runTest(13, "App Admin disable/re-enable lifecycle: deactivated admin fail
       password: pass,
     }),
   });
-  assert.equal(loginReact.status, 200, "Re-activated admin login must succeed");
-  const { token: newToken } = await loginReact.json();
-
-  // 7. New token verifies successfully
-  const vNew = await app.request("/api/auth/app-admin/verify", {
-    method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${newToken}` }),
-    body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
-  });
-  assert.equal(vNew.status, 200, "New token issued after reactivation must verify successfully");
+  assert.equal(loginReact.status, 410, "Legacy login must return 410 Gone");
 });
 
 // --------------------------------------------------------------------------
@@ -1751,8 +1705,7 @@ await runTest(30, "App Admin deletion lifecycle: deleted admin document is remov
       password: pass,
     }),
   });
-  assert.equal(loginRes.status, 200);
-  const { token } = await loginRes.json();
+  assert.equal(loginRes.status, 410, "Legacy login must return 410 Gone");
 
   // Delete admin
   const delRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
@@ -1761,15 +1714,20 @@ await runTest(30, "App Admin deletion lifecycle: deleted admin document is remov
   });
   assert.equal(delRes.status, 200, "Admin deletion must succeed");
 
-  // Token verify fails -> 401
+  // Verify user in user collection has scopedClientId cleared and role reset to 'user'
+  const userDoc = await db.collection("user").findOne({ email: adminEmail });
+  assert.equal(userDoc?.role, "user", "Role must be reset to user upon app-admin deletion");
+  assert.equal(userDoc?.scopedClientId, null, "scopedClientId must be unlinked");
+
+  // Token verify fails -> 410
   const v = await app.request("/api/auth/app-admin/verify", {
     method: "POST",
-    headers: getTestHeaders({ Authorization: `Bearer ${token}` }),
+    headers: getTestHeaders({ Authorization: "Bearer dummy-token" }),
     body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
   });
-  assert.equal(v.status, 401, "Deleted admin token verification must return 401");
+  assert.equal(v.status, 410, "Deleted admin token verification must return 410");
 
-  // Login fails -> 401
+  // Login fails -> 410
   const loginDel = await app.request("/api/auth/app-admin/login", {
     method: "POST",
     headers: getTestHeaders(),
@@ -1780,7 +1738,7 @@ await runTest(30, "App Admin deletion lifecycle: deleted admin document is remov
       password: pass,
     }),
   });
-  assert.equal(loginDel.status, 401, "Deleted admin login must return 401");
+  assert.equal(loginDel.status, 410, "Deleted admin login must return 410");
 
   // MongoDB document is deleted
   const doc = await db.collection("app_admins").findOne({

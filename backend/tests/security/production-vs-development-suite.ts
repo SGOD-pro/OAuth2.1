@@ -15,8 +15,7 @@ process.env.FRONTEND_URL = "https://app.example.com";
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
-process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
-process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
@@ -56,8 +55,7 @@ await runTest("PROD-1: envSchema strictly rejects non-HTTPS and localhost URLs i
       GOOGLE_CLIENT_ID: "g-id",
       GOOGLE_CLIENT_SECRET: "g-sec",
       FRONTEND_URL: "https://app.example.com",
-      APP_ADMIN_JWT_SECRET: "j".repeat(32),
-      APP_ADMIN_TOTP_KEY: "t".repeat(32),
+      INTERNAL_GATEWAY_SECRET: "g".repeat(32),
     });
   }, /BETTER_AUTH_URL must use HTTPS in production/);
 
@@ -72,12 +70,11 @@ await runTest("PROD-1: envSchema strictly rejects non-HTTPS and localhost URLs i
       GOOGLE_CLIENT_ID: "g-id",
       GOOGLE_CLIENT_SECRET: "g-sec",
       FRONTEND_URL: "https://app.example.com",
-      APP_ADMIN_JWT_SECRET: "j".repeat(32),
-      APP_ADMIN_TOTP_KEY: "t".repeat(32),
+      INTERNAL_GATEWAY_SECRET: "g".repeat(32),
     });
   }, /BETTER_AUTH_URL cannot be a loopback address in production/);
 
-  // Rejects missing APP_ADMIN_JWT_SECRET in production
+  // Rejects missing INTERNAL_GATEWAY_SECRET in production
   assert.throws(() => {
     envSchema.parse({
       NODE_ENV: "production",
@@ -88,9 +85,8 @@ await runTest("PROD-1: envSchema strictly rejects non-HTTPS and localhost URLs i
       GOOGLE_CLIENT_ID: "g-id",
       GOOGLE_CLIENT_SECRET: "g-sec",
       FRONTEND_URL: "https://app.example.com",
-      APP_ADMIN_TOTP_KEY: "t".repeat(32),
     });
-  }, /APP_ADMIN_JWT_SECRET is required in production/);
+  }, /INTERNAL_GATEWAY_SECRET is required in production/);
 
   // Rejects short secrets (<32 characters)
   assert.throws(() => {
@@ -103,8 +99,7 @@ await runTest("PROD-1: envSchema strictly rejects non-HTTPS and localhost URLs i
       GOOGLE_CLIENT_ID: "g-id",
       GOOGLE_CLIENT_SECRET: "g-sec",
       FRONTEND_URL: "https://app.example.com",
-      APP_ADMIN_JWT_SECRET: "j".repeat(32),
-      APP_ADMIN_TOTP_KEY: "t".repeat(32),
+      INTERNAL_GATEWAY_SECRET: "g".repeat(32),
     });
   }, />=32 characters|too_small/);
 });
