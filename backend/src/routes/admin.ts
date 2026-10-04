@@ -9,6 +9,7 @@ import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
 import { config } from "../config";
+import { syncAppAdminIdentity, removeAppAdminIdentity } from "../utils/admin-sync";
 
 // Helper accessor for Better Auth dynamic plugin APIs
 const authApi = authProvider.api as any;
@@ -1097,40 +1098,16 @@ admin.post("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
 
     const insertResult = await database.collection("app_admins").insertOne(doc);
 
-    // Ensure centralized IdP identity exists with role: 'admin' and scopedClientId: canonicalClientId
+    // Ensure centralized IdP identity exists in user, account, and user_app_registrations
     try {
-      const existingUser = await database.collection("user").findOne({ email });
-      if (existingUser) {
-        await database.collection("user").updateOne(
-          { _id: existingUser._id },
-          {
-            $set: {
-              role: "admin",
-              scopedClientId: canonicalClientId,
-              emailVerified: true,
-              updatedAt: now,
-            },
-          }
-        );
-      } else {
-        const newUser = await authApi.signUpEmail({
-          body: { email, password, name },
-        });
-        const userId = newUser?.user?.id || (newUser as any)?.id;
-        if (userId) {
-          await database.collection("user").updateOne(
-            { $or: [{ id: userId }, { _id: userId }, { email }] } as any,
-            {
-              $set: {
-                role: "admin",
-                scopedClientId: canonicalClientId,
-                emailVerified: true,
-                updatedAt: now,
-              },
-            }
-          );
-        }
-      }
+      await syncAppAdminIdentity(database, {
+        email,
+        clientId: canonicalClientId,
+        name,
+        hashedPassword,
+        isActive: true,
+        createdAt: now,
+      });
     } catch (provisionErr: any) {
       console.warn("[ADMIN_CREATE_APP_ADMIN] Warning syncing to centralized user collection:", provisionErr?.message || provisionErr);
     }
@@ -1274,6 +1251,21 @@ const updateAppAdminHandler = async (c: any) => {
       return c.json({ error: "Administrator not found after update" }, 404);
     }
 
+    // Synchronize updates to centralized Better Auth user, account, and user_app_registrations
+    try {
+      await syncAppAdminIdentity(database, {
+        email: updated.email,
+        clientId: canonicalClientId,
+        name: updated.name,
+        hashedPassword: updated.password,
+        isActive: updated.isActive !== false,
+        previousEmail: existing.email,
+        createdAt: updated.createdAt,
+      });
+    } catch (syncErr: any) {
+      console.warn("[ADMIN_UPDATE_APP_ADMIN] Warning syncing to centralized user collection:", syncErr?.message || syncErr);
+    }
+
     await recordAdminAudit({
       actorUserId: sessionUser?.id,
       actorEmail: sessionUser?.email,
@@ -1346,11 +1338,15 @@ admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async 
 
     await database.collection("app_admins").deleteOne({ _id: adminObjId });
 
-    // If user was scoped to this client, remove scopedClientId and reset role to user
-    await database.collection("user").updateOne(
-      { email: existing.email, scopedClientId: canonicalClientId },
-      { $set: { role: "user", scopedClientId: null, updatedAt: new Date() } }
-    );
+    // If user was scoped to this client, remove scopedClientId, reset role, and remove registration
+    try {
+      await removeAppAdminIdentity(database, {
+        email: existing.email,
+        clientId: canonicalClientId,
+      });
+    } catch (delErr: any) {
+      console.warn("[ADMIN_DELETE_APP_ADMIN] Warning removing centralized identity:", delErr?.message || delErr);
+    }
 
     await recordAdminAudit({
       actorUserId: sessionUser?.id,

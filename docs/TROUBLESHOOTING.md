@@ -86,6 +86,32 @@ SWYRA Auth emits standard, machine-readable OAuth 2.1 / RFC 6749 error codes. Be
 
 ---
 
+### 2.6 "Invalid email or password" when authenticating as Application Administrator
+
+- **Symptom:** Administrator enters valid credentials on the centralized IdP login page (`/auth` or `/api/auth/sign-in/email`) but receives `"Invalid email or password"` or `"invalid password"`.
+- **Root Cause:**
+  1. **Centralized User/Account Table Separation:** In SWYRA Auth, credentials are authenticated by Better Auth against the centralized `user` and `account` collections (`providerId: "credential"`). If an administrator was created or updated in the legacy `app_admins` collection without bidirectional synchronization into `user` and `account`, Better Auth cannot find the credential identity and returns `"Invalid email or password"`.
+  2. **Disabled Centralized Sync:** If administrator provisioning did not populate the `account` password hash or omitted `user_app_registrations`, the user cannot authenticate.
+- **Safe Resolution:**
+  - Automated bidirectional synchronization is now built into `POST /api/admin/clients/:clientId/app-admins` and `PUT/PATCH /api/admin/clients/:clientId/app-admins/:adminId`.
+  - The server startup procedure automatically executes `selfHealAppAdmins(db)` to heal any unsynced administrator records.
+  - To trigger an immediate manual reconciliation across production or dev databases:
+    ```bash
+    npx tsx scripts/migrate-app-admins.ts
+    ```
+
+---
+
+### 2.7 Consumer App Integration Mistake: Local Password Form vs. Centralized OAuth 2.1 Redirect
+
+- **Symptom:** Consumer app renders a username/password form on its own `/login` page and attempts to POST credentials to `/api/auth/login` or IdP endpoints, receiving `405 Method Not Allowed` or `404 Not Found`.
+- **Root Cause:** Violating the Prime Directive of Consumer Integration. Under OAuth 2.1, consumer applications NEVER handle, proxy, collect, or store passwords.
+- **Safe Resolution:**
+  - Remove all `<input type="password">` fields and credential submission logic from the consumer application.
+  - The consumer `/login` route must only render a "Sign In" button that performs a `GET /api/auth/login` redirect to the centralized IdP's `/api/auth/oauth2/authorize` endpoint with PKCE `code_challenge` (S256) and `state`.
+
+---
+
 ## 3. Safe Debugging Protocols
 
 When diagnosing authentication issues:

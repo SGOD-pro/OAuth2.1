@@ -1,4 +1,5 @@
 import { getDb } from "./mongo";
+import { selfHealAppAdmins } from "../utils/admin-sync";
 import {
   getCachedTokenFamilyStatus,
   setCachedTokenFamilyStatus,
@@ -96,6 +97,13 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("oauth_transactions", { transactionId: 1 }, { unique: true }),
       safeIndex("oauth_transactions", { state: 1 }),
     ]);
+
+    // Automatically synchronize app administrators into centralized user & account collections
+    try {
+      await selfHealAppAdmins(db);
+    } catch (healErr: any) {
+      console.warn("[INDEX] Warning during self-healing app_admins sync:", healErr?.message || healErr);
+    }
   })();
 
   return indexPromise;

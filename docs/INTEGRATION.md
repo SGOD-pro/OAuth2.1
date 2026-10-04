@@ -107,6 +107,18 @@ function isApplicationAdmin(claims: { role?: string; scoped_client_id?: string |
 }
 ```
 
+### 3.4 Application Administrator Credential & Identity Lifecycle
+
+Application Administrators are provisioned via the Super Admin API (`POST /api/admin/clients/:clientId/app-admins`) or the Admin Console:
+- When an App Admin is created or updated, their identity and credentials are automatically synchronized directly into the centralized IdP `user` and `account` tables.
+- The administrator's centralized user record receives:
+  - `role: "admin"`
+  - `scopedClientId: "<clientId>"`
+  - `emailVerified: true`
+  - Explicit assignment in `user_app_registrations` (guaranteeing access to private applications).
+- **Authentication Location:** Application administrators authenticate exclusively through the **centralized IdP login page** (`${AUTH_ISSUER}/auth` or `${AUTH_ISSUER}/api/auth/oauth2/authorize`).
+- **Never In Consumer:** The consumer application NEVER creates a custom administrator password form or relays credentials.
+
 ---
 
 ## 4. Endpoints Directory
@@ -191,6 +203,42 @@ export async function GET() {
   res.cookies.set("oauth_state", state, { httpOnly: true, secure: isProd, sameSite: "lax", maxAge: 600, path: "/" });
 
   return res;
+}
+```
+
+#### Consumer Login UI (`app/login/page.tsx`)
+> ⚠️ **CRITICAL CONTRACT FOR CONSUMERS & AI AGENTS:**  
+> The consumer application must **NEVER** render an email/password form or submit credentials.  
+> The consumer's `/login` page must only render a "Sign In" link/button that triggers the OAuth initiator (`GET /api/auth/login`).
+
+```tsx
+export default function LoginPage({ searchParams }: { searchParams?: { error?: string; desc?: string } }) {
+  const isAccessDenied = searchParams?.error === "access_denied";
+
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-lg border p-6 shadow-sm">
+        <h1 className="text-xl font-semibold mb-2">Welcome</h1>
+        <p className="text-sm text-gray-600 mb-6">
+          Access is restricted to authorized accounts and designated application administrators.
+        </p>
+
+        {isAccessDenied && (
+          <div className="mb-4 rounded bg-red-50 p-3 text-sm text-red-700">
+            Access denied: Your account is not authorized for this private application. Please contact your administrator.
+          </div>
+        )}
+
+        {/* Initiates OAuth 2.1 PKCE redirect via GET /api/auth/login */}
+        <a
+          href="/api/auth/login"
+          className="flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
+        >
+          Sign In with Corporate SSO
+        </a>
+      </div>
+    </main>
+  );
 }
 ```
 

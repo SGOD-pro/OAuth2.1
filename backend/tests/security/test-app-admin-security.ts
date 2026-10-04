@@ -500,6 +500,41 @@ try {
     assert.equal(idpUser?.role, "user", "Role must be reset to user");
   });
 
+  await runTest("PROV-3: Super Admin re-adds application admin; identity, password hash, and app registration are restored", async () => {
+    const res = await app.request(`/api/admin/clients/${clientA_id}/app-admins`, {
+      method: "POST",
+      headers: getTestHeaders({ Cookie: superAdminCookie }),
+      body: JSON.stringify({
+        email: provisionAdminEmail,
+        password: "ReAddedPassword@1234!",
+        name: "Re-Added App A Admin",
+      }),
+    });
+    assert.equal(res.status, 201, "Must return 201 Created");
+
+    // Verify user exists with role: admin and scopedClientId
+    const idpUser = await db.collection("user").findOne({ email: provisionAdminEmail });
+    assert.ok(idpUser, "User must exist in centralized IdP collection");
+    assert.equal(idpUser.role, "admin", "Role must be admin again");
+    assert.equal(idpUser.scopedClientId, clientA_id, "scopedClientId must match clientA");
+
+    // Verify account exists with password
+    const userId = idpUser.id || idpUser._id;
+    const account = await db.collection("account").findOne({
+      $or: [{ userId }, { userId: userId.toString() }, { accountId: userId.toString() }],
+      providerId: "credential",
+    });
+    assert.ok(account, "Account must exist for re-added user");
+    assert.ok(account.password, "Password hash must exist in account");
+
+    // Verify registration exists
+    const reg = await db.collection("user_app_registrations").findOne({
+      clientId: clientA_id,
+      $or: [{ userId: userId.toString() }, { userId }],
+    });
+    assert.ok(reg, "Registration must exist in user_app_registrations for client");
+  });
+
   // ==========================================================================
   // SUITE 4: OBSOLETE SECRETS REMOVAL INVARIANTS
   // ==========================================================================
