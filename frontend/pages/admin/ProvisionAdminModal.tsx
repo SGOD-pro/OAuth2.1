@@ -13,7 +13,7 @@ export interface AppAdmin {
   id: string;
   email: string;
   name?: string;
-  redirectUrl: string;
+  redirectUrl?: string;
   isActive: boolean;
   totpEnabled?: boolean;
   loginCount: number;
@@ -101,7 +101,12 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
           ...csrfHeaders(),
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(addForm),
+        body: JSON.stringify({
+          ...addForm,
+          email: addForm.email.trim(),
+          name: addForm.name.trim(),
+          redirectUrl: addForm.redirectUrl.trim(),
+        }),
       });
 
       const data = await res.json();
@@ -139,9 +144,9 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
 
     try {
       const payload: Record<string, unknown> = {
-        email: editForm.email,
-        name: editForm.name,
-        redirectUrl: editForm.redirectUrl,
+        email: editForm.email.trim(),
+        name: editForm.name.trim(),
+        redirectUrl: editForm.redirectUrl.trim(),
         isActive: editForm.isActive,
       };
       if (editForm.password.trim()) {
@@ -304,15 +309,25 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
                       <Label className="text-[11px] text-foreground font-medium">
-                        Redirect URL <span className="text-destructive">*</span>
+                        Redirect URL <span className="text-muted-foreground font-normal">(Optional)</span>
                       </Label>
-                      {candidateOrigins.length > 0 && (
-                        <span className="text-[10px] text-muted-foreground font-sans">Must match app origin</span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {addForm.redirectUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setAddForm((prev) => ({ ...prev, redirectUrl: '' }))}
+                            className="text-[10px] text-destructive hover:underline cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        )}
+                        {candidateOrigins.length > 0 && (
+                          <span className="text-[10px] text-muted-foreground font-sans">Must match app origin</span>
+                        )}
+                      </div>
                     </div>
                     <Input
-                      required
-                      placeholder="https://app.domain.com/admin/dashboard"
+                      placeholder="https://app.domain.com/admin/dashboard (optional)"
                       value={addForm.redirectUrl}
                       onChange={(e) => setAddForm({ ...addForm, redirectUrl: e.target.value })}
                       className="h-8 text-xs font-mono bg-card"
@@ -331,6 +346,16 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
                             {orig}/admin
                           </button>
                         ))}
+                        {addForm.redirectUrl && (
+                          <button
+                            type="button"
+                            className="text-[10px] font-sans bg-destructive/10 hover:bg-destructive/20 border border-destructive/30 px-1.5 py-0.5 rounded text-destructive transition-colors cursor-pointer ml-auto"
+                            onClick={() => setAddForm((prev) => ({ ...prev, redirectUrl: '' }))}
+                            title="Clear redirect URL"
+                          >
+                            Clear
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -438,33 +463,58 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
 
                         <div className="space-y-1">
                           <div className="flex items-center justify-between">
-                            <Label className="text-[11px] text-foreground">Redirect URL *</Label>
-                            {candidateOrigins.length > 0 && (
-                              <span className="text-[10px] text-muted-foreground font-sans">Must match app origin</span>
-                            )}
+                            <Label className="text-[11px] text-foreground">
+                              Redirect URL <span className="text-muted-foreground font-normal">(Optional)</span>
+                            </Label>
+                            <div className="flex items-center gap-2">
+                              {editForm.redirectUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditForm((prev) => ({ ...prev, redirectUrl: '' }))}
+                                  className="text-[10px] text-destructive hover:underline cursor-pointer"
+                                >
+                                  Remove URL
+                                </button>
+                              )}
+                              {candidateOrigins.length > 0 && (
+                                <span className="text-[10px] text-muted-foreground font-sans">Must match app origin</span>
+                              )}
+                            </div>
                           </div>
                           <Input
-                            required
+                            placeholder="https://app.domain.com/admin (leave empty to remove)"
                             value={editForm.redirectUrl}
                             onChange={(e) => setEditForm({ ...editForm, redirectUrl: e.target.value })}
                             className="h-8 text-xs font-mono bg-card"
                           />
-                          {candidateOrigins.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-1 pt-0.5">
-                              <span className="text-[10px] text-muted-foreground font-sans">Quick fill:</span>
-                              {candidateOrigins.map((orig) => (
-                                <button
-                                  key={orig}
-                                  type="button"
-                                  className="text-[10px] font-mono bg-secondary hover:bg-secondary/80 border border-border px-1.5 py-0.5 rounded text-foreground transition-colors cursor-pointer"
-                                  onClick={() => setEditForm((prev) => ({ ...prev, redirectUrl: `${orig}/admin` }))}
-                                  title={`Use ${orig}/admin`}
-                                >
-                                  {orig}/admin
-                                </button>
-                              ))}
-                            </div>
-                          )}
+                          <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                            {candidateOrigins.length > 0 && (
+                              <>
+                                <span className="text-[10px] text-muted-foreground font-sans">Quick fill:</span>
+                                {candidateOrigins.map((orig) => (
+                                  <button
+                                    key={orig}
+                                    type="button"
+                                    className="text-[10px] font-mono bg-secondary hover:bg-secondary/80 border border-border px-1.5 py-0.5 rounded text-foreground transition-colors cursor-pointer"
+                                    onClick={() => setEditForm((prev) => ({ ...prev, redirectUrl: `${orig}/admin` }))}
+                                    title={`Use ${orig}/admin`}
+                                  >
+                                    {orig}/admin
+                                  </button>
+                                ))}
+                              </>
+                            )}
+                            {editForm.redirectUrl && (
+                              <button
+                                type="button"
+                                className="text-[10px] font-sans bg-destructive/10 hover:bg-destructive/20 border border-destructive/30 px-1.5 py-0.5 rounded text-destructive transition-colors cursor-pointer ml-auto"
+                                onClick={() => setEditForm((prev) => ({ ...prev, redirectUrl: '' }))}
+                                title="Remove redirect URL"
+                              >
+                                Remove URL
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         <div className="space-y-1">
@@ -556,9 +606,15 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
                           <div className="min-w-0">
                             <div className="flex items-center gap-1 text-[11px] text-muted-foreground truncate">
                               <Globe className="size-3 shrink-0 text-muted-foreground/70" />
-                              <span className="font-mono truncate" title={admin.redirectUrl}>
-                                {admin.redirectUrl}
-                              </span>
+                              {admin.redirectUrl ? (
+                                <span className="font-mono truncate" title={admin.redirectUrl}>
+                                  {admin.redirectUrl}
+                                </span>
+                              ) : (
+                                <span className="italic text-muted-foreground/50 text-[11px]">
+                                  No redirect URL
+                                </span>
+                              )}
                             </div>
                           </div>
 

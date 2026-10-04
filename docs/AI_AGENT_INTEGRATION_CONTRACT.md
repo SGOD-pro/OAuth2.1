@@ -815,11 +815,208 @@ export async function authenticateAppAdmin(email: string, pass: string) {
 
 ---
 
-## 28. Integration Implementation Checklist
+## 28. Private Application Architecture & Dual-Strategy Integration Guide (`isPublic: false`)
+
+When an OAuth client is configured with `isPublic: false` in SWYRA Auth, it operates in **Private Application Mode** (strict multi-tenant isolation).
+
+### 28.1 The Two Authoritative Integration Strategies
+
+AI agents integrating private consumer applications must select and implement one of two authoritative strategies:
+
+| Dimension | Strategy 1: Centralized OAuth 2.1 Enterprise SSO | Strategy 2: In-App Dedicated Credential Relay |
+|---|---|---|
+| **Primary Use Case** | Multi-tenant SaaS, enterprise tools with centralized SSO, MFA, and audit logging. | Dedicated, branded administrative portals or custom white-labeled login screens. |
+| **Login UI Location** | Centralized SWYRA Auth IdP (`/signin`). | **Consumer Application's Own Frontend** (e.g. `https://tenant.com/login`). |
+| **Protocol Flow** | OAuth 2.1 Authorization Code Flow with PKCE (`S256`). | Server-to-Server REST Relay (`/api/auth/app-admin/login`). |
+| **Client Requirement** | Confidential or Public Client (`isPublic: false`). | **Strictly Confidential Client** (requires `client_secret` on server backend). |
+| **User Directory** | Identity Pool `users` + `user_app_registrations`. | Scoped `app_admins` directory for the specific `clientId`. |
+| **Self-Registration** | **Strictly Forbidden** (`403 registration_disabled`). | **Forbidden** (Accounts provisioned by Admin via `/app-admins`). |
+| **Unassigned Access** | **Strictly Blocked** (`403 access_denied`). | **Strictly Blocked** (`401 invalid_credentials`). |
+
+---
+
+### 28.2 Strategy 1 Deep Dive: Centralized OAuth 2.1 Private Tenant SSO
+
+#### Why does the IdP serve the login page instead of blocking the request upfront?
+When a private application redirects a browser to `/api/auth/oauth2/authorize`:
+1. **Unauthenticated Browser (Initial Visit):**  
+   The IdP does not know *who* the user is until credentials are provided. Because authorized enterprise employees assigned to this private tenant must be able to log in, the IdP must present the authentication challenge.
+   - If an unauthorized user attempts to register: `POST /api/auth/sign-up/email` immediately fails with `403 {"error": "registration_disabled", "message": "Self-registration is disabled for this private application. An administrator must provision your account."}`.
+   - If an unauthorized user logs in with existing credentials from another app: `POST /api/auth/sign-in/email` immediately fails with `403 {"error": "access_denied", "message": "Access restricted: This application is in private mode and your account has not been authorized. Please contact an administrator."}`.
+   - If an authorized user logs in: Authentication succeeds, and the browser is redirected to the consumer's `redirect_uri` with the authorization `code`.
+2. **Already Authenticated Browser (Existing IdP Session):**  
+   If the user already has an active session cookie at SWYRA Auth and hits `/api/auth/oauth2/authorize` for a private application they are not assigned to, SWYRA Auth **blocks authorization immediately** without displaying the login page:
+   ```
+   HTTP/1.1 302 Found
+   Location: https://consumer.com/callback?error=access_denied&error_description=Access+restricted%3A+Your+account+is+not+authorized+for+this+private+application&state=xyz
+   ```
+
+#### Managing Assigned Users (Admin API):
+- **Assign User to Private App:**
+  ```bash
+  curl -X POST https://oauth21.vercel.app/api/admin/clients/{clientId}/users \
+    -H "Cookie: better-auth.session_token={ADMIN_SESSION}" \
+    -H "x-gateway-secret: {INTERNAL_GATEWAY_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"email": "employee@tenant.com"}'
+  ```
+- **List Assigned Users:**
+  ```bash
+  curl https://oauth21.vercel.app/api/admin/clients/{clientId}/users \
+    -H "Cookie: better-auth.session_token={ADMIN_SESSION}" \
+    -H "x-gateway-secret: {INTERNAL_GATEWAY_SECRET}"
+  ```
+- **Revoke User Access:**
+  ```bash
+  curl -X DELETE https://oauth21.vercel.app/api/admin/clients/{clientId}/users/{userId} \
+    -H "Cookie: better-auth.session_token={ADMIN_SESSION}" \
+    -H "x-gateway-secret: {INTERNAL_GATEWAY_SECRET}"
+  ```
+
+---
+
+### 28.3 Strategy 2 Deep Dive: In-App Dedicated Credential Relay (`/api/auth/app-admin/login`)
+
+For private consumer applications that must host **their own white-labeled login page**, SWYRA Auth provides a dedicated server-to-server credential verification API.
+
+#### Security Invariant: Confidential Clients Only
+Because this strategy requires relaying credentials alongside the confidential `client_secret`, it **MUST NEVER** be called from browser frontend code or public SPAs. It is strictly a server-to-server protocol between the consumer backend (Next.js BFF, Express, FastAPI) and SWYRA Auth.
+
+#### Step 1: User Submits Credentials to Consumer App Backend
+In the consumer application's frontend, render a custom login form:
+```tsx
+// Consumer App Frontend (e.g. app/login/page.tsx)
+const res = await fetch('/api/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email, password }),
+});
+```
+
+#### Step 2: Consumer Backend Relays Credentials to SWYRA Auth
+The consumer application's backend route handler relays the credentials along with its server-side `CLIENT_ID` and `CLIENT_SECRET`:
+
+```typescript
+// Consumer App Backend (e.g. app/api/auth/login/route.ts in Next.js App Router)
+import { NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+
+export async function POST(req: Request) {
+  const { email, password } = await req.json();
+
+  const authIssuer = process.env.AUTH_ISSUER;
+  const clientId = process.env.CLIENT_ID;
+  const clientSecret = process.env.CLIENT_SECRET;
+
+  if (!authIssuer || !clientId || !clientSecret) {
+    throw new Error('Missing server authentication configuration');
+  }
+
+  // Server-to-server call to SWYRA Auth
+  const idpRes = await fetch(`${authIssuer}/api/auth/app-admin/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      email,
+      password,
+    }),
+  });
+
+  const data = await idpRes.json();
+
+  if (!idpRes.ok) {
+    return NextResponse.json(
+      { error: data.error || 'invalid_credentials', message: data.message || 'Authentication failed' },
+      { status: idpRes.status }
+    );
+  }
+
+  // Handle Two-Factor Authentication (TOTP)
+  if (data.mfa_required) {
+    return NextResponse.json({
+      mfa_required: true,
+      mfa_token: data.mfa_token,
+      message: 'Two-factor authentication code required',
+    });
+  }
+
+  // Authentication succeeded: Set secure HttpOnly session cookie
+  const cookieStore = await cookies();
+  cookieStore.set('admin_session', data.token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge: data.expiresIn || 3600,
+  });
+
+  return NextResponse.json({
+    success: true,
+    admin: data.admin,
+    redirectUrl: data.redirectUrl || '/dashboard',
+  });
+}
+```
+
+#### Step 3: Consumer Backend Verifies Session on Subsequent Requests
+The consumer app backend verifies the token using the IdP verification endpoint or offline HMAC verification:
+```typescript
+export async function verifyConsumerAdminSession(token: string) {
+  const res = await fetch(`${process.env.AUTH_ISSUER}/api/auth/app-admin/verify`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      client_id: process.env.CLIENT_ID,
+      client_secret: process.env.CLIENT_SECRET,
+    }),
+  });
+  return res.ok;
+}
+```
+
+#### Step 4: Provisioning App Admins (Admin API)
+Accounts authenticating via Strategy 2 are provisioned by an administrator in the `app_admins` directory:
+```bash
+curl -X POST https://oauth21.vercel.app/api/admin/clients/{clientId}/app-admins \
+  -H "Cookie: better-auth.session_token={ADMIN_SESSION}" \
+  -H "x-gateway-secret: {INTERNAL_GATEWAY_SECRET}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "lead-admin@tenant.com",
+    "password": "TemporarySecurePassword123!",
+    "name": "Tenant Lead Admin",
+    "redirectUrl": "/dashboard"
+  }'
+```
+
+---
+
+### 28.4 Decision Guide for AI Agents: Strategy 1 vs Strategy 2
+
+| If your task requires... | Recommended Strategy |
+|---|---|
+| Standard OAuth 2.1 / OIDC compliance with PKCE | **Strategy 1 (Centralized OAuth 2.1)** |
+| Single Sign-On (SSO) across multiple internal enterprise apps | **Strategy 1 (Centralized OAuth 2.1)** |
+| End-users who should never share their password with the consumer application | **Strategy 1 (Centralized OAuth 2.1)** |
+| A Single-Page Application (SPA) without a server-side backend | **Strategy 1 (Centralized OAuth 2.1)** |
+| A completely custom, white-labeled login page hosted entirely inside the consumer app | **Strategy 2 (Direct Credential Relay)** |
+| Dedicated tenant staff / application administrators with custom dashboards | **Strategy 2 (Direct Credential Relay)** |
+| Strict server-to-server credential verification with consumer `client_secret` validation | **Strategy 2 (Direct Credential Relay)** |
+
+---
+
+## 29. Integration Implementation Checklist
 
 ### Phase 1: Pre-Flight Verification
 - [ ] Determine client model (Public vs Confidential).
 - [ ] Determine client mode (Development `isDev: true` vs Production `isDev: false`).
+- [ ] Determine application access mode (Public `isPublic: true` vs Private `isPublic: false`).
+- [ ] If private, choose integration strategy (Strategy 1: Centralized OAuth 2.1 vs Strategy 2: In-App Credential Relay).
 - [ ] Register client in SWYRA Auth Admin Dashboard.
 - [ ] Verify exact callback URI in client registration (HTTPS for prod, loopback for dev).
 - [ ] Store credentials securely without public prefixes.
@@ -836,7 +1033,7 @@ export async function authenticateAppAdmin(email: string, pass: string) {
 
 ---
 
-## 29. Prohibited Integration Patterns
+## 30. Prohibited Integration Patterns
 
 AI agents and developers **MUST NOT**:
 1. Connect consumer apps to the SWYRA Auth MongoDB.
@@ -857,7 +1054,7 @@ AI agents and developers **MUST NOT**:
 
 ---
 
-## 30. AI Agent Change Boundary
+## 31. AI Agent Change Boundary
 
 Before modifying any existing consumer application codebase:
 1. **Inspect Existing Authentication**: Check for existing OAuth clients, cookies, and middleware.
@@ -866,7 +1063,7 @@ Before modifying any existing consumer application codebase:
 
 ---
 
-## 31. The 18 Security Review Questions for Agents
+## 32. The 18 Security Review Questions for Agents
 
 Before declaring an integration task complete, every question must be answered with proof:
 
@@ -891,7 +1088,7 @@ Before declaring an integration task complete, every question must be answered w
 
 ---
 
-## 32. Canonical File Structure for Consumer Apps
+## 33. Canonical File Structure for Consumer Apps
 
 A standard consumer application should organize auth integration cleanly:
 
@@ -915,13 +1112,13 @@ app/
 
 ---
 
-## 33. Documentation Consistency Rule
+## 34. Documentation Consistency Rule
 
 This document is the **normative master contract**. All other documentation in this repository must align with the definitions, rules, and terminology established here without contradiction or divergence.
 
 ---
 
-## 34. Machine-Readable Integration Policy
+## 35. Machine-Readable Integration Policy
 
 This contract is accompanied by the machine-readable policy file:  
 `docs/security/integration-policy.json`
@@ -930,7 +1127,7 @@ Automated linters, CI gates, and AI verification tools validate integration code
 
 ---
 
-## 35. Integration Linter
+## 36. Integration Linter
 
 The repository provides an automated integration contract checker:
 
@@ -939,3 +1136,4 @@ npm run security:integration-check
 ```
 
 Implemented in `scripts/security/check-integration-contract.ts`, this linter detects forbidden fallback patterns, exposed client secrets, bypass flags, and policy violations across documentation and consumer applications.
+

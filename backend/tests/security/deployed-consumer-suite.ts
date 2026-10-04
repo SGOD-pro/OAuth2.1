@@ -197,14 +197,14 @@ await runTest("DEP-5: Live consumer /api/auth/login initiates OAuth 2.1 PKCE red
   assert.ok(location.includes("code_challenge="), "Must include PKCE code_challenge");
   assert.ok(location.includes("code_challenge_method=S256"), "Must require S256 code challenge method");
 
-  // Verify cookies are set for PKCE verifier and state
+  // Verify cookies are set for PKCE verifier and state (or unified encrypted transaction cookie)
   const setCookie = loginRes.headers.get("set-cookie") || "";
   assert.ok(
-    setCookie.includes("oauth_verifier") || setCookie.includes("swyra_pkce_verifier"),
+    setCookie.includes("oauth_verifier") || setCookie.includes("swyra_pkce_verifier") || setCookie.includes("swyra_oauth_tx"),
     "Must set PKCE verifier cookie"
   );
   assert.ok(
-    setCookie.includes("oauth_state") || setCookie.includes("swyra_auth_state"),
+    setCookie.includes("oauth_state") || setCookie.includes("swyra_auth_state") || setCookie.includes("swyra_oauth_tx"),
     "Must set OAuth state cookie"
   );
 

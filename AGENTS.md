@@ -70,6 +70,9 @@ Base URL: `${AUTH_ISSUER}` (e.g. `https://oauth21.vercel.app`)
 3. **Application Access Mode**:
    - `isPublic: true`: Open to all registered platform users.
    - `isPublic: false`: Restricted enterprise tenant (only explicitly provisioned users may log in).
+     - *Strategy 1 (Centralized OAuth 2.1)*: Standard OAuth 2.1 Code Flow + PKCE. Users pre-assigned via `POST /api/admin/clients/:clientId/users`. Unassigned users receive 403 `access_denied`.
+     - *Strategy 2 (In-App Credential Relay)*: White-labeled login form in consumer app; backend relays `{ client_id, client_secret, email, password }` to `/api/auth/app-admin/login`.
+     - Full specification: [docs/AI_AGENT_INTEGRATION_CONTRACT.md § 28](docs/AI_AGENT_INTEGRATION_CONTRACT.md#28-private-application-architecture--dual-strategy-integration-guide-ispublic-false).
 
 ---
 

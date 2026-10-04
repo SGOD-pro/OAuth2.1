@@ -130,6 +130,29 @@
       "forbiddenHosts": ["localhost.evil.com", "127.0.0.1.evil.com", "169.254.169.254"]
     }
   },
+  "applicationAccessModes": {
+    "public": {
+      "flag": { "isPublic": true },
+      "description": "Open platform access mode. Any registered user in the identity provider pool can sign in. Application membership is automatically recorded upon first login.",
+      "selfRegistration": "allowed_subject_to_global_setting",
+      "loginFlow": "standard_oauth2_pkce"
+    },
+    "private": {
+      "flag": { "isPublic": false },
+      "description": "Strict multi-tenant isolation mode. Self-registration is strictly blocked (403 registration_disabled). Only users explicitly provisioned or assigned via the Admin API (POST /api/admin/clients/:clientId/users) may authenticate.",
+      "selfRegistration": "strictly_blocked_403",
+      "supportedStrategies": [
+        {
+          "name": "centralized_oauth2_code_pkce_with_tenant_assignment",
+          "description": "Standard OAuth 2.1 code flow with PKCE redirecting to IdP. If unauthenticated, user is challenged at IdP login page. Assigned users succeed; unassigned users fail with 403 access_denied."
+        },
+        {
+          "name": "in_app_credential_relay_app_admin",
+          "description": "Consumer app renders its own custom login page and relays credentials server-to-server via POST /api/auth/app-admin/login. Requires confidential client holding client_secret."
+        }
+      ]
+    }
+  },
   "callbackRules": {
     "production": {
       "allowedProtocols": ["https:"],

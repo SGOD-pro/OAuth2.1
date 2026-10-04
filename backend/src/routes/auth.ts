@@ -494,8 +494,14 @@ auth.get("/oauth2/authorize", async (c) => {
                 return c.redirect(errorUrl.toString(), 302);
             }
         } else {
-            // User does not have an active session yet: Better Auth will redirect to loginPage
-            return forwardToBetterAuth();
+            // Unauthenticated user attempting public OAuth on a private application:
+            // Private applications strictly DO NOT permit public IdP authentication or redirect to the public auth page!
+            // Reject immediately at the OAuth boundary and return access_denied to the registered redirect_uri.
+            const errorUrl = new URL(redirectUri);
+            errorUrl.searchParams.set("error", "access_denied");
+            errorUrl.searchParams.set("error_description", "Access restricted: Private application requires direct in-app credential verification or an existing pre-authorized session. Public login is disabled.");
+            if (state) errorUrl.searchParams.set("state", state);
+            return c.redirect(errorUrl.toString(), 302);
         }
     } else {
         // Public Application Mode:

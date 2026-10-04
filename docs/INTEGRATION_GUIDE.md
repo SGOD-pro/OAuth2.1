@@ -566,16 +566,50 @@ If an administrator has MFA enabled:
 
 When an application is configured as **Private (`isPublic: false`)**, only authorized users can authenticate.
 
-### Managing Assigned Users via the Admin API:
+SWYRA Auth supports two distinct integration strategies for private applications:
+
+### Strategy 1: Centralized OAuth 2.1 Enterprise SSO
+The consumer application uses standard OAuth 2.1 Authorization Code Flow with PKCE, redirecting to `${AUTH_ISSUER}/api/auth/oauth2/authorize`.
+
+- **Why does the IdP serve the login page to unauthenticated users?**  
+  An unauthenticated visitor's identity is unknown to the IdP. The IdP must present the login challenge to authenticate them. Once credentials are submitted:
+  - Authorized enterprise employees assigned to this private client authenticate successfully and receive an authorization code.
+  - Users not assigned to this application receive `HTTP 403 Forbidden` (`access_denied: Access restricted: This application is in private mode and your account has not been authorized.`).
+  - Users attempting self-registration receive `HTTP 403 Forbidden` (`registration_disabled: Self-registration is disabled for this private application. An administrator must provision your account.`).
+- **If the user already has an active IdP session:**  
+  If an unassigned user already has an active session from another application, SWYRA Auth blocks authorization immediately without showing the login page, redirecting to the callback with `302 redirect_uri?error=access_denied`.
+
+#### Managing Assigned Users via the Admin API:
 - **List assigned users**:
-  `GET /api/admin/clients/:clientId/users` (Super Admin JWT required)
+  `GET /api/admin/clients/:clientId/users` (Super Admin or Scoped Admin session required)
 - **Assign user access**:
   `POST /api/admin/clients/:clientId/users`  
   Payload: `{ "email": "employee@company.com" }`
 - **Revoke user access**:
   `DELETE /api/admin/clients/:clientId/users/:userId`
 
-If an unassigned user attempts to authenticate through `/api/auth/oauth2/authorize`, SWYRA Auth denies authorization with `HTTP 403 Forbidden` (`registration_disabled`).
+---
+
+### Strategy 2: In-App Dedicated Credential Relay (`/api/auth/app-admin/login`)
+For private consumer applications that must host **their own white-labeled login page** (e.g. `https://tenant.com/login`) rather than redirecting users to the IdP:
+
+1. **Consumer Frontend:** Presents an in-app login form collecting `{ email, password }`.
+2. **Consumer Backend BFF:** Relays the credentials server-to-server to SWYRA Auth:
+   ```bash
+   POST /api/auth/app-admin/login
+   Content-Type: application/json
+
+   {
+     "client_id": "YOUR_CLIENT_ID",
+     "client_secret": "YOUR_CLIENT_SECRET",
+     "email": "admin@tenant.com",
+     "password": "user_password"
+   }
+   ```
+3. **SWYRA Auth Backend:** Verifies `client_id` + `client_secret`, validates credentials against the scoped `app_admins` directory for that client, enforces TOTP MFA if enabled, and issues a scoped JWT.
+4. **Security Invariant:** Requires a **Confidential Client** (holds `client_secret` server-side). Browser SPAs must NEVER call `/api/auth/app-admin/login` directly.
+
+For complete code recipes and framework implementations, see [docs/AI_AGENT_INTEGRATION_CONTRACT.md § 28](AI_AGENT_INTEGRATION_CONTRACT.md#28-private-application-architecture--dual-strategy-integration-guide-ispublic-false).
 
 ---
 

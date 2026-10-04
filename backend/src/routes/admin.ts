@@ -1033,10 +1033,6 @@ admin.post("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
     return c.json({ error: "Valid email address is required" }, 400);
   }
 
-  if (!redirectUrl) {
-    return c.json({ error: "Redirect URL is required" }, 400);
-  }
-
   if (!isStrongPassword(password)) {
     return c.json(
       {
@@ -1063,10 +1059,12 @@ admin.post("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
       return c.json({ error: "Application not found" }, 404);
     }
 
-    // Enforce origin matching against client's registered origins/redirect URIs
-    const urlCheck = isRedirectUrlAllowedForClient(redirectUrl, client);
-    if (!urlCheck.allowed) {
-      return c.json({ error: urlCheck.error }, 400);
+    // Enforce origin matching against client's registered origins/redirect URIs if provided
+    if (redirectUrl) {
+      const urlCheck = isRedirectUrlAllowedForClient(redirectUrl, client);
+      if (!urlCheck.allowed) {
+        return c.json({ error: urlCheck.error }, 400);
+      }
     }
 
     const canonicalClientId = client.clientId;
@@ -1197,7 +1195,9 @@ const updateAppAdminHandler = async (c: any) => {
       }
     }
 
-    if (typeof body.redirectUrl === "string" && body.redirectUrl.trim()) {
+    if (body.removeRedirectUrl === true || body.redirectUrl === "" || body.redirectUrl === null) {
+      updateFields.redirectUrl = "";
+    } else if (typeof body.redirectUrl === "string" && body.redirectUrl.trim()) {
       const urlCheck = isRedirectUrlAllowedForClient(body.redirectUrl.trim(), client);
       if (!urlCheck.allowed) {
         return c.json({ error: urlCheck.error }, 400);
@@ -1253,7 +1253,7 @@ const updateAppAdminHandler = async (c: any) => {
         id: updated._id.toString(),
         email: updated.email,
         name: updated.name,
-        redirectUrl: updated.redirectUrl,
+        redirectUrl: updated.redirectUrl || "",
         isActive: updated.isActive !== false,
         loginCount: updated.loginCount || 0,
         lastLoginAt: updated.lastLoginAt ? updated.lastLoginAt.toISOString() : null,

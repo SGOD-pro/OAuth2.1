@@ -972,6 +972,48 @@ await runTest(12, "App Admin password invalidation: changing password immediatel
     body: JSON.stringify({ client_id: appA_id, client_secret: appA_secret }),
   });
   assert.equal(vNew.status, 200, "New token issued after password change must succeed");
+
+  // Verify clearing/removing redirect URL on update & optional redirect URL on create
+  const clearUrlRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
+    method: "PUT",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({ redirectUrl: "" }),
+  });
+  assert.equal(clearUrlRes.status, 200, "Super Admin can clear/remove redirect URL with empty string");
+  const clearUrlJson = await clearUrlRes.json();
+  assert.equal(clearUrlJson.admin.redirectUrl, "", "Admin redirectUrl must be empty string after removal");
+
+  // Verify removeRedirectUrl: true also clears it
+  const removeUrlRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
+    method: "PATCH",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({ removeRedirectUrl: true }),
+  });
+  assert.equal(removeUrlRes.status, 200, "removeRedirectUrl flag succeeds");
+  const removeUrlJson = await removeUrlRes.json();
+  assert.equal(removeUrlJson.admin.redirectUrl, "", "redirectUrl is cleared via removeRedirectUrl flag");
+
+  // Verify creating an App Admin without redirectUrl succeeds
+  const noUrlEmail = `admin_nourl_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const createNoUrlRes = await app.request(`/api/admin/clients/${appA_id}/app-admins`, {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({
+      email: noUrlEmail,
+      password: "NoUrlPassword@123456!",
+    }),
+  });
+  assert.equal(createNoUrlRes.status, 201, "Creating App Admin without redirectUrl succeeds");
+  const createNoUrlJson = await createNoUrlRes.json();
+  assert.equal(createNoUrlJson.admin.redirectUrl, "", "New admin created without redirectUrl has empty redirectUrl");
+
+  // Verify invalid redirect URL origin is still strictly rejected
+  const invalidUrlRes = await app.request(`/api/admin/clients/${appA_id}/app-admins/${adminId}`, {
+    method: "PUT",
+    headers: getTestHeaders({ Cookie: superAdminCookie }),
+    body: JSON.stringify({ redirectUrl: "https://evil.unregistered-domain.com/admin" }),
+  });
+  assert.equal(invalidUrlRes.status, 400, "Invalid redirect URL origin must be rejected with 400");
 });
 
 // --------------------------------------------------------------------------
