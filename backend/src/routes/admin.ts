@@ -932,8 +932,8 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
 
 // -- Application Administrators Management (Super Admin) ------------------
 
-// 10. List Application Admins for a Client
-admin.get("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
+// 10. List Application Admins for a Client (Super-Admin or Scoped-Admin for own app)
+admin.get("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
   const rawClientId = c.req.param("clientId");
   try {
     const database = await getDb();
@@ -1019,8 +1019,8 @@ function isRedirectUrlAllowedForClient(redirectUrl: string, client: any): { allo
   return { allowed: true };
 }
 
-// 11. Create Application Admin for a Client
-admin.post("/clients/:clientId/app-admins", requireSuperAdmin, async (c) => {
+// 11. Create Application Admin for a Client (Super-Admin or Scoped-Admin for own app)
+admin.post("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
   const clientId = c.req.param("clientId");
   const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
@@ -1295,11 +1295,11 @@ const updateAppAdminHandler = async (c: any) => {
     return c.json({ error: err?.message || "Failed to update administrator" }, 500);
   }
 };
-admin.put("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, updateAppAdminHandler);
-admin.patch("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, updateAppAdminHandler);
+admin.put("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, updateAppAdminHandler);
+admin.patch("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, updateAppAdminHandler);
 
-// 13. Delete Application Admin
-admin.delete("/clients/:clientId/app-admins/:adminId", requireSuperAdmin, async (c) => {
+// 13. Delete Application Admin (Super-Admin or Scoped-Admin for own app)
+admin.delete("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, async (c) => {
   const rawClientId = c.req.param("clientId");
   const adminId = c.req.param("adminId");
   const sessionUser = c.get("user") as any;

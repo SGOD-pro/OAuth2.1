@@ -535,6 +535,30 @@ try {
     assert.ok(reg, "Registration must exist in user_app_registrations for client");
   });
 
+  await runTest("PROV-4: Scoped Admin CAN list app-admins for own app, but is DENIED for other apps", async () => {
+    const scopedTokenA = await signTestToken({
+      sub: "scoped-admin-a",
+      role: "admin",
+      scoped_client_id: clientA_id,
+    });
+
+    // 1. Scoped Admin A requests App A app-admins -> Allowed (200)
+    const resA = await app.request(`/api/admin/clients/${clientA_id}/app-admins`, {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${scopedTokenA}` }),
+    });
+    assert.equal(resA.status, 200, "Scoped Admin A must be allowed to list own App A admins");
+    const jsonA = await resA.json();
+    assert.ok(Array.isArray(jsonA.admins), "Must return admins array");
+
+    // 2. Scoped Admin A requests App B app-admins -> Forbidden (403)
+    const resB = await app.request(`/api/admin/clients/${clientB_id}/app-admins`, {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${scopedTokenA}` }),
+    });
+    assert.equal(resB.status, 403, "Scoped Admin A must be denied from listing other App B admins");
+  });
+
   // ==========================================================================
   // SUITE 4: OBSOLETE SECRETS REMOVAL INVARIANTS
   // ==========================================================================
