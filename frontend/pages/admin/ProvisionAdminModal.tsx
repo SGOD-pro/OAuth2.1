@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Eye, EyeOff, Plus, Pencil, Trash2, Shield, UserPlus, RefreshCw, Globe, CheckCircle2, XCircle } from 'lucide-react';
+import { Eye, EyeOff, Plus, Pencil, Trash2, Shield, UserPlus, RefreshCw, Globe, CheckCircle2, XCircle, X } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { csrfHeaders } from '@/lib/csrf';
 
@@ -473,7 +473,7 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
                                   onClick={() => setEditForm((prev) => ({ ...prev, redirectUrl: '' }))}
                                   className="text-[10px] text-destructive hover:underline cursor-pointer"
                                 >
-                                  Remove URL
+                                  Remove all
                                 </button>
                               )}
                               {candidateOrigins.length > 0 && (
@@ -481,12 +481,24 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
                               )}
                             </div>
                           </div>
+                          <div className="relative">
                           <Input
                             placeholder="https://app.domain.com/admin (leave empty to remove)"
                             value={editForm.redirectUrl}
                             onChange={(e) => setEditForm({ ...editForm, redirectUrl: e.target.value })}
-                            className="h-8 text-xs font-mono bg-card"
+                            className="h-8 text-xs font-mono bg-card pr-7"
                           />
+                          {editForm.redirectUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setEditForm((prev) => ({ ...prev, redirectUrl: '' }))}
+                              title="Remove redirect URL"
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-destructive hover:text-destructive/80 transition-colors"
+                            >
+                              <X className="size-3.5" />
+                            </button>
+                          )}
+                          </div>
                           <div className="flex flex-wrap items-center gap-1 pt-0.5">
                             {candidateOrigins.length > 0 && (
                               <>
@@ -503,16 +515,6 @@ export const AppAdminManager: React.FC<AppAdminManagerProps> = ({
                                   </button>
                                 ))}
                               </>
-                            )}
-                            {editForm.redirectUrl && (
-                              <button
-                                type="button"
-                                className="text-[10px] font-sans bg-destructive/10 hover:bg-destructive/20 border border-destructive/30 px-1.5 py-0.5 rounded text-destructive transition-colors cursor-pointer ml-auto"
-                                onClick={() => setEditForm((prev) => ({ ...prev, redirectUrl: '' }))}
-                                title="Remove redirect URL"
-                              >
-                                Remove URL
-                              </button>
                             )}
                           </div>
                         </div>

@@ -1,125 +1,122 @@
-# Security Architecture & Abuse Defense Specification
-**Version:** 2.1.0  
-**Status:** Supporting Security Specification  
-**Normative Reference:** For the single authoritative security architecture, perimeter gateway trust, and canonical terminology, refer strictly to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
+# SWYRA Auth -- Normative Security Architecture & Trust Model (SECURITY.md)
 
-This document details the security model, cryptographic guarantees, threat mitigation mechanisms, and operational scope boundaries of the **SWYRA Auth Identity Provider**.
+**Status:** NORMATIVE / AUTHORITATIVE SECURITY SPECIFICATION  
+**Precedence:** This document defines the non-negotiable security requirements and trust boundaries of SWYRA Auth. In the event of any conflict between this document and consumer application implementations, this document takes absolute precedence.  
 
 ---
 
-## 1. Threat Mitigation Matrix
+## 1. Security Philosophy & The Fail-Closed Foundation
 
-| Attack Vector | Mitigation Strategy | Verification Standard |
-|---|---|---|
-| **Credential Stuffing / IP-Rotation Brute Force** | Target-keyed rate limiting (5 attempts / 60s window per normalized email) evaluated prior to password verification. | Attempt #6 blocked with HTTP 429 across 20 distinct IP addresses. |
-| **Account Enumeration / Timing Discrepancies** | Interleaved constant-time dummy scrypt hashing (`N: 16384, r: 16, p: 1, dkLen: 64`) when user account does not exist. | Statistically verified ($p > 0.05$ via Welch's t-test and Mann-Whitney U test). |
-| **Token Replay / Refresh Hijacking** | Token Family Rotation with immediate multi-generation revocation upon reuse of consumed tokens. | Fail-closed MongoDB fallback revokes entire token family when stale token is replayed outside grace window. |
-| **Concurrent Refresh Token Bursts** | Atomic Compare-And-Swap (CAS) in-flight tracking with a 2-second network hazard grace window. | 5 concurrent refresh requests yield exactly 1 active successor; competing requests fail cleanly without corrupting family state. |
-| **Cross-Tenant Token Replay** | Tokens bound to issuing `client_id` via JWT claims (`client_id`, `azp`, `aud`). | Resource servers reject tokens issued for different OAuth clients (`403 Forbidden`). |
-| **Session Fixation & Hijacking** | Session identifiers regenerated and cryptographically signed on authentication; unauthenticated pre-auth tokens destroyed. | Attacker-seeded pre-auth session tokens cannot access authenticated sessions post-login. |
-| **Cross-Site Request Forgery (CSRF)** | Mandatory cryptographically random `state` parameter in OAuth flows; custom headers and `SameSite=Lax` cookies for stateful endpoints. | State-changing requests lacking valid CSRF state or tokens are rejected. |
-| **Cross-Origin Telemetry Theft (CORS)** | Dynamic origin reflection strictly validated against database client whitelists with Redis/memory caching. | Unregistered origins receive HTTP 403 or unreflected CORS headers. |
-| **SSRF & Open Redirects** | `validateOAuthClientConfiguration` and `validateRedirectUri` block wildcards, userinfo credentials, and intranet private IPs (`192.168.x`, `10.x`, `169.254.169.254`). | Production mode strictly requires HTTPS on production clients (`isDev: false`), while loopback addresses (`localhost`, `127.0.0.1`) are permitted exclusively on explicitly authorized development clients (`isDev: true`) per RFC 8252. |
-| **Admin Credential Compromise Blast Radius** | App Admin tokens signed with separate HMAC-SHA256 secret (`APP_ADMIN_JWT_SECRET`), bound to `client_id`, with stateful JTI revocation. | Compromise of an App Admin token for App A cannot authenticate against App B. |
+Security in SWYRA Auth is designed around three governing axioms:
+
+1. **Fail-Closed by Design:** Any missing credential, unconfigured setting, ambiguous state, or unexpected protocol parameter MUST result in immediate request rejection or server termination.
+2. **Zero Consumer Trust:** Consumer applications are external entities. They never receive direct access to IdP user credentials, session tables, or the database.
+3. **Defense-in-Depth:** Every authorization decision is verified across multiple layers: network perimeter, gateway trust header, Hono router, Better-Auth core, and MongoDB transactional checks.
 
 ---
 
-## 2. Rate Limiting Architecture & Fail-Safe Guarantees
+## 2. Threat Model & Trust Boundaries
 
-```mermaid
-flowchart TD
-    Req[Incoming Login Request] --> IPCheck{IP Rate Limiter<br/>Upstash Redis / MongoDB}
-    IPCheck -- "Exceeded" --> HTTP429_IP[HTTP 429 IP Rate Limited]
-    IPCheck -- "Pass" --> TargetCheck{Target Account Limiter<br/>5 attempts / 60s}
-    TargetCheck -- "Count >= 5" --> HTTP429_Target[HTTP 429 Target Throttled]
-    TargetCheck -- "Count < 5" --> UserLookup{User Exists in MongoDB?}
-    UserLookup -- "No" --> DummyHash[Execute Dummy Scrypt Hash<br/>Matching Cost Parameters]
-    UserLookup -- "Yes" --> RealHash[Verify Real Scrypt Password]
-    DummyHash --> AuthFail[HTTP 401 Invalid Credentials]
-    RealHash --> AuthResult{Password Correct?}
-    AuthResult -- "No" --> AuthFail
-    AuthResult -- "Yes" --> GenTokens[Issue Tokens & Bind Session]
+```
+[ UNTRUSTED ZONE: Browser / Mobile Client / Public Internet ]
+                           │
+       Boundary 1: TLS 1.3 / Exact HTTPS Redirect URIs
+                           ▼
+[ DMZ / EDGE: Vercel Reverse Proxy & Edge Router ]
+                           │
+       Boundary 2: Internal Gateway Secret (x-gateway-secret)
+                           ▼
+[ TRUSTED CORE: AWS Lambda Function (Hono Router) ]
+                           │
+       Boundary 3: MongoDB Encrypted Driver & Replica Set
+                           ▼
+[ PERSISTENCE: MongoDB Atlas Data Store ]
 ```
 
-### Key Characteristics:
-1. **Target-Keyed Rate Limiting**: Keyed by normalized target email (`swyra:rl:target:email:<email>:<window>`). Defends against distributed botnets rotating thousands of IPs against a single victim account.
-2. **Fail-Open for DDoS Resilience**: If Redis experiences a hard timeout (> 400ms) or outage, rate limiter checks fail open in ~403ms, preventing denial-of-service to legitimate users while MongoDB TTL fallback assumes state tracking.
-3. **Fail-Closed for Token Family Revocation**: Token family replay and revocation always query authoritative MongoDB records, ensuring that an attacker replaying a stolen token is caught even during Redis cache outages.
+### Trust Boundary Definitions
+- **Boundary 1 (Edge Perimeter):** Validates TLS certificates, enforces HSTS, drops malformed HTTP frames, and rewrites edge traffic.
+- **Boundary 2 (Gateway Trust Perimeter):** Ensures that requests entering the Lambda management surfaces originate exclusively from the authorized API Gateway / reverse proxy via `x-gateway-secret`. Direct internet calls to Lambda URLs fail closed (403 `forbidden`).
+- **Boundary 3 (Storage Isolation):** User credentials, session tokens, and refresh token families are stored exclusively within the IdP database. Consumer applications never receive database credentials.
 
 ---
 
-## 3. Refresh Token Family Rotation & Concurrency Defenses
+## 3. Normative Security Invariants (P0 Guarantees)
 
-SWYRA Auth implements RFC 6749 Section 10.4 Token Family Rotation:
-- Every refresh operation rotates the refresh token ($R_0 \to R_1$).
-- **Single-Flight CAS State**: Concurrent rotation requests are protected by an atomic Compare-And-Swap check in MongoDB (`findOneAndUpdate`). Exactly one request executes the rotation, while competing requests fail closed or are handled within the 2-second in-flight grace window.
-- **Immediate Family Invalidation**: When a consumed refresh token ($R_0$) is replayed after the grace window, SWYRA Auth detects malicious token theft and revokes all active tokens in that family immediately.
+### 3.1 Zero Credential Exposure
+- Consumer applications MUST NEVER collect, render input forms for, handle, proxy, transmit, or store IdP user passwords.
+- The previous credential-relay pattern (`/api/auth/app-admin/login`) is strictly deprecated and forbidden for consumer authentication.
+- All user authentication terminates at the centralized IdP login interface (`/auth`).
+
+### 3.2 Mandatory PKCE S256 & Endpoint Integrity
+- All browser authorization code flows target the canonical endpoint `/api/auth/oauth2/authorize` (never internal UI routes).
+- Every authorization request to `/api/auth/oauth2/authorize` MUST include `code_challenge` and `code_challenge_method=S256`.
+- Plain PKCE (`code_challenge_method=plain`) is strictly rejected at the OAuth boundary.
+- During token exchange, the consumer must supply the exact `code_verifier`. Replay of codes or incorrect verifiers fails immediately (400 `invalid_grant`).
+
+### 3.3 Strict Redirect URI Exact Matching
+- Redirect URIs are matched using strict, full string equality against registered entries.
+- Wildcards (`*`), path traversals (`/..`), regex patterns, and query string injections are strictly forbidden.
+- Localhost URIs (`http://localhost:*`, `http://127.0.0.1:*`) are permitted **ONLY** when `isDev: true`. Production clients (`isDev: false`) fail closed if a loopback URI is supplied.
+
+### 3.4 Cryptographic State Parameter
+- Every authorization request MUST include a cryptographically random `state` parameter generated with at least 128 bits of entropy.
+- The consumer application MUST verify that the `state` received in the callback matches the `state` initiated in the session.
+
+### 3.5 Token Family Rotation & Replay Protection
+- Refresh tokens rotate atomically on every exchange.
+- Replaying a previously consumed refresh token triggers immediate **Cascade Revocation**, revoking the entire token family and invalidating all active access tokens for that user/client combination.
+- Token families are strictly scoped to the `clientId` that created them. Cross-client token exchange or introspection attempts fail closed.
+
+### 3.6 Offline Cryptographic Verification & Algorithm Pinning
+- Consumer applications verify JWT signatures offline against the IdP's JWKS (`/.well-known/jwks.json`).
+- Consumer JWT verifiers MUST pin the signing algorithm strictly to `RS256`. Algorithms `none`, `HS256`, or unpinned configurations are strictly forbidden.
+- The consumer MUST validate that `iss === AUTH_ISSUER` and `aud === CLIENT_ID`.
 
 ---
 
-## 4. Per-Application Administrator Cryptographic Isolation
+## 4. Multi-Tenant Private Application Security
 
-To protect consumer applications against cross-tenant privilege escalation:
-1. **Dedicated Signing Secret**: App Admin JWTs are signed with `APP_ADMIN_JWT_SECRET`, physically isolated from the OIDC RSA private keys and Better Auth session secrets.
-2. **Audience Constraint**: Every App Admin token contains `aud: client_id`. Backend verification endpoints enforce that the presenting `client_id` matches the token's audience.
-3. **Stateful JTI Revocation**: When an admin logs out or an account is disabled, the token's `jti` is permanently stored in the revocation collection.
-4. **AES-256-GCM TOTP Encryption**: TOTP secrets are encrypted at rest using `APP_ADMIN_TOTP_KEY`.
+When `isPublic = false`, the application is an enterprise tenant:
+1. **No Public Self-Registration:** Unauthenticated users hitting `/oauth2/authorize` are directed to IdP login with `is_public=false`, which hides and disables the Sign-Up tab. Direct sign-up API calls return 403 `registration_disabled`.
+2. **Pre-Authorization Requirement:** Authentication alone does not grant access. The IdP verifies that the authenticated user ID is explicitly present in `user_app_registrations` for that `clientId`.
+3. **Instant Eviction on De-Provisioning:** If a user is removed from `user_app_registrations`, their existing refresh token family is immediately revoked, and subsequent refresh requests return 401 `invalid_grant`.
 
 ---
 
-## 5. Security Verification & Test Suite Gates
+## 5. Administrative Authorization Separation
 
-The repository contains **11 automated security suites** executing **118 total tests** to verify security invariants:
+- **Super Administrator (`role: "admin"`, `scopedClientId: null`):** Authorized to manage global platform resources, register new clients, and provision administrators.
+- **Application Administrator (`role: "admin"`, `scopedClientId: "<clientId>"`):** Authorized to manage only their designated client. Scoped administrators cannot:
+  - Modify or view other clients (Cross-Tenant Access Forbidden).
+  - Mutate security boundary flags (`isDev`, `isPublic`).
+  - Delete their application or any other application.
+  - Access Super-Admin endpoints.
 
-| Suite Name | Test Count | Environment | Primary Focus |
-|---|---|---|---|
-| `full-production-adversarial-suite.ts` | 30 | Local / Test Harness | Concurrent refresh bursts, token replay, CAS race conditions, timing attacks |
-| `final-adversarial-gate.ts` | 14 | Local / Test Harness | Client credential validation, redirect URI spoofing, PKCE enforcement |
-| `direct-backend-access-suite.ts` | 8 | Local / Test Harness | Shielding backend against unauthenticated direct invocations |
-| `session-hijacking-suite.ts` | 7 | Local / Test Harness | Session fixation, cookie hijacking, pre-auth token isolation |
-| `oauth-transaction-suite.ts` | 8 | Local / Test Harness | Authorization code single-use, code expiration, state validation |
-| `credential-compromise-suite.ts` | 8 | Local / Test Harness | Blast radius of stolen credentials and App Admin tokens |
-| `cross-tenant-matrix.ts` | 7 | Local / Test Harness | Multi-tenant isolation between App A and App B |
-| `production-vs-development-suite.ts` | 9 | Local / Test Harness | Production environment strictness and secret length enforcement |
-| `aws-dashboard-integration-suite.ts` | 8 | Local / Test Harness | Real consumer contract validation (App Admin + OAuth flows) |
-| `e2e-oidc-interop.test.ts` | 11 | Local / Test Harness | OpenID Connect discovery, JWKS compliance, RS256 token verification |
-| `deployed-consumer-suite.ts` | 8 | **Live HTTPS** | Live verification against production IdP and deployed consumer |
-| **TOTAL** | **118** | **110 Local + 8 Live** | **100% Pass Rate** |
+---
 
-All tests are executable via:
+## 6. Automated Security Validation Suite
+
+SWYRA Auth maintains an automated continuous security test gate consisting of 15 blocking test suites:
+
+| Suite Name | Test Script | Verified Security Properties |
+|---|---|---|
+| **Client Mode Transition** | `npm run test:client-mode-transition` | Atomic dev/prod transitions, loopback URI lockdown, flag immutability |
+| **Cross-Client Refresh Matrix** | `npm run test:cross-client-refresh` | Token family CAS concurrency, cross-client substitution defenses, grace windows |
+| **Adversarial Master Gate** | `npm run test:full-adversarial` | Comprehensive penetration matrix against token replay and code theft |
+| **Final Adversarial Gate** | `npm run test:security-gate` | Rigorous privilege injection, CSRF evasion, and scope-tampering tests |
+| **Direct Backend Access** | `npm run test:direct-backend` | Gateway perimeter enforcement (`x-gateway-secret`), direct URL blocking |
+| **Session Hijacking** | `npm run test:session-hijack` | Multi-tab isolation, cookie tampering, cross-origin state poisoning |
+| **OAuth Transaction** | `npm run test:oauth-tx` | Code substitution, multi-tab transaction isolation, verifier binding |
+| **Credential Compromise** | `npm run test:credential-comp` | Password invalidation, JWT revocation, token family revocation |
+| **Cross-Tenant Matrix** | `npm run test:cross-tenant` | Isolation between tenants A, B, and C under adversarial load |
+| **Prod vs Dev** | `npm run test:prod-vs-dev` | Strict environment flag enforcement and loopback boundary rules |
+| **Deployed Consumer** | `npm run test:deployed-consumer` | Live HTTPS verification, fail-closed callback checks against live IdP |
+| **AWS Dashboard Integration** | `npm run test:aws-dashboard` | Real-world consumer app integration and role-claim validation |
+| **App Management Auth** | `npm run test:app-mgmt-auth` | Scoped vs Super Admin authorization decisions and audit logging |
+| **E2E OIDC Interop** | `npm run test:oidc-interop` | Full OIDC compliance, PKCE S256, JOSE remote JWKS verification |
+| **Private App OAuth** | `npm run test:private-oauth` | Private tenant login flow, registration disabled, assignment enforcement |
+
+Execute all security suites:
 ```bash
 npm run test:all-security
 ```
-
----
-
-## 6. Honest Scope Boundary & DDoS Protection
-
-> [!WARNING]
-> **SWYRA Auth protects application-layer authentication and authorization logic.**  
-> It does not mitigate network-layer or volumetric DDoS attacks (e.g. SYN floods, UDP amplification, terabit bandwidth saturation).
-
-In production deployments, you **MUST** deploy an upstream CDN / WAF in front of SWYRA Auth:
-- **Cloudflare** (with Turnstile / Bot Management / DDoS Protection)
-- **AWS CloudFront + AWS WAF + AWS Shield**
-- **Google Cloud Armor / Azure Front Door**
-
----
-
-## 7. Mandatory Operational Security: Credential Rotation Notice
-
-> [!CAUTION]
-> **Database Credential Rotation Required**  
-> If database credentials, URIs, or secrets were ever exposed in screenshots, development environments, or external logs, operators **MUST** assume those credentials compromised and execute the following rotation protocol immediately:
-> 
-> 1. **MongoDB Atlas / Database User Password Rotation**:
->    - Log in to MongoDB Atlas (or your database provider control panel).
->    - Navigate to **Security** &rarr; **Database Access**.
->    - Edit the database user and generate a new high-entropy password (minimum 32 characters).
->    - Terminate all active database connections in Atlas &rarr; Metrics / Real-Time view.
-> 2. **Environment Variable Update**:
->    - Update `MONGO_URI` across all hosting providers (AWS SAM / Lambda parameter store, Vercel environment variables, container secrets).
->    - Ensure `.env` is never committed to version control and matches `.gitignore`.
-> 3. **Secret Verification & Audit**:
->    - Audit git commit logs to verify no production secrets (`BETTER_AUTH_SECRET`, `INTERNAL_GATEWAY_SECRET`, `APP_ADMIN_JWT_SECRET`, `APP_ADMIN_TOTP_KEY`, `MONGO_URI`) exist in history.
->    - Redeploy the application stack with the updated connection string.

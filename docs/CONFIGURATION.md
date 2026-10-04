@@ -1,138 +1,131 @@
-# Configuration & Environment Specification
-**Version:** 2.1.0  
-**Status:** Supporting Configuration Guide  
-**Normative Reference:** For the single authoritative security architecture, perimeter gateway trust, and client mode lifecycle, refer strictly to [docs/SECURITY_CANONICAL.md](SECURITY_CANONICAL.md).
+# SWYRA Auth -- Configuration Specification (CONFIGURATION.md)
 
-This document provides a comprehensive reference for configuring the **SWYRA Auth** identity provider in development, testing, and production environments.
+**Authority:** Normative Environment and Configuration Reference for SWYRA Auth and Consumers  
+**Target:** System Administrators, DevOps Engineers, and Integrating Applications  
 
 ---
 
-## 1. Production Security Prerequisites & Fail-Fast Secrets
+## 1. Architectural Philosophy: Fail-Closed Configuration
 
-When `NODE_ENV=production`, the application applies strict startup validation (`backend/src/config/schema.ts`). The server will fail immediately at boot if any required security key is missing, invalid, or shorter than 32 characters.
-
-| Secret / Config Name | Required in Production | Min Length | Purpose |
-|---|---|---|---|
-| `BETTER_AUTH_SECRET` | **Yes** | 32 chars | Primary cryptographic master key for Better Auth user sessions, database field encryption, and cookie signing. |
-| `APP_ADMIN_JWT_SECRET` | **Yes** | 32 chars | Dedicated HMAC-SHA256 signing secret for Per-Application Administrator JWTs (`token_use: "app_admin"` and `token_use: "app_admin_mfa_pending"`). Disallows derivation fallback in production. |
-| `APP_ADMIN_TOTP_KEY` | **Yes** | 32 chars | Dedicated AES-256-GCM encryption key for securing App Admin TOTP secrets and backup codes at rest in MongoDB (`app_admins.totpSecret`). |
-| `INTERNAL_GATEWAY_SECRET` | **Yes** | 32 chars | Shared secret protecting internal backend management and direct Lambda invocation endpoints against unauthorized external bypass. |
-| `MONGO_URI` | **Yes** | - | Full MongoDB connection string (MongoDB 6+ or Atlas) with read/write credentials and database name. |
-| `BETTER_AUTH_URL` | **Yes** | - | Canonical public URL of the auth backend API (e.g. `https://api.auth.yourdomain.com`). Must be HTTPS and non-loopback in production. |
-| `FRONTEND_URL` | **Yes** | - | Canonical public origin of the frontend UI (e.g. `https://auth.yourdomain.com`). Must be HTTPS and non-loopback in production. Strictly origin without path. |
-| `TRUSTED_PROXY_CIDRS` | Recommended | - | Comma-separated list of trusted upstream proxy / reverse proxy CIDRs (e.g. Cloudflare / ALB / API Gateway ranges) for client IP extraction. |
-| `ALLOW_DEV_CLIENTS_IN_PRODUCTION` | Optional | `false` | Controls whether brand-new development OAuth clients (`isDev: true`) with loopback URIs can be created in production. Defaults to `'false'`. Existing registered applications can be transitioned between development and production modes individually by authorized administrators. |
-
-> [!NOTE]
-> **IdP Runtime (`NODE_ENV`) vs Client Mode (`isDev`)**: The IdP runtime environment (`NODE_ENV=production`) is separate from per-client development mode (`isDev`). A production IdP strictly enforces HTTPS on production clients (`isDev: false`), while permitting loopback URIs (`localhost`, `127.0.0.1`) on explicitly authorized development clients (`isDev: true`). Setting `ALLOW_DEV_CLIENTS_IN_PRODUCTION=true` is only needed if creating brand-new dev clients in production.
-
-> [!IMPORTANT]
-> In `development` and `test` modes only, `APP_ADMIN_JWT_SECRET`, `APP_ADMIN_TOTP_KEY`, and `INTERNAL_GATEWAY_SECRET` have permissive fallbacks for zero-friction local setup. In `production`, all four secrets are **strictly mandatory**.
+Every configuration parameter across SWYRA Auth and consumer applications is governed by the **Fail-Closed Principle**:
+- **Missing Required Settings:** If a mandatory environment variable is absent or empty, the application MUST crash at startup with a fatal log.
+- **Forbidden Fallbacks:** Defaulting expressions such as `process.env.CLIENT_ID || "dev-client"` or `process.env.AUTH_CALLBACK_URL || "http://localhost:3000/callback"` are strictly forbidden.
+- **Environment Isolation:** The runtime server environment (`NODE_ENV`) is strictly decoupled from client modes (`isDev`). A production IdP server (`NODE_ENV=production`) hosts both development clients (`isDev: true`) and production clients (`isDev: false`).
 
 ---
 
-## 2. Complete Environment Variables Specification
+## 2. SWYRA Auth IdP Server Environment Variables
 
-### Backend Variables (`backend/.env`)
+The IdP server runs on Node.js / AWS Lambda and requires the following configuration in `backend/.env` or runtime environment:
 
-```ini
-# Environment Mode
-NODE_ENV=production
-PORT=3000
+### 2.1 Core Server Settings
 
-# Database
-MONGO_URI=mongodb+srv://<user>:<password>@cluster0.xyz.mongodb.net/oauthservice?retryWrites=true&w=majority
-
-# Core Authentication & Secrets (>= 32 characters each)
-BETTER_AUTH_SECRET=your_32_char_random_better_auth_secret_here
-BETTER_AUTH_URL=https://api.auth.yourdomain.com
-FRONTEND_URL=https://auth.yourdomain.com
-
-# Dedicated App Admin Secrets (Required in production, >= 32 characters)
-APP_ADMIN_JWT_SECRET=your_32_char_app_admin_jwt_secret_here
-APP_ADMIN_TOTP_KEY=your_32_char_app_admin_totp_encryption_key
-
-# Gateway Protection (Required in production, >= 32 characters)
-INTERNAL_GATEWAY_SECRET=your_32_char_internal_gateway_secret_here
-
-# Reverse Proxy & Network Boundary
-TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12,127.0.0.1/32
-
-# Production Development Overrides
-ALLOW_DEV_CLIENTS_IN_PRODUCTION=false
-
-# Public Registration & Verification Controls
-AUTH_PUBLIC_SIGNUP_ENABLED=true
-AUTH_EMAIL_VERIFICATION_ENABLED=false
-
-# Distributed Rate Limiting & Cache (Optional - falls back to Mongo TTL)
-UPSTASH_REDIS_REST_URL=https://<instance>.upstash.io
-UPSTASH_REDIS_REST_TOKEN=your_upstash_rest_token_here
-
-# Social Providers (Optional)
-GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-```
-
-### Frontend Gateway Variables (`frontend/.env`)
-
-```ini
-# Canonical Backend Service Endpoint
-VITE_AUTH_URL=https://api.auth.yourdomain.com
-```
-
-### Consumer Application Variables (Client Side)
-
-```ini
-# Consumer Backend / BFF (Confidential Client)
-AUTH_ISSUER=https://auth.yourdomain.com
-JWKS_URL=https://auth.yourdomain.com/.well-known/jwks.json
-CLIENT_ID=your_client_id_from_admin_console
-CLIENT_SECRET=your_plaintext_client_secret
-REDIRECT_URI=https://app.yourdomain.com/api/auth/callback
-
-# Consumer Frontend SPA (Public Client - NO CLIENT_SECRET!)
-VITE_AUTH_ISSUER=https://auth.yourdomain.com
-VITE_CLIENT_ID=your_client_id_from_admin_console
-VITE_REDIRECT_URI=https://app.yourdomain.com/auth/callback
-```
-
----
-
-## 3. Application Modes: Public vs. Private Applications
-
-SWYRA Auth enforces strong tenant isolation between public and private OAuth 2.1 client applications:
-
-### Public Applications (`isPublic: true`, default)
-- Any authenticated user in the global `user` collection can authorize and consent to grant scopes to the application.
-- Self-registration is allowed via `/api/auth/sign-up/email` when `AUTH_PUBLIC_SIGNUP_ENABLED=true`.
-- Intended for SaaS clients, general portals, and open consumer applications.
-
-### Private Applications (`isPublic: false`)
-- Strict authorization boundary: Even if a user has an active global session with SWYRA Auth, they **cannot** authorize for a private application unless their membership is explicitly provisioned in `user_app_registrations` (`{ clientId, userId }`).
-- Requests to `/api/auth/oauth2/authorize` for unauthorized accounts are immediately intercepted and rejected with `403 Forbidden` (`registration_disabled`).
-- Direct self-registration via `/api/auth/sign-up/email` for private applications is strictly blocked.
-- User membership is managed exclusively by Super Admins and Scoped Application Administrators via the Admin Console or Admin API (`/api/admin/clients/:clientId/users`).
-
----
-
-## 4. Rate Limiting & Abuse Defense Configuration
-
-SWYRA Auth implements multi-layered rate limiting with Upstash Redis and automatic MongoDB TTL collection fallback:
-
-| Limit Tier | Window | Threshold | Key Strategy | Purpose |
+| Variable | Type | Required | Description | Example |
 |---|---|---|---|---|
-| **App-Admin Authentication** | 60s | 5 req / IP | Client IP (`admin_auth:<ip>`) | Prevents brute-forcing App Admin credentials. |
-| **App-Admin MFA Verification** | 60s | 5 req / IP | Client IP (`admin_mfa:<ip>`) | Throttles TOTP and backup code guessing attempts. |
-| **Standard User Auth** | 60s | 20 req / IP | Client IP (`auth:<ip>`) | Throttles interactive user logins. |
-| **Credential Stuffing Target** | 60s | 5 req / Email | Normalized Email (`cred_stuffing:<email>`) | Defends against botnets rotating across thousands of IPs against a single victim account. |
-| **Admin Provisioning** | 60s | 5 req / IP | Client IP (`admin_provision:<ip>`) | Throttles application admin provisioning. |
+| `NODE_ENV` | String | **Yes** | Server execution environment. Allowed: `production`, `development`, `test`. | `production` |
+| `PORT` | Number | No | HTTP listening port for node server. Defaults to `3000`. | `3000` |
+| `MONGO_URI` | String | **Yes** | MongoDB Atlas connection string. Requires replica set for transactions. | `mongodb+srv://...` |
+| `BETTER_AUTH_SECRET` | String | **Yes** | High-entropy cryptographic secret for Better-Auth signing (min 32 chars). | `BNR0Sm/FNK/...` |
+| `BETTER_AUTH_URL` | String (URL) | **Yes** | Canonical base URL of the IdP service (OIDC Issuer). | `https://oauth21.vercel.app` |
+| `FRONTEND_URL` | String (URL) | **Yes** | Canonical base URL of the IdP frontend UI. | `https://oauth21.vercel.app` |
+
+### 2.2 Security Perimeter & Gateway Settings
+
+| Variable | Type | Required | Description | Example |
+|---|---|---|---|---|
+| `INTERNAL_GATEWAY_SECRET` | String | **Yes** | 64-hex-character secret verified between reverse proxy (Vercel) and Lambda. | `139f62efde9...` |
+| `TRUSTED_PROXY_CIDRS` | String | **Yes (Prod)** | Comma-separated CIDR blocks of trusted proxies for `X-Forwarded-For` client IP resolution. | `127.0.0.1/32,10.0.0.0/8` |
+| `ALLOW_DEV_CLIENTS_IN_PRODUCTION` | Boolean | No | Emergency switch. Defaults to `false`. When `false`, dev clients (`isDev: true`) cannot be created or run in production unless explicitly permitted. | `false` |
+
+### 2.3 Feature Flags & Authentication Policies
+
+| Variable | Type | Required | Description | Default |
+|---|---|---|---|---|
+| `AUTH_PUBLIC_SIGNUP_ENABLED` | Boolean | No | Enables self-registration globally on the IdP for public applications. | `true` |
+| `AUTH_EMAIL_VERIFICATION_ENABLED` | Boolean | No | Enforces email verification before issuing OAuth authorization codes. | `false` |
+
+### 2.4 Distributed Cache & Rate Limiting
+
+| Variable | Type | Required | Description | Example |
+|---|---|---|---|---|
+| `UPSTASH_REDIS_REST_URL` | String (URL) | No | Upstash Redis REST endpoint for distributed rate limiting. | `https://accurate-cowbird-124727.upstash.io` |
+| `UPSTASH_REDIS_REST_TOKEN` | String | No | Upstash Redis REST Bearer token. | `gQAAAAAAAec...` |
 
 ---
 
-## 5. Reverse Proxy & Network Boundary Guidelines
+## 3. Client Registration Document Properties (MongoDB `oauthClient`)
 
-For AWS ALB, Cloudflare, Nginx, or API Gateway reverse proxies:
-1. Ensure the reverse proxy strips external `X-Forwarded-For` headers from untrusted clients and sets a single trusted IP or appends the client IP to the chain.
-2. Configure `TRUSTED_PROXY_CIDRS` to match your proxy's exact subnet or egress CIDR blocks.
-3. If deployed on AWS Lambda behind an API Gateway or Function URL, the built-in trusted proxy resolver handles internal VPC and gateway hops securely.
+Every client application registered in SWYRA Auth possesses a document in the `oauthClient` collection:
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `clientId` | String | Generated | Unique, URL-safe client identifier. Publicly visible. |
+| `clientSecret` | String | Generated | SHA-256 base64url hash of client secret. Omitted for Public clients. |
+| `name` | String | Required | Human-readable application name displayed on login/consent screens. |
+| `redirectUris` | Array&lt;String&gt; | `[]` | Exact registered HTTPS callback URLs where authorization codes may be sent. |
+| `allowedOrigins` | Array&lt;String&gt; | `[]` | Origins permitted for CORS requests to `/oauth2/token` and `/oauth2/userinfo`. |
+| `isPublic` | Boolean | `true` | **Tenancy Mode:** `true` = open to all platform users; `false` = restricted to pre-assigned users. |
+| `isDev` | Boolean | `false` | **Client Mode:** `true` = loopback (`http://localhost:*`) permitted; `false` = strict HTTPS only. |
+| `disabled` | Boolean | `false` | Administrative kill-switch. When `true`, all authentication requests are blocked (403). |
+| `skipConsent` | Boolean | `false` | When `true`, trusted first-party clients bypass the interactive consent prompt. |
+| `adminUserId` | String | `null` | User ID of the designated Application Administrator. |
+| `adminEmail` | String | `null` | Email of the designated Application Administrator. |
+
+---
+
+## 4. Consumer Application Environment Variables
+
+Consumer applications integrate with SWYRA Auth using standard OAuth 2.1 environment variables:
+
+### 4.1 Confidential Clients (Next.js BFF, Express, FastAPI, Django)
+
+```env
+# Canonical IdP Issuer Base URL (No trailing slash)
+AUTH_ISSUER=https://oauth21.vercel.app
+
+# Client Identifier issued by SWYRA Auth
+CLIENT_ID=your-registered-client-id
+
+# Confidential Client Secret (MUST NEVER BE EXPOSED TO BROWSER)
+CLIENT_SECRET=your-registered-client-secret
+
+# Exact registered callback URL matching an entry in IdP redirectUris
+AUTH_CALLBACK_URL=https://your-consumer-app.com/api/auth/callback
+
+# Consumer session encryption key (min 32 chars)
+SESSION_SECRET=your-consumer-session-secret
+```
+
+### 4.2 Public Clients (React SPA, Vue, Mobile)
+
+```env
+# Public IdP Issuer Base URL
+VITE_AUTH_ISSUER=https://oauth21.vercel.app
+
+# Public Client Identifier
+VITE_CLIENT_ID=your-public-client-id
+
+# Registered Callback URL
+VITE_AUTH_CALLBACK_URL=https://your-spa-domain.com/callback
+```
+
+> [!CAUTION]
+> **Zero Client Secrets in Frontend Bundles:**  
+> Never expose confidential secrets in client variables (such as `NEXT_PUBLIC_*`, `VITE_*`, or `REACT_APP_*`). Public clients authenticate using PKCE (`S256`) alone without client credentials.
+
+---
+
+## 5. Development vs Production Configuration Rules
+
+### The Two Independent Dimensions
+1. **Confidential vs Public:** Governs whether the client possesses a `clientSecret`.
+2. **Development vs Production (`isDev`):** Governs whether loopback URIs (`http://localhost:*`, `http://127.0.0.1:*`) are permitted.
+
+| Client State | `isDev` | Permitted Redirect URIs | Permitted Origins |
+|---|---|---|---|
+| **Production Client** | `false` | Strict HTTPS only. No IP literals, no localhost, no wildcards. | Strict HTTPS only. |
+| **Development Client** | `true` | Loopback HTTP permitted (`http://localhost:*`, `http://127.0.0.1:*`, `http://[::1]:*`). | Loopback HTTP origins permitted. |
+
+### Immutability Rules
+- Scoped Application Administrators CANNOT modify `isDev` or `isPublic`. These trust boundary flags can only be configured by Global Super Administrators.
+- A development client transitioning to production (`isDev: true` &rarr; `isDev: false`) must remove all localhost redirect URIs in the same atomic operation.

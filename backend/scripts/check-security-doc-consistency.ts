@@ -25,11 +25,14 @@ function check(desc: string, fn: () => void) {
 // 1. Verify Required Canonical Documents and Manifests Exist
 check("Required canonical documents exist", () => {
   const requiredFiles = [
-    "docs/SECURITY_CANONICAL.md",
+    "docs/SECURITY.md",
+    "docs/INTEGRATION.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CONFIGURATION.md",
+    "docs/DEPLOYMENT.md",
+    "docs/TROUBLESHOOTING.md",
     "docs/security/security-suite-manifest.json",
     "docs/security/security-route-manifest.json",
-    "docs/security/integration-policy.json",
-    "docs/AI_AGENT_INTEGRATION_CONTRACT.md",
     "AGENTS.md",
     "README.md",
   ];
@@ -131,14 +134,14 @@ check("Route manifest aligns with backend route implementations", () => {
 
 // 4. Verify Canonical Terminology Consistency in Documentation
 check("Documentation contains no forbidden architectural contradictions", () => {
-  const canonicalDoc = fs.readFileSync(path.join(repoRoot, "docs/SECURITY_CANONICAL.md"), "utf-8");
-  assert.ok(canonicalDoc.includes("NORMATIVE / AUTHORITATIVE"), "SECURITY_CANONICAL.md must declare NORMATIVE status");
+  const canonicalDoc = fs.readFileSync(path.join(repoRoot, "docs/SECURITY.md"), "utf-8");
+  assert.ok(canonicalDoc.includes("NORMATIVE / AUTHORITATIVE"), "SECURITY.md must declare NORMATIVE status");
 
-  // Verify that README references SECURITY_CANONICAL.md
+  // Verify that README references SECURITY.md
   const readme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf-8");
   assert.ok(
-    readme.includes("SECURITY_CANONICAL.md"),
-    "README.md must reference docs/SECURITY_CANONICAL.md as canonical standard"
+    readme.includes("SECURITY.md"),
+    "README.md must reference docs/SECURITY.md as canonical standard"
   );
 
   // Verify AGENTS.md enforces the golden rules

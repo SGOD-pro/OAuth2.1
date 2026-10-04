@@ -1,274 +1,117 @@
-# Multi-Cloud & Server Deployment Guide
+# SWYRA Auth -- Production Deployment Guide (DEPLOYMENT.md)
 
-SWYRA Auth is designed to deploy seamlessly to any compute provider or infrastructure model — from serverless micro-functions to containerized PaaS platforms and dedicated Linux instances.
-
----
-
-## 1. Universal Deployment Architecture
-
-```mermaid
-flowchart TD
-    subgraph Storage["1. Storage & Caching Layer"]
-        Atlas[("MongoDB Atlas<br/>Database & Sessions")]
-        Redis[("Upstash Redis / Valkey<br/>Rate Limiting & Token Cache")]
-    end
-
-    subgraph Targets["2. Deployment Target Options"]
-        Lambda["AWS Lambda<br/>(Serverless / SAM)"]
-        EC2["AWS EC2 / VPS / Bare Metal<br/>(Node.js + PM2 / Caddy)"]
-        Railway["Railway / Render / Fly.io<br/>(Container / PaaS)"]
-        GCP["Google Cloud<br/>(Cloud Run / Compute Engine)"]
-        Azure["Microsoft Azure<br/>(Container Apps / App Service)"]
-        Vercel["Vercel / Netlify<br/>(Serverless Functions)"]
-        DockerHost["Docker & Compose<br/>(Self-Hosted)"]
-    end
-
-    subgraph FrontendHosting["3. Frontend Gateway Hosting"]
-        VercelFront["Vercel / Cloudflare Pages / S3+CloudFront"]
-    end
-
-    Atlas --> Targets
-    Redis --> Targets
-    Targets --> FrontendHosting
-```
+**Authority:** Authoritative Production Deployment & Operational Runbook  
+**Target:** DevOps Engineers, Platform Administrators, and Site Reliability Engineers  
 
 ---
 
-## 2. Common Prerequisites (All Providers)
+## 1. Deployment Topology Overview
 
-### Step 1: Database Setup (MongoDB Atlas)
-1. Sign up at [mongodb.com/atlas](https://www.mongodb.com/atlas) and create an **M0 (Free)** or Dedicated cluster.
-2. Under **Database Access**, create a user with Read and Write permissions.
-3. Under **Network Access**, add `0.0.0.0/0` (required for serverless/dynamic cloud IPs).
-4. Connection URI format:
-   ```text
-   mongodb+srv://<user>:<password>@cluster0.abc123.mongodb.net/oauthservice?retryWrites=true&w=majority
-   ```
+SWYRA Auth operates across two complementary cloud infrastructures:
 
-### Step 2: Distributed Cache (Upstash Redis)
-1. Create a free Redis database at [upstash.com](https://upstash.com).
-2. Copy `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
-3. *(Note: If Redis is omitted, the service falls back automatically to MongoDB TTL sliding-window rate limiting).*
+1. **Frontend & Edge Gateway (Vercel):**
+   - Hosts the React SPA frontend (login, consent, account settings).
+   - Serves as the public edge reverse-proxy. Rewrites `/api/*` to the AWS Lambda backend.
+   - Injects the trusted perimeter header `x-gateway-secret` on rewritten requests.
+2. **Backend Engine (AWS Lambda):**
+   - High-performance Node.js 24 runtime executing the bundled Hono server (`dist/index.cjs`).
+   - Connects to MongoDB Atlas for persistence and Upstash Redis for distributed rate limiting.
 
-### Step 3: Initialize Database Indexes
+---
+
+## 2. Infrastructure Deployment Steps
+
+### 2.1 Backend Deployment (AWS Lambda via SAM)
+
+#### Prerequisites
+- AWS CLI configured with appropriate IAM permissions.
+- AWS SAM CLI installed.
+- Node.js 24+ and npm.
+
+#### Build and Deploy
 ```bash
+# 1. Navigate to backend directory
 cd backend
-cp .env.example .env
-# Set MONGO_URI and BETTER_AUTH_SECRET in .env
-npm run db:setup
+
+# 2. Build the optimized single-file bundle
+npm run build
+
+# 3. Deploy via AWS SAM using samconfig.toml parameters
+sam build
+sam deploy --config-file samconfig.toml
 ```
 
-### Step 4: Generate Production Cryptographic Secrets
-All production secrets must be at least 32 characters long:
-```bash
-# Generate 4 distinct cryptographically secure secrets
-openssl rand -hex 32  # BETTER_AUTH_SECRET
-openssl rand -hex 32  # APP_ADMIN_JWT_SECRET
-openssl rand -hex 32  # APP_ADMIN_TOTP_KEY
-openssl rand -hex 32  # INTERNAL_GATEWAY_SECRET
-```
-
-
----
-
-## 3. Provider-Specific Deployment Guides
-
-### Option 1: AWS Lambda (Serverless via AWS SAM)
-
-The backend includes a dedicated serverless entrypoint in `src/lambda.ts` bundled into CommonJS `dist/index.cjs`.
-
-1. **Install dependencies & build**:
-   ```bash
-   cd backend
-   npm install
-   npm run build
-   ```
-2. **Deploy via SAM**:
-   ```bash
-   ./deploy.sh
-   # Or for guided first-time deployment:
-   sam deploy --guided --profile aws
-   ```
-3. **Configure Environment in `backend/samconfig.toml`**:
-   ```toml
-   parameter_overrides = "BetterAuthUrl=\"https://<lambda-id>.lambda-url.<region>.on.aws/api/auth\" FrontendUrl=\"https://auth.yourdomain.com\""
-   ```
+#### Environment Variables on AWS Lambda
+Ensure the Lambda environment variables are configured in AWS Systems Manager Parameter Store or Lambda environment:
+- `NODE_ENV=production`
+- `MONGO_URI=mongodb+srv://...`
+- `BETTER_AUTH_SECRET=<min 32-character secret>`
+- `BETTER_AUTH_URL=https://oauth21.vercel.app`
+- `FRONTEND_URL=https://oauth21.vercel.app`
+- `INTERNAL_GATEWAY_SECRET=<64-hex character secret>`
+- `TRUSTED_PROXY_CIDRS=127.0.0.1/32,10.0.0.0/8`
+- `ALLOW_DEV_CLIENTS_IN_PRODUCTION=false`
+- `AUTH_PUBLIC_SIGNUP_ENABLED=true`
 
 ---
 
-### Option 2: AWS EC2 / Linux VPS / Dedicated Bare-Metal (Node.js + PM2 + Caddy / Nginx)
+### 2.2 Frontend & Edge Gateway Deployment (Vercel)
 
-For high-throughput bare-metal or VM hosting (Ubuntu, Debian, RHEL, Amazon Linux 2023):
-
-1. **Build the Standalone Node.js bundle**:
-   ```bash
-   cd backend
-   npm install
-   npm run build:node
-   # Produces standalone dist/index.cjs powered by @hono/node-server
-   ```
-2. **Run with PM2 Cluster & Threadpool Scaling**:
-   ```bash
-   npm install -g pm2
-   # Start with 16 worker threads per process for maximum scrypt hashing throughput:
-   UV_THREADPOOL_SIZE=16 PORT=3000 NODE_ENV=production pm2 start dist/index.cjs --name "swyra-auth" -i max
-   pm2 save
-   pm2 startup
-   ```
-3. **Configure Reverse Proxy with TLS (Caddy or Nginx)**:
-
-   *Option A: Caddy (`/etc/caddy/Caddyfile`)*:
-   ```caddy
-   api.auth.yourdomain.com {
-       reverse_proxy localhost:3000 {
-           header_up X-Forwarded-For {remote_host}
-           header_up X-Forwarded-Proto {scheme}
-       }
-   }
-   ```
-
-   *Option B: Nginx (`/etc/nginx/sites-available/auth`)*:
-   ```nginx
-   server {
-       server_name api.auth.yourdomain.com;
-       location / {
-           proxy_pass http://127.0.0.1:3000;
-           proxy_http_version 1.1;
-           proxy_set_header Host $host;
-           proxy_set_header X-Real-IP $remote_addr;
-           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-           proxy_set_header X-Forwarded-Proto $scheme;
-       }
-       listen 443 ssl;
-       # managed by Certbot (Let's Encrypt)
-   }
-   ```
-
----
-
-### Option 3: Railway / Render / Fly.io (PaaS & Containers)
-
-1. **Deploying on Railway**:
-   - Create a new project on [railway.app](https://railway.app) connected to your GitHub repository.
-   - **Root Directory**: `backend`
-   - **Build Command**: `npm install && npm run build:node`
-   - **Start Command**: `npm start` (runs `node dist/index.cjs`)
-   - Add environment variables in the Railway dashboard (`MONGO_URI`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `FRONTEND_URL`, `UV_THREADPOOL_SIZE=16`).
-2. **Deploying on Render**:
-   - Create a **Web Service** on [render.com](https://render.com).
-   - **Environment**: Node
-   - **Build Command**: `npm install && npm run build:node`
-   - **Start Command**: `npm start`
-3. **Deploying on Fly.io**:
-   ```bash
-   cd backend
-   fly launch --dockerfile Dockerfile
-   fly secrets set MONGO_URI="..." BETTER_AUTH_SECRET="..." BETTER_AUTH_URL="..." FRONTEND_URL="..."
-   fly deploy
-   ```
-
----
-
-### Option 4: Google Cloud Platform (GCP) — Cloud Run & Compute Engine
-
-1. **GCP Cloud Run (Serverless Container)**:
-   ```bash
-   # 1. Build and push container to Google Artifact Registry
-   cd backend
-   gcloud builds submit --tag gcr.io/$PROJECT_ID/swyra-auth:latest .
-
-   # 2. Deploy to Cloud Run with automatic HTTPS and concurrency scaling
-   gcloud run deploy swyra-auth \
-     --image gcr.io/$PROJECT_ID/swyra-auth:latest \
-     --platform managed \
-     --region us-central1 \
-     --allow-unauthenticated \
-     --port 3000 \
-     --set-env-vars "NODE_ENV=production,UV_THREADPOOL_SIZE=16,MONGO_URI=...,BETTER_AUTH_SECRET=...,BETTER_AUTH_URL=https://<cloud-run-url>/api/auth,FRONTEND_URL=https://auth.domain.com"
-   ```
-2. **GCP Compute Engine (VM Instance)**:
-   - Create an e2-standard-2 VM.
-   - Follow the **Linux VPS (Option 2)** instructions with PM2 and Caddy.
-
----
-
-### Option 5: Microsoft Azure — Container Apps & App Service
-
-1. **Azure Container Apps**:
-   ```bash
-   # 1. Build container image in Azure Container Registry (ACR)
-   az acr build --registry <yourRegistryName> --image swyra-auth:latest ./backend
-
-   # 2. Create Azure Container App
-   az containerapp create \
-     --name swyra-auth \
-     --resource-group <yourResourceGroup> \
-     --environment <yourManagedEnvironment> \
-     --image <yourRegistryName>.azurecr.io/swyra-auth:latest \
-     --target-port 3000 \
-     --ingress external \
-     --env-vars "NODE_ENV=production" "UV_THREADPOOL_SIZE=16" "MONGO_URI=secretref:mongo-uri" "BETTER_AUTH_SECRET=secretref:auth-secret" "BETTER_AUTH_URL=https://<app-fqdn>/api/auth" "FRONTEND_URL=https://auth.domain.com"
-   ```
-2. **Azure App Service (Linux Node.js 20)**:
-   - Set Startup Command in Azure Portal: `node dist/index.cjs` (or `npm start`)
-   - Set Application Settings matching the Environment Variables Reference table.
-
----
-
-### Option 6: Vercel (Full-Stack Backend + Frontend SPA)
-
-1. **Backend Serverless Entrypoint**:
-   - The backend includes `src/vercel.ts` and `npm run build:vercel` configured to export a Vercel Serverless Function handler.
-2. **Frontend Deployment**:
-   - Link the repo to [Vercel](https://vercel.com).
-   - Set **Root Directory** to `frontend`.
-   - Set Environment Variable: `VITE_AUTH_URL=https://<your-backend-domain>`.
-   - The included `frontend/vercel.json` and root `vercel.json` configure SPA route rewrites automatically.
-
----
-
-### Option 7: Netlify (Netlify Functions + SPA)
-
-1. **Backend Serverless Functions**:
-   - Build bundle: `npm run build:netlify` (generates handler from `src/netlify.ts`).
-2. **Frontend SPA**:
-   - Deploy `frontend/dist` with `_redirects` file: `/* /index.html 200`.
-
----
-
-### Option 8: Full-Stack Docker Compose (Self-Hosted)
-
-To run the complete stack (Hono Backend API + React Frontend Gateway) on a single server:
+#### Build Configuration
+Before triggering deployment on Vercel, the edge rewrite rules must be populated with the active `INTERNAL_GATEWAY_SECRET` without committing the secret to version control.
 
 ```bash
-# 1. Clone repository and navigate to root
-git clone <repo-url> && cd OAuth2.1
+# Prepare edge rewrite configuration from environment
+node scripts/prepare-vercel-config.mjs
 
-# 2. Configure environment
-cp backend/.env.example backend/.env
-# Edit backend/.env with your MongoDB Atlas URI, Better Auth Secret, and Domains
-
-# 3. Start services in background
-docker compose up -d --build
-
-# Backend API will be available on http://localhost:3000
-# Frontend Admin & Auth UI will be available on http://localhost:8080
+# Build frontend bundle
+cd frontend
+npm run build
 ```
+
+#### Vercel Environment Variables
+Configure the following in the Vercel Project Settings:
+- `INTERNAL_GATEWAY_SECRET`: The exact 64-hex string configured on AWS Lambda.
+- `VITE_PUBLIC_SIGNUP_ENABLED`: `true` (or `false` to disable public sign-up globally).
 
 ---
 
-## 4. Post-Deployment Admin Provisioning
+## 3. Secret Management & Rotation Protocols
 
-Because public registration is disabled by default in production (`AUTH_PUBLIC_SIGNUP_ENABLED=false`), provision your initial Super-Admin account using the CLI utility:
+### 3.1 Rotating `INTERNAL_GATEWAY_SECRET`
 
-```bash
-cd backend
-npm run admin:create -- "admin@yourdomain.com" "YourStrongPassword@2026!" "Super Admin"
-```
+The `INTERNAL_GATEWAY_SECRET` authenticates the edge proxy to the Lambda function. If rotation is required:
 
-> **Password Requirements:** 12–128 characters, containing at least one uppercase letter, one lowercase letter, one number, and one symbol.
+1. **Generate a fresh 64-character hex secret:**
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
+2. **Update AWS Lambda:** Update the `InternalGatewaySecret` parameter in `backend/samconfig.toml` and redeploy the Lambda function.
+3. **Update Vercel:** Update `INTERNAL_GATEWAY_SECRET` in Vercel Project Settings and re-run deployment.
+4. **Update `backend/.env`:** Update the local environment file for testing.
+5. **Verify Perimeter:** Execute `npm run test:direct-backend` to ensure the new secret is active and invalid secrets are rejected (403).
 
-Log into your Admin Console at:
-```text
-https://<your-frontend-domain>/admin/login
-```
+### 3.2 Rotating Client Secrets
+
+Confidential OAuth clients may rotate secrets without downtime:
+1. Request a secret rotation via Super-Admin API: `POST /api/admin/clients/:clientId/rotate-secret`.
+2. Update the consumer application's `CLIENT_SECRET` environment variable.
+3. Restart the consumer application.
+
+---
+
+## 4. Production Pre-Flight Checklist
+
+Before directing live user traffic to SWYRA Auth, verify:
+
+- [ ] `NODE_ENV` is set to `production` on both Lambda and edge environments.
+- [ ] `ALLOW_DEV_CLIENTS_IN_PRODUCTION` is set to `false`.
+- [ ] `INTERNAL_GATEWAY_SECRET` is non-empty, high-entropy, and matches between Vercel and Lambda.
+- [ ] `INTERNAL_GATEWAY_SECRET` is NOT hardcoded in git-tracked `vercel.json` files.
+- [ ] `TRUSTED_PROXY_CIDRS` is configured with the proxy IP ranges.
+- [ ] MongoDB connection uses TLS and connects to a replica set with transaction support.
+- [ ] All 15 security test suites pass: `npm run test:all-security`.
+- [ ] Documentation consistency linter passes: `npm run security:docs-check`.
+- [ ] Integration contract linter passes: `npm run security:integration-check`.
+- [ ] Discovery metadata at `/.well-known/openid-configuration` returns HTTPS URLs.
+- [ ] Public JWKS endpoint at `/.well-known/jwks.json` returns active RSA public keys.

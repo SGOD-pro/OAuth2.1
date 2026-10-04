@@ -37,6 +37,7 @@
     "test:aws-dashboard": "tsx tests/security/aws-dashboard-integration-suite.ts",
     "test:cross-client-refresh": "tsx tests/security/cross-client-refresh-matrix.ts",
     "test:app-mgmt-auth": "tsx tests/security/test-app-management-auth.ts",
+    "test:private-oauth": "tsx tests/security/test-private-app-oauth.ts",
     "test:all-security": "tsx tests/security/test-client-mode-transition.ts && tsx tests/security/cross-client-refresh-matrix.ts && tsx tests/security/full-production-adversarial-suite.ts && tsx tests/security/final-adversarial-gate.ts && tsx tests/security/direct-backend-access-suite.ts && tsx tests/security/session-hijacking-suite.ts && tsx tests/security/oauth-transaction-suite.ts && tsx tests/security/credential-compromise-suite.ts && tsx tests/security/cross-tenant-matrix.ts && tsx tests/security/production-vs-development-suite.ts && tsx tests/security/deployed-consumer-suite.ts && tsx tests/security/aws-dashboard-integration-suite.ts && tsx tests/security/test-app-management-auth.ts && tsx tests/security/e2e-oidc-interop.test.ts",
     "security:docs-check": "tsx scripts/check-security-doc-consistency.ts",
     "security:integration-check": "tsx ../scripts/security/check-integration-contract.ts",

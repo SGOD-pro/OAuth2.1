@@ -1,146 +1,130 @@
 # SWYRA Auth — Self-Hosted OAuth 2.1 / OIDC Identity Provider
 
-> A production-ready, configuration-only OAuth 2.1 / OpenID Connect identity provider you deploy once and own forever — with zero always-on infrastructure costs.
+> A production-grade, centralized OAuth 2.1 / OpenID Connect identity provider you deploy once and own forever — with zero always-on infrastructure costs.
 
-Built with **Hono**, **MongoDB Atlas**, and the **Better Auth** identity engine. Features a high-aesthetic Admin Console for managing OAuth 2.1 clients, dynamic CORS whitelists, private application tenant isolation, token family rotation with atomic CAS concurrency protection, and dedicated Per-Application Administrators with cryptographically isolated JWT verification and built-in TOTP multi-factor authentication.
-
----
-
-## 🤖 For AI Coding Agents
-
-If you are an AI coding agent (e.g., Google Antigravity, Claude Code, GitHub Copilot, Cursor, Devin) integrating a consumer application with SWYRA Auth, **start here**:
-
-👉 **[AGENTS.md](AGENTS.md)** (Quick Reference)  
-👉 **[docs/AI_AGENT_INTEGRATION_CONTRACT.md](docs/AI_AGENT_INTEGRATION_CONTRACT.md)** (Normative Integration Specification)
+Built with **Hono**, **MongoDB Atlas**, and the **Better Auth** identity engine. Features a modern Admin Console for managing OAuth 2.1 clients, dynamic CORS whitelists, private application tenant isolation, token family rotation with atomic CAS concurrency protection, and application-scoped administration.
 
 ---
 
-## 🏛️ System Architecture
+## 🤖 For AI Coding Agents & Developers
+
+If you are an AI coding agent (e.g., Google Antigravity, Claude Code, GitHub Copilot, Cursor, Devin) or a human developer integrating a consumer application with SWYRA Auth, **start here**:
+
+👉 **[AGENTS.md](AGENTS.md)** (AI Agent Guidance & Fast Protocol Reference)  
+👉 **[docs/INTEGRATION.md](docs/INTEGRATION.md)** (Normative Integration Specification & Framework Recipes)  
+
+---
+
+## 🏛️ System Architecture Overview
+
+All consumer applications—regardless of public access or restricted enterprise multi-tenancy—authenticate users through **ONE centralized protocol**:  
+**OAuth 2.1 Authorization Code Flow with PKCE (`S256`).**
 
 ```mermaid
 flowchart TD
-    subgraph Clients["Consumer Applications"]
-        NextApp["Next.js App (BFF)<br/>Port: 3001"]
-        ReactApp["React SPA<br/>Port: 5175"]
+    subgraph Consumers["Consumer Applications"]
+        NextApp["Next.js 14+ (BFF)<br/>Port: 3001"]
+        ReactApp["React SPA (Public)<br/>Port: 5175"]
         ExpressApp["Express API Backend<br/>Port: 4000"]
         FastAPIApp["Python FastAPI Backend"]
     end
 
-    subgraph Gateway["SWYRA Auth Gateway (Port: 5174 / Production CDN / Vercel)"]
-        ViteProxy["Reverse Proxy Layer<br/>Routes /api/* & /.well-known/*"]
-        AuthUI["Auth & Consent UI<br/>/auth, /admin, /consent"]
+    subgraph Edge["SWYRA Auth Gateway (Vercel Edge)"]
+        VercelEdge["Reverse Proxy & Header Injection<br/>x-gateway-secret"]
+        AuthUI["Centralized Auth UI<br/>/auth, /admin, /consent"]
     end
 
-    subgraph Core["Auth Service Core (Port: 3000 / AWS Lambda / Docker / Standalone)"]
-        HonoApp["Hono Server + Better Auth Engine"]
-        OAuthBoundary["OAuth 2.1 Boundary Guard<br/>(Client Status & Redirect URI Validation)"]
-        AppIsolation["Multi-Tenant Isolation Guard<br/>(user_app_registrations)"]
-        TokenFamily["Token Family Rotation & CAS Concurrency Guard"]
-        AppAdminService["Per-Application Admin Auth<br/>(Dedicated JWT & TOTP Keys)"]
-        JWKSEndpoint["OIDC Discovery & JWKS<br/>/.well-known/jwks.json"]
+    subgraph Core["Auth Core (AWS Lambda / Node.js 24)"]
+        HonoApp["Hono HTTP Router"]
+        OAuthBoundary["OAuth 2.1 Boundary Guard<br/>PKCE S256 & Exact Redirect Matching"]
+        TenantGuard["Private Tenant Guard<br/>user_app_registrations"]
+        TokenEngine["Token Family Rotation & CAS Guard"]
+        JWKSEngine["OIDC Discovery & JWKS<br/>/.well-known/jwks.json"]
     end
 
-    subgraph Data["Storage Layer"]
-        MongoDB[("MongoDB Atlas<br/>user, session, oauthClient,<br/>token_family_states, user_app_registrations, app_admins")]
-        Redis[("Upstash Redis Cache (Optional)<br/>Distributed Rate Limiting & Token Cache")]
+    subgraph Persistence["Storage Layer"]
+        MongoDB[("MongoDB Atlas<br/>user, oauthClient, registrations, token families")]
+        Redis[("Upstash Redis Cache<br/>Rate Limiting")]
     end
 
-    NextApp -- "1. OAuth 2.1 Code Flow" --> Gateway
-    ReactApp -- "1. OAuth 2.1 PKCE Flow" --> Gateway
-    Gateway --> HonoApp
+    NextApp -- "1. OAuth 2.1 Code + PKCE" --> Edge
+    ReactApp -- "1. OAuth 2.1 PKCE Flow" --> Edge
+    Edge --> HonoApp
     HonoApp --> OAuthBoundary
-    OAuthBoundary --> AppIsolation
-    HonoApp --> TokenFamily
-    AppIsolation --> MongoDB
-    TokenFamily --> MongoDB
-    HonoApp --> AppAdminService
-    AppAdminService --> MongoDB
+    OAuthBoundary --> TenantGuard
+    TenantGuard --> MongoDB
+    HonoApp --> TokenEngine
+    TokenEngine --> MongoDB
     HonoApp -.-> Redis
-    ExpressApp -- "2. Offline RS256 Verification" --> JWKSEndpoint
-    FastAPIApp -- "2. Offline RS256 Verification" --> JWKSEndpoint
-    NextApp -- "2. Offline JWT Verification" --> JWKSEndpoint
+    ExpressApp -- "2. Offline RS256 Verification" --> JWKSEngine
+    FastAPIApp -- "2. Offline RS256 Verification" --> JWKSEngine
+    NextApp -- "2. Offline RS256 Verification" --> JWKSEngine
 ```
 
 ---
 
-## 🛡️ Core Security Architecture & Boundaries
+## 🛡️ Core Security Architecture & Guarantees
 
-- **Strict OAuth 2.1 Compliance**: Mandatory PKCE (`code_challenge_method=S256`), exact redirect URI matching, and single-use authorization codes.
-- **Protocol Endpoint Integrity**: All authorization code flows target `/api/auth/oauth2/authorize` (never internal UI routes).
-- **Token Family Rotation & CAS Concurrency**: Refresh tokens use atomic Compare-And-Swap (CAS) state tracking in MongoDB with a 2-second network grace window, preventing concurrent rotation race conditions and revoking compromised token families on reuse.
-- **OAuth Boundary Private-App Isolation**: Validates client status, active state, and user authorization at the OAuth authorization boundary, preventing cross-tenant access.
-- **Dedicated Application Administrator Separation**: Per-Application Administrators operate with dedicated, cryptographically isolated signing (`APP_ADMIN_JWT_SECRET`) and encryption (`APP_ADMIN_TOTP_KEY`) keys.
-- **Internal Gateway Protection**: Dedicated `INTERNAL_GATEWAY_SECRET` protects internal backend endpoints from external direct invocation.
-- **Atomic MFA & Anti-Replay**: Single-use backup code consumption via MongoDB `$pull` with concurrency protection and brute-force rate limiting.
-- **Target-Keyed Anti-Credential-Stuffing**: Sliding-window rate limiters keyed by both client IP and normalized target email to survive distributed botnet attacks.
+- **Zero In-App Password Handling**: Consumer applications NEVER collect, proxy, transmit, or store IdP user passwords. All credentials terminate at the centralized IdP.
+- **Strict OAuth 2.1 Compliance**: Mandatory PKCE (`code_challenge_method=S256`), cryptographically random `state`, exact redirect URI matching, and single-use authorization codes.
+- **Private Tenant Isolation (`isPublic = false`)**: Unauthenticated users are sent to the centralized IdP login with sign-up disabled. Authenticated users are verified against `user_app_registrations`. Unassigned users receive HTTP 302 `error=access_denied`.
+- **Token Family Rotation with Atomic CAS**: Refresh tokens rotate atomically on every exchange. Replay attacks trigger immediate cascade revocation across the compromised token family.
+- **Scoped vs Super Administration**: Application Administrators (`role: "admin"`, `scopedClientId: "<clientId>"`) can only manage their own client; platform operations require Super Admin (`scopedClientId: null`).
+- **Gateway Trust Boundary**: Direct external invocation of backend management endpoints is blocked by `x-gateway-secret` perimeter validation.
 
 ---
 
-## 📚 Documentation Hub
+## 📚 Canonical Documentation Hub
 
-Complete technical documentation, integration contracts, and operational runbooks are located in the [`docs/`](docs/) directory:
+The documentation for SWYRA Auth is consolidated into the following canonical specifications in [`docs/`](docs/):
 
-| Document | Description |
+| Canonical Document | Description |
 |---|---|
-| 🛡️ **[Canonical Security Specification](docs/SECURITY_CANONICAL.md)** | **Normative standard** and single source of truth for security architecture, gateway trust, and authorization models. |
-| 🤖 **[AI Agent Integration Contract](docs/AI_AGENT_INTEGRATION_CONTRACT.md)** | **Normative specification** for AI coding agents and automated integration systems. |
-| ⚡ **[AGENTS.md](AGENTS.md)** | Quick-reference cheat sheet for AI agents and developers. |
-| 🔌 **[Consumer Integration Guide](docs/INTEGRATION_GUIDE.md)** | Integration recipes for Next.js BFF, React SPA, React + FastAPI, Express, and App Admin auth. |
-| 🏛️ **[System Architecture](docs/ARCHITECTURE.md)** | Multi-tenant isolation model, cryptographic token binding, OIDC discovery, and protocol sequence flows. |
-| ⚙️ **[Configuration & Environment](docs/CONFIGURATION.md)** | Production security secrets, fail-fast rules, public vs. private app modes, and rate limiting specs. |
-| 📋 **[Environment Variables Reference](docs/ENVIRONMENT_VARIABLES.md)** | Complete table of all backend, frontend, and consumer client configuration flags. |
-| 🛡️ **[Security & Abuse Defense](docs/SECURITY.md)** | Threat model, rate limiting algorithms, constant-time hashing, test gates, and scope boundaries. |
-| 👑 **[Admin Console & App Management](docs/ADMIN_GUIDE.md)** | Registering applications, CORS management, private user assignment, App Admin provisioning, and CLI utilities. |
-| 🚀 **[Multi-Cloud Deployment Guide](docs/DEPLOYMENT.md)** | Production deployment runbooks for AWS Lambda (SAM), Linux VPS/EC2, Docker Compose, GCP, Azure, and Vercel. |
-| 🔄 **[CI/CD & Auto Deployment](docs/CICD.md)** | Automated GitHub Actions pipelines for AWS Lambda (SAM) and Vercel edge deployment. |
-| 🔍 **[Security Investigations Report](docs/SECURITY_INVESTIGATIONS.md)** | *Non-normative / Historical* post-mortem analysis of past consumer integration behaviors. |
+| 🔌 **[docs/INTEGRATION.md](docs/INTEGRATION.md)** | **Authoritative Integration Contract:** The 4 app configurations, zero password relay, flow diagrams, and copy-pasteable recipes for Next.js, React SPA, FastAPI, and Express. |
+| 🛡️ **[docs/SECURITY.md](docs/SECURITY.md)** | **Normative Security Architecture:** Trust model, P0 invariants, fail-closed design principles, cryptographic key pinning, and automated security test matrix. |
+| 🏛️ **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | **System Design & Topology:** IdP infrastructure, OAuth 2.1 boundary, multi-tenant isolation, user identity vs app membership, and CAS token rotation engine. |
+| ⚙️ **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)** | **Configuration Reference:** Complete reference for IdP server variables, consumer client variables, public vs private flags, and fail-closed environment rules. |
+| 🚀 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** | **Production Deployment Guide:** Deploying AWS Lambda (SAM) and Vercel edge proxy, secret rotation runbooks, and pre-flight checklist. |
+| 🔧 **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** | **Diagnostics & Error Catalog:** Standard OAuth 2.1 machine-readable error codes, common symptoms, safe resolutions, and debugging rules. |
 
 ---
 
 ## ⚡ Quickstart (Local Development)
 
 ### 1. Prerequisites
-- **Node.js 20+**
-- **MongoDB Atlas** database connection string (or local MongoDB instance)
-- *(Optional)* **Upstash Redis** credentials for distributed rate limiting
+- Node.js 20+ (Node 24 recommended)
+- MongoDB Atlas instance or local replica set
 
-### 2. Configure Backend Environment
+### 2. Installation & Setup
 ```bash
-cd backend
-cp .env.example .env
-# Edit backend/.env with your MONGO_URI, BETTER_AUTH_SECRET, and FRONTEND_URL
-npm run db:setup
+# Clone repository
+git clone https://github.com/SGOD-pro/OAuth2.1.git
+cd OAuth2.1
+
+# Install backend & frontend dependencies
+cd backend && npm install
+cd ../frontend && npm install
+cd ..
+
+# Configure backend environment
+cp backend/.env.example backend/.env
+# Edit backend/.env with your MONGO_URI and secrets
 ```
 
-### 3. Start All Services with One Command
-From the project root:
+### 3. Running Test Suites
 ```bash
-./start-all.sh
-```
-
-| Service | Port / URL | Description |
-|---|---|---|
-| **SWYRA Auth Gateway (Frontend)** | `http://localhost:5174` | Unified Auth UI, Consent Screen, Admin Console, and Reverse Proxy |
-| **SWYRA Auth API (Backend)** | `http://localhost:3000` | Hono Core Identity Engine, Token Endpoint, JWKS |
-| **Next.js Demo App** | `http://localhost:3001` | Full-stack Next.js 14 App Router OAuth 2.1 client (BFF Pattern) |
-| **Express Backend Demo** | `http://localhost:4000` | Resource server with offline RS256 JWKS verification |
-| **React Frontend Demo** | `http://localhost:5175` | React SPA client consuming Express protected telemetry |
-
----
-
-## 🧪 Security Test Suite & Documentation Consistency
-
-SWYRA Auth includes an automated security gate with **14 blocking security test suites** defined in [`docs/security/security-suite-manifest.json`](docs/security/security-suite-manifest.json) executing against the complete production authorization, tenant isolation, CAS rotation, and gateway perimeter models:
-
-```bash
-cd backend
-# Execute the full 14-suite master security gate
+# Execute all 15 automated security and adversarial suites
 npm run test:all-security
 
-# Execute automated documentation and route manifest consistency verification
+# Execute documentation consistency linter
 npm run security:docs-check
+
+# Execute integration contract linter
+npm run security:integration-check
 ```
 
 ---
 
-*Built with [Hono](https://hono.dev), [MongoDB Atlas](https://www.mongodb.com/atlas), and [Better Auth](https://better-auth.com).*
+## 📄 License
+
+MIT © SWYRA Auth Maintainers

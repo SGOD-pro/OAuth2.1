@@ -130,6 +130,7 @@ export const authProvider = betterAuth({
                 definePayload: ({ user }) => ({
                     sub: user.id,
                     role: user.role,
+                    scoped_client_id: (user as any).scopedClientId || null,
                 }),
             },
         }),

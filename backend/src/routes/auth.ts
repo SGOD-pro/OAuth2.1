@@ -471,6 +471,21 @@ auth.get("/oauth2/authorize", async (c) => {
         const headers = new Headers(res.headers);
         headers.append("set-cookie", `oauth_transaction_id=${transactionId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
         headers.append("set-cookie", `current_client_id=${canonicalClientId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
+
+        const location = headers.get("location");
+        if (location) {
+            try {
+                const locUrl = new URL(location, config.auth.baseURL);
+                if (locUrl.pathname.includes("/auth")) {
+                    locUrl.searchParams.set("client_id", canonicalClientId);
+                    if (!client.isPublic) {
+                        locUrl.searchParams.set("is_public", "false");
+                    }
+                    headers.set("location", locUrl.toString());
+                }
+            } catch {}
+        }
+
         return new Response(res.body, {
             status: res.status,
             statusText: res.statusText,
@@ -494,14 +509,10 @@ auth.get("/oauth2/authorize", async (c) => {
                 return c.redirect(errorUrl.toString(), 302);
             }
         } else {
-            // Unauthenticated user attempting public OAuth on a private application:
-            // Private applications strictly DO NOT permit public IdP authentication or redirect to the public auth page!
-            // Reject immediately at the OAuth boundary and return access_denied to the registered redirect_uri.
-            const errorUrl = new URL(redirectUri);
-            errorUrl.searchParams.set("error", "access_denied");
-            errorUrl.searchParams.set("error_description", "Access restricted: Private application requires direct in-app credential verification or an existing pre-authorized session. Public login is disabled.");
-            if (state) errorUrl.searchParams.set("state", state);
-            return c.redirect(errorUrl.toString(), 302);
+            // Unauthenticated user attempting OAuth on a private application:
+            // Forward to centralized IdP login with registration disabled.
+            // DO NOT block unauthenticated users from reaching the IdP login page.
+            return forwardToBetterAuth();
         }
     } else {
         // Public Application Mode:
@@ -928,6 +939,42 @@ auth.get("/oauth2/userinfo", async (c) => {
                 401,
                 { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid or unsupported access token"' }
             );
+        }
+        if (res.status === 200) {
+            try {
+                const text = await res.text();
+                let data: any = null;
+                try {
+                    data = JSON.parse(text);
+                } catch {
+                    return new Response(text, { status: res.status, headers: res.headers });
+                }
+
+                if (data && (data.sub || data.id)) {
+                    const database = await getDb();
+                    const userId = String(data.sub || data.id);
+                    const orConditions: any[] = [{ id: userId }];
+                    if (data.email) orConditions.push({ email: data.email });
+                    if (ObjectId.isValid(userId)) {
+                        orConditions.push({ _id: new ObjectId(userId) });
+                    }
+                    const userDoc = await database.collection("user").findOne({
+                        $or: orConditions
+                    });
+                    if (userDoc) {
+                        data.role = userDoc.role || "user";
+                        data.scoped_client_id = userDoc.scopedClientId || null;
+                    } else {
+                        data.role = data.role || "user";
+                        data.scoped_client_id = data.scoped_client_id || null;
+                    }
+                    return c.json(data, 200);
+                }
+                return c.json(data, 200);
+            } catch (err) {
+                console.error("[USERINFO_ERR]", err);
+                return res;
+            }
         }
         return res;
     } catch {

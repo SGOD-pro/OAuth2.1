@@ -45,7 +45,14 @@ export const SignIn: React.FC = () => {
       ? initialError.replace(/\+/g, ' ')
       : null
   );
-  const signupEnabled = useMemo(() => isPublicSignupEnabled(), []);
+  const isPrivateApp = useMemo(() => {
+    return searchParams.get('is_public') === 'false';
+  }, [searchParams]);
+
+  const signupEnabled = useMemo(() => {
+    if (isPrivateApp) return false;
+    return isPublicSignupEnabled();
+  }, [isPrivateApp]);
 
   const callbackURL = useMemo(() => {
     const explicit = safeCallbackURL(searchParams.get('callbackURL'));
@@ -286,6 +293,15 @@ export const SignIn: React.FC = () => {
                     : 'Get started by creating your identity'}
                 </p>
               </div>
+
+              {isPrivateApp && (
+                <div className="mb-6 rounded-md border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground flex items-center gap-2">
+                  <svg className="size-4 shrink-0 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  <span>Private Application: Please sign in with your authorized account. Public self-registration is disabled.</span>
+                </div>
+              )}
 
               <Tabs value={tab} onValueChange={setTab} className="w-full">
                 {signupEnabled && (
