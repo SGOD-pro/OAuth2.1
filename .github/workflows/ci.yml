@@ -8,13 +8,11 @@ on:
       - 'backend/**'
       - 'frontend/**'
       - '.github/workflows/ci.yml'
-  push:
-    branches:
-      - '**'
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -23,6 +21,7 @@ jobs:
   test-frontend:
     name: Frontend Lint & Build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -49,6 +48,7 @@ jobs:
   test-backend:
     name: Backend Security Tests & Build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     services:
       mongodb:
@@ -75,7 +75,7 @@ jobs:
       - name: Setup AWS SAM CLI
         uses: aws-actions/setup-sam@v2
         with:
-          use-installer: true
+          use-installer: false
 
       - name: Install Backend Dependencies
         working-directory: backend

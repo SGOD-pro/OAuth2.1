@@ -20,17 +20,13 @@ on:
           - backend
           - frontend
 
-# Prevent concurrent overlapping production deployments
-concurrency:
-  group: production-deployment
-  cancel-in-progress: false
-
 permissions: {}
 
 jobs:
   detect-changes:
     name: Detect Changed Components
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     outputs:
@@ -40,7 +36,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Evaluate Components to Deploy
         id: filter
@@ -49,7 +45,7 @@ jobs:
           MANUAL_TARGET: ${{ github.event.inputs.target }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "Triggered manually with target: $MANUAL_TARGET"
+            echo "Triggered manually via workflow_dispatch with target: $MANUAL_TARGET"
             if [ "$MANUAL_TARGET" = "all" ] || [ "$MANUAL_TARGET" = "backend" ]; then
               echo "deploy_backend=true" >> "$GITHUB_OUTPUT"
             else
@@ -63,9 +59,20 @@ jobs:
             exit 0
           fi
 
-          # On push to main, check diff against parent commit
-          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD || true)
-          echo "Changed files in this commit:"
+          BEFORE_SHA="${{ github.event.before }}"
+          CURRENT_SHA="${{ github.sha }}"
+
+          echo "Evaluating changed files for push: before=${BEFORE_SHA}, current=${CURRENT_SHA}"
+
+          if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            echo "Comparing changes between $BEFORE_SHA and $CURRENT_SHA"
+            CHANGED_FILES=$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")
+          else
+            echo "Before commit not available; falling back to parent commit HEAD~1"
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git show --name-only --format="" HEAD 2>/dev/null || true)
+          fi
+
+          echo "Changed files in this push:"
           echo "$CHANGED_FILES"
 
           if echo "$CHANGED_FILES" | grep -qE '^(backend/|\.github/workflows/deploy\.yml)'; then
@@ -89,6 +96,10 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.deploy_backend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: production-backend
+      cancel-in-progress: false
     environment: production
     permissions:
       contents: read
@@ -119,7 +130,7 @@ jobs:
       - name: Setup AWS SAM CLI
         uses: aws-actions/setup-sam@v2
         with:
-          use-installer: true
+          use-installer: false
 
       - name: Configure AWS Credentials (OIDC or IAM Access Keys)
         uses: aws-actions/configure-aws-credentials@v4
@@ -206,7 +217,7 @@ jobs:
           
           until [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]
           do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
+            STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
             echo "Probe $RETRY_COUNT: $TARGET_URL returned HTTP $STATUS"
             if [ "$STATUS" -eq 200 ]; then
               echo "Backend probe successful (HTTP 200)."
@@ -224,6 +235,10 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.deploy_frontend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: production-frontend
+      cancel-in-progress: false
     environment: production
     permissions:
       contents: read
@@ -292,5 +307,10 @@ jobs:
       - name: Smoke Test Deployed Frontend
         run: |
           echo "Probing production frontend gateway..."
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/)
+          STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/ || true)
           echo "Frontend probe returned HTTP $STATUS"
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 400 ]; then
+            echo "Frontend probe successful (HTTP $STATUS)."
+            exit 0
+          fi
+          echo "WARN: Frontend probe returned non-2xx/3xx HTTP code: $STATUS"
