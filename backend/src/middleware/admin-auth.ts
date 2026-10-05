@@ -8,7 +8,7 @@ import { config } from "../config";
 let cachedPublicKey: any = null;
 let lastKeyFetch = 0;
 
-async function getIdpPublicKey(): Promise<any> {
+export async function getIdpPublicKey(): Promise<any> {
   const now = Date.now();
   if (cachedPublicKey && now - lastKeyFetch < 60_000) {
     return cachedPublicKey;

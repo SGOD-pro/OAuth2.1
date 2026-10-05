@@ -20,7 +20,118 @@ import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirec
 import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
 
+import { importJWK, SignJWT, jwtVerify } from "jose";
+import { getIdpPublicKey } from "../middleware/admin-auth";
+import { symmetricDecrypt } from "better-auth/crypto";
+
 export const auth = new Hono();
+
+let cachedPrivateKey: any = null;
+let cachedKeyId: string = "";
+let lastPrivateKeyFetch = 0;
+
+async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | null> {
+    const now = Date.now();
+    if (cachedPrivateKey && cachedKeyId && now - lastPrivateKeyFetch < 60_000) {
+        return { privateKey: cachedPrivateKey, kid: cachedKeyId };
+    }
+    const database = await getDb();
+    const jwksRecord = await database.collection("jwks").findOne(
+        { privateKey: { $exists: true } },
+        { sort: { createdAt: -1 } }
+    );
+    if (!jwksRecord || !jwksRecord.privateKey) {
+        return null;
+    }
+    try {
+        let rawData: any;
+        if (typeof jwksRecord.privateKey === "string") {
+            try {
+                rawData = JSON.parse(jwksRecord.privateKey);
+            } catch {
+                rawData = jwksRecord.privateKey;
+            }
+        } else {
+            rawData = jwksRecord.privateKey;
+        }
+
+        let jwk: any;
+        if (rawData && typeof rawData === "object" && rawData.kty) {
+            jwk = rawData;
+        } else if (config.auth.secret) {
+            try {
+                const decrypted = await symmetricDecrypt({ key: config.auth.secret, data: rawData });
+                jwk = typeof decrypted === "string" ? JSON.parse(decrypted) : decrypted;
+            } catch (decErr) {
+                console.warn("[getIdpSigningKey] symmetricDecrypt failed, attempting rawData:", decErr);
+                jwk = rawData;
+            }
+        } else {
+            jwk = rawData;
+        }
+
+        if (typeof jwk === "string") {
+            jwk = JSON.parse(jwk);
+        }
+
+        cachedPrivateKey = await importJWK(jwk, "RS256");
+        cachedKeyId = jwksRecord.kid || (jwksRecord._id ? jwksRecord._id.toString() : "idp-key");
+        lastPrivateKeyFetch = now;
+        return { privateKey: cachedPrivateKey, kid: cachedKeyId };
+    } catch (err) {
+        console.error("[getIdpSigningKey] Error preparing IDP signing key:", err);
+        return null;
+    }
+}
+
+async function mintJwtAccessToken(params: {
+    userId: string;
+    clientId: string;
+    expiresInSeconds?: number;
+    scope?: string;
+}): Promise<string | null> {
+    try {
+        const signingKey = await getIdpSigningKey();
+        if (!signingKey) return null;
+
+        const database = await getDb();
+        const orConditions: any[] = [{ id: params.userId }];
+        if (ObjectId.isValid(params.userId)) {
+            orConditions.push({ _id: new ObjectId(params.userId) });
+        }
+        const userDoc = await database.collection("user").findOne({
+            $or: orConditions
+        });
+
+        const role = userDoc?.role || "user";
+        const scopedClientId = userDoc?.scopedClientId || null;
+        const email = userDoc?.email || undefined;
+        const name = userDoc?.name || undefined;
+        const ttl = params.expiresInSeconds || 900;
+
+        const jwt = await new SignJWT({
+            sub: params.userId,
+            role,
+            scoped_client_id: scopedClientId,
+            email,
+            name,
+            client_id: params.clientId,
+            azp: params.clientId,
+            scope: params.scope || "openid profile email",
+        })
+            .setProtectedHeader({ alg: "RS256", kid: signingKey.kid })
+            .setIssuedAt()
+            .setIssuer(config.auth.baseURL)
+            .setAudience(params.clientId)
+            .setExpirationTime(`${ttl}s`)
+            .sign(signingKey.privateKey);
+
+        return jwt;
+    } catch (err) {
+        console.error("[MINT_JWT_ACCESS_TOKEN] Error minting JWT access token:", err);
+        return null;
+    }
+}
 
 export function isSuperAdmin(user: any): boolean {
     return Boolean(
@@ -806,6 +917,27 @@ auth.post("/oauth2/token", async (c) => {
                         401
                     );
                 }
+
+                if (tokenData && tokenData.access_token && resolvedUserId) {
+                    const jwtAt = await mintJwtAccessToken({
+                        userId: resolvedUserId,
+                        clientId: canonicalClientId,
+                        expiresInSeconds: tokenData.expires_in || 900,
+                        scope: tokenData.scope,
+                    });
+                    if (jwtAt) {
+                        await database.collection("oauthAccessToken").insertOne({
+                            token: jwtAt,
+                            clientId: canonicalClientId,
+                            userId: resolvedUserId,
+                            expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
+                            createdAt: new Date(),
+                            scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                        }).catch(() => {});
+                        tokenData.access_token = jwtAt;
+                    }
+                    return c.json(tokenData, 200);
+                }
             }
         } else {
             // Unset rotating on failure
@@ -847,12 +979,10 @@ auth.post("/oauth2/token", async (c) => {
     if (res.status === 200 && grantType === "authorization_code") {
         try {
             const tokenData = await res.clone().json().catch(() => null);
-            if (tokenData && tokenData.refresh_token) {
-                const initialHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
-                const familyId = crypto.randomUUID();
 
-                // Extract authenticated userId from pre-resolved code, access token JWT, or database
-                let resolvedUserId: string | undefined = preCodeUserId;
+            // Extract authenticated userId — resolve at outer scope so JWT minting below can access it
+            let resolvedUserId: string | undefined = preCodeUserId;
+            if (tokenData) {
                 if (!resolvedUserId && tokenData.id_token && typeof tokenData.id_token === "string") {
                     const parts = tokenData.id_token.split(".");
                     if (parts.length === 3) {
@@ -862,15 +992,7 @@ auth.post("/oauth2/token", async (c) => {
                         } catch {}
                     }
                 }
-                if (!resolvedUserId && tokenData.access_token && typeof tokenData.access_token === "string") {
-                    const parts = tokenData.access_token.split(".");
-                    if (parts.length === 3) {
-                        try {
-                            const jwtPayload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
-                            resolvedUserId = jwtPayload.sub || jwtPayload.userId;
-                        } catch {}
-                    }
-                }
+                // DB polling fallback (access token is opaque at this point; only use refresh_token lookup)
                 for (let attempt = 0; attempt < 5 && !resolvedUserId; attempt++) {
                     if (attempt > 0) await new Promise(r => setTimeout(r, 40 * attempt));
                     if (tokenData.refresh_token) {
@@ -892,6 +1014,11 @@ auth.post("/oauth2/token", async (c) => {
                         }
                     }
                 }
+            }
+
+            if (tokenData && tokenData.refresh_token) {
+                const initialHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
+                const familyId = crypto.randomUUID();
 
                 // Strictly bind token family to canonicalClientId and resolvedUserId
                 try {
@@ -899,9 +1026,7 @@ auth.post("/oauth2/token", async (c) => {
                 } catch (regErr) {
                     console.error("[TOKEN_FAMILY] Critical failure registering initial family; failing closed:", regErr);
                     // FAIL CLOSED: Purge issued tokens so no untracked refresh token exists in DB (Phase 10)
-                    if (tokenData.refresh_token) {
-                        await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
-                    }
+                    await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
                     if (tokenData.access_token) {
                         await database.collection("oauthAccessToken").deleteMany({ token: tokenData.access_token }).catch(() => {});
                     }
@@ -913,6 +1038,27 @@ auth.post("/oauth2/token", async (c) => {
                         500
                     );
                 }
+            }
+
+            if (tokenData && tokenData.access_token && resolvedUserId) {
+                const jwtAt = await mintJwtAccessToken({
+                    userId: resolvedUserId,
+                    clientId: canonicalClientId,
+                    expiresInSeconds: tokenData.expires_in || 900,
+                    scope: tokenData.scope,
+                });
+                if (jwtAt) {
+                    await database.collection("oauthAccessToken").insertOne({
+                        token: jwtAt,
+                        clientId: canonicalClientId,
+                        userId: resolvedUserId,
+                        expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
+                        createdAt: new Date(),
+                        scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                    }).catch(() => {});
+                    tokenData.access_token = jwtAt;
+                }
+                return c.json(tokenData, 200);
             }
         } catch (err) {
             console.error("[TOKEN_FAMILY] Error in token issuance interceptor:", err);
@@ -932,7 +1078,42 @@ auth.post("/oauth2/token", async (c) => {
 // 6. UserInfo Interceptor (RFC 6750 Section 3.1 HTTP 401 Normalization)
 auth.get("/oauth2/userinfo", async (c) => {
     try {
-        const res = await authProvider.handler(c.req.raw);
+        const authHeader = c.req.header("authorization") || c.req.header("Authorization");
+        const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
+
+        let res = await authProvider.handler(c.req.raw);
+
+        // Fallback for RS256 JWT access tokens if Better Auth expects opaque tokens
+        if (res.status !== 200 && bearerToken && bearerToken.includes(".")) {
+            try {
+                const publicKey = await getIdpPublicKey();
+                if (publicKey) {
+                    const { payload } = await jwtVerify(bearerToken, publicKey, {
+                        algorithms: ["RS256"],
+                        issuer: config.auth.baseURL,
+                    });
+                    if (payload && payload.sub) {
+                        const database = await getDb();
+                        const userId = String(payload.sub);
+                        const userDoc = await database.collection("user").findOne({
+                            $or: [
+                                { id: userId },
+                                ...(ObjectId.isValid(userId) ? [{ _id: new ObjectId(userId) }] : [])
+                            ]
+                        });
+                        return c.json({
+                            sub: userId,
+                            email: userDoc?.email || payload.email,
+                            name: userDoc?.name || payload.name || (userDoc?.email ? userDoc.email.split("@")[0] : userId),
+                            role: userDoc?.role || (payload.role as string) || "user",
+                            scoped_client_id: userDoc?.scopedClientId || (payload.scoped_client_id as string | null) || null,
+                        }, 200);
+                    }
+                }
+            } catch {
+                // fall through to error handling
+            }
+        }
         if (res.status >= 500) {
             return c.json(
                 { error: "invalid_token", error_description: "Invalid or unsupported access token" },

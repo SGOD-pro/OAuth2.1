@@ -208,6 +208,7 @@ await runTest("PRIV-3: Authenticated user explicitly assigned to private client 
   assert.equal(tokenRes.status, 200, "Token exchange must succeed");
   const tokenData = await tokenRes.json();
   assert.ok(tokenData.access_token, "Must receive access_token");
+  assert.equal(tokenData.access_token.split(".").length, 3, "access_token must be a RS256 JWT");
 
   // Call UserInfo endpoint
   const userinfoRes = await app.request("/api/auth/oauth2/userinfo", {
@@ -256,6 +257,7 @@ await runTest("PRIV-4: Scoped App Admin receives role: admin and scoped_client_i
 
   assert.equal(tokenRes.status, 200);
   const tokenData = await tokenRes.json();
+  assert.equal(tokenData.access_token.split(".").length, 3, "access_token must be a RS256 JWT");
 
   // Call UserInfo endpoint
   const userinfoRes = await app.request("/api/auth/oauth2/userinfo", {

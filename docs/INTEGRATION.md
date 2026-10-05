@@ -135,6 +135,40 @@ Base URL: `${AUTH_ISSUER}` (Production: `https://oauth21.vercel.app`)
 | **Token Introspection** | `POST` | `/api/auth/oauth2/introspect` | Confidential client token verification |
 | **Token Revocation** | `POST` | `/api/auth/oauth2/revoke` | Revoke active token or entire token family |
 
+### 4.1 Token Formats & Claims Specification
+
+SWYRA Auth issues RS256-signed JWTs for both **ID Tokens** and **Access Tokens**. Both can be cryptographically verified offline using standard JOSE / JWT libraries against the public keys published at `/.well-known/jwks.json`.
+
+| Token Type | Format | Signing Alg | Claims Contained | Primary Usage |
+|---|---|---|---|---|
+| **ID Token** (`id_token`) | RS256 JWT | RS256 | `sub`, `email`, `name`, `iss`, `aud`, `exp`, `iat` | Client-side user identity verification |
+| **Access Token** (`access_token`) | RS256 JWT | RS256 | `sub`, `email`, `name`, `role`, `scoped_client_id`, `client_id`, `azp`, `scope`, `iss`, `aud`, `exp`, `iat` | API authorization & offline backend verification |
+| **Refresh Token** (`refresh_token`) | Opaque | N/A | Server-managed token family | Rotating session renewal |
+
+#### Access Token Claims Payload
+```json
+{
+  "sub": "6ac330238d040e9eaaee2b42",
+  "role": "admin",
+  "scoped_client_id": "vIaLkLJZpfMesoHlhJHNGOtnFRTcbzUx",
+  "email": "swyra@aws.com",
+  "name": "AWS Admin",
+  "client_id": "vIaLkLJZpfMesoHlhJHNGOtnFRTcbzUx",
+  "azp": "vIaLkLJZpfMesoHlhJHNGOtnFRTcbzUx",
+  "scope": "openid profile email",
+  "iss": "https://oauth21.vercel.app",
+  "aud": "vIaLkLJZpfMesoHlhJHNGOtnFRTcbzUx",
+  "iat": 1728100000,
+  "exp": 1728100900
+}
+```
+
+> ⚠️ **Verification Guidance for Consumers & Agents:**
+> 1. When verifying either `id_token` or `access_token` offline, pin the algorithm to `RS256` only.
+> 2. Validate `iss === process.env.AUTH_ISSUER` and `aud === process.env.CLIENT_ID`.
+> 3. If validating `azp` (authorized party), ensure it matches `process.env.CLIENT_ID`.
+> 4. To extract tenant admin privileges, read `role` and `scoped_client_id` directly from the verified `access_token` claims or the `/api/auth/oauth2/userinfo` response.
+
 ---
 
 ## 5. Security Invariants (Normative Rules)
@@ -305,8 +339,10 @@ export async function GET(req: NextRequest) {
 
   const tokenData = await tokenRes.json();
 
-  // 2. Offline Cryptographic Verification of ID Token
-  const { payload } = await jwtVerify(tokenData.id_token, getJWKS(issuer), {
+  // 2. Offline Cryptographic Verification (Access Token & ID Token)
+  // Both id_token and access_token are RS256 JWTs. The access_token contains
+  // authorization claims (role, scoped_client_id, sub, email, name).
+  const { payload } = await jwtVerify(tokenData.access_token || tokenData.id_token, getJWKS(issuer), {
     issuer,
     audience: clientId,
     algorithms: ["RS256"],
