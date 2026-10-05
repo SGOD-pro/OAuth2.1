@@ -133,6 +133,31 @@ async function mintJwtAccessToken(params: {
     }
 }
 
+async function resignIdTokenWithNewAtHash(idToken: string, newAccessToken: string): Promise<string> {
+    if (!idToken || typeof idToken !== "string") return idToken;
+    const parts = idToken.split(".");
+    if (parts.length !== 3) return idToken;
+    try {
+        const idPayload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+        if (!idPayload.at_hash) return idToken;
+        const newAtHash = crypto
+            .createHash("sha256")
+            .update(newAccessToken)
+            .digest()
+            .subarray(0, 16)
+            .toString("base64url");
+        idPayload.at_hash = newAtHash;
+        const signingKey = await getIdpSigningKey();
+        if (!signingKey) return idToken;
+        return await new SignJWT(idPayload)
+            .setProtectedHeader({ alg: "RS256", kid: signingKey.kid })
+            .sign(signingKey.privateKey);
+    } catch (e) {
+        console.error("[ID_TOKEN_RE_SIGN] Error updating at_hash:", e);
+        return idToken;
+    }
+}
+
 export function isSuperAdmin(user: any): boolean {
     return Boolean(
         user &&
@@ -935,6 +960,9 @@ auth.post("/oauth2/token", async (c) => {
                             scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
                         }).catch(() => {});
                         tokenData.access_token = jwtAt;
+                        if (tokenData.id_token) {
+                            tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
+                        }
                     }
                     return c.json(tokenData, 200);
                 }
@@ -1057,6 +1085,9 @@ auth.post("/oauth2/token", async (c) => {
                         scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
                     }).catch(() => {});
                     tokenData.access_token = jwtAt;
+                    if (tokenData.id_token) {
+                        tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
+                    }
                 }
                 return c.json(tokenData, 200);
             }
@@ -1164,6 +1195,99 @@ auth.get("/oauth2/userinfo", async (c) => {
             401,
             { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid or unsupported access token"' }
         );
+    }
+});
+
+// 6.5. Token Introspection Interceptor (RFC 7662)
+auth.post("/oauth2/introspect", async (c) => {
+    try {
+        const rawBodyText = await c.req.raw.clone().text().catch(() => "");
+        const params = new URLSearchParams(rawBodyText);
+        const token = params.get("token") || c.req.query("token") || "";
+
+        // First forward to Better Auth for client authentication and default handling
+        const res = await authProvider.handler(c.req.raw);
+
+        // If Better Auth rejected client credentials (e.g. 401), preserve the security gate
+        if (res.status !== 200) {
+            return res;
+        }
+
+        const data = await res.clone().json().catch(() => null);
+
+        // If Better Auth already identified it as active, return immediately
+        if (data && data.active === true) {
+            return res;
+        }
+
+        // Better Auth returned active: false (e.g. JWT audience did not match a registered resource server).
+        // Check if the token is an RS256 JWT access token issued by SWYRA Auth.
+        if (token && typeof token === "string" && token.includes(".")) {
+            try {
+                // Extract authenticated client ID from Basic Auth or request body
+                let authClientId: string | undefined;
+                const authHeader = c.req.header("authorization") || c.req.header("Authorization");
+                if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
+                    try {
+                        const decoded = Buffer.from(authHeader.slice(6).trim(), "base64").toString("utf-8");
+                        const idx = decoded.indexOf(":");
+                        if (idx !== -1) authClientId = decoded.slice(0, idx);
+                    } catch {}
+                }
+                if (!authClientId) {
+                    authClientId = params.get("client_id") || undefined;
+                }
+
+                const publicKey = await getIdpPublicKey();
+                if (publicKey) {
+                    const { payload } = await jwtVerify(token, publicKey, {
+                        algorithms: ["RS256"],
+                        issuer: config.auth.baseURL,
+                    });
+
+                    const nowSec = Math.floor(Date.now() / 1000);
+                    if (payload.exp && payload.exp <= nowSec) {
+                        return c.json({ active: false }, 200);
+                    }
+
+                    // RFC 7662 §4: Anti-scanning & Cross-client token isolation
+                    const tokenClientId = (payload.client_id as string) || (payload.azp as string) || (payload.aud as string);
+                    if (authClientId && tokenClientId && tokenClientId !== authClientId) {
+                        return c.json({ active: false }, 200);
+                    }
+
+                    // Check active state in database (revocation check)
+                    const database = await getDb();
+                    const tokenDoc = await database.collection("oauthAccessToken").findOne({
+                        token,
+                        clientId: tokenClientId,
+                    });
+                    if (!tokenDoc) {
+                        return c.json({ active: false }, 200);
+                    }
+
+                    return c.json({
+                        active: true,
+                        sub: payload.sub,
+                        client_id: tokenClientId,
+                        scope: payload.scope || (Array.isArray(tokenDoc.scopes) ? tokenDoc.scopes.join(" ") : "openid profile email"),
+                        exp: payload.exp,
+                        iat: payload.iat,
+                        iss: payload.iss,
+                        token_type: "Bearer",
+                        role: payload.role || "user",
+                        scoped_client_id: payload.scoped_client_id || null,
+                    }, 200);
+                }
+            } catch {
+                return c.json({ active: false }, 200);
+            }
+        }
+
+        return res;
+    } catch (err) {
+        console.error("[INTROSPECT_ERR]", err);
+        return c.json({ active: false }, 200);
     }
 });
 
