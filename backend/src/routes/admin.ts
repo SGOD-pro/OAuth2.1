@@ -27,19 +27,13 @@ admin.use("*", requireGatewayTrust);
 
 // -- Super-Admin Only Routes ---------------------------------------------
 
-// 1. List All OAuth Clients (Super-Admin or Scoped-Admin)
-admin.get("/clients", requireAdmin, async (c) => {
+// 1. List All OAuth Clients (Super-Admin Only)
+admin.get("/clients", requireSuperAdmin, async (c) => {
   try {
     const database = await getDb();
-    const sessionUser = c.get("user") as any;
-    const scopedClientId = sessionUser?.scopedClientId;
-
-    const query = scopedClientId
-      ? { $or: [{ clientId: scopedClientId }, { client_id: scopedClientId }, { id: scopedClientId }] }
-      : {};
 
     const [clients, appAdminClientIds] = await Promise.all([
-      database.collection("oauthClient").find(query).sort({ createdAt: -1, _id: -1 }).toArray(),
+      database.collection("oauthClient").find({}).sort({ createdAt: -1, _id: -1 }).toArray(),
       database.collection("app_admins").distinct("clientId"),
     ]);
 

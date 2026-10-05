@@ -65,6 +65,17 @@ export const AdminTwoFactor: React.FC = () => {
         }
       }
 
+      const getSessionFn = authClient.getSession as unknown as () => Promise<{
+        data?: { user?: { role?: string; scopedClientId?: string | null } };
+      }>;
+      const userRes = await getSessionFn();
+      const currentUser = userRes?.data?.user;
+      if (currentUser?.role === 'admin' && currentUser?.scopedClientId) {
+        await authClient.signOut({});
+        navigate('/admin/login?error=access_denied_scoped', { replace: true });
+        return;
+      }
+
       toast.success('Two-factor authentication verified');
       navigate('/admin', { replace: true });
     } catch (err: unknown) {

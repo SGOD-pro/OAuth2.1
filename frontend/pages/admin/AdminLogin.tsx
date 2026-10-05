@@ -41,19 +41,28 @@ export const AdminLogin: React.FC = () => {
 
   useEffect(() => {
     const err = searchParams.get('error');
-    if (err === 'access_denied') {
+    if (err === 'access_denied_scoped') {
+      const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
+      setError(msg);
+      toast.error(msg);
+    } else if (err === 'access_denied') {
       toast.error('Access denied: Your account does not have admin privileges.');
     } else if (err === 'mfa_failed' || err === 'mfa_expired') {
       toast.error('2FA verification failed or session expired. Please re-enter your credentials.');
     }
   }, [searchParams]);
 
-  const user = (session as unknown as { user?: { role?: string } })?.user;
+  const user = (session as unknown as { user?: { role?: string; scopedClientId?: string | null } })?.user;
 
   useEffect(() => {
     if (!isPending && user) {
-      if (user.role === 'admin') {
+      if (user.role === 'admin' && !user.scopedClientId) {
         navigate('/admin', { replace: true });
+      } else if (user.role === 'admin' && user.scopedClientId) {
+        void authClient.signOut({});
+        const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
+        setError(msg);
+        toast.error(msg);
       }
     }
   }, [user, isPending, navigate]);
@@ -89,13 +98,26 @@ export const AdminLogin: React.FC = () => {
         return;
       }
 
-      // Check role
-      const getSessionFn = authClient.getSession as unknown as () => Promise<{ data?: { user?: { role?: string } } }>;
+      // Check role and isolation scope
+      const getSessionFn = authClient.getSession as unknown as () => Promise<{
+        data?: { user?: { role?: string; scopedClientId?: string | null } };
+      }>;
       const userRes = await getSessionFn();
-      const userRole = userRes?.data?.user?.role;
+      const currentUser = userRes?.data?.user;
+      const userRole = currentUser?.role;
+      const scopedClientId = currentUser?.scopedClientId;
+
       if (userRole !== 'admin') {
         setError('Access denied: Administrator privileges required.');
         toast.error('Access denied: Administrator privileges required.');
+        return;
+      }
+
+      if (scopedClientId) {
+        await authClient.signOut({});
+        const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
+        setError(msg);
+        toast.error(msg);
         return;
       }
 
@@ -150,12 +172,14 @@ export const AdminLogin: React.FC = () => {
               </p>
             </div>
 
-            {isAuthenticated && role !== 'admin' ? (
+            {isAuthenticated && (role !== 'admin' || Boolean(user?.scopedClientId)) ? (
               <div className="space-y-4">
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3.5">
                   <h4 className="font-sans text-xs font-medium text-destructive">Access Restricted</h4>
                   <p className="font-sans text-xs text-muted-foreground mt-1">
-                    Your account does not have administrator privileges.
+                    {user?.scopedClientId
+                      ? 'You are signed in as an Application Administrator. Application administrators must manage their application through their consumer application portal, not the central IdP console.'
+                      : 'Your account does not have administrator privileges.'}
                   </p>
                 </div>
                 <Button onClick={handleSignOut} variant="outline" className="w-full h-9 text-xs">

@@ -95,6 +95,23 @@ export const authProvider = betterAuth({
         },
     },
 
+    user: {
+        additionalFields: {
+            scopedClientId: {
+                type: "string",
+                required: false,
+                defaultValue: null,
+                input: false,
+            },
+            mustChangePassword: {
+                type: "boolean",
+                required: false,
+                defaultValue: false,
+                input: false,
+            },
+        },
+    },
+
     database: mongodbAdapter(
         database,
         { client, transaction: false }
