@@ -1,5 +1,11 @@
 # Security Runbook: Incident Response, Key Rotation & Operations
 
+> [!CAUTION]
+> **HISTORICAL / NON-NORMATIVE DOCUMENT**  
+> This operational runbook records historical procedures and audit notes from September 2026. It is **non-normative**.  
+> For the authoritative, current security architecture, gateway trust boundary, client mode policy, and master security gate verification, refer strictly to:  
+> 👉 **[docs/SECURITY.md](docs/SECURITY.md)** (Authoritative Specification)
+
 **Target System:** [SGOD-pro/OAuth2.1 Identity Provider](file:///home/swyra/projects/OAuth2.1)  
 **Audience:** Site Reliability Engineers, Security Operations, Identity Engineers  
 **Classification:** Operational Security Runbook  
@@ -100,9 +106,9 @@
 
 ### 2.3 Internal Gateway Secret Rotation (`INTERNAL_GATEWAY_SECRET`)
 - **Zero-Downtime Migration Pattern:**
-  1. Temporarily configure IdP to accept either the old or new secret via comma-separated list or secondary header `x-internal-secret`.
-  2. Update Edge Gateway (Vercel / CloudFront) to inject the new secret.
-  3. Deploy new single secret to AWS Lambda once edge propagation completes.
+  1. Temporarily configure IdP `INTERNAL_GATEWAY_SECRET` with both old and new secrets separated by a comma (e.g., `secretA,secretB`). Both are evaluated with timing-safe comparison on the `x-gateway-secret` header. (Note: secondary headers like `x-internal-secret` are permanently removed).
+  2. Update Edge Gateway (Vercel / CloudFront) to inject the new secret via the standard `x-gateway-secret` header.
+  3. Update IdP `INTERNAL_GATEWAY_SECRET` to the new single secret once edge deployment succeeds.
 
 ---
 

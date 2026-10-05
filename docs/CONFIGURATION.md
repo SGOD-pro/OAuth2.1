@@ -25,7 +25,7 @@ The IdP server runs on Node.js / AWS Lambda and requires the following configura
 | `NODE_ENV` | String | **Yes** | Server execution environment. Allowed: `production`, `development`, `test`. | `production` |
 | `PORT` | Number | No | HTTP listening port for node server. Defaults to `3000`. | `3000` |
 | `MONGO_URI` | String | **Yes** | MongoDB Atlas connection string. Requires replica set for transactions. | `mongodb+srv://...` |
-| `BETTER_AUTH_SECRET` | String | **Yes** | High-entropy cryptographic secret for Better-Auth signing (min 32 chars). | `BNR0Sm/FNK/...` |
+| `BETTER_AUTH_SECRET` | String | **Yes** | High-entropy cryptographic secret for Better-Auth signing (min 32 chars). | `<min-32-char-random-secret>` |
 | `BETTER_AUTH_URL` | String (URL) | **Yes** | Canonical base URL of the IdP service (OIDC Issuer). | `https://oauth21.vercel.app` |
 | `FRONTEND_URL` | String (URL) | **Yes** | Canonical base URL of the IdP frontend UI. | `https://oauth21.vercel.app` |
 
@@ -33,7 +33,7 @@ The IdP server runs on Node.js / AWS Lambda and requires the following configura
 
 | Variable | Type | Required | Description | Example |
 |---|---|---|---|---|
-| `INTERNAL_GATEWAY_SECRET` | String | **Yes** | 64-hex-character secret verified between reverse proxy (Vercel) and Lambda. | `139f62efde9...` |
+| `INTERNAL_GATEWAY_SECRET` | String | **Yes** | 64-hex-character secret verified between reverse proxy (Vercel) and Lambda. | `<64-hex-character-secret>` |
 | `TRUSTED_PROXY_CIDRS` | String | **Yes (Prod)** | Comma-separated CIDR blocks of trusted proxies for `X-Forwarded-For` client IP resolution. | `127.0.0.1/32,10.0.0.0/8` |
 | `ALLOW_DEV_CLIENTS_IN_PRODUCTION` | Boolean | No | Emergency switch. Defaults to `false`. When `false`, dev clients (`isDev: true`) cannot be created or run in production unless explicitly permitted. | `false` |
 
@@ -48,8 +48,8 @@ The IdP server runs on Node.js / AWS Lambda and requires the following configura
 
 | Variable | Type | Required | Description | Example |
 |---|---|---|---|---|
-| `UPSTASH_REDIS_REST_URL` | String (URL) | No | Upstash Redis REST endpoint for distributed rate limiting. | `https://accurate-cowbird-124727.upstash.io` |
-| `UPSTASH_REDIS_REST_TOKEN` | String | No | Upstash Redis REST Bearer token. | `gQAAAAAAAec...` |
+| `UPSTASH_REDIS_REST_URL` | String (URL) | No | Upstash Redis REST endpoint for distributed rate limiting. | `https://<your-redis-instance>.upstash.io` |
+| `UPSTASH_REDIS_REST_TOKEN` | String | No | Upstash Redis REST Bearer token. | `<upstash-token>` |
 
 ---
 

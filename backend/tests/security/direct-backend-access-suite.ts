@@ -440,6 +440,55 @@ await runTest("GATEWAY-7: Unconfigured Gateway Secret on Server => FAILS CLOSED 
   }
 });
 
+await runTest("GATEWAY-8: x-internal-secret alone (deprecated secondary header) => STRICTLY REJECTED (403)", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: superCookie,
+      Origin: process.env.FRONTEND_URL || "https://app.example.com",
+      "x-gateway-secret": "",
+      "x-internal-secret": trustedGatewaySecret,
+    }),
+  });
+  assert.equal(res.status, 403, "x-internal-secret alone must be rejected with 403 forbidden");
+  const data = await res.json();
+  assert.equal(data.error, "forbidden");
+});
+
+await runTest("GATEWAY-9: Server configured with short/malformed secret (< 32 chars) => FAILS CLOSED (403)", async () => {
+  const orig = process.env.INTERNAL_GATEWAY_SECRET;
+  try {
+    process.env.INTERNAL_GATEWAY_SECRET = "short_secret_only_20ch";
+    const res = await app.request("/api/admin/clients", {
+      method: "GET",
+      headers: getTestHeaders({
+        Cookie: superCookie,
+        Origin: process.env.FRONTEND_URL || "https://app.example.com",
+        "x-gateway-secret": "short_secret_only_20ch",
+      }),
+    });
+    assert.equal(res.status, 403, "Server with <32 char secret must fail closed with 403");
+  } finally {
+    if (orig !== undefined) {
+      process.env.INTERNAL_GATEWAY_SECRET = orig;
+    }
+  }
+});
+
+await runTest("GATEWAY-10: Client presenting malformed/short x-gateway-secret (< 32 chars) => DENIED (403)", async () => {
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: superCookie,
+      Origin: process.env.FRONTEND_URL || "https://app.example.com",
+      "x-gateway-secret": "short_secret_123",
+    }),
+  });
+  assert.equal(res.status, 403, "Client short secret must return 403 forbidden");
+  const data = await res.json();
+  assert.equal(data.error, "forbidden");
+});
+
 console.log(`  DIRECT BACKEND SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 process.exit(failed > 0 ? 1 : 0);

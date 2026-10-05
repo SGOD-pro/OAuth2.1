@@ -263,9 +263,19 @@ jobs:
             exit 1
           fi
 
-          if [ -n "$INTERNAL_GATEWAY_SECRET" ]; then
-            node scripts/prepare-vercel-config.mjs
+          if [ -z "${INTERNAL_GATEWAY_SECRET}" ]; then
+            echo "FATAL: secrets.INTERNAL_GATEWAY_SECRET is missing. Production deployments fail closed."
+            exit 1
           fi
+
+          SECRET_LEN=${#INTERNAL_GATEWAY_SECRET}
+          if [ "$SECRET_LEN" -lt 32 ]; then
+            echo "FATAL: secrets.INTERNAL_GATEWAY_SECRET must be at least 32 characters (got $SECRET_LEN)."
+            exit 1
+          fi
+
+          echo "Generating untracked vercel.json deployment configuration..."
+          node scripts/prepare-vercel-config.mjs
 
           echo "Linking Vercel Project..."
           npx --yes vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
@@ -275,6 +285,9 @@ jobs:
 
           echo "Deploying prebuilt production artifacts..."
           npx --yes vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+          echo "Cleaning untracked deployment artifacts..."
+          node scripts/prepare-vercel-config.mjs --clean
 
       - name: Smoke Test Deployed Frontend
         run: |

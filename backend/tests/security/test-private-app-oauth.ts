@@ -95,7 +95,7 @@ function getTestHeaders(extra: Record<string, string> = {}): Headers {
   h.set("origin", process.env.FRONTEND_URL || "https://oauth21.vercel.app");
   h.set("referer", (process.env.FRONTEND_URL || "https://oauth21.vercel.app") + "/");
   h.set("x-forwarded-for", `${ip}, 10.0.0.1`);
-  h.set("x-gateway-secret", process.env.INTERNAL_GATEWAY_SECRET || "139f62efde9b06735e66e7e9329fdcd51b44108c07717f3307af44c1dcdd3a57");
+  h.set("x-gateway-secret", process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32));
   h.set("x-csrf-token", "any");
   for (const [k, v] of Object.entries(extra)) {
     if (v === "") h.delete(k);

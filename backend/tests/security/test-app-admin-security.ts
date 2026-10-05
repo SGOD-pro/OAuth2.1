@@ -135,9 +135,13 @@ async function signTestToken(payload: Record<string, any>, options: {
     .setIssuer(options.issuer !== undefined ? options.issuer : config.auth.baseURL);
 
   if (options.audience !== undefined) {
-    signJwt.setAudience(options.audience);
+    if (options.audience !== null) {
+      signJwt.setAudience(options.audience);
+    }
+  } else if (payload.scoped_client_id) {
+    signJwt.setAudience(payload.scoped_client_id);
   } else {
-    signJwt.setAudience(clientA_id);
+    signJwt.setAudience(config.auth.baseURL);
   }
 
   if (options.expiresIn) {
@@ -453,6 +457,82 @@ try {
       body: JSON.stringify({ client_name: "Expired Token Update" }),
     });
     assert.equal(res.status, 401, "Expired token must be denied with 401");
+  });
+
+  // Case J: Arbitrary registered client audience (aud = clientA_id) calling Central Platform APIs → denied (HTTP 403)
+  await runTest("CASE-J: Arbitrary registered client audience denied Central Platform Management APIs (HTTP 403)", async () => {
+    const appAudToken = await signTestToken(
+      { sub: "admin-id", role: "admin", scoped_client_id: null },
+      { audience: clientA_id } // Presenting clientA audience to global central platform API
+    );
+    const res = await app.request("/api/admin/clients", {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${appAudToken}` }),
+    });
+    assert.equal(res.status, 403, "Arbitrary client audience must be denied Central Platform Management APIs");
+    const json = await res.json();
+    assert.equal(json.error, "forbidden");
+  });
+
+  // Case K: Global Super Admin token with platform audience accessing Central Platform APIs → allowed (HTTP 200)
+  await runTest("CASE-K: Global Super Admin token with platform audience succeeds on Central Platform APIs (HTTP 200)", async () => {
+    const platformToken = await signTestToken(
+      { sub: "global-super-admin-id", role: "admin", scoped_client_id: null },
+      { audience: config.auth.baseURL }
+    );
+    const res = await app.request("/api/admin/clients", {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${platformToken}` }),
+    });
+    assert.equal(res.status, 200, "Super admin with platform audience must access central platform clients API");
+    const clients = await res.json();
+    assert.ok(Array.isArray(clients));
+  });
+
+  // Case L: User-document with role=admin CANNOT elevate token with role=user (anti-escalation) → denied (HTTP 403)
+  await runTest("CASE-L: User-document role=admin CANNOT elevate signed token role=user (HTTP 403)", async () => {
+    // We already have superAdminEmail with role=admin in user collection
+    const superAdminDoc = await db.collection("user").findOne({ email: superAdminEmail });
+    assert.ok(superAdminDoc);
+
+    const downgradedToken = await signTestToken(
+      { sub: superAdminDoc.id || superAdminDoc._id.toString(), role: "user", scoped_client_id: null },
+      { audience: config.auth.baseURL }
+    );
+
+    const res = await app.request("/api/admin/clients", {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${downgradedToken}` }),
+    });
+    assert.equal(res.status, 403, "Token with role=user must not be elevated to admin by DB user document");
+  });
+
+  // Case M: Missing audience (aud omitted) in bearer token → denied (HTTP 401)
+  await runTest("CASE-M: Missing audience claim in bearer token is strictly denied (HTTP 401)", async () => {
+    const noAudToken = await signTestToken(
+      { sub: "admin-id", role: "admin", scoped_client_id: clientA_id },
+      { audience: null }
+    );
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${noAudToken}` }),
+      body: JSON.stringify({ client_name: "No Aud Attack" }),
+    });
+    assert.equal(res.status, 401, "Token with missing aud claim must return 401");
+  });
+
+  // Case N: Missing subject (sub omitted) in bearer token → denied (HTTP 401)
+  await runTest("CASE-N: Missing subject claim in bearer token is strictly denied (HTTP 401)", async () => {
+    const noSubToken = await signTestToken(
+      { role: "admin", scoped_client_id: clientA_id },
+      { audience: clientA_id }
+    );
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${noSubToken}` }),
+      body: JSON.stringify({ client_name: "No Sub Attack" }),
+    });
+    assert.equal(res.status, 401, "Token with missing sub claim must return 401");
   });
 
   // Remove test JWK so Better Auth uses its legitimate JWKS key for subsequent user creations

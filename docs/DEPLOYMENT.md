@@ -78,18 +78,25 @@ Configure the following in the Vercel Project Settings:
 
 ## 3. Secret Management & Rotation Protocols
 
-### 3.1 Rotating `INTERNAL_GATEWAY_SECRET`
+### 3.1 Rotating `INTERNAL_GATEWAY_SECRET` & Remediation of Historical Secrets
 
-The `INTERNAL_GATEWAY_SECRET` authenticates the edge proxy to the Lambda function. If rotation is required:
+> [!CAUTION]
+> **Mandatory Production Rotation of Historical Secrets:**  
+> Any secret values previously checked into Git history (including historical keys `139f62ef...` and `d5856917...`) MUST be treated as compromised. Operators MUST manually generate and configure fresh secrets in AWS Lambda and Vercel project settings. The repository now uses untracked `vercel.json` and `frontend/vercel.json` generated from tracked `*.template.json` files to guarantee secret-bearing deployment configuration is never tracked in Git.
+
+The `INTERNAL_GATEWAY_SECRET` authenticates the edge proxy to the Lambda function. SWYRA Auth accepts strictly the `x-gateway-secret` header (legacy secondary headers like `x-internal-secret` are permanently removed).
+
+**Zero-Downtime Secret Rotation Procedure:**
 
 1. **Generate a fresh 64-character hex secret:**
    ```bash
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
-2. **Update AWS Lambda:** Provide the new `INTERNAL_GATEWAY_SECRET` via CI/CD secret injection or `--parameter-overrides InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"` during SAM deploy (never commit the plaintext secret to `samconfig.toml`).
-3. **Update Vercel:** Update `INTERNAL_GATEWAY_SECRET` in Vercel Project Settings and re-run deployment.
-4. **Update `backend/.env`:** Update the local environment file for testing.
-5. **Verify Perimeter:** Execute `npm run test:direct-backend` to ensure the new secret is active and invalid secrets are rejected (403).
+2. **Dual-Secret Overlap on AWS Lambda:** Configure `INTERNAL_GATEWAY_SECRET` on AWS Lambda with both current and new secrets separated by a comma (`currentSecret,newSecret`). The backend evaluates each secret with timing-safe comparison on incoming `x-gateway-secret` headers.
+3. **Update Vercel Edge:** Update `INTERNAL_GATEWAY_SECRET` in Vercel Project Settings with the new secret and trigger a deployment. The build script `scripts/prepare-vercel-config.mjs` injects the secret into an untracked `vercel.json` during the build.
+4. **Finalize on AWS Lambda:** Once Vercel edge deployment completes, update AWS Lambda's `INTERNAL_GATEWAY_SECRET` to contain only `newSecret`.
+5. **Update `backend/.env`:** Update the local environment file for testing.
+6. **Verify Perimeter:** Execute `npm run test:direct-backend` to ensure the new secret is active and invalid/legacy headers are rejected (403).
 
 ### 3.2 Rotating Client Secrets
 

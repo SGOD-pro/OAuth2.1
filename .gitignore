@@ -34,3 +34,7 @@ test-results/
 image.png
 .vercel
 .env*
+
+# Generated secret-bearing deployment configuration
+vercel.json
+frontend/vercel.json

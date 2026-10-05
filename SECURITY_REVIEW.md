@@ -4,7 +4,7 @@
 > **HISTORICAL / NON-NORMATIVE DOCUMENT**  
 > This document records a point-in-time security audit conducted in September 2026. It is **non-normative** and maintained solely for audit history.  
 > For the authoritative, current security architecture, gateway trust boundary, client mode policy, and master security gate verification, refer strictly to:  
-> 👉 **[docs/SECURITY_CANONICAL.md](docs/SECURITY_CANONICAL.md)** (Authoritative Specification)
+> 👉 **[docs/SECURITY.md](docs/SECURITY.md)** (Authoritative Specification)
 
 **Primary Repository:** [SGOD-pro/OAuth2.1](file:///home/swyra/projects/OAuth2.1)  
 **Consumer Repository:** [SGOD-pro/aws-dashboard](file:///home/swyra/projects/OAuth2.1/test/aws-dashboard)  

@@ -4,7 +4,7 @@
 > **HISTORICAL / NON-NORMATIVE DOCUMENT**  
 > This remediation plan records point-in-time remediation actions from September 2026. It is **non-normative**.  
 > For the current verified state and single source of truth, see:  
-> 👉 **[docs/SECURITY_CANONICAL.md](docs/SECURITY_CANONICAL.md)** (Authoritative Specification)
+> 👉 **[docs/SECURITY.md](docs/SECURITY.md)** (Authoritative Specification)
 
 > **Repository File:** `SECURITY_REMEDIATION_PLAN.md`  
 > **Source Spec:** [User Request / Security Contract](file:///home/swyra/projects/OAuth2.1/AGENTS.md)  
@@ -129,7 +129,7 @@ None. All 4 primary objectives and 13 requirement sections are specified with un
   import { timingSafeEqualStr } from "../utils/security";
   ...
   if (config.internalGatewaySecret) {
-    const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
+    const gatewayHeader = c.req.header("x-gateway-secret");
     if (!gatewayHeader || !timingSafeEqualStr(gatewayHeader, config.internalGatewaySecret)) {
       return c.json(
         { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },

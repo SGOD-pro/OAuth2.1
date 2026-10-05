@@ -309,6 +309,29 @@ check('Consumer applications do not install duplicate auth engines or mongo driv
 });
 
 // -----------------------------------------------------------------------------
+// 5. Validate Gateway Secret Isolation & Perimeter Configuration
+// -----------------------------------------------------------------------------
+check('Gateway secret configuration is isolated from version control', () => {
+  const gitignorePath = path.join(repoRoot, '.gitignore');
+  assert.ok(fs.existsSync(gitignorePath), '.gitignore must exist');
+  const gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
+
+  assert.ok(gitignoreContent.includes('vercel.json'), '.gitignore must ignore vercel.json');
+  assert.ok(gitignoreContent.includes('frontend/vercel.json'), '.gitignore must ignore frontend/vercel.json');
+
+  const vTemplate = path.join(repoRoot, 'vercel.template.json');
+  const fvTemplate = path.join(repoRoot, 'frontend/vercel.template.json');
+  assert.ok(fs.existsSync(vTemplate), 'vercel.template.json must exist');
+  assert.ok(fs.existsSync(fvTemplate), 'frontend/vercel.template.json must exist');
+
+  const vTemplateContent = fs.readFileSync(vTemplate, 'utf-8');
+  assert.ok(
+    vTemplateContent.includes('__INTERNAL_GATEWAY_SECRET__'),
+    'vercel.template.json must contain __INTERNAL_GATEWAY_SECRET__ placeholder'
+  );
+});
+
+// -----------------------------------------------------------------------------
 // Results Reporting
 // -----------------------------------------------------------------------------
 console.log('================================================================');

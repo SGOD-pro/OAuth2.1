@@ -35,7 +35,7 @@ Security in SWYRA Auth is designed around three governing axioms:
 
 ### Trust Boundary Definitions
 - **Boundary 1 (Edge Perimeter):** Validates TLS certificates, enforces HSTS, drops malformed HTTP frames, and rewrites edge traffic.
-- **Boundary 2 (Gateway Trust Perimeter):** Ensures that requests entering the Lambda management surfaces originate exclusively from the authorized API Gateway / reverse proxy via `x-gateway-secret`. Direct internet calls to Lambda URLs fail closed (403 `forbidden`).
+- **Boundary 2 (Gateway Trust Perimeter):** Ensures that requests entering the Lambda management surfaces originate exclusively from the authorized API Gateway / reverse proxy via `x-gateway-secret`. Secondary headers like `x-internal-secret` are permanently removed and fail closed with 403 `forbidden`. Direct internet calls to Lambda URLs fail closed (403 `forbidden`). Dual-secret zero-downtime rotation is supported via comma-separated secrets in `INTERNAL_GATEWAY_SECRET` sent over `x-gateway-secret`.
 - **Boundary 3 (Storage Isolation):** User credentials, session tokens, and refresh token families are stored exclusively within the IdP database. Consumer applications never receive database credentials.
 
 ---
@@ -83,14 +83,28 @@ When `isPublic = false`, the application is an enterprise tenant:
 
 ---
 
-## 5. Administrative Authorization Separation
+## 5. Administrative Authorization Separation & Token Audience Rules
 
+### 5.1 Admin Role & Scope Model
 - **Super Administrator (`role: "admin"`, `scopedClientId: null`):** Authorized to manage global platform resources, register new clients, and provision administrators.
 - **Application Administrator (`role: "admin"`, `scopedClientId: "<clientId>"`):** Authorized to manage only their designated client. Scoped administrators cannot:
   - Modify or view other clients (Cross-Tenant Access Forbidden).
   - Mutate security boundary flags (`isDev`, `isPublic`).
   - Delete their application or any other application.
   - Access Super-Admin endpoints.
+  - Access the central platform management dashboard (`/admin/*`).
+
+### 5.2 Strict Bearer Token Audience Rules
+Management endpoints enforce strict audience matching on bearer tokens:
+1. **Central Platform Management APIs (`/api/admin/clients`, `/api/admin/stats`, `/api/admin/logs`, etc.):**
+   - Strictly require platform administrator audience (`AUTH_ISSUER` or `FRONTEND_URL`).
+   - Arbitrary registered OAuth client audiences are strictly rejected with 403 `forbidden`.
+2. **Application-Scoped Management APIs (`/api/admin/clients/:id`, `/app-admins`, `/users`):**
+   - Require either platform audience (for Super Admin) or the exact canonical client ID matching the managed resource.
+   - Cross-client audience or mismatched scoped administrator tokens are strictly rejected with 403 `forbidden`.
+3. **Anti-Escalation & Claims Trust Invariant:**
+   - Signed OAuth token claims are authoritative. Database fallback values CANNOT elevate a signed `role: "user"` token to `role: "admin"`.
+   - Scoped administrator tokens cannot escalate to global super admin. Conflicting tenant scopes between token claims and database records fail closed.
 
 ---
 

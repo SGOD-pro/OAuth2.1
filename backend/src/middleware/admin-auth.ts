@@ -25,8 +25,20 @@ export async function getIdpPublicKey(): Promise<any> {
 }
 
 /**
- * Helper to fetch session and user document once per request and cache on context `c`
+ * Helper to fetch session and user document once per request and cache on context `c`.
  * Supports Better Auth cookie sessions AND signed OAuth 2.1 RS256 Bearer tokens.
+ *
+ * TRUST MODEL:
+ * 1. RS256 Cryptographic Verification: Tokens must be signed by the IdP private key.
+ *    Symmetric (HS256) or unsigned (none) tokens are strictly rejected.
+ * 2. Strict Issuer Validation: Issuer must match config.auth.baseURL exactly.
+ * 3. Strict Audience Validation: Tokens must have a non-empty audience claim.
+ *    - Central platform management operations require platform administrator audience.
+ *    - Scoped application operations require matching canonical client audience.
+ * 4. Zero Privilege Escalation: Signed token claims can NEVER be elevated by database fallback.
+ *    A caller only possesses 'admin' if BOTH the signed token and database record agree.
+ * 5. Strict Tenant Scoping: Union of constraints. If either token or database scopes the user,
+ *    they are strictly constrained to that application and cannot act globally.
  */
 async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any } | null> {
   const existingUser = c.get("user");
@@ -46,9 +58,15 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
     });
 
+    if (userDoc && (userDoc.disabled === true || userDoc.isActive === false)) {
+      return null;
+    }
+
     const fullUser = { ...session.user, ...userDoc };
     c.set("user", fullUser);
     c.set("session", session.session);
+    c.set("authMethod", "session");
+    c.set("hasPlatformAudience", true);
 
     return { user: fullUser, session: session.session };
   }
@@ -70,46 +88,82 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
         issuer: config.auth.baseURL,
       });
 
-      // Strict Audience Validation
-      if (payload.aud) {
-        const audList = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-        const validAuds = new Set([
-          config.auth.baseURL,
-          config.frontendUrl,
-          "https://oauth21.vercel.app",
-        ]);
+      // Mandatory Subject Claim
+      const sub = payload.sub;
+      if (!sub || typeof sub !== "string" || sub.trim().length === 0) {
+        return null;
+      }
 
-        let audMatched = audList.some((a) => validAuds.has(a));
-        if (!audMatched) {
-          const database = await getDb();
-          const clientMatch = await database.collection("oauthClient").findOne({
-            $or: audList.map((a) => ({ clientId: a })),
-          });
-          if (clientMatch) {
-            audMatched = true;
-          }
-        }
+      // Mandatory Audience Claim
+      if (!payload.aud) {
+        return null;
+      }
+      const audList = (Array.isArray(payload.aud) ? payload.aud : [payload.aud])
+        .filter((a): a is string => typeof a === "string" && a.trim().length > 0);
+      if (audList.length === 0) {
+        return null;
+      }
 
-        if (!audMatched) {
-          return null; // Audience mismatch
+      const validPlatformAuds = new Set([
+        config.auth.baseURL,
+        config.frontendUrl,
+      ].filter(Boolean));
+
+      const hasPlatformAudience = audList.some((a) => validPlatformAuds.has(a));
+
+      const database = await getDb();
+
+      // Check if audience is recognized at all by this IdP (platform audience or registered OAuth client)
+      if (!hasPlatformAudience) {
+        const clientMatch = await database.collection("oauthClient").findOne({
+          $or: audList.map((a) => ({ clientId: a })),
+        });
+        if (!clientMatch) {
+          // Token audience is completely unregistered / unknown to this IdP
+          return null;
         }
       }
 
-      const sub = payload.sub;
-      if (!sub) return null;
-
-      const database = await getDb();
       const userDoc = await database.collection("user").findOne({
         $or: [{ id: sub }, { _id: sub }, { email: sub }],
       });
 
-      const role = (payload.role as string) || userDoc?.role || "user";
-      const scopedClientId = payload.scoped_client_id !== undefined
-        ? (payload.scoped_client_id as string | null)
-        : (userDoc?.scopedClientId || null);
+      // If user document exists, account must not be disabled
+      if (userDoc && (userDoc.disabled === true || userDoc.isActive === false)) {
+        return null;
+      }
+
+      // Role authorization:
+      // Signed token claims must NEVER be elevated by database fallback.
+      // If the token explicitly grants 'user' (or omits role), the caller cannot be elevated to 'admin'.
+      // If a database record exists, caller only possesses 'admin' if BOTH token and DB agree.
+      let role = "user";
+      if (payload.role === "admin") {
+        if (!userDoc || userDoc.role === "admin") {
+          role = "admin";
+        }
+      }
+
+      // Scoped application binding:
+      // Scoping is the union of constraints: if either the signed token or the database
+      // specifies a scoped client ID, the caller is strictly constrained to that tenant.
+      // A scoped admin can NEVER escalate to Global Super Admin (null/unscoped).
+      const tokenScope = typeof payload.scoped_client_id === "string" && payload.scoped_client_id.trim().length > 0
+        ? payload.scoped_client_id.trim()
+        : null;
+      const dbScope = typeof userDoc?.scopedClientId === "string" && userDoc.scopedClientId.trim().length > 0
+        ? userDoc.scopedClientId.trim()
+        : null;
+
+      if (tokenScope && dbScope && tokenScope !== dbScope) {
+        // Cross-tenant identity conflict: token scope and user document scope conflict
+        return null;
+      }
+
+      const scopedClientId = tokenScope || dbScope || null;
 
       const fullUser = {
-        ...(userDoc || {}),
+        ...userDoc,
         id: sub,
         role,
         scopedClientId,
@@ -117,6 +171,9 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
 
       c.set("user", fullUser);
       c.set("session", { id: `token-${sub}`, userId: sub });
+      c.set("authMethod", "bearer");
+      c.set("tokenAudList", audList);
+      c.set("hasPlatformAudience", hasPlatformAudience);
 
       return { user: fullUser, session: { id: `token-${sub}`, userId: sub } };
     } catch {
@@ -137,7 +194,10 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
  * - Missing configured gateway secret => FAILS (false)
  * - Missing or invalid header => FAILS (false)
  * - Valid secret => SUCCEEDS (true)
- * Never allows missing secret to result in a trusted request.
+ *
+ * STRICT GATEWAY HEADER CONTRACT:
+ * Only 'x-gateway-secret' is accepted. Secondary headers like 'x-internal-secret'
+ * are strictly forbidden and return 403 Forbidden.
  */
 function verifyGatewaySecret(c: any): boolean {
   try {
@@ -145,7 +205,9 @@ function verifyGatewaySecret(c: any): boolean {
     if (!configuredSecret || typeof configuredSecret !== "string" || configuredSecret.trim().length === 0) {
       return false;
     }
-    const gatewayHeader = c.req.header("x-gateway-secret") || c.req.header("x-internal-secret");
+
+    // STRICT GATEWAY HEADER ENFORCEMENT: Only 'x-gateway-secret' is accepted.
+    const gatewayHeader = c.req.header("x-gateway-secret");
     if (!gatewayHeader || typeof gatewayHeader !== "string") {
       return false;
     }
@@ -155,6 +217,10 @@ function verifyGatewaySecret(c: any): boolean {
       .split(",")
       .map((s) => s.trim())
       .filter((s) => s.length >= 32);
+
+    if (allowedSecrets.length === 0) {
+      return false;
+    }
 
     for (const secret of allowedSecrets) {
       if (timingSafeEqualStr(gatewayHeader, secret)) {
@@ -244,6 +310,21 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
     );
   }
 
+  // 5. Strict Bearer Token Audience Validation for Central Platform Management APIs:
+  // Must possess platform administrator audience. Arbitrary registered client IDs are strictly rejected.
+  if (c.get("authMethod") === "bearer") {
+    const hasPlatformAud = c.get("hasPlatformAudience");
+    if (!hasPlatformAud) {
+      return c.json(
+        {
+          error: "forbidden",
+          message: "Token audience invalid: Central platform management APIs require platform administrator audience",
+        },
+        403
+      );
+    }
+  }
+
   return next();
 });
 
@@ -282,20 +363,46 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
     );
   }
 
-  // 5. Enforce Scoped Tenant Boundaries
+  // 5. Enforce Scoped Tenant Boundaries & Audience Matching
   const scopedClientId = auth.user?.scopedClientId;
   const targetClientId = c.req.param("id") || c.req.param("clientId");
 
-  // If user is scoped to a specific application, resolve canonical tenant identity first
-  if (scopedClientId && targetClientId) {
-    const database = await getDb();
+  const database = await getDb();
+  let canonicalTargetId: string | null = null;
+  if (targetClientId) {
     const resolvedClient = await resolveOAuthClient(database, targetClientId);
-    const canonicalTargetId = resolvedClient ? resolvedClient.clientId : targetClientId;
+    canonicalTargetId = resolvedClient ? resolvedClient.clientId : targetClientId;
+  }
+
+  // If user is scoped to a specific application, resolve canonical tenant identity first
+  if (scopedClientId && canonicalTargetId) {
     if (canonicalTargetId !== scopedClientId) {
       return c.json(
         {
           error: "forbidden",
           message: "Cross-tenant access forbidden: you can only manage your own assigned application",
+        },
+        403
+      );
+    }
+  }
+
+  // Strict Bearer Token Audience Validation for Scoped Management APIs:
+  if (c.get("authMethod") === "bearer" && canonicalTargetId) {
+    const isGlobal = isSuperAdmin(auth.user);
+    const hasPlatformAud = c.get("hasPlatformAudience");
+    const tokenAudList: string[] = c.get("tokenAudList") || [];
+
+    // Valid audience for scoped API:
+    // Either platform audience (for global super admin), OR the exact target client ID
+    const audMatchesTarget = tokenAudList.includes(canonicalTargetId);
+    const isAllowedAudience = (isGlobal && hasPlatformAud) || audMatchesTarget;
+
+    if (!isAllowedAudience) {
+      return c.json(
+        {
+          error: "forbidden",
+          message: `Token audience invalid: bearer token audience does not match target application '${canonicalTargetId}'`,
         },
         403
       );
