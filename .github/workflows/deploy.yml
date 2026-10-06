@@ -7,6 +7,8 @@ on:
     paths:
       - 'backend/**'
       - 'frontend/**'
+      - 'scripts/**'
+      - 'vercel.template.json'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
@@ -75,7 +77,7 @@ jobs:
           echo "Changed files in this push:"
           echo "$CHANGED_FILES"
 
-          if echo "$CHANGED_FILES" | grep -qE '^(backend/|\.github/workflows/deploy\.yml)'; then
+          if echo "$CHANGED_FILES" | grep -qE '^(backend/|scripts/|\.github/workflows/deploy\.yml)'; then
             echo "Backend changes detected."
             echo "deploy_backend=true" >> "$GITHUB_OUTPUT"
           else
@@ -83,7 +85,7 @@ jobs:
             echo "deploy_backend=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if echo "$CHANGED_FILES" | grep -qE '^(frontend/|\.github/workflows/deploy\.yml)'; then
+          if echo "$CHANGED_FILES" | grep -qE '^(frontend/|scripts/|vercel\.template\.json|\.github/workflows/deploy\.yml)'; then
             echo "Frontend changes detected."
             echo "deploy_frontend=true" >> "$GITHUB_OUTPUT"
           else
@@ -310,7 +312,18 @@ jobs:
           STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/ || true)
           echo "Frontend probe returned HTTP $STATUS"
           if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 400 ]; then
-            echo "Frontend probe successful (HTTP $STATUS)."
-            exit 0
+            echo "Frontend root probe successful (HTTP $STATUS)."
+          else
+            echo "ERROR: Frontend probe returned non-2xx/3xx HTTP code: $STATUS"
+            exit 1
           fi
-          echo "WARN: Frontend probe returned non-2xx/3xx HTTP code: $STATUS"
+
+          echo "Probing production OIDC discovery endpoint..."
+          DISC_STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/.well-known/openid-configuration || true)
+          echo "Discovery probe returned HTTP $DISC_STATUS"
+          if [ "$DISC_STATUS" -eq 200 ]; then
+            echo "OIDC discovery probe successful (HTTP 200)."
+          else
+            echo "ERROR: OIDC discovery probe returned non-200 code: $DISC_STATUS"
+            exit 1
+          fi
