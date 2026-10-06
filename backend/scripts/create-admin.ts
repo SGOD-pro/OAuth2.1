@@ -43,6 +43,7 @@ async function run() {
       {
         $set: {
           role: "admin",
+          scopedClientId: null,
           emailVerified: true,
           updatedAt: now,
         },
@@ -58,6 +59,7 @@ async function run() {
       email,
       emailVerified: true,
       role: "admin",
+      scopedClientId: null,
       banned: false,
       createdAt: now,
       updatedAt: now,

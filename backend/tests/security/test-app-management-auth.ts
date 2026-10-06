@@ -515,6 +515,68 @@ await runTest("DIRECT-4: Direct POST /api/auth/oauth2/delete-client is strictly 
   assert.equal(res.status, 403, "Direct delete-client must return 403");
 });
 
+// ==========================================================================
+// SUITE 5: STRICT GLOBAL VS SCOPED ADMIN INVARIANTS (EMPTY/UNDEFINED SCOPE)
+// ==========================================================================
+
+await runTest("STRICT-1: Admin with scopedClientId: '' (empty string) CANNOT create application (403)", async () => {
+  const emptyScopeEmail = `empty_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const emptyScopePass = "EmptyScopePass@1234!";
+  await authProvider.api.signUpEmail({
+    body: { email: emptyScopeEmail, password: emptyScopePass, name: "Empty Scope Admin" },
+  });
+  await db.collection("user").updateOne(
+    { email: emptyScopeEmail },
+    { $set: { role: "admin", scopedClientId: "", emailVerified: true } }
+  );
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: emptyScopeEmail, password: emptyScopePass }),
+  });
+  assert.equal(loginRes.status, 200);
+  const cookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: cookie }),
+    body: JSON.stringify({
+      client_name: "Illegal App",
+      redirect_uris: ["http://localhost:3000/callback"],
+    }),
+  });
+  assert.equal(res.status, 403, "Empty string scopedClientId must fail closed and return 403");
+});
+
+await runTest("STRICT-2: Admin with scopedClientId: undefined CANNOT create application (403)", async () => {
+  const undefScopeEmail = `undef_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const undefScopePass = "UndefScopePass@1234!";
+  await authProvider.api.signUpEmail({
+    body: { email: undefScopeEmail, password: undefScopePass, name: "Undef Scope Admin" },
+  });
+  await db.collection("user").updateOne(
+    { email: undefScopeEmail },
+    { $set: { role: "admin", emailVerified: true }, $unset: { scopedClientId: "" } }
+  );
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: undefScopeEmail, password: undefScopePass }),
+  });
+  assert.equal(loginRes.status, 200);
+  const cookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  const res = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: cookie }),
+    body: JSON.stringify({
+      client_name: "Illegal App 2",
+      redirect_uris: ["http://localhost:3000/callback"],
+    }),
+  });
+  assert.equal(res.status, 403, "Undefined scopedClientId must fail closed and return 403");
+});
+
 console.log("================================================================");
 console.log(`  APPLICATION MANAGEMENT AUTH RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");

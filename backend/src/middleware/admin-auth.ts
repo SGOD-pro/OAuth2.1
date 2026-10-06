@@ -62,7 +62,20 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       return null;
     }
 
-    const fullUser = { ...session.user, ...userDoc };
+    let scopedClientId: string | null | undefined;
+    if (userDoc?.scopedClientId === null) {
+      scopedClientId = null;
+    } else if (typeof userDoc?.scopedClientId === "string" && userDoc.scopedClientId.trim().length > 0) {
+      scopedClientId = userDoc.scopedClientId.trim();
+    } else {
+      scopedClientId = undefined;
+    }
+
+    const fullUser = {
+      ...session.user,
+      ...userDoc,
+      scopedClientId,
+    };
     c.set("user", fullUser);
     c.set("session", session.session);
     c.set("authMethod", "session");
@@ -148,19 +161,45 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       // Scoping is the union of constraints: if either the signed token or the database
       // specifies a scoped client ID, the caller is strictly constrained to that tenant.
       // A scoped admin can NEVER escalate to Global Super Admin (null/unscoped).
-      const tokenScope = typeof payload.scoped_client_id === "string" && payload.scoped_client_id.trim().length > 0
-        ? payload.scoped_client_id.trim()
-        : null;
-      const dbScope = typeof userDoc?.scopedClientId === "string" && userDoc.scopedClientId.trim().length > 0
-        ? userDoc.scopedClientId.trim()
-        : null;
+      let tokenScope: string | null | undefined;
+      if (payload.scoped_client_id === null) {
+        tokenScope = null;
+      } else if (typeof payload.scoped_client_id === "string") {
+        const trimmed = payload.scoped_client_id.trim();
+        tokenScope = trimmed.length > 0 ? trimmed : undefined;
+      } else {
+        tokenScope = undefined;
+      }
 
-      if (tokenScope && dbScope && tokenScope !== dbScope) {
+      let dbScope: string | null | undefined;
+      if (userDoc) {
+        if (userDoc.scopedClientId === null) {
+          dbScope = null;
+        } else if (typeof userDoc.scopedClientId === "string") {
+          const trimmed = userDoc.scopedClientId.trim();
+          dbScope = trimmed.length > 0 ? trimmed : undefined;
+        } else {
+          dbScope = undefined;
+        }
+      } else {
+        dbScope = null;
+      }
+
+      if (typeof tokenScope === "string" && typeof dbScope === "string" && tokenScope !== dbScope) {
         // Cross-tenant identity conflict: token scope and user document scope conflict
         return null;
       }
 
-      const scopedClientId = tokenScope || dbScope || null;
+      let scopedClientId: string | null | undefined;
+      if (typeof tokenScope === "string") {
+        scopedClientId = tokenScope;
+      } else if (typeof dbScope === "string") {
+        scopedClientId = dbScope;
+      } else if (tokenScope === null && dbScope === null) {
+        scopedClientId = null;
+      } else {
+        scopedClientId = undefined;
+      }
 
       const fullUser = {
         ...userDoc,
@@ -246,6 +285,25 @@ export const requireGatewayTrust = createMiddleware(async (c, next) => {
   return next();
 });
 
+export function extractTargetClientId(c: any): string | null {
+  const paramId = c.req.param("id") || c.req.param("clientId");
+  if (paramId && typeof paramId === "string" && paramId.trim().length > 0) {
+    return paramId.trim();
+  }
+
+  const path = c.req.path || "";
+  const clientsMatch = path.match(/^\/api\/admin\/clients\/([^\/?#]+)/);
+  if (clientsMatch && clientsMatch[1]) {
+    return decodeURIComponent(clientsMatch[1]).trim();
+  }
+  const appMatch = path.match(/^\/api\/admin\/app\/([^\/?#]+)/);
+  if (appMatch && appMatch[1]) {
+    return decodeURIComponent(appMatch[1]).trim();
+  }
+
+  return null;
+}
+
 export const requireAdmin = createMiddleware(async (c, next) => {
   // 1. Enforce Gateway Trust Boundary
   if (!verifyGatewaySecret(c)) {
@@ -267,12 +325,31 @@ export const requireAdmin = createMiddleware(async (c, next) => {
     return c.json({ error: "Admin access required" }, 403);
   }
 
+  // 4. Strict Bearer-Token Audience Validation for Central Platform Management APIs:
+  // Privileged central management APIs must NOT accept arbitrary registered client audiences.
+  if (c.get("authMethod") === "bearer") {
+    const targetClientId = extractTargetClientId(c);
+
+    if (!targetClientId) {
+      const hasPlatformAud = c.get("hasPlatformAudience");
+      if (!hasPlatformAud) {
+        return c.json(
+          {
+            error: "forbidden",
+            message: "Token audience invalid: Central platform management APIs require platform administrator audience",
+          },
+          403
+        );
+      }
+    }
+  }
+
   return next();
 });
 
 export function isSuperAdmin(user: any): boolean {
   if (!user) return false;
-  return user.role === "admin" && (user.scopedClientId == null || user.scopedClientId === "");
+  return user.role === "admin" && user.scopedClientId === null;
 }
 
 /**
@@ -364,19 +441,29 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
   }
 
   // 5. Enforce Scoped Tenant Boundaries & Audience Matching
-  const scopedClientId = auth.user?.scopedClientId;
-  const targetClientId = c.req.param("id") || c.req.param("clientId");
-
-  const database = await getDb();
-  let canonicalTargetId: string | null = null;
-  if (targetClientId) {
-    const resolvedClient = await resolveOAuthClient(database, targetClientId);
-    canonicalTargetId = resolvedClient ? resolvedClient.clientId : targetClientId;
+  const targetClientId = extractTargetClientId(c);
+  if (!targetClientId) {
+    return c.json(
+      { error: "forbidden", message: "Target application client ID is required for scoped admin operations" },
+      403
+    );
   }
 
-  // If user is scoped to a specific application, resolve canonical tenant identity first
-  if (scopedClientId && canonicalTargetId) {
-    if (canonicalTargetId !== scopedClientId) {
+  const database = await getDb();
+  const resolvedClient = await resolveOAuthClient(database, targetClientId);
+  const canonicalTargetId = resolvedClient ? resolvedClient.clientId : targetClientId;
+
+  const isGlobal = isSuperAdmin(auth.user);
+  const rawScopedId = auth.user?.scopedClientId;
+  const scopedClientId = typeof rawScopedId === "string" && rawScopedId.trim().length > 0
+    ? rawScopedId.trim()
+    : null;
+
+  // Strict Scoped Admin Semantics:
+  // Must be either a verified global super admin (scopedClientId === null)
+  // OR a verified scoped admin whose scopedClientId matches the canonicalTargetId.
+  if (!isGlobal) {
+    if (!scopedClientId || scopedClientId !== canonicalTargetId) {
       return c.json(
         {
           error: "forbidden",
@@ -388,13 +475,10 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
   }
 
   // Strict Bearer Token Audience Validation for Scoped Management APIs:
-  if (c.get("authMethod") === "bearer" && canonicalTargetId) {
-    const isGlobal = isSuperAdmin(auth.user);
+  if (c.get("authMethod") === "bearer") {
     const hasPlatformAud = c.get("hasPlatformAudience");
     const tokenAudList: string[] = c.get("tokenAudList") || [];
 
-    // Valid audience for scoped API:
-    // Either platform audience (for global super admin), OR the exact target client ID
     const audMatchesTarget = tokenAudList.includes(canonicalTargetId);
     const isAllowedAudience = (isGlobal && hasPlatformAud) || audMatchesTarget;
 

@@ -392,7 +392,17 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
 
   const email = body.email.toLowerCase().trim();
   const name = body.name || email.split("@")[0];
-  const scopedClientId = body.clientId || body.scopedClientId || null;
+  const rawClientId = body.clientId ?? body.scopedClientId;
+  let scopedClientId: string | null = null;
+  if (typeof rawClientId === "string") {
+    const trimmed = rawClientId.trim();
+    if (trimmed.length === 0) {
+      return c.json({ error: "Invalid clientId: cannot be empty string" }, 400);
+    }
+    scopedClientId = trimmed;
+  } else if (rawClientId !== null && rawClientId !== undefined) {
+    return c.json({ error: "Invalid clientId format" }, 400);
+  }
 
   // Generate secure random temp password if not provided
   let password = body.password;

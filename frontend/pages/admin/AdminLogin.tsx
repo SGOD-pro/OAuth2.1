@@ -56,9 +56,9 @@ export const AdminLogin: React.FC = () => {
 
   useEffect(() => {
     if (!isPending && user) {
-      if (user.role === 'admin' && !user.scopedClientId) {
+      if (user.role === 'admin' && user.scopedClientId === null) {
         navigate('/admin', { replace: true });
-      } else if (user.role === 'admin' && user.scopedClientId) {
+      } else if (user.role === 'admin' && user.scopedClientId !== null) {
         void authClient.signOut({});
         const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
         setError(msg);
@@ -113,7 +113,7 @@ export const AdminLogin: React.FC = () => {
         return;
       }
 
-      if (scopedClientId) {
+      if (scopedClientId !== null) {
         await authClient.signOut({});
         const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
         setError(msg);
@@ -172,7 +172,7 @@ export const AdminLogin: React.FC = () => {
               </p>
             </div>
 
-            {isAuthenticated && (role !== 'admin' || Boolean(user?.scopedClientId)) ? (
+            {isAuthenticated && (role !== 'admin' || user?.scopedClientId !== null) ? (
               <div className="space-y-4">
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3.5">
                   <h4 className="font-sans text-xs font-medium text-destructive">Access Restricted</h4>

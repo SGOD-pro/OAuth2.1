@@ -181,7 +181,7 @@ export const authProvider = betterAuth({
             // Security: Strictly disable dynamic client registration and enforce Super-Admin only privileges
             allowDynamicClientRegistration: false,
             clientPrivileges: async ({ user }: any) => {
-                return Boolean(user && user.role === "admin" && (user.scopedClientId == null || user.scopedClientId === ""));
+                return Boolean(user && user.role === "admin" && user.scopedClientId === null);
             },
 
             accessToken: {

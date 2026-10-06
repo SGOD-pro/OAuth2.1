@@ -162,7 +162,7 @@ export function isSuperAdmin(user: any): boolean {
     return Boolean(
         user &&
         user.role === "admin" &&
-        (user.scopedClientId == null || user.scopedClientId === "")
+        user.scopedClientId === null
     );
 }
 

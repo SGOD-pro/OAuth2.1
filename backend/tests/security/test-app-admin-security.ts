@@ -535,6 +535,46 @@ try {
     assert.equal(res.status, 401, "Token with missing sub claim must return 401");
   });
 
+  // Case O: Cross-application bearer token (aud = clientB_id) accessing clientA endpoint is strictly rejected (HTTP 403)
+  await runTest("CASE-O: Cross-application audience token (aud = clientB_id) accessing clientA endpoint is strictly rejected (HTTP 403)", async () => {
+    const crossAudToken = await signTestToken(
+      { sub: "admin-user-id-a", role: "admin", scoped_client_id: clientA_id },
+      { audience: clientB_id }
+    );
+    const res = await app.request(`/api/admin/clients/${clientA_id}`, {
+      method: "PATCH",
+      headers: getTestHeaders({ Authorization: `Bearer ${crossAudToken}` }),
+      body: JSON.stringify({ client_name: "Cross-Audience Exploit" }),
+    });
+    assert.equal(res.status, 403, "Cross-application audience must be strictly denied with 403");
+  });
+
+  // Case P: Token with scoped_client_id: "" (empty string) fails closed and CANNOT act as Global Super Admin (HTTP 403)
+  await runTest("CASE-P: Token with scoped_client_id: '' (empty string) fails closed and CANNOT act as Global Super Admin (HTTP 403)", async () => {
+    const emptyScopeToken = await signTestToken(
+      { sub: "untrusted-admin-id", role: "admin", scoped_client_id: "" },
+      { audience: config.auth.baseURL }
+    );
+    const res = await app.request("/api/admin/clients", {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${emptyScopeToken}` }),
+    });
+    assert.equal(res.status, 403, "Empty string scope token must not evaluate to super admin");
+  });
+
+  // Case Q: Token with scoped_client_id: undefined fails closed and CANNOT act as Global Super Admin (HTTP 403)
+  await runTest("CASE-Q: Token with scoped_client_id: undefined fails closed and CANNOT act as Global Super Admin (HTTP 403)", async () => {
+    const undefinedScopeToken = await signTestToken(
+      { sub: "untrusted-admin-id", role: "admin" },
+      { audience: config.auth.baseURL }
+    );
+    const res = await app.request("/api/admin/clients", {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${undefinedScopeToken}` }),
+    });
+    assert.equal(res.status, 403, "Undefined scope token must not evaluate to super admin");
+  });
+
   // Remove test JWK so Better Auth uses its legitimate JWKS key for subsequent user creations
   await db.collection("jwks").deleteOne({ _id: testJwkDocId });
 

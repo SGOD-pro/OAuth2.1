@@ -24,12 +24,13 @@
 - [ ] Run `cd backend && ./deploy.sh` (or `sam deploy --guided --profile aws`).
 - [ ] Confirm stack deployment succeeds.
 - [ ] Copy the generated **Lambda Function URL** (e.g., `https://<id>.lambda-url.<region>.on.aws/`).
-- [ ] Verify backend health check by calling `curl https://<id>.lambda-url.<region>.on.aws/` (should return `{"message": "Health check", "status": "ok"}`).
+- [ ] Verify backend health check by calling `curl https://<id>.lambda-url.<region>.on.aws/health` (should return `{"status": "ok", "timestamp": "..."}`). Note: management endpoints strictly require the `x-gateway-secret` header.
 
 ## 4. Frontend Deployment (Vercel)
 - [ ] Connect repo to Vercel with Root Directory set to `frontend`.
+- [ ] Configure `INTERNAL_GATEWAY_SECRET` environment variable in Vercel Project Settings matching AWS Lambda configuration.
 - [ ] Set `VITE_AUTH_URL` environment variable in Vercel to the Lambda Function URL (`https://<id>.lambda-url.<region>.on.aws`).
-- [ ] Ensure `vercel.json` rewrite rules are present in `frontend/vercel.json`.
+- [ ] Untracked `vercel.json` deployment configuration is generated automatically at build time via `node scripts/prepare-vercel-config.mjs` (never committed to Git).
 - [ ] Deploy and copy the production frontend URL (e.g., `https://oauth21.vercel.app`).
 
 ## 5. Cloud & OAuth Configuration Alignment
