@@ -2,7 +2,16 @@ import { Hono } from "hono";
 import crypto from "crypto";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
-import { getHeaders, isStrongPassword, validateRedirectUris, validateOAuthClientConfiguration, getTrustedClientIp, resolveOAuthClient } from "../utils/security";
+import {
+  getHeaders,
+  isStrongPassword,
+  validateRedirectUris,
+  validateOAuthClientConfiguration,
+  getTrustedClientIp,
+  resolveOAuthClient,
+  deriveAllowedOriginsFromRedirectUris,
+  normalizeOAuthClientFields,
+} from "../utils/security";
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
 import { requireAdmin, requireSuperAdmin, requireScopedAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
@@ -55,19 +64,11 @@ admin.get("/clients", requireSuperAdmin, async (c) => {
       const rawUpdateDate = rest.updatedAt || rest.updated_at || rawDate;
       const updatedAtIso = rawUpdateDate instanceof Date ? rawUpdateDate.toISOString() : (typeof rawUpdateDate === "string" ? rawUpdateDate : new Date(rawUpdateDate).toISOString());
 
+      const normalized = normalizeOAuthClientFields({ ...doc, ...rest, id: canonicalClientId, clientId: canonicalClientId });
       return {
-        ...rest,
+        ...normalized,
         client_id: canonicalClientId,
-        client_name: rest.name || rest.client_name || "Application",
-        redirect_uris: rest.redirectUris || rest.redirect_uris || doc.redirectUris || doc.redirect_uris || [],
-        redirectUris: rest.redirectUris || rest.redirect_uris || doc.redirectUris || doc.redirect_uris || [],
-        allowed_origins: rest.allowedOrigins || rest.allowed_origins || doc.allowedOrigins || doc.allowed_origins || [],
-        allowedOrigins: rest.allowedOrigins || rest.allowed_origins || doc.allowedOrigins || doc.allowed_origins || [],
-        disabled: Boolean(rest.disabled),
-        is_dev: Boolean(rest.isDev || rest.is_dev),
-        is_public: doc.isPublic !== false && doc.is_public !== false,
-        isPublic: doc.isPublic !== false && doc.is_public !== false,
-        skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
+        clientId: canonicalClientId,
         adminEmail: rest.adminEmail || rest.admin_email || null,
         adminUserId: rest.adminUserId || rest.admin_user_id || null,
         has_custom_admins: hasCustomAdmins,
@@ -104,7 +105,10 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
   }
 
   const redirectUris = (body.redirect_uris || body.redirectUris || []) as string[];
-  const allowedOrigins = (body.allowed_origins || body.allowedOrigins || []) as string[];
+  let allowedOrigins = (body.allowed_origins || body.allowedOrigins || []) as string[];
+  if (allowedOrigins.length === 0 && redirectUris.length > 0) {
+    allowedOrigins = deriveAllowedOriginsFromRedirectUris(redirectUris);
+  }
   const isPublic = typeof body.isPublic === "boolean" ? body.isPublic : (typeof body.is_public === "boolean" ? body.is_public : true);
 
   if (allowedOrigins.length === 0) {
@@ -134,6 +138,7 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
 
   // application_type is strictly security-derived; request body cannot override
   const applicationType = validation.effectiveApplicationType;
+  const effectiveOrigins = validation.effectiveAllowedOrigins.length > 0 ? validation.effectiveAllowedOrigins : allowedOrigins;
 
   const createBody: any = {
     client_name: clientName,
@@ -142,7 +147,7 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     skip_consent: Boolean(body.skip_consent ?? body.skipConsent),
     enable_end_session: body.enable_end_session !== false && body.enableEndSession !== false,
     metadata: {
-      allowedOrigins,
+      allowedOrigins: effectiveOrigins,
       isDev,
     },
   };
@@ -173,8 +178,8 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     { $or: [{ clientId }, { id: clientId }, { client_id: clientId }] },
     {
       $set: {
-        allowedOrigins,
-        allowed_origins: allowedOrigins,
+        allowedOrigins: effectiveOrigins,
+        allowed_origins: effectiveOrigins,
         redirectUris,
         redirect_uris: redirectUris,
         isDev,
@@ -193,8 +198,8 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     { $set: { createdAt: now } }
   );
 
-  if (allowedOrigins.length > 0) {
-    await invalidateOriginCache(allowedOrigins);
+  if (effectiveOrigins.length > 0) {
+    await invalidateOriginCache(effectiveOrigins);
   }
 
   await recordAdminAudit({
@@ -214,7 +219,9 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     client_secret: result.client_secret || result.clientSecret,
     client_name: clientName,
     redirect_uris: redirectUris,
-    allowed_origins: allowedOrigins,
+    redirectUris: redirectUris,
+    allowed_origins: effectiveOrigins,
+    allowedOrigins: effectiveOrigins,
     is_dev: isDev,
     is_public: isPublic,
     isPublic: isPublic,
@@ -535,17 +542,10 @@ admin.get("/clients/:id", requireScopedAdmin, async (c) => {
     const rawUpdateDate = rest.updatedAt || rest.updated_at || rawDate;
     const updatedAtIso = rawUpdateDate instanceof Date ? rawUpdateDate.toISOString() : (typeof rawUpdateDate === "string" ? rawUpdateDate : new Date(rawUpdateDate).toISOString());
 
+    const normalized = normalizeOAuthClientFields({ ...clientDoc, ...rest, id: rest.clientId || rest.client_id || rest.id || String(_id) });
     return c.json({
-      ...rest,
-      client_id: rest.clientId || rest.client_id || rest.id || String(_id),
-      client_name: rest.name || rest.client_name || "Application",
-      redirect_uris: rest.redirectUris || rest.redirect_uris || clientDoc.redirectUris || clientDoc.redirect_uris || [],
-      redirectUris: rest.redirectUris || rest.redirect_uris || clientDoc.redirectUris || clientDoc.redirect_uris || [],
-      allowed_origins: rest.allowedOrigins || rest.allowed_origins || clientDoc.allowedOrigins || clientDoc.allowed_origins || [],
-      allowedOrigins: rest.allowedOrigins || rest.allowed_origins || clientDoc.allowedOrigins || clientDoc.allowed_origins || [],
-      disabled: Boolean(rest.disabled),
-      is_dev: Boolean(rest.isDev || rest.is_dev),
-      skip_consent: Boolean(rest.skipConsent || rest.skip_consent),
+      ...normalized,
+      client_id: normalized.clientId,
       createdAt: createdAtIso,
       created_at: createdAtIso,
       updatedAt: updatedAtIso,
@@ -605,9 +605,13 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     : ((oldClient.redirectUris || oldClient.redirect_uris || []) as string[]);
 
   const hasNewAllowedOrigins = Array.isArray(body.allowed_origins || body.allowedOrigins) && (body.allowed_origins || body.allowedOrigins).length > 0;
-  const targetAllowedOrigins: string[] = hasNewAllowedOrigins
+  let targetAllowedOrigins: string[] = hasNewAllowedOrigins
     ? ((body.allowed_origins || body.allowedOrigins) as string[])
     : ((oldClient.allowedOrigins || oldClient.allowed_origins || []) as string[]);
+
+  if (targetAllowedOrigins.length === 0 && targetRedirectUris.length > 0) {
+    targetAllowedOrigins = deriveAllowedOriginsFromRedirectUris(targetRedirectUris);
+  }
 
   const targetIsDev = isSuperAdmin(sessionUser) && typeof (body.isDev ?? body.is_dev) === "boolean"
     ? Boolean(body.isDev ?? body.is_dev)
@@ -671,7 +675,7 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
 
   // Fallback / sync direct update to DB for custom fields (allowedOrigins, isDev, etc.)
   const dbUpdates: any = { updatedAt: new Date() };
-  if (hasNewAllowedOrigins) {
+  if (hasNewAllowedOrigins || (hasNewRedirectUris && targetAllowedOrigins.length > 0)) {
     dbUpdates.allowedOrigins = targetAllowedOrigins;
     dbUpdates.allowed_origins = targetAllowedOrigins;
   }
@@ -713,7 +717,7 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   if (oldClient && Array.isArray(oldClient.allowed_origins)) {
     oldClient.allowed_origins.forEach((o: string) => originsToInvalidate.add(o));
   }
-  if (hasNewAllowedOrigins) {
+  if (hasNewAllowedOrigins || (hasNewRedirectUris && targetAllowedOrigins.length > 0)) {
     targetAllowedOrigins.forEach((o: string) => originsToInvalidate.add(o));
   }
   if (originsToInvalidate.size > 0) {
@@ -741,21 +745,36 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     timestamp: new Date(),
   });
 
-  const finalResult = {
+  const docIdStr = updatedDoc?._id ? String(updatedDoc._id) : "";
+  const createdDate = updatedDoc?.createdAt instanceof Date
+    ? updatedDoc.createdAt.toISOString()
+    : typeof updatedDoc?.createdAt === "string"
+      ? updatedDoc.createdAt
+      : (docIdStr && ObjectId.isValid(docIdStr))
+        ? new ObjectId(docIdStr).getTimestamp().toISOString()
+        : new Date().toISOString();
+  const updatedDate = updatedDoc?.updatedAt instanceof Date
+    ? updatedDoc.updatedAt.toISOString()
+    : typeof updatedDoc?.updatedAt === "string"
+      ? updatedDoc.updatedAt
+      : new Date().toISOString();
+
+  const normalized = normalizeOAuthClientFields({
     ...(result || {}),
     ...(updatedDoc || {}),
-    client_id: updatedDoc?.clientId || id,
-    client_name: updatedDoc?.name || result?.client_name || "Application",
-    redirect_uris: updatedDoc?.redirectUris || targetRedirectUris || [],
-    allowed_origins: updatedDoc?.allowedOrigins || targetAllowedOrigins || [],
-    disabled: Boolean(updatedDoc?.disabled),
-    is_dev: Boolean(updatedDoc?.isDev),
-    skip_consent: Boolean(updatedDoc?.skipConsent),
-    enable_end_session: Boolean(updatedDoc?.enableEndSession ?? true),
-    createdAt: (updatedDoc?.createdAt instanceof Date ? updatedDoc.createdAt.toISOString() : (typeof updatedDoc?.createdAt === "string" ? updatedDoc.createdAt : (ObjectId.isValid(updatedDoc?._id) ? new ObjectId(updatedDoc._id).getTimestamp().toISOString() : new Date().toISOString()))),
-    created_at: (updatedDoc?.createdAt instanceof Date ? updatedDoc.createdAt.toISOString() : (typeof updatedDoc?.createdAt === "string" ? updatedDoc.createdAt : (ObjectId.isValid(updatedDoc?._id) ? new ObjectId(updatedDoc._id).getTimestamp().toISOString() : new Date().toISOString()))),
-    updatedAt: (updatedDoc?.updatedAt instanceof Date ? updatedDoc.updatedAt.toISOString() : (typeof updatedDoc?.updatedAt === "string" ? updatedDoc.updatedAt : new Date().toISOString())),
-    updated_at: (updatedDoc?.updatedAt instanceof Date ? updatedDoc.updatedAt.toISOString() : (typeof updatedDoc?.updatedAt === "string" ? updatedDoc.updatedAt : new Date().toISOString())),
+    id: updatedDoc?.clientId || id,
+    clientId: updatedDoc?.clientId || id,
+    redirectUris: updatedDoc?.redirectUris || targetRedirectUris || [],
+    allowedOrigins: updatedDoc?.allowedOrigins || targetAllowedOrigins || [],
+  });
+
+  const finalResult = {
+    ...normalized,
+    client_id: normalized.clientId,
+    createdAt: createdDate,
+    created_at: createdDate,
+    updatedAt: updatedDate,
+    updated_at: updatedDate,
   };
 
   const { client_secret: _omit, clientSecret: _omit2, _id: _omit3, ...safeResult } = finalResult as any;
@@ -821,9 +840,13 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
     : ((oldClient.redirectUris || oldClient.redirect_uris || []) as string[]);
 
   const hasNewAllowedOrigins = Array.isArray(body.allowed_origins || body.allowedOrigins) && (body.allowed_origins || body.allowedOrigins).length > 0;
-  const targetAllowedOrigins: string[] = hasNewAllowedOrigins
+  let targetAllowedOrigins: string[] = hasNewAllowedOrigins
     ? ((body.allowed_origins || body.allowedOrigins) as string[])
     : ((oldClient.allowedOrigins || oldClient.allowed_origins || []) as string[]);
+
+  if (targetAllowedOrigins.length === 0 && targetRedirectUris.length > 0) {
+    targetAllowedOrigins = deriveAllowedOriginsFromRedirectUris(targetRedirectUris);
+  }
 
   const targetIsDev = isSuperAdmin(sessionUser) && typeof (body.is_dev ?? body.isDev) === "boolean"
     ? Boolean(body.is_dev ?? body.isDev)
@@ -870,7 +893,7 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
     safeUpdate.redirect_uris = targetRedirectUris;
     safeUpdate.redirectUris = targetRedirectUris;
   }
-  if (hasNewAllowedOrigins) {
+  if (hasNewAllowedOrigins || (hasNewRedirectUris && targetAllowedOrigins.length > 0)) {
     safeUpdate.allowed_origins = targetAllowedOrigins;
     safeUpdate.allowedOrigins = targetAllowedOrigins;
   }
@@ -930,7 +953,8 @@ admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
     timestamp: new Date(),
   });
 
-  const { client_secret: _omit, clientSecret: _omit2, ...safeResult } = result as Record<string, unknown>;
+  const normalized = normalizeOAuthClientFields({ ...(result || {}), id: clientId, clientId });
+  const { client_secret: _omit, clientSecret: _omit2, ...safeResult } = normalized as any;
   return c.json(safeResult);
 });
 

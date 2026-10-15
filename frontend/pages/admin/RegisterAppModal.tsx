@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { csrfHeaders } from '@/lib/csrf';
-import { validateUri } from '@/lib/security';
+import { validateUri, deriveOrigins } from '@/lib/security';
 import { apiFetch } from '@/lib/api';
 
 interface FormState {
@@ -130,7 +130,15 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
     e.preventDefault();
     if (!form.clientName.trim()) { setError('Application name is required.'); return; }
     if (form.redirectUris.length === 0) { setError('At least one redirect URI is required.'); return; }
-    if (form.allowedOrigins.length === 0) { setError('At least one allowed origin is required.'); return; }
+
+    const effectiveOrigins = form.allowedOrigins.length > 0
+      ? form.allowedOrigins
+      : deriveOrigins(form.redirectUris);
+
+    if (effectiveOrigins.length === 0) {
+      setError('At least one allowed origin is required. Provide a valid HTTP or HTTPS redirect URI or explicit origin.');
+      return;
+    }
 
     setLoading(true);
     setError('');
@@ -145,7 +153,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
         body: JSON.stringify({
           client_name: form.clientName.trim(),
           redirect_uris: form.redirectUris,
-          allowed_origins: form.allowedOrigins,
+          allowed_origins: effectiveOrigins,
           is_dev: form.isDev,
           is_public: form.isPublic,
           isPublic: form.isPublic,
@@ -257,15 +265,36 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
                 tags={form.redirectUris}
                 placeholder="https://app.example.com/auth/callback"
                 validate={validateUri}
-                onAdd={(v) => setForm((f) => ({ ...f, redirectUris: [...f.redirectUris, v] }))}
+                onAdd={(v) => {
+                  setForm((f) => {
+                    const nextUris = [...f.redirectUris, v];
+                    const derived = deriveOrigins([v]);
+                    const nextOrigins = Array.from(new Set([...f.allowedOrigins, ...derived]));
+                    return { ...f, redirectUris: nextUris, allowedOrigins: nextOrigins };
+                  });
+                }}
                 onRemove={(v) => setForm((f) => ({ ...f, redirectUris: f.redirectUris.filter((r) => r !== v) }))}
               />
             </div>
 
             <div className="space-y-1.5">
-              <label className="font-sans text-xs font-medium text-foreground">
-                Allowed CORS Origins <span className="text-destructive">*</span>
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="font-sans text-xs font-medium text-foreground">
+                  Allowed CORS Origins <span className="text-destructive">*</span>
+                </label>
+                {form.redirectUris.length > 0 && (
+                  <button
+                    type="button"
+                    className="font-sans text-[11px] text-primary hover:underline"
+                    onClick={() => {
+                      const derived = deriveOrigins(form.redirectUris);
+                      setForm((f) => ({ ...f, allowedOrigins: Array.from(new Set([...f.allowedOrigins, ...derived])) }));
+                    }}
+                  >
+                    Auto derive from redirect URIs
+                  </button>
+                )}
+              </div>
               <TagInput
                 tags={form.allowedOrigins}
                 placeholder="https://app.example.com"

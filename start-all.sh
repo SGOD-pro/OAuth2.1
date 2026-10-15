@@ -15,7 +15,7 @@
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Define service paths
-HONO_DIR="$ROOT_DIR/hono"
+BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 NEXT_APP_DIR="$ROOT_DIR/test/next-app"
 CONSUMER_BE_DIR="$ROOT_DIR/test/react-express-app/backend"
@@ -106,13 +106,13 @@ check_port() {
 }
 
 echo -e "${BLUE}🔍 Checking dependencies and ports...${NC}"
-check_dependencies "Hono Backend" "$HONO_DIR"
+check_dependencies "Backend API" "$BACKEND_DIR"
 check_dependencies "Auth Frontend" "$FRONTEND_DIR"
 check_dependencies "Next.js Consumer App" "$NEXT_APP_DIR"
 check_dependencies "Consumer Express Backend" "$CONSUMER_BE_DIR"
 check_dependencies "Consumer React Frontend" "$CONSUMER_FE_DIR"
 
-check_port 3000 "Hono API"
+check_port 3000 "Backend API"
 check_port 5174 "Auth Frontend"
 check_port 3001 "Next.js App"
 check_port 4000 "Express Backend"
@@ -120,7 +120,7 @@ check_port 5175 "React Frontend"
 
 echo ""
 echo -e "${BOLD}📋 Active Service Endpoints:${NC}"
-echo -e "  🔐 ${CYAN}1. Hono Backend (IdP Core):${NC}         http://localhost:3000"
+echo -e "  🔐 ${CYAN}1. Backend (IdP Core):${NC}             http://localhost:3000"
 echo -e "  🎨 ${GREEN}2. SWYRA Auth UI (Gateway / Admin):${NC} http://localhost:5174"
 echo -e "  ⚡ ${YELLOW}3. Next.js Consumer App:${NC}            http://localhost:3001"
 echo -e "  ⚙️  ${MAGENTA}4. Consumer Express Backend:${NC}         http://localhost:4000"
@@ -147,8 +147,8 @@ start_service() {
   PIDS+=($!)
 }
 
-# 1. Start Hono Backend (:3000)
-start_service "HONO:3000" "$CYAN" "$HONO_DIR" "npm run dev"
+# 1. Start Backend (:3000)
+start_service "BACKEND:3000" "$CYAN" "$BACKEND_DIR" "npm run dev"
 
 # 2. Start Auth Frontend (:5174)
 start_service "AUTH:5174" "$GREEN" "$FRONTEND_DIR" "npm run dev"

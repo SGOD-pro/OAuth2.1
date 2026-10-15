@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { csrfHeaders } from '@/lib/csrf';
-import { validateUri } from '@/lib/security';
+import { validateUri, deriveOrigins } from '@/lib/security';
 import { apiFetch } from '@/lib/api';
 
 interface OAuthClient {
@@ -220,7 +220,7 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-[620px] w-full">
+      <DialogContent className="sm:max-w-155 w-full">
         <DialogHeader>
           <DialogTitle>Edit {client.client_name}</DialogTitle>
           <DialogDescription>
@@ -230,12 +230,12 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
 
         <form onSubmit={submit} className="space-y-4 py-2">
           {error && (
-            <div className="rounded-[12px] border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-sans text-xs text-destructive">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-sans text-xs text-destructive">
               {error}
             </div>
           )}
           {success && (
-            <div className="rounded-[12px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 font-sans text-xs text-emerald-500 dark:text-emerald-400">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 font-sans text-xs text-emerald-500 dark:text-emerald-400">
               Application configuration updated.
             </div>
           )}
@@ -253,7 +253,14 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
               tags={redirectUris}
               placeholder="https://app.example.com/auth/callback"
               validate={validateUri}
-              onAdd={(v) => setRedirectUris((u) => [...u, v])}
+              onAdd={(v) => {
+                setRedirectUris((u) => {
+                  const next = [...u, v];
+                  const derived = deriveOrigins([v]);
+                  setAllowedOrigins((o) => (o.length === 0 ? derived : Array.from(new Set([...o, ...derived]))));
+                  return next;
+                });
+              }}
               onRemove={(v) => setRedirectUris((u) => u.filter((r) => r !== v))}
             />
             {redirectUris.length === 0 && (
@@ -265,12 +272,26 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="font-sans text-xs font-medium text-foreground">
-                Allowed CORS Origins
-              </label>
-              <span className="font-sans text-xs text-muted-foreground">
-                Web origins permitted for browser token requests
-              </span>
+              <div>
+                <label className="font-sans text-xs font-medium text-foreground block">
+                  Allowed CORS Origins
+                </label>
+                <span className="font-sans text-xs text-muted-foreground">
+                  Web origins permitted for browser token requests
+                </span>
+              </div>
+              {redirectUris.length > 0 && (
+                <button
+                  type="button"
+                  className="font-sans text-[11px] text-primary hover:underline"
+                  onClick={() => {
+                    const derived = deriveOrigins(redirectUris);
+                    setAllowedOrigins((prev) => Array.from(new Set([...prev, ...derived])));
+                  }}
+                >
+                  Auto derive from redirect URIs
+                </button>
+              )}
             </div>
             <TagInput
               tags={allowedOrigins}
@@ -286,7 +307,7 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
             )}
           </div>
 
-          <div className="rounded-[12px] border border-border bg-secondary/30 p-4 space-y-3">
+          <div className="rounded-lg border border-border bg-secondary/30 p-4 space-y-3">
             <label className="flex items-start justify-between gap-4 cursor-pointer">
               <div>
                 <div className="flex items-center gap-2">

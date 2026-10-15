@@ -308,7 +308,7 @@ export async function verifyAndRotateTokenFamily(
   if (doc.consumedTokenHashes.includes(incomingTokenHash)) {
     // Distinguish between an in-flight concurrent race (within 2000ms grace window of rotation)
     // and a subsequent replay theft attempt.
-    const timeSinceRotation = doc.updatedAt ? nowMs - new Date(doc.updatedAt).getTime() : 10000;
+    const timeSinceRotation = doc.updatedAt ? Math.max(0, nowMs - new Date(doc.updatedAt).getTime()) : 10000;
     const isWithinGraceWindow = timeSinceRotation < 2000;
 
     if (isWithinGraceWindow) {
@@ -381,10 +381,10 @@ export async function verifyAndRotateTokenFamily(
     );
 
     if (updateResult.modifiedCount === 0) {
-      // Race condition detected! Another concurrent request rotated the token
+      // In-flight race condition: Another concurrent request rotated the token first
       return {
         valid: false,
-        replayed: true,
+        replayed: false,
         familyId: doc.familyId,
         clientId: doc.clientId,
         userId: doc.userId || userId,

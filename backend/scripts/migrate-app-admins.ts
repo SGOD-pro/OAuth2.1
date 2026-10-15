@@ -40,23 +40,29 @@ async function syncDb(dbName: string) {
     // 1. Upsert into user collection
     let user = await db.collection("user").findOne({ email });
     let userId: ObjectId;
+    const isSuperAdmin = user && user.role === "admin" && user.scopedClientId === null;
 
     if (user) {
       userId = user._id;
-      await db.collection("user").updateOne(
-        { _id: userId },
-        {
-          $set: {
-            name: name || user.name || "Administrator",
-            role: "admin",
-            scopedClientId: clientId,
-            emailVerified: true,
-            banned: !isActive,
-            updatedAt: now,
-          },
+      if (!isSuperAdmin) {
+        const updateDoc: any = {
+          name: name || user.name || "Administrator",
+          role: "admin",
+          emailVerified: true,
+          banned: !isActive,
+          updatedAt: now,
+        };
+        if (!user.scopedClientId || user.scopedClientId === clientId) {
+          updateDoc.scopedClientId = clientId;
         }
-      );
-      console.log(`  -> Updated existing user (${userId.toString()}) to role: admin, scopedClientId: ${clientId}`);
+        await db.collection("user").updateOne(
+          { _id: userId },
+          { $set: updateDoc }
+        );
+        console.log(`  -> Updated existing user (${userId.toString()}) to role: admin, scopedClientId: ${updateDoc.scopedClientId || user.scopedClientId}`);
+      } else {
+        console.log(`  🛡️ Preserved Global Super Admin (${userId.toString()}): skipped mutating scopedClientId, password, and banned.`);
+      }
     } else {
       userId = new ObjectId();
       const newUserDoc = {
@@ -77,8 +83,8 @@ async function syncDb(dbName: string) {
 
     const userIdStr = userId.toString();
 
-    // 2. Upsert into account collection
-    if (hashedPassword) {
+    // 2. Upsert into account collection if not Super Admin
+    if (hashedPassword && !isSuperAdmin) {
       const existingAccount = await db.collection("account").findOne({
         $or: [
           { userId: userId },
@@ -116,22 +122,23 @@ async function syncDb(dbName: string) {
       }
     }
 
-    // 3. Ensure membership in user_app_registrations
-    const existingReg = await db.collection("user_app_registrations").findOne({
-      clientId: clientId,
-      $or: [{ userId: userIdStr }, { userId: userId }],
-    });
-
-    if (!existingReg) {
-      await db.collection("user_app_registrations").insertOne({
-        userId: userIdStr,
+    // 3. Ensure membership in user_app_registrations with appRole: "admin"
+    await db.collection("user_app_registrations").updateOne(
+      {
         clientId: clientId,
-        registeredAt: admin.createdAt || now,
-      });
-      console.log(`  -> Created user_app_registrations membership for client ${clientId}`);
-    } else {
-      console.log(`  -> User is already registered in user_app_registrations`);
-    }
+        $or: [{ userId: userIdStr }, { userId: userId }],
+      },
+      {
+        $set: {
+          userId: userIdStr,
+          clientId: clientId,
+          appRole: "admin",
+          registeredAt: admin.createdAt || now,
+        },
+      },
+      { upsert: true }
+    );
+    console.log(`  -> Ensured user_app_registrations membership for client ${clientId} with appRole: admin`);
 
     syncedCount++;
   }

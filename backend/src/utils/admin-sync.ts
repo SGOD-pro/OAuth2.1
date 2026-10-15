@@ -1,6 +1,9 @@
 import { ObjectId, Db } from "mongodb";
 
 export interface SyncAppAdminParams {
+  /**
+   * Application administrator email. Required to key user upsert and Better Auth account synchronization.
+   */
   email: string;
   clientId: string;
   name?: string;
@@ -20,6 +23,26 @@ export interface SyncAppAdminParams {
  * 3. The admin has explicit membership in `user_app_registrations` for private app access.
  * 4. Password updates, name changes, email updates, and active/inactive state sync cleanly.
  */
+export async function recordSyncAudit(
+  database: Db,
+  entry: {
+    action: string;
+    targetClientId: string;
+    targetUserId: string;
+    details?: Record<string, unknown>;
+    timestamp?: Date;
+  }
+): Promise<void> {
+  try {
+    await database.collection("admin_audit").insertOne({
+      ...entry,
+      timestamp: entry.timestamp || new Date(),
+    });
+  } catch (err: any) {
+    console.warn("[ADMIN_SYNC_AUDIT] Failed to record admin audit entry:", err?.message || err);
+  }
+}
+
 export async function syncAppAdminIdentity(
   database: Db,
   params: SyncAppAdminParams
@@ -42,22 +65,31 @@ export async function syncAppAdminIdentity(
   // 1. Upsert into user collection
   let user = await database.collection("user").findOne({ email: normalizedEmail });
   let userId: ObjectId;
+  const isSuperAdmin = user && user.role === "admin" && user.scopedClientId === null;
 
   if (user) {
-    userId = user._id;
-    const userUpdate: any = {
-      role: "admin",
-      scopedClientId: clientId,
-      emailVerified: true,
-      updatedAt: now,
-    };
-    if (name) userUpdate.name = name;
-    if (typeof isActive === "boolean") userUpdate.banned = !isActive;
+    userId = user._id instanceof ObjectId ? user._id : new ObjectId(String(user._id));
 
-    await database.collection("user").updateOne(
-      { _id: userId },
-      { $set: userUpdate }
-    );
+    // Never demote, alter password, or ban a Global Super Admin!
+    if (!isSuperAdmin) {
+      const userUpdate: any = {
+        role: "admin",
+        emailVerified: true,
+        updatedAt: now,
+      };
+
+      // Only assign scopedClientId if user doesn't already have one or is already scoped to this client
+      if (!user.scopedClientId || user.scopedClientId === clientId) {
+        userUpdate.scopedClientId = clientId;
+      }
+      if (name) userUpdate.name = name;
+      if (typeof isActive === "boolean") userUpdate.banned = !isActive;
+
+      await database.collection("user").updateOne(
+        { _id: user._id },
+        { $set: userUpdate }
+      );
+    }
   } else {
     userId = new ObjectId();
     const newUserDoc = {
@@ -77,8 +109,8 @@ export async function syncAppAdminIdentity(
 
   const userIdStr = userId.toString();
 
-  // 2. Upsert into account collection if hashedPassword provided
-  if (hashedPassword) {
+  // 2. Upsert into account collection if hashedPassword provided AND not Super Admin
+  if (hashedPassword && !isSuperAdmin) {
     const existingAccount = await database.collection("account").findOne({
       $or: [
         { userId: userId },
@@ -113,19 +145,35 @@ export async function syncAppAdminIdentity(
     }
   }
 
-  // 3. Ensure explicit assignment in user_app_registrations for private client access
-  const existingReg = await database.collection("user_app_registrations").findOne({
-    clientId: clientId,
-    $or: [{ userId: userIdStr }, { userId: userId }],
-  });
-
-  if (!existingReg) {
-    await database.collection("user_app_registrations").insertOne({
-      userId: userIdStr,
+  // 3. Ensure explicit assignment in user_app_registrations for private client access with appRole: "admin"
+  await database.collection("user_app_registrations").updateOne(
+    {
       clientId: clientId,
-      registeredAt: createdAt || now,
-    });
-  }
+      $or: [{ userId: userIdStr }, { userId: userId }],
+    },
+    {
+      $set: {
+        userId: userIdStr,
+        clientId: clientId,
+        appRole: "admin",
+        registeredAt: createdAt || now,
+      },
+    },
+    { upsert: true }
+  );
+
+  await recordSyncAudit(database, {
+    action: user ? "admin_identity_synced" : "admin_identity_created",
+    targetClientId: clientId,
+    targetUserId: userIdStr,
+    details: {
+      email: normalizedEmail,
+      name: name || user?.name || "Administrator",
+      scopedClientId: isSuperAdmin ? null : (user?.scopedClientId || clientId),
+      isSuperAdmin: Boolean(isSuperAdmin),
+    },
+    timestamp: now,
+  });
 }
 
 /**
@@ -134,28 +182,110 @@ export async function syncAppAdminIdentity(
 export async function removeAppAdminIdentity(
   database: Db,
   params: {
-    email: string;
+    email?: string;
+    userId?: string | ObjectId;
     clientId: string;
   }
 ): Promise<void> {
-  const { email, clientId } = params;
-  if (!email || !clientId) return;
+  const { email, userId, clientId } = params;
+  if ((!email && !userId) || !clientId) return;
 
-  const normalizedEmail = email.toLowerCase().trim();
-  const user = await database.collection("user").findOne({ email: normalizedEmail });
+  const normalizedEmail = email ? email.toLowerCase().trim() : undefined;
+  const userQuery: any[] = [];
+  if (normalizedEmail) userQuery.push({ email: normalizedEmail });
+  if (userId) {
+    userQuery.push({ _id: userId });
+    userQuery.push({ id: userId.toString() });
+    if (typeof userId === "string" && ObjectId.isValid(userId)) {
+      userQuery.push({ _id: new ObjectId(userId) });
+    }
+  }
+
+  const user = await database.collection("user").findOne({ $or: userQuery });
 
   if (user) {
+    const userEmail = (user.email || normalizedEmail || "").toLowerCase().trim();
     const userIdStr = (user.id || user._id).toString();
-    if (user.scopedClientId === clientId) {
-      await database.collection("user").updateOne(
-        { _id: user._id },
-        { $set: { role: "user", scopedClientId: null, updatedAt: new Date() } }
-      );
-    }
+    const isSuperAdmin = user.role === "admin" && user.scopedClientId === null;
+
+    // Delete membership for the specified clientId first
     await database.collection("user_app_registrations").deleteMany({
       clientId: clientId,
       $or: [{ userId: userIdStr }, { userId: user._id }],
     });
+
+    if (!isSuperAdmin) {
+      // Check if user still administers other applications via app_admins or user_app_registrations
+      const adminQueryConditions: any[] = [];
+      if (userEmail) adminQueryConditions.push({ email: userEmail });
+      adminQueryConditions.push({ userId: userIdStr });
+      if (user._id) adminQueryConditions.push({ userId: user._id });
+
+      const otherAdmins = await database.collection("app_admins").find({
+        $or: adminQueryConditions,
+        clientId: { $ne: clientId },
+        isActive: { $ne: false },
+      }).sort({ clientId: 1 }).toArray();
+
+      const regQueryConditions: any[] = [
+        { userId: userIdStr },
+        ...(user._id ? [{ userId: user._id }] : []),
+      ];
+
+      const otherRegistrations = await database.collection("user_app_registrations").find({
+        $or: regQueryConditions,
+        clientId: { $ne: clientId },
+        appRole: "admin",
+      }).sort({ clientId: 1 }).toArray();
+
+      const survivingClientIds = new Set<string>();
+      for (const a of otherAdmins) {
+        if (a.clientId) survivingClientIds.add(a.clientId);
+      }
+      for (const r of otherRegistrations) {
+        if (r.clientId) survivingClientIds.add(r.clientId);
+      }
+
+      if (survivingClientIds.size > 0) {
+        // User remains an admin for another client; update scopedClientId deterministically
+        const sortedClients = Array.from(survivingClientIds).sort();
+        const nextClientId = sortedClients[0];
+        await database.collection("user").updateOne(
+          { _id: user._id },
+          { $set: { role: "admin", scopedClientId: nextClientId, updatedAt: new Date() } }
+        );
+        await recordSyncAudit(database, {
+          action: "admin_identity_repointed",
+          targetClientId: nextClientId,
+          targetUserId: userIdStr,
+          details: {
+            removedClientId: clientId,
+            newScopedClientId: nextClientId,
+            email: userEmail,
+            remainingClientIds: sortedClients,
+          },
+          timestamp: new Date(),
+        });
+      } else {
+        // Zero remaining admin assignments: demote back to standard user
+        await database.collection("user").updateOne(
+          { _id: user._id },
+          { $set: { role: "user", scopedClientId: null, updatedAt: new Date() } }
+        );
+        await recordSyncAudit(database, {
+          action: "admin_identity_demoted",
+          targetClientId: clientId,
+          targetUserId: userIdStr,
+          details: {
+            removedClientId: clientId,
+            previousRole: "admin",
+            newRole: "user",
+            email: userEmail,
+          },
+          timestamp: new Date(),
+        });
+      }
+    }
   }
 }
 

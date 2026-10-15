@@ -4,8 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "bash ./start-all.sh",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "admin:create": "npm --prefix backend run admin:create --",
     "security:integration-check": "./backend/node_modules/.bin/tsx scripts/security/check-integration-contract.ts",
     "security:docs-check": "npm --prefix backend run security:docs-check",
+    "test:unit": "npm --prefix backend run test:unit",
     "test:all-security": "npm --prefix backend run test:all-security"
   }
 }

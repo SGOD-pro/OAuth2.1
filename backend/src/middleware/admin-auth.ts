@@ -1,27 +1,125 @@
 import { createMiddleware } from "hono/factory";
-import { importJWK, jwtVerify } from "jose";
+import { importJWK, jwtVerify, decodeProtectedHeader } from "jose";
 import { authProvider } from "../utils/auth";
-import { getHeaders, resolveOAuthClient, timingSafeEqualStr } from "../utils/security";
+import { getHeaders, resolveOAuthClient, timingSafeEqualStr, isLoopbackHost } from "../utils/security";
 import { getDb } from "../db/mongo";
+import { ObjectId } from "mongodb";
 import { config } from "../config";
 
-let cachedPublicKey: any = null;
-let lastKeyFetch = 0;
+interface CachedPublicKey {
+  key: any;
+  cachedAt: number;
+}
+const MAX_PUBLIC_KEY_CACHE_SIZE = 50;
+const publicKeyCache = new Map<string, CachedPublicKey>();
 
-export async function getIdpPublicKey(): Promise<any> {
-  const now = Date.now();
-  if (cachedPublicKey && now - lastKeyFetch < 60_000) {
-    return cachedPublicKey;
+function setInPublicKeyCache(keyId: string, entry: CachedPublicKey): void {
+  if (publicKeyCache.size >= MAX_PUBLIC_KEY_CACHE_SIZE) {
+    const oldestKey = publicKeyCache.keys().next().value;
+    if (oldestKey) {
+      publicKeyCache.delete(oldestKey);
+    }
   }
+  publicKeyCache.set(keyId, entry);
+}
+
+export function clearPublicKeyCacheForTesting(): void {
+  publicKeyCache.clear();
+}
+
+export async function getIdpPublicKey(kid?: string): Promise<any> {
+  const now = Date.now();
+  const cacheKey = kid || "latest";
+  const cached = publicKeyCache.get(cacheKey);
+  if (cached && now - cached.cachedAt < 60_000) {
+    return cached.key;
+  }
+
   const database = await getDb();
-  const jwksRecord = await database.collection("jwks").findOne({}, { sort: { createdAt: -1 } });
+  let jwksRecord: any = null;
+  let matchedRequestedKid = false;
+
+  if (kid) {
+    jwksRecord = await database.collection("jwks").findOne({
+      $or: [
+        { kid: kid },
+        { id: kid },
+        ...(ObjectId.isValid(kid) ? [{ _id: new ObjectId(kid) }] : []),
+      ],
+    });
+    if (jwksRecord) {
+      matchedRequestedKid = true;
+    }
+  }
+
+  if (!jwksRecord) {
+    jwksRecord = await database.collection("jwks").findOne({}, { sort: { createdAt: -1 } });
+  }
+
   if (!jwksRecord || !jwksRecord.publicKey) {
     return null;
   }
-  const jwk = typeof jwksRecord.publicKey === "string" ? JSON.parse(jwksRecord.publicKey) : jwksRecord.publicKey;
-  cachedPublicKey = await importJWK(jwk, "RS256");
-  lastKeyFetch = now;
-  return cachedPublicKey;
+
+  let jwk: any;
+  try {
+    jwk = typeof jwksRecord.publicKey === "string" ? JSON.parse(jwksRecord.publicKey) : jwksRecord.publicKey;
+  } catch {
+    return null;
+  }
+
+  const importedKey = await importJWK(jwk, "RS256");
+  const cacheEntry = { key: importedKey, cachedAt: now };
+
+  // Only cache under the requested kid if it matched, or if no kid was specified (latest)
+  if (cacheKey === "latest" || matchedRequestedKid) {
+    setInPublicKeyCache(cacheKey, cacheEntry);
+  }
+  if (jwksRecord.kid) {
+    setInPublicKeyCache(jwksRecord.kid, cacheEntry);
+  }
+
+  return importedKey;
+}
+
+export async function checkUserIsClientAdmin(
+  database: any,
+  userDoc: any,
+  userIdStr: string,
+  clientId: string
+): Promise<boolean> {
+  if (!database || !clientId) return false;
+  if (userDoc?.role === "admin" && userDoc?.scopedClientId === null) return true;
+  if (userDoc?.role === "admin" && userDoc?.scopedClientId === clientId) return true;
+
+  const adminOrConditions: any[] = [];
+  if (userIdStr) adminOrConditions.push({ userId: userIdStr });
+  if (userDoc?._id) adminOrConditions.push({ userId: userDoc._id });
+  if (userDoc?.email) {
+    adminOrConditions.push({ email: userDoc.email.toLowerCase().trim() });
+  }
+
+  if (adminOrConditions.length > 0) {
+    const appAdmin = await database.collection("app_admins").findOne({
+      clientId,
+      $or: adminOrConditions,
+      isActive: { $ne: false },
+    });
+    if (appAdmin) return true;
+  }
+
+  const orConditions: any[] = [];
+  if (userIdStr) orConditions.push({ userId: userIdStr });
+  if (userDoc?._id) orConditions.push({ userId: userDoc._id });
+  if (orConditions.length > 0) {
+    const reg = await database.collection("user_app_registrations").findOne({
+      clientId,
+      $or: orConditions,
+      appRole: "admin",
+    });
+    if (reg) return true;
+  }
+
+  return false;
 }
 
 /**
@@ -91,7 +189,12 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
     if (!token) return null;
 
     try {
-      const publicKey = await getIdpPublicKey();
+      let kid: string | undefined;
+      try {
+        const header = decodeProtectedHeader(token);
+        kid = header.kid;
+      } catch {}
+      const publicKey = await getIdpPublicKey(kid);
       if (!publicKey) return null;
 
       // STRICT ALGORITHM PINNING: strictly require RS256 (rejects HS256, none, forged)
@@ -137,8 +240,12 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
         }
       }
 
+      const orConditions: any[] = [{ id: sub }, { email: sub }];
+      if (ObjectId.isValid(sub)) {
+        orConditions.push({ _id: new ObjectId(sub) });
+      }
       const userDoc = await database.collection("user").findOne({
-        $or: [{ id: sub }, { _id: sub }, { email: sub }],
+        $or: orConditions,
       });
 
       // If user document exists, account must not be disabled
@@ -186,8 +293,12 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       }
 
       if (typeof tokenScope === "string" && typeof dbScope === "string" && tokenScope !== dbScope) {
-        // Cross-tenant identity conflict: token scope and user document scope conflict
-        return null;
+        // Cross-tenant check: allow if caller is an authorized administrator for tokenScope
+        const isAuthorizedForTokenScope = await checkUserIsClientAdmin(database, userDoc, sub, tokenScope);
+        if (!isAuthorizedForTokenScope) {
+          // Cross-tenant identity conflict: token scope and user document scope conflict
+          return null;
+        }
       }
 
       let scopedClientId: string | null | undefined;
@@ -229,43 +340,88 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
  * Validates that requests entering management surfaces originate from the trusted
  * API Gateway / reverse proxy.
  *
- * FAIL-CLOSED PRIMITIVE:
- * - Missing configured gateway secret => FAILS (false)
- * - Missing or invalid header => FAILS (false)
- * - Valid secret => SUCCEEDS (true)
+ * GATEWAY VERIFICATION POLICY:
+ * - When configured (minimum 32 characters): strictly requires matching 'x-gateway-secret' header.
+ * - In production mode (NODE_ENV === "production"), unconfigured secret fails closed (false).
+ * - In development mode (NODE_ENV !== "production"), unconfigured secret permits loopback requests
+ *   (localhost, 127.0.0.1, [::1]) with an informational warning.
  *
  * STRICT GATEWAY HEADER CONTRACT:
  * Only 'x-gateway-secret' is accepted. Secondary headers like 'x-internal-secret'
  * are strictly forbidden and return 403 Forbidden.
  */
-function verifyGatewaySecret(c: any): boolean {
+export function verifyGatewaySecret(c: any): boolean {
   try {
     const configuredSecret = config.internalGatewaySecret;
-    if (!configuredSecret || typeof configuredSecret !== "string" || configuredSecret.trim().length === 0) {
-      return false;
-    }
+    const isConfigured = Boolean(
+      configuredSecret &&
+      typeof configuredSecret === "string" &&
+      configuredSecret.trim().length > 0
+    );
 
-    // STRICT GATEWAY HEADER ENFORCEMENT: Only 'x-gateway-secret' is accepted.
-    const gatewayHeader = c.req.header("x-gateway-secret");
-    if (!gatewayHeader || typeof gatewayHeader !== "string") {
-      return false;
-    }
-
-    // Read secrets purely from environment configuration (supports comma-separated values for rotation)
-    const allowedSecrets = configuredSecret
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length >= 32);
-
-    if (allowedSecrets.length === 0) {
-      return false;
-    }
-
-    for (const secret of allowedSecrets) {
-      if (timingSafeEqualStr(gatewayHeader, secret)) {
-        return true;
+    if (isConfigured) {
+      // STRICT GATEWAY HEADER ENFORCEMENT: Only 'x-gateway-secret' is accepted.
+      const gatewayHeader = c.req.header("x-gateway-secret");
+      if (!gatewayHeader || typeof gatewayHeader !== "string") {
+        return false;
       }
+
+      // Read secrets purely from environment configuration (supports comma-separated values for rotation)
+      const allowedSecrets = (configuredSecret as string)
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 32);
+
+      if (allowedSecrets.length === 0) {
+        return false;
+      }
+
+      for (const secret of allowedSecrets) {
+        if (timingSafeEqualStr(gatewayHeader, secret)) {
+          return true;
+        }
+      }
+      return false;
     }
+
+    // Unconfigured secret behavior:
+    const isProduction = config.env === "production" || process.env.NODE_ENV === "production";
+    if (isProduction) {
+      return false;
+    }
+
+    // Development mode bypass: permit loopback host requests
+    const remoteAddress =
+      c?.env?.incoming?.socket?.remoteAddress ||
+      c?.req?.raw?.socket?.remoteAddress ||
+      c?.req?.raw?.connection?.remoteAddress ||
+      c?.raw?.socket?.remoteAddress ||
+      c?.req?.socket?.remoteAddress;
+
+    if (remoteAddress && typeof remoteAddress === "string" && !isLoopbackHost(remoteAddress)) {
+      return false;
+    }
+
+    let requestHost = "";
+    try {
+      const hostHeader = c.req.header("host") || c.req.header("x-forwarded-host") || "";
+      if (hostHeader) {
+        const url = new URL(`http://${hostHeader}`);
+        requestHost = url.hostname;
+      } else if (c.req.url) {
+        requestHost = new URL(c.req.url).hostname;
+      }
+    } catch {
+      requestHost = (c.req.header("host") || "").replace(/:\d+$/, "");
+    }
+
+    if (requestHost && isLoopbackHost(requestHost)) {
+      console.warn(
+        `[dev-gateway-bypass] INTERNAL_GATEWAY_SECRET is unconfigured. Allowing loopback request from host "${requestHost}". Set INTERNAL_GATEWAY_SECRET to secure administrative endpoints.`
+      );
+      return true;
+    }
+
     return false;
   } catch {
     return false;
@@ -463,7 +619,12 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
   // Must be either a verified global super admin (scopedClientId === null)
   // OR a verified scoped admin whose scopedClientId matches the canonicalTargetId.
   if (!isGlobal) {
-    if (!scopedClientId || scopedClientId !== canonicalTargetId) {
+    let isAuthorized = scopedClientId === canonicalTargetId;
+    if (!isAuthorized) {
+      const userIdStr = (auth.user?.id || auth.user?._id)?.toString() || "";
+      isAuthorized = await checkUserIsClientAdmin(database, auth.user, userIdStr, canonicalTargetId);
+    }
+    if (!isAuthorized) {
       return c.json(
         {
           error: "forbidden",

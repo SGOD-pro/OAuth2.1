@@ -473,12 +473,26 @@ await runTest("TRANS-8: validateOAuthClientConfiguration direct policy matrix", 
   );
   assert.equal(res5b.valid, true);
 
-  // New client creation in production with isSuperAdminOp=true but non-loopback -> rejected
+  // New client creation in production with isSuperAdminOp=true and valid HTTPS URIs -> permitted (dual mode)
   const res5c = validateOAuthClientConfiguration(
     { isDev: true, redirectUris: ["https://example.com/callback"], allowedOrigins: ["https://example.com"] },
     { serverEnvironment: "production", isNewClient: true, allowDevClientsInProduction: false, isSuperAdminOp: true }
   );
-  assert.equal(res5c.valid, false);
+  assert.equal(res5c.valid, true);
+
+  // New client creation in production with isSuperAdminOp=true but non-loopback HTTP -> rejected
+  const res5d = validateOAuthClientConfiguration(
+    { isDev: true, redirectUris: ["http://example.com/callback"], allowedOrigins: ["http://example.com"] },
+    { serverEnvironment: "production", isNewClient: true, allowDevClientsInProduction: false, isSuperAdminOp: true }
+  );
+  assert.equal(res5d.valid, false);
+
+  // New client creation in production with isSuperAdminOp=true but private IP -> rejected
+  const res5e = validateOAuthClientConfiguration(
+    { isDev: true, redirectUris: ["https://192.168.1.1/callback"], allowedOrigins: ["https://192.168.1.1"] },
+    { serverEnvironment: "production", isNewClient: true, allowDevClientsInProduction: false, isSuperAdminOp: true }
+  );
+  assert.equal(res5e.valid, false);
 
   // Existing client update in production with allowDevClientsInProduction=false -> permitted
   const res6 = validateOAuthClientConfiguration(

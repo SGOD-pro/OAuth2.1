@@ -42,27 +42,20 @@ export const AdminLogin: React.FC = () => {
   useEffect(() => {
     const err = searchParams.get('error');
     if (err === 'access_denied_scoped') {
-      const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
-      setError(msg);
-      toast.error(msg);
+      setError('Access restricted: Application administrators manage their app through their application portal. To access the central console, sign in with Global Super Admin credentials.');
     } else if (err === 'access_denied') {
-      toast.error('Access denied: Your account does not have admin privileges.');
+      setError('Access restricted: Administrator privileges required. Please sign in with Global Super Admin credentials.');
     } else if (err === 'mfa_failed' || err === 'mfa_expired') {
-      toast.error('2FA verification failed or session expired. Please re-enter your credentials.');
+      setError('Two factor verification failed or session expired. Please re-enter your credentials.');
     }
   }, [searchParams]);
 
-  const user = (session as unknown as { user?: { role?: string; scopedClientId?: string | null } })?.user;
+  const user = (session as unknown as { user?: { role?: string; scopedClientId?: string | null; email?: string } })?.user;
 
   useEffect(() => {
     if (!isPending && user) {
       if (user.role === 'admin' && user.scopedClientId === null) {
         navigate('/admin', { replace: true });
-      } else if (user.role === 'admin' && user.scopedClientId !== null) {
-        void authClient.signOut({});
-        const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
-        setError(msg);
-        toast.error(msg);
       }
     }
   }, [user, isPending, navigate]);
@@ -136,11 +129,10 @@ export const AdminLogin: React.FC = () => {
     setLoading(true);
     try {
       await authClient.signOut({});
+      window.location.href = '/admin/login';
     } catch {
-      // ignore
+      setLoading(false);
     }
-    navigate('/admin/login');
-    setLoading(false);
   };
 
   if (isPending) {
@@ -149,6 +141,7 @@ export const AdminLogin: React.FC = () => {
 
   const role = user?.role;
   const isAuthenticated = !!user;
+  const isConflictingSession = isAuthenticated && (role !== 'admin' || user?.scopedClientId !== null);
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-background relative">
@@ -172,18 +165,25 @@ export const AdminLogin: React.FC = () => {
               </p>
             </div>
 
-            {isAuthenticated && (role !== 'admin' || user?.scopedClientId !== null) ? (
+            {isConflictingSession ? (
               <div className="space-y-4">
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3.5">
-                  <h4 className="font-sans text-xs font-medium text-destructive">Access Restricted</h4>
-                  <p className="font-sans text-xs text-muted-foreground mt-1">
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-xs">
+                  <h4 className="font-sans font-medium text-amber-900 dark:text-amber-200 text-sm">
+                    Active consumer session detected
+                  </h4>
+                  <p className="font-sans text-muted-foreground mt-1.5 leading-relaxed">
                     {user?.scopedClientId
-                      ? 'You are signed in as an Application Administrator. Application administrators must manage their application through their consumer application portal, not the central IdP console.'
-                      : 'Your account does not have administrator privileges.'}
+                      ? 'You are signed in as an Application Administrator. Sign out to clear this session before signing in with Global Super Admin credentials.'
+                      : 'Your current account does not have administrator privileges. Sign out to continue.'}
                   </p>
                 </div>
-                <Button onClick={handleSignOut} variant="outline" className="w-full h-9 text-xs">
-                  Sign out & switch account
+                <Button
+                  type="button"
+                  onClick={handleSignOut}
+                  className="w-full h-10 font-medium"
+                  disabled={loading}
+                >
+                  {loading ? 'Signing out...' : 'Sign out to continue'}
                 </Button>
               </div>
             ) : (
@@ -257,7 +257,7 @@ export const AdminLogin: React.FC = () => {
             )}
 
             <p className="font-sans text-[11px] text-muted-foreground text-center mt-6">
-              Protected by two-factor authentication.
+              Protected by two factor authentication.
             </p>
           </CardContent>
         </Card>

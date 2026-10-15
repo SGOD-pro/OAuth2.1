@@ -20,15 +20,123 @@ import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirec
 import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
 
-import { importJWK, SignJWT, jwtVerify } from "jose";
+import { importJWK, SignJWT, jwtVerify, decodeJwt, decodeProtectedHeader, generateKeyPair, exportJWK } from "jose";
 import { getIdpPublicKey } from "../middleware/admin-auth";
-import { symmetricDecrypt } from "better-auth/crypto";
+import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 
 export const auth = new Hono();
 
 let cachedPrivateKey: any = null;
 let cachedKeyId: string = "";
 let lastPrivateKeyFetch = 0;
+
+export async function resolveUserRoleForClient(
+    database: any,
+    userDoc: any,
+    clientId: string
+): Promise<{ role: string; scopedClientId: string | null }> {
+    if (!userDoc) {
+        return { role: "user", scopedClientId: null };
+    }
+
+    // 1. Global Super Admin: always role: "admin", scopedClientId: null
+    if (userDoc.role === "admin" && userDoc.scopedClientId === null) {
+        return { role: "admin", scopedClientId: null };
+    }
+
+    if (!clientId) {
+        return { role: userDoc.role || "user", scopedClientId: userDoc.scopedClientId || null };
+    }
+
+    // 2. Direct scoped match on primary user document
+    if (userDoc.role === "admin" && userDoc.scopedClientId === clientId) {
+        return { role: "admin", scopedClientId: clientId };
+    }
+
+    // 3. Check app_admins collection by userId and email
+    const userIdStr = (userDoc.id || userDoc._id)?.toString();
+    const adminOrConditions: any[] = [];
+    if (userIdStr) adminOrConditions.push({ userId: userIdStr });
+    if (userDoc._id) adminOrConditions.push({ userId: userDoc._id });
+    if (userDoc.email) {
+        adminOrConditions.push({ email: userDoc.email.toLowerCase().trim() });
+    }
+    if (adminOrConditions.length > 0) {
+        const appAdmin = await database.collection("app_admins").findOne({
+            clientId,
+            $or: adminOrConditions,
+            isActive: { $ne: false },
+        });
+        if (appAdmin) {
+            return { role: "admin", scopedClientId: clientId };
+        }
+    }
+
+    // 4. Check user_app_registrations collection for appRole: "admin"
+    const orConditions: any[] = [];
+    if (userIdStr) orConditions.push({ userId: userIdStr });
+    if (userDoc._id) orConditions.push({ userId: userDoc._id });
+    if (orConditions.length > 0) {
+        const reg = await database.collection("user_app_registrations").findOne({
+            clientId,
+            $or: orConditions,
+            appRole: "admin",
+        });
+        if (reg) {
+            return { role: "admin", scopedClientId: clientId };
+        }
+    }
+
+    // 5. Default to role: "user" with scopedClientId null for this client
+    return { role: "user", scopedClientId: null };
+}
+
+async function generateAndStoreFreshKeypair(database: any): Promise<{ privateKey: any; kid: string } | null> {
+    try {
+        const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
+        const publicJwk: any = await exportJWK(publicKey);
+        const privateJwk: any = await exportJWK(privateKey);
+        const kid = `idp-key-${crypto.randomUUID()}`;
+        publicJwk.kid = kid;
+        publicJwk.alg = "RS256";
+        publicJwk.use = "sig";
+        privateJwk.kid = kid;
+        privateJwk.alg = "RS256";
+        privateJwk.use = "sig";
+
+        let storedPrivateKey: any = privateJwk;
+        if (config.auth.secret) {
+            try {
+                storedPrivateKey = await symmetricEncrypt({
+                    key: config.auth.secret,
+                    data: JSON.stringify(privateJwk),
+                });
+            } catch (encryptErr) {
+                console.error("[getIdpSigningKey] Critical: Failed to symmetrically encrypt fresh private key at rest:", encryptErr);
+                return null;
+            }
+        }
+
+        const newDoc = {
+            kid,
+            publicKey: JSON.stringify(publicJwk),
+            privateKey: storedPrivateKey,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+
+        await database.collection("jwks").insertOne(newDoc);
+        console.log(`[getIdpSigningKey] Self-healed: generated and stored fresh RS256 keypair (kid: ${kid})`);
+
+        cachedPrivateKey = privateKey;
+        cachedKeyId = kid;
+        lastPrivateKeyFetch = Date.now();
+        return { privateKey: cachedPrivateKey, kid: cachedKeyId };
+    } catch (healErr) {
+        console.error("[getIdpSigningKey] Catastrophic failure self-healing RS256 keypair:", healErr);
+        return null;
+    }
+}
 
 async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | null> {
     const now = Date.now();
@@ -41,7 +149,8 @@ async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | nu
         { sort: { createdAt: -1 } }
     );
     if (!jwksRecord || !jwksRecord.privateKey) {
-        return null;
+        console.warn("[getIdpSigningKey] No valid signing key found in database. Self-healing with fresh keypair...");
+        return generateAndStoreFreshKeypair(database);
     }
     try {
         let rawData: any;
@@ -71,7 +180,13 @@ async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | nu
         }
 
         if (typeof jwk === "string") {
-            jwk = JSON.parse(jwk);
+            try {
+                jwk = JSON.parse(jwk);
+            } catch {}
+        }
+
+        if (!jwk || typeof jwk !== "object" || !jwk.kty) {
+            throw new Error("Invalid or unreadable JWK private key format");
         }
 
         cachedPrivateKey = await importJWK(jwk, "RS256");
@@ -79,8 +194,8 @@ async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | nu
         lastPrivateKeyFetch = now;
         return { privateKey: cachedPrivateKey, kid: cachedKeyId };
     } catch (err) {
-        console.error("[getIdpSigningKey] Error preparing IDP signing key:", err);
-        return null;
+        console.warn("[getIdpSigningKey] Existing signing key is unreadable or corrupted. Self-healing with fresh keypair...", err);
+        return generateAndStoreFreshKeypair(database);
     }
 }
 
@@ -103,8 +218,7 @@ async function mintJwtAccessToken(params: {
             $or: orConditions
         });
 
-        const role = userDoc?.role || "user";
-        const scopedClientId = userDoc?.scopedClientId || null;
+        const { role, scopedClientId } = await resolveUserRoleForClient(database, userDoc, params.clientId);
         const email = userDoc?.email || undefined;
         const name = userDoc?.name || undefined;
         const ttl = params.expiresInSeconds || 900;
@@ -783,14 +897,20 @@ auth.post("/oauth2/token", async (c) => {
             );
         }
 
+        const staleLockThreshold = new Date(Date.now() - 15000);
+
         // Atomic compare-and-swap to claim rotation rights for this token family
         // Scoped strictly by canonicalClientId to prevent cross-client CAS contention
+        // Allows reclaiming a stale lock if a previous rotation timed out or crashed (> 15s)
         const claim = await database.collection("oauth_token_families").findOneAndUpdate(
             {
                 activeTokenHash: incomingHash,
                 clientId: canonicalClientId,
                 status: "active",
-                rotating: { $ne: true },
+                $or: [
+                    { rotating: { $ne: true } },
+                    { rotatingAt: { $lt: staleLockThreshold } },
+                ],
             },
             {
                 $set: { rotating: true, rotatingAt: new Date() },
@@ -805,7 +925,13 @@ auth.post("/oauth2/token", async (c) => {
                 $or: [{ activeTokenHash: incomingHash }, { consumedTokenHashes: incomingHash }]
             });
 
-            if (currentDoc && (currentDoc as any).rotating === true) {
+            const isActivelyRotating =
+                currentDoc &&
+                (currentDoc as any).rotating === true &&
+                (currentDoc as any).rotatingAt &&
+                new Date((currentDoc as any).rotatingAt).getTime() > Date.now() - 15000;
+
+            if (isActivelyRotating) {
                 return c.json(
                     {
                         error: "invalid_grant",
@@ -1117,7 +1243,12 @@ auth.get("/oauth2/userinfo", async (c) => {
         // Fallback for RS256 JWT access tokens if Better Auth expects opaque tokens
         if (res.status !== 200 && bearerToken && bearerToken.includes(".")) {
             try {
-                const publicKey = await getIdpPublicKey();
+                let kid: string | undefined;
+                try {
+                    const header = decodeProtectedHeader(bearerToken);
+                    kid = header.kid;
+                } catch {}
+                const publicKey = await getIdpPublicKey(kid);
                 if (publicKey) {
                     const { payload } = await jwtVerify(bearerToken, publicKey, {
                         algorithms: ["RS256"],
@@ -1132,12 +1263,14 @@ auth.get("/oauth2/userinfo", async (c) => {
                                 ...(ObjectId.isValid(userId) ? [{ _id: new ObjectId(userId) }] : [])
                             ]
                         });
+                        const targetClientId = (payload.client_id || payload.azp || (typeof payload.aud === "string" ? payload.aud : payload.aud?.[0]) || "") as string;
+                        const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
                         return c.json({
                             sub: userId,
                             email: userDoc?.email || payload.email,
                             name: userDoc?.name || payload.name || (userDoc?.email ? userDoc.email.split("@")[0] : userId),
-                            role: userDoc?.role || (payload.role as string) || "user",
-                            scoped_client_id: userDoc?.scopedClientId || (payload.scoped_client_id as string | null) || null,
+                            role: resolved.role,
+                            scoped_client_id: resolved.scopedClientId,
                         }, 200);
                     }
                 }
@@ -1173,13 +1306,17 @@ auth.get("/oauth2/userinfo", async (c) => {
                     const userDoc = await database.collection("user").findOne({
                         $or: orConditions
                     });
-                    if (userDoc) {
-                        data.role = userDoc.role || "user";
-                        data.scoped_client_id = userDoc.scopedClientId || null;
-                    } else {
-                        data.role = data.role || "user";
-                        data.scoped_client_id = data.scoped_client_id || null;
+
+                    let targetClientId = c.req.query("client_id") || "";
+                    if (!targetClientId && bearerToken) {
+                        try {
+                            const decoded: any = decodeJwt(bearerToken);
+                            targetClientId = (decoded?.client_id || decoded?.azp || (typeof decoded?.aud === "string" ? decoded.aud : decoded?.aud?.[0]) || "") as string;
+                        } catch {}
                     }
+                    const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
+                    data.role = resolved.role;
+                    data.scoped_client_id = resolved.scopedClientId;
                     return c.json(data, 200);
                 }
                 return c.json(data, 200);
@@ -1238,7 +1375,12 @@ auth.post("/oauth2/introspect", async (c) => {
                     authClientId = params.get("client_id") || undefined;
                 }
 
-                const publicKey = await getIdpPublicKey();
+                let kid: string | undefined;
+                try {
+                    const header = decodeProtectedHeader(token);
+                    kid = header.kid;
+                } catch {}
+                const publicKey = await getIdpPublicKey(kid);
                 if (publicKey) {
                     const { payload } = await jwtVerify(token, publicKey, {
                         algorithms: ["RS256"],
@@ -1266,6 +1408,19 @@ auth.post("/oauth2/introspect", async (c) => {
                         return c.json({ active: false }, 200);
                     }
 
+                    // Dynamically resolve user role to ensure freshly revoked or granted admin privileges reflect immediately
+                    const userId = String(payload.sub || tokenDoc.userId || "");
+                    const orConditions: any[] = [{ id: userId }];
+                    if (payload.email) orConditions.push({ email: payload.email });
+                    if (ObjectId.isValid(userId)) {
+                        orConditions.push({ _id: new ObjectId(userId) });
+                    }
+                    const userDoc = await database.collection("user").findOne({
+                        $or: orConditions,
+                    });
+
+                    const resolved = await resolveUserRoleForClient(database, userDoc, tokenClientId);
+
                     return c.json({
                         active: true,
                         sub: payload.sub,
@@ -1275,8 +1430,8 @@ auth.post("/oauth2/introspect", async (c) => {
                         iat: payload.iat,
                         iss: payload.iss,
                         token_type: "Bearer",
-                        role: payload.role || "user",
-                        scoped_client_id: payload.scoped_client_id || null,
+                        role: resolved.role,
+                        scoped_client_id: resolved.scopedClientId,
                     }, 200);
                 }
             } catch {
@@ -1522,7 +1677,7 @@ async function handleSocialCallback(c: any) {
         }
     }
     if (!clientId) {
-        clientId = getCookie(c, "current_client_id");
+        clientId = getCookie(c, "current_client_id") || null;
     }
 
     if (clientId) {

@@ -2,8 +2,15 @@ import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { MongoClient } from "mongodb";
 import { config } from "dotenv";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
-config({ path: "hono/.env" });
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envPath = fs.existsSync(path.resolve(__dirname, ".env"))
+    ? path.resolve(__dirname, ".env")
+    : path.resolve(__dirname, "../.env");
+config({ path: envPath });
 
 const client = new MongoClient(process.env.MONGO_URI);
 
