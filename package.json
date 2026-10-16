@@ -11,6 +11,7 @@
     "security:integration-check": "./backend/node_modules/.bin/tsx scripts/security/check-integration-contract.ts",
     "security:docs-check": "npm --prefix backend run security:docs-check",
     "test:unit": "npm --prefix backend run test:unit",
+    "test:local-consumer-e2e": "npm --prefix backend run test:local-consumer-e2e",
     "test:all-security": "npm --prefix backend run test:all-security"
   }
 }

@@ -3,7 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
-import { requireAuth, AuthenticatedRequest } from './middleware/auth.js';
+import { requireAuth, AuthenticatedRequest, coordinateTokenRefresh } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -182,6 +182,43 @@ app.get('/auth/me', requireAuth, (req: AuthenticatedRequest, res) => {
     user: req.user,
     accessTokenPreview: req.accessToken ? `${req.accessToken.slice(0, 12)}...` : undefined,
   });
+});
+
+// 3b. Refresh Tokens Route
+app.post('/auth/refresh', async (req, res) => {
+  const cookieSession = req.cookies?.app_session;
+  let parsed: any;
+  if (cookieSession) {
+    try {
+      parsed = typeof cookieSession === 'string' ? JSON.parse(cookieSession) : cookieSession;
+    } catch {
+      return res.status(400).json({ error: 'invalid_session', message: 'Malformed session cookie' });
+    }
+  }
+
+  const refreshToken = req.body?.refresh_token || parsed?.refresh_token;
+  if (!refreshToken) {
+    return res.status(400).json({ error: 'invalid_request', message: 'Missing refresh token' });
+  }
+
+  try {
+    const tokens = await coordinateTokenRefresh(refreshToken, AUTH_ISSUER, CLIENT_ID, CLIENT_SECRET);
+    if (parsed) {
+      parsed.access_token = tokens.access_token;
+      parsed.refresh_token = tokens.refresh_token || refreshToken;
+      parsed.expires_at = Date.now() + (tokens.expires_in || 3600) * 1000;
+      res.cookie('app_session', JSON.stringify(parsed), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: (tokens.expires_in || 3600) * 1000,
+      });
+    }
+    return res.json(tokens);
+  } catch (err: any) {
+    return res.status(401).json({ error: 'refresh_failed', message: err.message });
+  }
 });
 
 // 4. Logout Session

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node ../scripts/prepare-vercel-config.mjs --if-present && tsc -b && vite build",
+    "build:ui": "node ../scripts/prepare-vercel-config.mjs --skip-deployment-prep && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },

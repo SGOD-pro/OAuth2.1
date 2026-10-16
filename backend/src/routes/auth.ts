@@ -104,13 +104,14 @@ async function generateAndStoreFreshKeypair(database: any): Promise<{ privateKey
         privateJwk.alg = "RS256";
         privateJwk.use = "sig";
 
-        let storedPrivateKey: any = privateJwk;
+        let storedPrivateKey: any = typeof privateJwk === "string" ? privateJwk : JSON.stringify(privateJwk);
         if (config.auth.secret) {
             try {
-                storedPrivateKey = await symmetricEncrypt({
+                const enc = await symmetricEncrypt({
                     key: config.auth.secret,
                     data: JSON.stringify(privateJwk),
                 });
+                storedPrivateKey = JSON.stringify(enc);
             } catch (encryptErr) {
                 console.error("[getIdpSigningKey] Critical: Failed to symmetrically encrypt fresh private key at rest:", encryptErr);
                 return null;
@@ -118,6 +119,8 @@ async function generateAndStoreFreshKeypair(database: any): Promise<{ privateKey
         }
 
         const newDoc = {
+            _id: kid as any,
+            id: kid,
             kid,
             publicKey: JSON.stringify(publicJwk),
             privateKey: storedPrivateKey,
@@ -138,7 +141,22 @@ async function generateAndStoreFreshKeypair(database: any): Promise<{ privateKey
     }
 }
 
-async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | null> {
+let signingKeyOverrideForTesting: (() => Promise<{ privateKey: any; kid: string } | null>) | null = null;
+export function setSigningKeyOverrideForTesting(override: (() => Promise<{ privateKey: any; kid: string } | null>) | null): void {
+    signingKeyOverrideForTesting = override;
+}
+
+export function clearSigningKeyCacheForTesting(): void {
+    cachedPrivateKey = null;
+    cachedKeyId = "";
+    lastPrivateKeyFetch = 0;
+    signingKeyOverrideForTesting = null;
+}
+
+export async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | null> {
+    if (signingKeyOverrideForTesting) {
+        return signingKeyOverrideForTesting();
+    }
     const now = Date.now();
     if (cachedPrivateKey && cachedKeyId && now - lastPrivateKeyFetch < 60_000) {
         return { privateKey: cachedPrivateKey, kid: cachedKeyId };
@@ -195,11 +213,14 @@ async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | nu
         return { privateKey: cachedPrivateKey, kid: cachedKeyId };
     } catch (err) {
         console.warn("[getIdpSigningKey] Existing signing key is unreadable or corrupted. Self-healing with fresh keypair...", err);
+        if (jwksRecord && jwksRecord._id) {
+            await database.collection("jwks").deleteOne({ _id: jwksRecord._id }).catch(() => {});
+        }
         return generateAndStoreFreshKeypair(database);
     }
 }
 
-async function mintJwtAccessToken(params: {
+export async function mintJwtAccessToken(params: {
     userId: string;
     clientId: string;
     expiresInSeconds?: number;
@@ -238,6 +259,7 @@ async function mintJwtAccessToken(params: {
             .setIssuer(config.auth.baseURL)
             .setAudience(params.clientId)
             .setExpirationTime(`${ttl}s`)
+            .setJti(crypto.randomUUID())
             .sign(signingKey.privateKey);
 
         return jwt;
@@ -698,26 +720,50 @@ auth.get("/oauth2/authorize", async (c) => {
 
     // E. Determine authenticated user from session & MongoDB
     let sessionUser: any = null;
-    try {
-        const sessionResult = await authProvider.api.getSession({
-            headers: getHeaders(c),
-        });
-        if (sessionResult?.user) {
-            const userDoc = await database.collection("user").findOne({
-                $or: [
-                    { id: sessionResult.user.id },
-                    { _id: (sessionResult.user as any)._id },
-                    { email: sessionResult.user.email },
-                ],
+    const isPromptLogin = c.req.query("prompt") === "login";
+    if (!isPromptLogin) {
+        try {
+            const sessionResult = await authProvider.api.getSession({
+                headers: getHeaders(c),
             });
-            sessionUser = { ...sessionResult.user, ...userDoc };
+            if (sessionResult?.user) {
+                const userDoc = await database.collection("user").findOne({
+                    $or: [
+                        { id: sessionResult.user.id },
+                        { _id: (sessionResult.user as any)._id },
+                        { email: sessionResult.user.email },
+                    ],
+                });
+                sessionUser = { ...sessionResult.user, ...userDoc };
+            }
+        } catch {
+            sessionUser = null;
         }
-    } catch {
-        sessionUser = null;
     }
 
     const forwardToBetterAuth = async () => {
-        const res = await authProvider.handler(c.req.raw);
+        let rawReq = c.req.raw;
+        if (isPromptLogin) {
+            const h = new Headers(rawReq.headers);
+            const cookieHeader = h.get("cookie") || "";
+            const filteredCookies = cookieHeader
+                .split(";")
+                .map((part) => part.trim())
+                .filter((part) => !part.startsWith("better-auth.session_token=") && !part.startsWith("__Secure-better-auth.session_token="))
+                .join("; ");
+            if (filteredCookies) {
+                h.set("cookie", filteredCookies);
+            } else {
+                h.delete("cookie");
+            }
+            rawReq = new Request(rawReq.url, {
+                method: rawReq.method,
+                headers: h,
+                body: rawReq.body,
+                redirect: "manual",
+            });
+        }
+        const res = await authProvider.handler(rawReq);
         const headers = new Headers(res.headers);
         headers.append("set-cookie", `oauth_transaction_id=${transactionId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
         headers.append("set-cookie", `current_client_id=${canonicalClientId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
@@ -1069,26 +1115,138 @@ auth.post("/oauth2/token", async (c) => {
                     );
                 }
 
-                if (tokenData && tokenData.access_token && resolvedUserId) {
+                if (!rotationResult.valid) {
+                    return c.json(
+                        {
+                            error: "invalid_grant",
+                            error_description: "Refresh token was already consumed or is invalid",
+                        },
+                        400
+                    );
+                }
+
+                if (tokenData && tokenData.access_token) {
+                    if (!resolvedUserId) {
+                        console.error("[TOKEN_MINTING] Missing resolvedUserId in refresh_token flow; failing closed without opaque fallback");
+                        await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
+                        await database.collection("oauthAccessToken").deleteMany({ token: tokenData.access_token }).catch(() => {});
+                        if (rotationResult.familyId) {
+                            await database.collection("oauth_token_families").updateOne(
+                                { familyId: rotationResult.familyId, activeTokenHash: newHash },
+                                {
+                                    $set: { activeTokenHash: incomingHash },
+                                    $pull: { consumedTokenHashes: incomingHash as any },
+                                }
+                            ).catch(() => {});
+                        }
+                        if (refreshToken) {
+                            await database.collection("oauthRefreshToken").updateOne(
+                                { token: refreshToken },
+                                {
+                                    $setOnInsert: {
+                                        token: refreshToken,
+                                        clientId: canonicalClientId,
+                                        createdAt: new Date(),
+                                        expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
+                                    }
+                                },
+                                { upsert: true }
+                            ).catch(() => {});
+                        }
+                        return c.json(
+                            {
+                                error: "server_error",
+                                error_description: "Failed to resolve authenticated user identity for token minting",
+                            },
+                            500
+                        );
+                    }
+
                     const jwtAt = await mintJwtAccessToken({
                         userId: resolvedUserId,
                         clientId: canonicalClientId,
                         expiresInSeconds: tokenData.expires_in || 900,
                         scope: tokenData.scope,
                     });
-                    if (jwtAt) {
-                        await database.collection("oauthAccessToken").insertOne({
-                            token: jwtAt,
-                            clientId: canonicalClientId,
-                            userId: resolvedUserId,
-                            expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
-                            createdAt: new Date(),
-                            scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
-                        }).catch(() => {});
-                        tokenData.access_token = jwtAt;
-                        if (tokenData.id_token) {
-                            tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
+
+                    if (!jwtAt) {
+                        console.error("[TOKEN_MINTING] Failed to mint RS256 access token in refresh_token flow; failing closed without opaque fallback");
+                        // Compute base64url hashes as stored by Better Auth OAuth provider
+                        const incomingStoredHash = crypto.createHash("sha256").update(refreshToken).digest("base64url");
+                        const newRefreshStoredHash = tokenData.refresh_token
+                            ? crypto.createHash("sha256").update(tokenData.refresh_token).digest("base64url")
+                            : null;
+                        const newAccessStoredHash = tokenData.access_token
+                            ? crypto.createHash("sha256").update(tokenData.access_token).digest("base64url")
+                            : null;
+
+                        // FAIL CLOSED: Purge newly minted refresh and access tokens (both plaintext and stored hash formats)
+                        if (tokenData.refresh_token) {
+                            await database.collection("oauthRefreshToken").deleteMany({
+                                $or: [
+                                    { token: tokenData.refresh_token },
+                                    ...(newRefreshStoredHash ? [{ token: newRefreshStoredHash }] : [])
+                                ]
+                            }).catch(() => {});
                         }
+                        if (tokenData.access_token) {
+                            await database.collection("oauthAccessToken").deleteMany({
+                                $or: [
+                                    { token: tokenData.access_token },
+                                    ...(newAccessStoredHash ? [{ token: newAccessStoredHash }] : [])
+                                ]
+                            }).catch(() => {});
+                        }
+
+                        // Revert the family rotation so caller's existing token remains valid and not in consumedTokenHashes
+                        if (rotationResult.familyId) {
+                            await database.collection("oauth_token_families").updateOne(
+                                { familyId: rotationResult.familyId, activeTokenHash: newHash },
+                                {
+                                    $set: { activeTokenHash: incomingHash, rotating: false },
+                                    $pull: { consumedTokenHashes: incomingHash as any },
+                                }
+                            ).catch(() => {});
+                        }
+
+                        // Also restore old refresh token record in oauthRefreshToken by un-revoking it
+                        if (refreshToken) {
+                            await database.collection("oauthRefreshToken").updateOne(
+                                { $or: [{ token: refreshToken }, { token: incomingStoredHash }] },
+                                {
+                                    $set: { revoked: null, rotatedAt: null },
+                                    $setOnInsert: {
+                                        token: incomingStoredHash,
+                                        clientId: canonicalClientId,
+                                        userId: resolvedUserId,
+                                        createdAt: new Date(),
+                                        expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
+                                    }
+                                },
+                                { upsert: true }
+                            ).catch(() => {});
+                        }
+
+                        return c.json(
+                            {
+                                error: "server_error",
+                                error_description: "Failed to mint RS256 access token",
+                            },
+                            500
+                        );
+                    }
+
+                    await database.collection("oauthAccessToken").insertOne({
+                        token: jwtAt,
+                        clientId: canonicalClientId,
+                        userId: resolvedUserId,
+                        expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
+                        createdAt: new Date(),
+                        scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                    }).catch(() => {});
+                    tokenData.access_token = jwtAt;
+                    if (tokenData.id_token) {
+                        tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
                     }
                     return c.json(tokenData, 200);
                 }
@@ -1170,9 +1328,11 @@ auth.post("/oauth2/token", async (c) => {
                 }
             }
 
+            let initialHash: string | null = null;
+            let familyId: string | null = null;
             if (tokenData && tokenData.refresh_token) {
-                const initialHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
-                const familyId = crypto.randomUUID();
+                initialHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
+                familyId = crypto.randomUUID();
 
                 // Strictly bind token family to canonicalClientId and resolvedUserId
                 try {
@@ -1194,26 +1354,82 @@ auth.post("/oauth2/token", async (c) => {
                 }
             }
 
-            if (tokenData && tokenData.access_token && resolvedUserId) {
+            if (tokenData && tokenData.access_token) {
+                if (!resolvedUserId) {
+                    console.error("[TOKEN_MINTING] Missing resolvedUserId in authorization_code flow; failing closed without opaque fallback");
+                    if (tokenData.refresh_token) {
+                        await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
+                        if (familyId) {
+                            await database.collection("oauth_token_families").deleteMany({ familyId }).catch(() => {});
+                        }
+                    }
+                    await database.collection("oauthAccessToken").deleteMany({ token: tokenData.access_token }).catch(() => {});
+                    return c.json(
+                        {
+                            error: "server_error",
+                            error_description: "Failed to resolve authenticated user identity for token minting",
+                        },
+                        500
+                    );
+                }
+
                 const jwtAt = await mintJwtAccessToken({
                     userId: resolvedUserId,
                     clientId: canonicalClientId,
                     expiresInSeconds: tokenData.expires_in || 900,
                     scope: tokenData.scope,
                 });
-                if (jwtAt) {
-                    await database.collection("oauthAccessToken").insertOne({
-                        token: jwtAt,
-                        clientId: canonicalClientId,
-                        userId: resolvedUserId,
-                        expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
-                        createdAt: new Date(),
-                        scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
-                    }).catch(() => {});
-                    tokenData.access_token = jwtAt;
-                    if (tokenData.id_token) {
-                        tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
+
+                if (!jwtAt) {
+                    console.error("[TOKEN_MINTING] Failed to mint RS256 access token in authorization_code flow; failing closed without opaque fallback");
+                    const newRefreshStoredHash = tokenData.refresh_token
+                        ? crypto.createHash("sha256").update(tokenData.refresh_token).digest("base64url")
+                        : null;
+                    const newAccessStoredHash = tokenData.access_token
+                        ? crypto.createHash("sha256").update(tokenData.access_token).digest("base64url")
+                        : null;
+
+                    // FAIL CLOSED: Purge any created tokens and token family state so no partial/unusable credentials survive
+                    if (tokenData.refresh_token) {
+                        await database.collection("oauthRefreshToken").deleteMany({
+                            $or: [
+                                { token: tokenData.refresh_token },
+                                ...(newRefreshStoredHash ? [{ token: newRefreshStoredHash }] : [])
+                            ]
+                        }).catch(() => {});
+                        if (familyId) {
+                            await database.collection("oauth_token_families").deleteMany({ familyId }).catch(() => {});
+                        }
                     }
+                    if (tokenData.access_token) {
+                        await database.collection("oauthAccessToken").deleteMany({
+                            $or: [
+                                { token: tokenData.access_token },
+                                ...(newAccessStoredHash ? [{ token: newAccessStoredHash }] : [])
+                            ]
+                        }).catch(() => {});
+                    }
+
+                    return c.json(
+                        {
+                            error: "server_error",
+                            error_description: "Failed to mint RS256 access token",
+                        },
+                        500
+                    );
+                }
+
+                await database.collection("oauthAccessToken").insertOne({
+                    token: jwtAt,
+                    clientId: canonicalClientId,
+                    userId: resolvedUserId,
+                    expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
+                    createdAt: new Date(),
+                    scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                }).catch(() => {});
+                tokenData.access_token = jwtAt;
+                if (tokenData.id_token) {
+                    tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
                 }
                 return c.json(tokenData, 200);
             }

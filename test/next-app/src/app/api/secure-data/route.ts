@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { refreshAccessToken } from '@/lib/oauth';
 
 export async function GET(request: NextRequest) {
   // Check auth_session cookie or Bearer token header
@@ -8,10 +9,24 @@ export async function GET(request: NextRequest) {
   let isAuthenticated = false;
   let userEmail = 'Unknown';
   let tokenPreview = '';
+  let updatedSession: any = null;
 
   if (sessionCookie) {
     try {
       const session = JSON.parse(sessionCookie);
+      const isExpired = session.createdAt && session.tokens?.expires_in && (session.createdAt + session.tokens.expires_in * 1000 <= Date.now());
+
+      if (isExpired && session.tokens?.refresh_token) {
+        try {
+          const newTokens = await refreshAccessToken(session.tokens.refresh_token);
+          session.tokens = newTokens;
+          session.createdAt = Date.now();
+          updatedSession = session;
+        } catch {
+          // auto-refresh failed
+        }
+      }
+
       if (session?.tokens?.access_token) {
         isAuthenticated = true;
         userEmail = session.user?.email || session.user?.sub || 'Authenticated User';
@@ -38,7 +53,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Return realistic dummy secure telemetry data
-  return NextResponse.json({
+  const response = NextResponse.json({
     status: 'SECURE_STREAM_ACTIVE',
     authorizedUser: userEmail,
     tokenPreview,
@@ -71,4 +86,16 @@ export async function GET(request: NextRequest) {
       }
     }
   });
+
+  if (updatedSession) {
+    response.cookies.set('auth_session', JSON.stringify(updatedSession), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: updatedSession.tokens?.expires_in || 3600,
+    });
+  }
+
+  return response;
 }

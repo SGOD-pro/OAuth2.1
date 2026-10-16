@@ -21,6 +21,59 @@ function getJWKS(jwksUrl: string) {
   return jwks;
 }
 
+const inFlightRefreshes = new Map<string, Promise<{ access_token: string; refresh_token?: string; expires_in: number }>>();
+
+export async function coordinateTokenRefresh(
+  refreshToken: string,
+  issuer: string,
+  clientId: string,
+  clientSecret?: string
+): Promise<{ access_token: string; refresh_token?: string; expires_in: number }> {
+  const existing = inFlightRefreshes.get(refreshToken);
+  if (existing) {
+    return existing;
+  }
+
+  const refreshPromise = (async () => {
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      };
+      const bodyParams = new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: clientId,
+      });
+
+      if (clientSecret) {
+        const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+        headers['Authorization'] = `Basic ${basicAuth}`;
+        bodyParams.set('client_secret', clientSecret);
+      }
+
+      const res = await fetch(`${issuer}/api/auth/oauth2/token`, {
+        method: 'POST',
+        headers,
+        body: bodyParams.toString(),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Token refresh failed (${res.status}): ${errText}`);
+      }
+
+      const data = await res.json();
+      return data;
+    } finally {
+      inFlightRefreshes.delete(refreshToken);
+    }
+  })();
+
+  inFlightRefreshes.set(refreshToken, refreshPromise);
+  return refreshPromise;
+}
+
 export async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   const cookieSession = req.cookies?.app_session;
@@ -28,17 +81,48 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
   let token: string | undefined;
   let sessionUser: Record<string, unknown> | undefined;
   let sessionExpiresAt: number | undefined;
+  let refreshToken: string | undefined;
+  let parsedSession: any;
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.substring(7);
   } else if (cookieSession) {
     try {
-      const parsed = typeof cookieSession === 'string' ? JSON.parse(cookieSession) : cookieSession;
-      token = parsed.access_token;
-      sessionUser = parsed.user;
-      sessionExpiresAt = parsed.expires_at;
+      parsedSession = typeof cookieSession === 'string' ? JSON.parse(cookieSession) : cookieSession;
+      token = parsedSession.access_token;
+      sessionUser = parsedSession.user;
+      sessionExpiresAt = parsedSession.expires_at;
+      refreshToken = parsedSession.refresh_token;
     } catch {
       // Invalid cookie format
+    }
+  }
+
+  const issuer = process.env.AUTH_ISSUER;
+  const clientId = process.env.CLIENT_ID;
+  const clientSecret = process.env.CLIENT_SECRET;
+
+  // Auto-refresh expired session if refresh_token is available
+  if (refreshToken && sessionExpiresAt && sessionExpiresAt <= Date.now() && issuer && clientId) {
+    try {
+      const refreshed = await coordinateTokenRefresh(refreshToken, issuer, clientId, clientSecret);
+      token = refreshed.access_token;
+      refreshToken = refreshed.refresh_token || refreshToken;
+      sessionExpiresAt = Date.now() + (refreshed.expires_in || 3600) * 1000;
+      if (parsedSession) {
+        parsedSession.access_token = token;
+        parsedSession.refresh_token = refreshToken;
+        parsedSession.expires_at = sessionExpiresAt;
+        res.cookie('app_session', JSON.stringify(parsedSession), {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          path: '/',
+          maxAge: (refreshed.expires_in || 3600) * 1000,
+        });
+      }
+    } catch (refreshErr) {
+      // Refresh failed; proceed to validate token or fail
     }
   }
 
@@ -56,9 +140,6 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
     return next();
   }
 
-  const issuer = process.env.AUTH_ISSUER;
-  const clientId = process.env.CLIENT_ID;
-  const clientSecret = process.env.CLIENT_SECRET;
   if (!issuer || !clientId) {
     return res.status(500).json({ error: 'misconfigured', message: 'Missing AUTH_ISSUER or CLIENT_ID in environment' });
   }

@@ -14,12 +14,13 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | A | OAuth 2.1 protocol engine | Foundation | existing |
 | B | Multi tenant client registry | Foundation | existing |
 | C | Admin console interface | Foundation | existing |
-| D | Deployment and edge proxy | Foundation | in-progress |
+| D | Deployment and edge proxy | Foundation | done |
 | 1 | Admin identity decoupling and role scoping | Slice 1 | done |
 | 2 | Runtime resilience and key resolution | Slice 2 | done |
 | 3 | Gateway secret persistence and deploy pipeline | Slice 3 | done |
 | 4 | Dev isolation and dual mode client URIs | Slice 4 | done |
 | 5 | Application configuration simplification | Slice 5 | done |
+| 6 | Local consumer E2E and resilience hardening | Slice 6 | done |
 
 ## Existing foundations
 
@@ -35,9 +36,9 @@ code in `backend/src/routes/admin.ts` and `backend/src/utils/security.ts`
 Management dashboard for OAuth clients, redirect URIs, application administrators, and operational metrics.
 code in `frontend/src/` and `frontend/pages/admin/`
 
-### D. Deployment and edge proxy · in-progress
-AWS Lambda backend deployment and Vercel edge proxy routing with internal gateway secret authentication. Finish resolving cold start and proxy configuration persistence via /develop.
-code in `backend/deploy.sh` and `scripts/prepare-vercel-config.mjs`
+### D. Deployment and edge proxy · done
+AWS Lambda backend deployment and Vercel edge proxy routing with internal gateway secret authentication. Gateway secret persistence, production fail-closed security, and build hooks fully verified.
+code in `backend/deploy.sh`, `scripts/prepare-vercel-config.mjs`, and `.github/workflows/deploy.yml`
 
 ## Slice 1: Admin identity decoupling and role scoping
 
@@ -122,9 +123,26 @@ Reduce application onboarding friction by automatically deriving allowed CORS or
 - [x] Document it: `/document application configuration simplification`
 [0005](../specs/0005-application-configuration-simplification/index.md) · code in `backend/src/utils/security.ts`, `backend/src/routes/admin.ts`, `frontend/pages/admin/RegisterAppModal.tsx`, `frontend/pages/admin/EditAppModal.tsx`, `backend/tests/unit/config-simplification.test.ts`
 
+## Slice 6: Local consumer E2E and resilience hardening
+
+### 6. Local consumer E2E and resilience hardening · done
+Harden token minting failure handling to fail closed with controlled 500 server_error, replace implementation-mirroring resilience tests with real production service tests, coordinate consumer token refresh to prevent concurrent race revocation, and verify all 11 end-to-end authentication scenarios.
+**Done when:** JWT minting failure returns controlled 500 server_error without opaque fallback, runtime resilience tests exercise real routes against disposable MongoDB, consumer applications coordinate in-flight refresh requests, and all 11 local consumer E2E scenarios pass.
+- [x] Build it: `/develop local consumer E2E and resilience hardening`
+   - [x] Return controlled 500 server_error and rollback state on JWT minting failure (Gap 1)
+   - [x] Replace resilience tests with real production functions and routes (Gap 2)
+   - [x] Implement fail-closed Vercel deployment prep and authenticated smoke check (Gap 3)
+   - [x] Implement consumer refresh coordination mutex and auto-refresh in test apps (Slice 6)
+   - [x] Verify all 11 local consumer end-to-end flows against disposable MongoDB (Slice 6)
+   - [x] Add CI verification workflow for bug-fix branch and pull requests without deployment (Slice 6)
+- [x] Verify it: `/check verify local consumer E2E and resilience hardening`
+- [x] Test it: `/test local consumer E2E and resilience hardening`
+- [x] Review it: `/check review local consumer E2E and resilience hardening`
+- [x] Document it: `/document local consumer E2E and resilience hardening`
+[0002](../specs/0002-runtime-resilience-and-key-resolution/index.md) · code in `backend/src/routes/auth.ts`, `backend/src/db/state.ts`, `test/next-app/`, `test/react-express-app/`, `backend/tests/e2e/local-consumer-e2e.test.ts`
+
 ## Deferred
 Out of scope for the current remediation slice, kept so the plan stays honest.
-- **Consumer sample app test harness**: automated end to end integration test suites executing sample consumer apps against the live identity provider · needs a decision · GA
 - **Developer self service portal**: self service registration portal for external developers to request client credentials without main admin console access · needs a decision · GA
 
 ## Legend

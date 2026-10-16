@@ -1,5 +1,15 @@
+import assert from "node:assert/strict";
+import crypto from "crypto";
+import { MongoMemoryServer } from "mongodb-memory-server";
+import { ObjectId, type Db } from "mongodb";
+import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
+
+// 1. Start disposable in-memory MongoDB before importing any application config
+const mongod = await MongoMemoryServer.create();
+const mongoUri = mongod.getUri();
+
 process.env.NODE_ENV = "test";
-process.env.MONGO_URI = "mongodb://localhost:27017/test_runtime_resilience";
+process.env.MONGO_URI = mongoUri;
 process.env.BETTER_AUTH_SECRET = "a".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -7,149 +17,34 @@ process.env.GOOGLE_CLIENT_ID = "test-google-id";
 process.env.GOOGLE_CLIENT_SECRET = "test-google-secret";
 process.env.INTERNAL_GATEWAY_SECRET = "g".repeat(32);
 
-import assert from "node:assert/strict";
-import crypto from "crypto";
-import { ObjectId, type Db } from "mongodb";
-import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
-
+// 2. Import real production modules
+const { client, getDb, closeDb, database: exportedDb } = await import("../../src/db/mongo");
 const { getIdpPublicKey, clearPublicKeyCacheForTesting } = await import("../../src/middleware/admin-auth");
-const { client, setTestDbOverride } = await import("../../src/db/mongo");
-
-// Mock Mongo collection for in-memory testing
-class MockCollection {
-  public docs: any[] = [];
-
-  constructor(initialDocs: any[] = []) {
-    this.docs = initialDocs.map((doc) => ({ ...doc }));
-  }
-
-  async findOne(query: Record<string, any>, options?: { sort?: Record<string, any> }) {
-    let matches = this.docs.filter((d) => this.matches(d, query));
-    if (options?.sort) {
-      const sortField = Object.keys(options.sort)[0];
-      const sortDir = options.sort[sortField] || 1;
-      matches.sort((a, b) => {
-        if (a[sortField] < b[sortField]) return -1 * sortDir;
-        if (a[sortField] > b[sortField]) return 1 * sortDir;
-        return 0;
-      });
-    }
-    const doc = matches[0];
-    return doc ? { ...doc } : null;
-  }
-
-  find(query: Record<string, any>) {
-    const getFiltered = () => this.docs.filter((d) => this.matches(d, query)).map((d) => ({ ...d }));
-    return {
-      sort: (sortObj: Record<string, any>) => ({
-        toArray: async () => {
-          const items = getFiltered();
-          const sortField = Object.keys(sortObj)[0];
-          const sortDir = sortObj[sortField] || 1;
-          if (sortField) {
-            items.sort((a, b) => {
-              if (a[sortField] < b[sortField]) return -1 * sortDir;
-              if (a[sortField] > b[sortField]) return 1 * sortDir;
-              return 0;
-            });
-          }
-          return items;
-        },
-      }),
-      toArray: async () => getFiltered(),
-    };
-  }
-
-  async updateOne(query: Record<string, any>, update: Record<string, any>, options?: { upsert?: boolean }) {
-    const idx = this.docs.findIndex((doc) => this.matches(doc, query));
-    if (idx >= 0) {
-      if (update.$set) {
-        Object.assign(this.docs[idx], update.$set);
-      }
-      if (update.$push) {
-        for (const [k, v] of Object.entries(update.$push)) {
-          if (!Array.isArray(this.docs[idx][k])) this.docs[idx][k] = [];
-          this.docs[idx][k].push(v);
-        }
-      }
-      return { matchedCount: 1, modifiedCount: 1, upsertedCount: 0 };
-    }
-    if (options?.upsert) {
-      const newDoc = { ...query };
-      if (update.$set) Object.assign(newDoc, update.$set);
-      this.docs.push(newDoc);
-      return { matchedCount: 0, modifiedCount: 0, upsertedCount: 1 };
-    }
-    return { matchedCount: 0, modifiedCount: 0, upsertedCount: 0 };
-  }
-
-  async insertOne(doc: any) {
-    this.docs.push({ ...doc });
-    return { insertedId: doc._id || new ObjectId() };
-  }
-
-  async createIndex() {
-    return "";
-  }
-
-  async deleteMany(query: Record<string, any>) {
-    const initialLen = this.docs.length;
-    this.docs = this.docs.filter((doc) => !this.matches(doc, query));
-    return { deletedCount: initialLen - this.docs.length };
-  }
-
-  private matches(doc: any, query: Record<string, any>): boolean {
-    for (const [key, val] of Object.entries(query)) {
-      if (key === "$or" && Array.isArray(val)) {
-        const anyMatch = val.some((subQ) => this.matches(doc, subQ));
-        if (!anyMatch) return false;
-        continue;
-      }
-      if (val instanceof ObjectId || doc[key] instanceof ObjectId) {
-        if (String(doc[key]) !== String(val)) return false;
-        continue;
-      }
-      if (Array.isArray(doc[key]) && !Array.isArray(val)) {
-        if (!doc[key].includes(val)) return false;
-        continue;
-      }
-      if (val && typeof val === "object") {
-        if ("$ne" in val && doc[key] === val.$ne) return false;
-        if ("$exists" in val) {
-          const exists = doc[key] !== undefined;
-          if (exists !== val.$exists) return false;
-        }
-        continue;
-      }
-      if (doc[key] !== val) {
-        return false;
-      }
-    }
-    return true;
-  }
-}
-
-function createMockDb(collections: Record<string, any[]>) {
-  const colMap = new Map<string, MockCollection>();
-  for (const [name, initialDocs] of Object.entries(collections)) {
-    colMap.set(name, new MockCollection(initialDocs));
-  }
-
-  return {
-    collection: (name: string) => {
-      if (!colMap.has(name)) {
-        colMap.set(name, new MockCollection());
-      }
-      return colMap.get(name) as any;
-    },
-  } as unknown as Db;
-}
+const {
+  getIdpSigningKey,
+  mintJwtAccessToken,
+  clearSigningKeyCacheForTesting,
+  setSigningKeyOverrideForTesting,
+  auth,
+} = await import("../../src/routes/auth");
+const { default: app } = await import("../../src/app");
+const { authProvider } = await import("../../src/utils/auth");
+const {
+  verifyAndRotateTokenFamily,
+  registerTokenFamily,
+  ensureTtlIndexes,
+} = await import("../../src/db/state");
 
 async function runTests() {
-  console.log("Starting Runtime Resilience and Key Resolution Unit Tests\n");
+  console.log("Starting Real Runtime Resilience and Key Resolution Tests (against disposable MongoDB)\n");
 
-  // TEST 1: MongoClient options and lifecycle listener configuration (AC-1, AC-2)
+  const database = await getDb();
+  await ensureTtlIndexes();
+
+  // TEST 1: Real Mongo disconnect/reconnect and resilient timeouts against disposable database (AC-1, AC-2)
   {
+    console.log("[TEST 1] Testing real Mongo connection resilience, timeouts, and reconnect lifecycle...");
+
     const options = (client as any).options;
     assert.ok(options, "MongoClient options must be present");
     assert.equal(options.serverSelectionTimeoutMS, 10000, "serverSelectionTimeoutMS must be 10000ms");
@@ -163,260 +58,533 @@ async function runTests() {
     assert.ok(closeListeners.length >= 1, "close event listener must be configured");
     assert.ok(topologyListeners.length >= 1, "topologyClosed event listener must be configured");
 
-    // Simulate close and topologyClosed events to verify event listeners execute cleanly
-    (client as any).emit("close");
-    (client as any).emit("topologyClosed");
+    // Write a document to verify live connection
+    await database.collection("resilience_probe").insertOne({ probe: "initial", at: new Date() });
+    const initialDoc = await database.collection("resilience_probe").findOne({ probe: "initial" });
+    assert.ok(initialDoc, "Document must be written to real disposable database");
 
-    console.log("PASS: AC-1 & AC-2 MongoClient resilient timeouts and event listeners verified (covers: AC-1, AC-2)");
+    // Simulate connection drop via closeDb()
+    await closeDb();
+
+    // Call getDb() to verify automatic re-connection
+    const reconnectedDb = await getDb();
+    assert.ok(reconnectedDb, "getDb() must automatically reconnect after close");
+    const retrievedDoc = await reconnectedDb.collection("resilience_probe").findOne({ probe: "initial" });
+    assert.ok(retrievedDoc, "Must query documents successfully after reconnection");
+
+    // Verify proxy forwarder
+    assert.ok(typeof exportedDb.collection === "function", "database Proxy forwarder must expose collection");
+    const proxyDoc = await exportedDb.collection("resilience_probe").findOne({ probe: "initial" });
+    assert.ok(proxyDoc, "database Proxy must resolve document from active database");
+
+    console.log("PASS: AC-1 & AC-2 Real Mongo disconnect and reconnect against disposable database verified (covers: AC-1, AC-2)");
   }
 
-  // TEST 2: getIdpPublicKey resolves rotated keys by kid with in-memory caching and latest fallback (AC-3)
+  // TEST 2: Unreadable signing key, self-healing, and failed recovery (AC-4)
   {
+    console.log("[TEST 2] Testing unreadable signing key detection, self-healing key generation, and failed recovery...");
+
+    const db = await getDb();
+    clearSigningKeyCacheForTesting();
+    await db.collection("jwks").deleteMany({});
+
+    // Seed unreadable/corrupted key in database
+    await db.collection("jwks").insertOne({
+      kid: "corrupted-test-key",
+      publicKey: JSON.stringify({ kty: "RSA", kid: "corrupted-test-key" }),
+      privateKey: "corrupted-unreadable-ciphertext-not-valid-hex",
+      createdAt: new Date(),
+    });
+
+    // Call real getIdpSigningKey() — must self-heal
+    const healedSigningKey = await getIdpSigningKey();
+    assert.ok(healedSigningKey, "getIdpSigningKey must return a valid signing key after self-healing");
+    assert.ok(healedSigningKey.privateKey, "Healed signing key must contain privateKey");
+    assert.ok(healedSigningKey.kid, "Healed signing key must contain kid");
+    assert.notEqual(healedSigningKey.kid, "corrupted-test-key", "Healed key kid must be a freshly generated key");
+
+    // Verify that the corrupted document was purged from jwks
+    const corruptedDoc = await db.collection("jwks").findOne({ kid: "corrupted-test-key" });
+    assert.equal(corruptedDoc, null, "Corrupted key record must be purged from database on self-healing");
+
+    // Verify that mintJwtAccessToken succeeds with the healed key
+    await db.collection("user").insertOne({
+      id: "user-heal-test",
+      email: "heal@test.local",
+      role: "user",
+      scopedClientId: null,
+    });
+
+    const mintedJwt = await mintJwtAccessToken({
+      userId: "user-heal-test",
+      clientId: "client-heal-test",
+      expiresInSeconds: 900,
+    });
+    assert.ok(mintedJwt, "mintJwtAccessToken must mint a valid token using healed key");
+
+    // Verify failed recovery: if getIdpSigningKey fails completely (e.g. key generation returns null),
+    // mintJwtAccessToken must return null
+    clearSigningKeyCacheForTesting();
+    const mockDbFailing = {
+      collection: (name: string) => ({
+        findOne: async () => null,
+        insertOne: async () => { throw new Error("Disk full: cannot write fresh key"); },
+        deleteMany: async () => ({ deletedCount: 0 }),
+      }),
+    } as any;
+
+    const { setTestDbOverride } = await import("../../src/db/mongo");
+    setTestDbOverride(mockDbFailing);
+    try {
+      clearSigningKeyCacheForTesting();
+      const failedSigningKey = await getIdpSigningKey();
+      assert.equal(failedSigningKey, null, "getIdpSigningKey must return null when key generation/storage fails");
+
+      const failedMint = await mintJwtAccessToken({
+        userId: "user-heal-test",
+        clientId: "client-heal-test",
+      });
+      assert.equal(failedMint, null, "mintJwtAccessToken must return null when signing key resolution fails");
+    } finally {
+      setTestDbOverride(null);
+      clearSigningKeyCacheForTesting();
+    }
+
+    console.log("PASS: AC-4 Unreadable signing key detected, self-healed, and failed recovery handled cleanly (covers: AC-4)");
+  }
+
+  // TEST 3: Rotated keys discoverable through the actual JWKS endpoint (AC-3)
+  {
+    console.log("[TEST 3] Testing rotated keys discoverable through actual /.well-known/jwks.json and /api/auth/jwks endpoints...");
+
+    const db = await getDb();
+    await db.collection("jwks").deleteMany({});
+
     const { publicKey: pubKey1, privateKey: privKey1 } = await generateKeyPair("RS256", { extractable: true });
     const { publicKey: pubKey2, privateKey: privKey2 } = await generateKeyPair("RS256", { extractable: true });
-    const jwk1 = await exportJWK(pubKey1);
-    const jwk2 = await exportJWK(pubKey2);
+    const jwk1: any = await exportJWK(pubKey1);
+    const jwk2: any = await exportJWK(pubKey2);
 
-    const kid1 = "test-key-alpha";
-    const kid2 = "test-key-beta";
+    const kid1 = "prod-jwks-kid-1";
+    const kid2 = "prod-jwks-kid-2";
+    jwk1.kid = kid1;
+    jwk1.alg = "RS256";
+    jwk1.use = "sig";
+    jwk2.kid = kid2;
+    jwk2.alg = "RS256";
+    jwk2.use = "sig";
 
+    // Insert Key 1 (older)
+    await db.collection("jwks").insertOne({
+      _id: kid1 as any,
+      id: kid1,
+      kid: kid1,
+      publicKey: JSON.stringify(jwk1),
+      privateKey: JSON.stringify(await exportJWK(privKey1)),
+      createdAt: new Date(Date.now() - 3600000),
+    });
+
+    // Insert Key 2 (rotated / newest)
+    await db.collection("jwks").insertOne({
+      _id: kid2 as any,
+      id: kid2,
+      kid: kid2,
+      publicKey: JSON.stringify(jwk2),
+      privateKey: JSON.stringify(await exportJWK(privKey2)),
+      createdAt: new Date(),
+    });
+
+    // Request actual production endpoint GET /.well-known/jwks.json
+    const resJwksJson = await app.request("/.well-known/jwks.json");
+    assert.equal(resJwksJson.status, 200, "/.well-known/jwks.json must return HTTP 200");
+    const jwksData = (await resJwksJson.json()) as any;
+    console.log("JWKS DATA RETURNED:", JSON.stringify(jwksData));
+    assert.ok(jwksData && Array.isArray(jwksData.keys), "JWKS response must have a keys array");
+
+    const returnedKids = jwksData.keys.map((k: any) => k.kid);
+    assert.ok(returnedKids.includes(kid1), `Old key ${kid1} must be discoverable in JWKS`);
+    assert.ok(returnedKids.includes(kid2), `Rotated key ${kid2} must be discoverable in JWKS`);
+
+    // Verify aliases
+    const resAlias = await app.request("/.well-known/jwks");
+    assert.equal(resAlias.status, 200, "/.well-known/jwks alias must return 200");
+
+    console.log("PASS: AC-3 Rotated keys discoverable through actual JWKS endpoint (covers: AC-3)");
+  }
+
+  // TEST 4: Tokens signed before and after rotation verify correctly (AC-3)
+  {
+    console.log("[TEST 4] Testing tokens signed before and after rotation verify against matched kid...");
+
+    const db = await getDb();
+    clearPublicKeyCacheForTesting();
+    clearSigningKeyCacheForTesting();
+
+    const { publicKey: pubKey1, privateKey: privKey1 } = await generateKeyPair("RS256", { extractable: true });
+    const { publicKey: pubKey2, privateKey: privKey2 } = await generateKeyPair("RS256", { extractable: true });
+    const kid1 = "rotation-token-kid-1";
+    const kid2 = "rotation-token-kid-2";
+
+    // Sign Token 1 with Key 1
+    const token1 = await new SignJWT({ sub: "user-rotation-alpha", client_id: "test-client" })
+      .setProtectedHeader({ alg: "RS256", kid: kid1 })
+      .setIssuedAt()
+      .setIssuer("http://localhost:3000")
+      .setAudience("test-client")
+      .setExpirationTime("15m")
+      .sign(privKey1);
+
+    // Sign Token 2 with Key 2
+    const token2 = await new SignJWT({ sub: "user-rotation-beta", client_id: "test-client" })
+      .setProtectedHeader({ alg: "RS256", kid: kid2 })
+      .setIssuedAt()
+      .setIssuer("http://localhost:3000")
+      .setAudience("test-client")
+      .setExpirationTime("15m")
+      .sign(privKey2);
+
+    // Store both public keys in database
+    await db.collection("jwks").deleteMany({});
+    const jwk1: any = await exportJWK(pubKey1);
+    const jwk2: any = await exportJWK(pubKey2);
     jwk1.kid = kid1;
     jwk2.kid = kid2;
 
-    const jwksDocs = [
-      {
-        _id: new ObjectId(),
-        kid: kid1,
+    await db.collection("jwks").insertOne({
+      kid: kid1,
+      publicKey: JSON.stringify(jwk1),
+      createdAt: new Date(Date.now() - 5000),
+    });
+    await db.collection("jwks").insertOne({
+      kid: kid2,
+      publicKey: JSON.stringify(jwk2),
+      createdAt: new Date(),
+    });
+
+    // 1. Resolve key for Token 1 (signed before rotation)
+    const keyForToken1 = await getIdpPublicKey(kid1);
+    assert.ok(keyForToken1, "Must resolve key for kid1");
+    const { payload: p1 } = await jwtVerify(token1, keyForToken1, { algorithms: ["RS256"] });
+    assert.equal(p1.sub, "user-rotation-alpha", "Token 1 must verify successfully with kid1 key");
+
+    // 2. Resolve key for Token 2 (signed after rotation)
+    const keyForToken2 = await getIdpPublicKey(kid2);
+    assert.ok(keyForToken2, "Must resolve key for kid2");
+    const { payload: p2 } = await jwtVerify(token2, keyForToken2, { algorithms: ["RS256"] });
+    assert.equal(p2.sub, "user-rotation-beta", "Token 2 must verify successfully with kid2 key");
+
+    // 3. Cross-key cryptographic isolation: verifying Token 1 with Key 2 must fail
+    await assert.rejects(
+      async () => {
+        await jwtVerify(token1, keyForToken2, { algorithms: ["RS256"] });
+      },
+      /signature verification failed/i,
+      "Verifying Token 1 with rotated Key 2 must fail cryptographically"
+    );
+
+    // 4. Fallback to latest key when unknown kid is provided
+    const fallbackKey = await getIdpPublicKey("completely-unknown-kid");
+    assert.ok(fallbackKey, "Must fall back to latest key when unknown kid is provided");
+
+    // 5. Verify bounded public key cache (max 50 entries)
+    for (let i = 0; i < 55; i++) {
+      const dummyKid = `cache-bound-${i}`;
+      await db.collection("jwks").insertOne({
+        kid: dummyKid,
         publicKey: JSON.stringify(jwk1),
-        createdAt: new Date(Date.now() - 10000),
-      },
-      {
-        _id: new ObjectId(),
-        kid: kid2,
-        publicKey: JSON.stringify(jwk2),
-        createdAt: new Date(Date.now()),
-      },
-    ];
+        createdAt: new Date(),
+      });
+      await getIdpPublicKey(dummyKid);
+    }
 
-    const mockDb = createMockDb({ jwks: jwksDocs });
+    console.log("PASS: AC-3 Tokens signed before and after rotation verified with cryptographic isolation (covers: AC-3)");
+  }
 
-    // Set mock database override to test isolated getIdpPublicKey lookup
-    setTestDbOverride(mockDb);
+  // TEST 5: Refresh concurrency, dropped responses, and replay boundaries (AC-5, AC-6)
+  {
+    console.log("[TEST 5] Testing refresh concurrency, dropped responses within grace window, and replay boundaries...");
+
+    const db = await getDb();
+    const familyId = crypto.randomUUID();
+    const clientId = "client-concurrency-prod";
+    const userId = "user-concurrency-prod";
+    const initialToken = "initial-refresh-token-value-12345";
+    const initialHash = crypto.createHash("sha256").update(initialToken).digest("hex");
+
+    await db.collection("oauth_token_families").deleteMany({ clientId });
+    await registerTokenFamily(familyId, clientId, userId, initialHash);
+
+    const baseTime = Date.now();
+    const hashWinner = crypto.createHash("sha256").update("winner-new-token").digest("hex");
+    const hashLoser = crypto.createHash("sha256").update("loser-concurrent-token").digest("hex");
+
+    // Concurrency: Winning concurrent request rotates token
+    const winnerRes = await verifyAndRotateTokenFamily(initialHash, hashWinner, userId, baseTime, clientId);
+    assert.equal(winnerRes.valid, true, "Winner concurrent request must succeed in rotating family");
+    assert.equal(winnerRes.replayed, false, "Winner request is not replayed");
+
+    // Concurrency: Loser concurrent request arriving simultaneously with the same initial token
+    const loserRes = await verifyAndRotateTokenFamily(initialHash, hashLoser, userId, baseTime, clientId);
+    assert.equal(loserRes.valid, false, "Loser concurrent request must fail");
+    assert.equal(loserRes.replayed, false, "Loser concurrent request must NOT trigger replay revocation!");
+
+    // Family must remain ACTIVE
+    const famAfterRace = await db.collection("oauth_token_families").findOne({ familyId });
+    assert.equal(famAfterRace?.status, "active", "Family status must remain active after concurrent race");
+
+    // Dropped Response: Client retries with initialToken 800ms later (within 2000ms grace window)
+    const droppedRetry = await verifyAndRotateTokenFamily(initialHash, "dummy", userId, baseTime + 800, clientId);
+    assert.equal(droppedRetry.valid, false, "Consumed token must not be valid for rotation");
+    assert.equal(droppedRetry.replayed, false, "Dropped response retry within 2000ms grace must NOT revoke family");
+
+    const famAfterDropped = await db.collection("oauth_token_families").findOne({ familyId });
+    assert.equal(famAfterDropped?.status, "active", "Family status must remain active during grace window");
+
+    // Clock Skew: Consumed token with small negative drift is still within grace
+    const skewRetry = await verifyAndRotateTokenFamily(initialHash, "dummy", userId, baseTime - 50, clientId);
+    assert.equal(skewRetry.valid, false);
+    assert.equal(skewRetry.replayed, false, "Clock skew must be tolerated within grace window");
+
+    // Replay Boundary / Theft Attempt: Presentation after grace window expires (baseTime + 2500ms)
+    const theftAttempt = await verifyAndRotateTokenFamily(initialHash, "dummy", userId, baseTime + 2500, clientId);
+    assert.equal(theftAttempt.valid, false, "Theft attempt must fail");
+    assert.equal(theftAttempt.replayed, true, "Presentation outside 2000ms grace window MUST be flagged as replay theft!");
+
+    // Family must now be REVOKED
+    const famAfterTheft = await db.collection("oauth_token_families").findOne({ familyId });
+    assert.equal(famAfterTheft?.status, "revoked", "Family must be revoked after replay theft");
+    assert.ok(famAfterTheft?.revokedAt, "Revocation timestamp must be set");
+
+    // Stale rotation lock reclamation (> 15s)
+    const staleFamilyId = crypto.randomUUID();
+    const staleHash = crypto.createHash("sha256").update("stale-token-hash").digest("hex");
+    const staleThreshold = new Date(Date.now() - 20000);
+
+    await db.collection("oauth_token_families").insertOne({
+      familyId: staleFamilyId,
+      clientId,
+      userId,
+      activeTokenHash: staleHash,
+      consumedTokenHashes: [],
+      status: "active",
+      rotating: true,
+      rotatingAt: staleThreshold,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const staleDoc = await db.collection("oauth_token_families").findOne({ activeTokenHash: staleHash });
+    const isStaleEligible =
+      staleDoc &&
+      (staleDoc.rotating !== true || (staleDoc.rotatingAt && staleDoc.rotatingAt < new Date(Date.now() - 15000)));
+    assert.ok(isStaleEligible, "In-flight rotation lock older than 15s must be eligible for reclamation");
+
+    console.log("PASS: AC-5 & AC-6 Refresh concurrency, dropped response grace window, and replay boundaries verified (covers: AC-5, AC-6)");
+  }
+
+  // TEST 6: Controlled server_error and token/family cleanup on JWT minting failure (RFC 6749 Section 5.2)
+  {
+    console.log("[TEST 6] Testing controlled server_error and state cleanup when JWT minting fails on code & refresh flows...");
+
+    const db = await getDb();
+    const testClientId = "client-mint-failure-test";
+    const testClientSecret = "secret-mint-failure-12345";
+    const testRedirectUri = "http://localhost:3001/callback";
+    const secretHash = crypto.createHash("sha256").update(testClientSecret).digest("base64url");
+
+    // Clean up previous fixtures
+    await db.collection("oauthClient").deleteMany({ clientId: testClientId });
+    await db.collection("oauth_token_families").deleteMany({ clientId: testClientId });
+    await db.collection("jwks").deleteMany({});
+    clearSigningKeyCacheForTesting();
     clearPublicKeyCacheForTesting();
 
-    try {
-      // 1. Resolve key by kid1
-      const resolvedKey1 = await getIdpPublicKey(kid1);
-      assert.ok(resolvedKey1, "Should resolve public key for kid1");
-
-      // 2. Resolve key by kid2 (rotated key)
-      const resolvedKey2 = await getIdpPublicKey(kid2);
-      assert.ok(resolvedKey2, "Should resolve rotated public key for kid2");
-
-      // 3. Fallback to latest when kid is omitted or unknown
-      const fallbackKey = await getIdpPublicKey("unknown-kid");
-      assert.ok(fallbackKey, "Should fall back to latest key when unknown kid is provided");
-
-      // 4. Verify cache bounds: inserting > 50 entries does not exceed max cache size
-      for (let i = 0; i < 55; i++) {
-        const dummyKeyDoc = {
-          _id: new ObjectId(),
-          kid: `bounded-key-${i}`,
-          publicKey: JSON.stringify(jwk1),
-          createdAt: new Date(),
-        };
-        (mockDb.collection("jwks") as any).docs.push(dummyKeyDoc);
-        await getIdpPublicKey(`bounded-key-${i}`);
-      }
-
-      // 5. End-to-end token verification: Tokens signed with rotated keypairs verify cleanly by kid
-      const token1 = await new SignJWT({ sub: "user-alpha" })
-        .setProtectedHeader({ alg: "RS256", kid: kid1 })
-        .setIssuedAt()
-        .setExpirationTime("15m")
-        .sign(privKey1);
-
-      const token2 = await new SignJWT({ sub: "user-beta" })
-        .setProtectedHeader({ alg: "RS256", kid: kid2 })
-        .setIssuedAt()
-        .setExpirationTime("15m")
-        .sign(privKey2);
-
-      const keyForToken1 = await getIdpPublicKey(kid1);
-      const { payload: payload1 } = await jwtVerify(token1, keyForToken1, { algorithms: ["RS256"] });
-      assert.equal(payload1.sub, "user-alpha", "Token 1 must verify with resolved kid1 key");
-
-      const keyForToken2 = await getIdpPublicKey(kid2);
-      const { payload: payload2 } = await jwtVerify(token2, keyForToken2, { algorithms: ["RS256"] });
-      assert.equal(payload2.sub, "user-beta", "Token 2 must verify with resolved rotated kid2 key");
-
-      console.log("PASS: AC-3 getIdpPublicKey matches kid, verifies rotated tokens, bounds cache size, and falls back gracefully (covers: AC-3)");
-    } finally {
-      setTestDbOverride(null);
-      clearPublicKeyCacheForTesting();
-    }
-  }
-
-  // TEST 3: Self-healing RS256 keypair generation on private key corruption or decryption failure (AC-4)
-  {
-    const mockDb = createMockDb({
-      jwks: [
-        {
-          _id: new ObjectId(),
-          kid: "corrupted-key-1",
-          publicKey: "not-a-valid-jwk",
-          privateKey: "corrupted-unreadable-ciphertext",
-          createdAt: new Date(Date.now() - 5000),
-        },
-      ],
-    });
-
-    setTestDbOverride(mockDb);
-
-    try {
-      // Direct verification: check that corrupted jwks collection self-heals by adding a valid keypair
-      const initialDocs = await mockDb.collection("jwks").find({}).toArray();
-      assert.equal(initialDocs.length, 1, "Initially contains 1 corrupted doc");
-
-      // Call generateAndStoreFreshKeypair pattern
-      const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
-      const publicJwk: any = await exportJWK(publicKey);
-      const privateJwk: any = await exportJWK(privateKey);
-      const kid = `idp-key-${crypto.randomUUID()}`;
-
-      await mockDb.collection("jwks").insertOne({
-        kid,
-        publicKey: JSON.stringify(publicJwk),
-        privateKey: JSON.stringify(privateJwk),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-      const updatedDocs = await mockDb.collection("jwks").find({}).toArray();
-      assert.equal(updatedDocs.length, 2, "Self-healing must insert fresh keypair doc into jwks collection");
-
-      const newestKey = await mockDb.collection("jwks").findOne({}, { sort: { createdAt: -1 } });
-      assert.ok(newestKey, "Newest key must exist");
-      assert.equal(newestKey.kid, kid, "Newest key kid must match self-healed kid");
-
-      console.log("PASS: AC-4 Self-healing key generation on decryption error recovery");
-    } finally {
-      setTestDbOverride(null);
-    }
-  }
-
-  // TEST 4: verifyAndRotateTokenFamily concurrent in-flight rotation race tolerance (AC-5, AC-6)
-  {
-    const { verifyAndRotateTokenFamily } = await import("../../src/db/state");
-
-    const familyId = crypto.randomUUID();
-    const clientId = "client-concurrency-test";
-    const userId = "user-concurrency-test";
-    const activeTokenHash = crypto.createHash("sha256").update("token-initial").digest("hex");
-
-    const mockDb = createMockDb({
-      oauth_token_families: [
-        {
-          _id: new ObjectId(),
-          familyId,
-          clientId,
-          userId,
-          activeTokenHash,
-          consumedTokenHashes: [],
-          status: "active",
-          createdAt: new Date(),
+    await db.collection("oauthClient").updateOne(
+      { clientId: testClientId },
+      {
+        $set: {
+          clientId: testClientId,
+          client_id: testClientId,
+          clientSecret: secretHash,
+          client_secret: secretHash,
+          name: "Mint Failure Test App",
+          isPublic: false,
+          is_public: false,
+          isDev: true,
+          is_dev: true,
+          disabled: false,
+          redirectUris: [testRedirectUri],
+          redirect_uris: [testRedirectUri],
+          allowedOrigins: ["http://localhost:3001"],
+          skipConsent: true,
+          skip_consent: true,
+          applicationType: "web",
           updatedAt: new Date(),
         },
-      ],
-      admin_audit: [],
-      oauthAccessToken: [],
-      oauthRefreshToken: [],
-      oauthAuthorizationCode: [],
+      },
+      { upsert: true }
+    );
+
+    const testEmail = `user_mint_fail_${Date.now()}@example.com`;
+    const testPass = "UserPassword@123!";
+    const uRes = await authProvider.api.signUpEmail({
+      body: { email: testEmail, password: testPass, name: "Mint Fail User" },
+      asResponse: true,
+    });
+    const userCookie = (uRes.headers.get("set-cookie") || "").split(";")[0];
+    const userDoc = await db.collection("user").findOne({ email: testEmail });
+    const userId = String(userDoc?.id || userDoc?._id);
+
+    await db.collection("user_app_registrations").insertOne({
+      userId,
+      clientId: testClientId,
+      registeredAt: new Date(),
     });
 
-    setTestDbOverride(mockDb);
+    const basicAuth = Buffer.from(`${testClientId}:${testClientSecret}`).toString("base64");
+
+    // Helper to obtain authorization code
+    async function getAuthCode() {
+      const verifier = crypto.randomBytes(32).toString("base64url");
+      const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+      const state = crypto.randomBytes(16).toString("hex");
+
+      const authRes = await app.request(
+        `/api/auth/oauth2/authorize?client_id=${testClientId}&redirect_uri=${encodeURIComponent(testRedirectUri)}&response_type=code&scope=openid+profile+email+offline_access&code_challenge=${challenge}&code_challenge_method=S256&state=${state}`,
+        {
+          method: "GET",
+          headers: { Cookie: userCookie },
+          redirect: "manual",
+        }
+      );
+      assert.equal(authRes.status, 302, "Authorize must redirect with 302");
+      const loc = authRes.headers.get("location") || "";
+      const parsed = new URL(loc);
+      const code = parsed.searchParams.get("code")!;
+      assert.ok(code, "Must receive auth code");
+      return { code, verifier };
+    }
+
+    // Step 1: Normal initial code exchange to establish a valid token family
+    const { code: normalCode, verifier: normalVerifier } = await getAuthCode();
+    const normalExchangeRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: normalCode,
+        redirect_uri: testRedirectUri,
+        code_verifier: normalVerifier,
+      }).toString(),
+    });
+    assert.equal(normalExchangeRes.status, 200, "Initial code exchange must succeed");
+    const initialTokens = await normalExchangeRes.json() as any;
+    assert.ok(initialTokens.access_token && initialTokens.access_token.split(".").length === 3, "Must receive RS256 JWT access token");
+    assert.ok(initialTokens.refresh_token, "Must receive refresh token");
+
+    const initialRefresh = initialTokens.refresh_token;
+    const initialHash = crypto.createHash("sha256").update(initialRefresh).digest("hex");
+    const initialFamily = await db.collection("oauth_token_families").findOne({ activeTokenHash: initialHash });
+    assert.ok(initialFamily, "Token family must exist for initial tokens");
+    assert.equal(initialFamily.status, "active", "Token family must be active");
+
+    // Step 2: Inject test override to force IdP signing key resolution and JWT minting failure
+    clearSigningKeyCacheForTesting();
+    setSigningKeyOverrideForTesting(async () => null);
 
     try {
-      const hashSucc1 = crypto.createHash("sha256").update("succ1").digest("hex");
-      const hashSucc2 = crypto.createHash("sha256").update("succ2").digest("hex");
-
-      // Concurrent request 1 succeeds (winner)
-      const res1 = await verifyAndRotateTokenFamily(activeTokenHash, hashSucc1, userId, Date.now(), clientId);
-      assert.equal(res1.valid, true, "First concurrent request must succeed");
-      assert.equal(res1.replayed, false, "Winner is not replayed");
-
-      // Concurrent request 2 with the same token (loser)
-      const res2 = await verifyAndRotateTokenFamily(activeTokenHash, hashSucc2, userId, Date.now(), clientId);
-      assert.equal(res2.valid, false, "Second concurrent request must fail");
-      assert.equal(res2.replayed, false, "In-flight concurrent loser must NOT be marked replayed (theft)!");
-
-      // Token family must still be active!
-      const familyDoc = await mockDb.collection("oauth_token_families").findOne({ familyId });
-      assert.ok(familyDoc, "Family doc must exist");
-      assert.equal(familyDoc.status, "active", "Family status must remain active");
-
-      // Test 4b: Consumed token presented within 2000ms grace window
-      const baseTime = Date.now();
-      const checkInsideGrace = await verifyAndRotateTokenFamily(activeTokenHash, "dummy", userId, baseTime + 1000, clientId);
-      assert.equal(checkInsideGrace.valid, false);
-      assert.equal(checkInsideGrace.replayed, false, "Inside 2000ms grace window must NOT trigger replay revocation");
-
-      // Test 4c: Consumed token with clock skew (negative delta) is guarded
-      const checkSkew = await verifyAndRotateTokenFamily(activeTokenHash, "dummy", userId, baseTime - 100, clientId);
-      assert.equal(checkSkew.valid, false);
-      assert.equal(checkSkew.replayed, false, "Clock drift must still be guarded within grace window");
-
-      // Test 4d: Consumed token presented AFTER 2000ms grace window (theft attempt!)
-      const checkOutsideGrace = await verifyAndRotateTokenFamily(activeTokenHash, "dummy", userId, baseTime + 2500, clientId);
-      assert.equal(checkOutsideGrace.valid, false);
-      assert.equal(checkOutsideGrace.replayed, true, "Outside 2000ms grace window must trigger replay revocation!");
-
-      const revokedFamily = await mockDb.collection("oauth_token_families").findOne({ familyId });
-      assert.equal(revokedFamily?.status, "revoked", "Replay outside grace window must revoke family");
-
-      // Test 4e: Stale in-flight rotation lock can be reclaimed
-      const staleRotatingAt = new Date(Date.now() - 20000);
-      const staleFamilyId = crypto.randomUUID();
-      const staleHash = crypto.createHash("sha256").update("stale-token").digest("hex");
-      (mockDb.collection("oauth_token_families") as any).docs.push({
-        _id: new ObjectId(),
-        familyId: staleFamilyId,
-        clientId,
-        userId,
-        activeTokenHash: staleHash,
-        consumedTokenHashes: [],
-        status: "active",
-        rotating: true,
-        rotatingAt: staleRotatingAt,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+      // Step 3: Refresh Token Exchange with JWT Minting Failure
+      const refreshFailRes = await app.request("/api/auth/oauth2/token", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: initialRefresh,
+        }).toString(),
       });
+      assert.equal(refreshFailRes.status, 500, "JWT minting failure on refresh must return HTTP 500 server_error");
+      const refreshErrBody = await refreshFailRes.json() as any;
+      assert.equal(refreshErrBody.error, "server_error", "Error code must be server_error");
+      assert.ok(!refreshErrBody.access_token, "Must never return an opaque token fallback");
 
-      const staleThreshold = new Date(Date.now() - 15000);
-      const staleDoc = await mockDb.collection("oauth_token_families").findOne({ activeTokenHash: staleHash });
-      const canReclaim = staleDoc && (staleDoc.rotating !== true || (staleDoc.rotatingAt && staleDoc.rotatingAt < staleThreshold));
-      assert.ok(canReclaim, "In-flight rotation older than 15s must be eligible for lock reclamation");
+      // Verify that token family was cleanly rolled back and initial token is still valid
+      const rolledBackFamily = await db.collection("oauth_token_families").findOne({ clientId: testClientId });
+      assert.ok(rolledBackFamily, "Family must still exist");
+      assert.equal(rolledBackFamily.activeTokenHash, initialHash, "Family activeTokenHash must be rolled back to initialHash");
+      assert.ok(!rolledBackFamily.consumedTokenHashes.includes(initialHash), "initialHash must NOT be in consumedTokenHashes");
+      assert.equal(rolledBackFamily.rotating, false, "Family rotating flag must be reset to false");
 
-      console.log("PASS: AC-5 & AC-6 verifyAndRotateTokenFamily in-flight concurrency tolerance and grace window boundary");
+      const incomingStoredHash = crypto.createHash("sha256").update(initialRefresh).digest("base64url");
+      const rolledBackRefreshDoc = await db.collection("oauthRefreshToken").findOne({
+        $or: [{ token: initialRefresh }, { token: incomingStoredHash }],
+      });
+      assert.ok(rolledBackRefreshDoc, "Initial refresh token must be preserved in oauthRefreshToken");
+      assert.equal(rolledBackRefreshDoc.revoked, null, "Initial refresh token must not be revoked");
+
+      // Step 4: Authorization Code Exchange with JWT Minting Failure
+      const { code: failCode, verifier: failVerifier } = await getAuthCode();
+      const codeFailRes = await app.request("/api/auth/oauth2/token", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: failCode,
+          redirect_uri: testRedirectUri,
+          code_verifier: failVerifier,
+        }).toString(),
+      });
+      assert.equal(codeFailRes.status, 500, "JWT minting failure on code exchange must return HTTP 500 server_error");
+      const codeErrBody = await codeFailRes.json() as any;
+      assert.equal(codeErrBody.error, "server_error", "Error code must be server_error");
+      assert.ok(!codeErrBody.access_token, "Must never return an opaque token fallback");
     } finally {
-      setTestDbOverride(null);
+      // Step 5: Restore override and verify recovery
+      setSigningKeyOverrideForTesting(null);
+      clearSigningKeyCacheForTesting();
     }
+
+    // Step 6: Verify successful refresh using the rolled-back token after recovery
+    const recoveredRefreshRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: initialRefresh,
+      }).toString(),
+    });
+    assert.equal(recoveredRefreshRes.status, 200, "After recovery, refresh with rolled-back token must succeed");
+    const recoveredTokens = await recoveredRefreshRes.json() as any;
+    assert.ok(recoveredTokens.access_token && recoveredTokens.access_token.split(".").length === 3, "Recovered refresh must return valid RS256 JWT");
+    assert.ok(recoveredTokens.refresh_token, "Recovered refresh must return new refresh token");
+
+    console.log("PASS: JWT minting failure returns controlled server_error and rolls back state cleanly on both code & refresh flows");
   }
 
-  // TEST 5: database Proxy dynamically forwards to active Db
-  {
-    const { database: exportedDb } = await import("../../src/db/mongo");
-    assert.ok(typeof exportedDb.collection === "function", "database Proxy must expose collection method");
-    const col = exportedDb.collection("test_proxy");
-    assert.ok(col, "Proxy collection must resolve without error");
-    console.log("PASS: database Proxy forwarder verified");
-  }
+  // Cleanup
+  await closeDb();
+  await mongod.stop();
 
-  console.log("\nALL RUNTIME RESILIENCE AND KEY RESOLUTION TESTS PASSED!");
+  console.log("\nALL REAL RUNTIME RESILIENCE AND KEY RESOLUTION TESTS PASSED (0 FAILURES)!");
   process.exit(0);
 }
 
-runTests().catch((err) => {
+runTests().catch(async (err) => {
   console.error("Test execution failed:", err);
+  try {
+    await closeDb();
+    await mongod.stop();
+  } catch {}
   process.exit(1);
 });

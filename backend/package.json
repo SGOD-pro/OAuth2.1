@@ -16,6 +16,7 @@
     "deploy": "run-s build zip update publish",
     "dev": "tsx watch --env-file=.env src/dev.ts",
     "security:self-check": "tsx --env-file=.env scripts/security-self-check.ts",
+    "test:local-consumer-e2e": "tsx tests/e2e/local-consumer-e2e.test.ts",
     "test:unit": "npm-run-all2 test:admin-scoping test:runtime-resilience test:gateway-pipeline test:dev-isolation test:config-simplification",
     "test:admin-scoping": "tsx tests/unit/admin-scoping.test.ts",
     "test:runtime-resilience": "tsx tests/unit/runtime-resilience.test.ts",
@@ -53,6 +54,7 @@
   "devDependencies": {
     "@types/node": "^25.6.2",
     "esbuild": "^0.21.4",
+    "mongodb-memory-server": "^11.3.0",
     "npm-run-all2": "^6.2.0",
     "tsx": "^4.19.2"
   },

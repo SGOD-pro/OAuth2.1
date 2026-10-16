@@ -81,3 +81,62 @@ export async function getUserInfo(accessToken: string) {
 
   return response.json();
 }
+
+const inFlightRefreshes = new Map<string, Promise<TokenResponse>>();
+
+export async function coordinateTokenRefresh(
+  refreshToken: string,
+  refreshFn: () => Promise<TokenResponse>
+): Promise<TokenResponse> {
+  const existing = inFlightRefreshes.get(refreshToken);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = (async () => {
+    try {
+      return await refreshFn();
+    } finally {
+      inFlightRefreshes.delete(refreshToken);
+    }
+  })();
+
+  inFlightRefreshes.set(refreshToken, promise);
+  return promise;
+}
+
+export async function refreshAccessToken(refreshToken: string): Promise<TokenResponse> {
+  return coordinateTokenRefresh(refreshToken, async () => {
+    const issuer = requireEnv('AUTH_ISSUER');
+    const clientId = requireEnv('CLIENT_ID');
+    const clientSecret = requireEnv('CLIENT_SECRET');
+
+    const tokenEndpoint = `${issuer}/api/auth/oauth2/token`;
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
+
+    const response = await fetch(tokenEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${basicAuth}`,
+        Accept: 'application/json',
+      },
+      body: body.toString(),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Refresh token failed (${response.status}): ${errorText}`);
+    }
+
+    return response.json();
+  });
+}
+

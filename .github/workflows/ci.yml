@@ -1,12 +1,19 @@
 name: CI Pipeline
 
 on:
+  push:
+    branches:
+      - main
+      - bug-fix
   pull_request:
     branches:
       - main
+      - bug-fix
     paths:
       - 'backend/**'
       - 'frontend/**'
+      - 'scripts/**'
+      - 'test/**'
       - '.github/workflows/ci.yml'
   workflow_dispatch:
 
@@ -41,14 +48,14 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
-      - name: Build Frontend SPA
+      - name: Build Frontend SPA UI
         working-directory: frontend
-        run: npm run build
+        run: npm run build:ui
 
   test-backend:
-    name: Backend Security Tests & Build
+    name: Backend Security Tests, E2E & Build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     services:
       mongodb:
@@ -80,6 +87,18 @@ jobs:
       - name: Install Backend Dependencies
         working-directory: backend
         run: npm ci
+
+      - name: Run Integration Contract Linter
+        run: npm run security:integration-check
+
+      - name: Run Security Documentation Consistency Check
+        run: npm run security:docs-check
+
+      - name: Run Unit Tests
+        run: npm run test:unit
+
+      - name: Run Local Consumer E2E Test Suite
+        run: npm run test:local-consumer-e2e
 
       - name: Run Automated Security Test Suite
         working-directory: backend

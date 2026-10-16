@@ -162,6 +162,52 @@ try {
   );
   console.log('  [PASS] backend/deploy.sh validates and passes gateway secret parameter overrides');
 
+  // Test 9: Production mode must fail closed on missing secret even with --if-present
+  console.log('[TEST 9] Testing production fail-closed behavior on missing secret with --if-present...');
+  cleanGeneratedFiles();
+  const prodMissingResult = spawnSync('node', [scriptPath, '--if-present'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      INTERNAL_GATEWAY_SECRET: '',
+    },
+  });
+  assert.equal(prodMissingResult.status, 1, 'Production mode must fail closed with exit code 1 when secret is missing even with --if-present');
+  console.log('  [PASS] Production mode fails closed on missing secret even with --if-present');
+
+  // Test 10: Local UI build can explicitly skip deployment preparation
+  console.log('[TEST 10] Testing local UI build explicit skip of deployment preparation...');
+  cleanGeneratedFiles();
+  const localSkipResult = spawnSync('node', [scriptPath, '--skip-deployment-prep'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      INTERNAL_GATEWAY_SECRET: '',
+    },
+  });
+  assert.equal(localSkipResult.status, 0, 'Local UI build must exit with 0 when explicitly skipping deployment preparation');
+  assert.ok(!fs.existsSync(rootVercelJson), 'vercel.json must not be created when explicitly skipping');
+  console.log('  [PASS] Local UI build can explicitly skip deployment preparation');
+
+  // Test 11: Production mode rejects skipping deployment preparation
+  console.log('[TEST 11] Testing production mode rejection of skipping deployment preparation...');
+  cleanGeneratedFiles();
+  const prodSkipResult = spawnSync('node', [scriptPath, '--skip-deployment-prep'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      INTERNAL_GATEWAY_SECRET: '',
+    },
+  });
+  assert.equal(prodSkipResult.status, 1, 'Production mode must reject skipping deployment preparation with exit 1');
+  console.log('  [PASS] Production mode strictly rejects skipping deployment preparation');
+
   console.log('================================================================');
   console.log('  ALL GATEWAY PIPELINE TESTS PASSED (0 FAILURES)');
   console.log('================================================================');

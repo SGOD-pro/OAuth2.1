@@ -19,6 +19,17 @@ if (process.argv.includes('--clean')) {
 }
 
 const isIfPresent = process.argv.includes('--if-present');
+const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+const skipDeploymentPrep = process.env.SKIP_DEPLOYMENT_PREP === '1' || process.argv.includes('--skip-deployment-prep');
+
+if (skipDeploymentPrep) {
+  if (isProduction) {
+    console.error('[prepare-vercel-config] FATAL: Deployment preparation cannot be skipped in production mode.');
+    process.exit(1);
+  }
+  console.log('[prepare-vercel-config] Skipping deployment preparation (explicitly requested for local build).');
+  process.exit(0);
+}
 
 let gatewaySecret = process.env.INTERNAL_GATEWAY_SECRET;
 
@@ -45,11 +56,11 @@ if (!gatewaySecret) {
 }
 
 if (!gatewaySecret) {
-  if (isIfPresent) {
-    console.warn('[prepare-vercel-config] INTERNAL_GATEWAY_SECRET not found; skipping vercel.json generation (--if-present).');
+  if (isIfPresent && !isProduction) {
+    console.warn('[prepare-vercel-config] INTERNAL_GATEWAY_SECRET not found; skipping vercel.json generation for local non-production build (--if-present).');
     process.exit(0);
   }
-  console.error('[prepare-vercel-config] FATAL: INTERNAL_GATEWAY_SECRET not found in env or backend/.env');
+  console.error('[prepare-vercel-config] FATAL: INTERNAL_GATEWAY_SECRET not found in env or backend/.env (required in production)');
   process.exit(1);
 }
 
