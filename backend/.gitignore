@@ -32,6 +32,7 @@ lerna-debug.log*
 tests/*
 !tests/security/
 !tests/unit/
+!tests/e2e/
 tests/security/*.log
 test-results/
 

@@ -118,7 +118,6 @@ export async function refreshAccessToken(refreshToken: string): Promise<TokenRes
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
       client_id: clientId,
-      client_secret: clientSecret,
     });
 
     const response = await fetch(tokenEndpoint, {

@@ -21,17 +21,38 @@ function getJWKS(jwksUrl: string) {
   return jwks;
 }
 
+export interface SharedSessionStore {
+  get(key: string): Promise<any | null>;
+  set(key: string, val: any, ttlSec?: number): Promise<void>;
+}
+
+let sharedSessionStore: SharedSessionStore | null = null;
+export function setSharedSessionStore(store: SharedSessionStore | null) {
+  sharedSessionStore = store;
+}
+
 const inFlightRefreshes = new Map<string, Promise<{ access_token: string; refresh_token?: string; expires_in: number }>>();
 
 export async function coordinateTokenRefresh(
   refreshToken: string,
   issuer: string,
   clientId: string,
-  clientSecret?: string
+  clientSecret?: string,
+  sessionId?: string
 ): Promise<{ access_token: string; refresh_token?: string; expires_in: number }> {
   const existing = inFlightRefreshes.get(refreshToken);
   if (existing) {
     return existing;
+  }
+
+  const cacheKey = sessionId ? `shared_refresh_${sessionId}` : `shared_refresh_${refreshToken.slice(0, 16)}`;
+  if (sharedSessionStore) {
+    try {
+      const cached = await sharedSessionStore.get(cacheKey);
+      if (cached && cached.access_token) {
+        return cached;
+      }
+    } catch {}
   }
 
   const refreshPromise = (async () => {
@@ -49,7 +70,6 @@ export async function coordinateTokenRefresh(
       if (clientSecret) {
         const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
         headers['Authorization'] = `Basic ${basicAuth}`;
-        bodyParams.set('client_secret', clientSecret);
       }
 
       const res = await fetch(`${issuer}/api/auth/oauth2/token`, {
@@ -59,11 +79,25 @@ export async function coordinateTokenRefresh(
       });
 
       if (!res.ok) {
+        // If refresh failed (e.g. token consumed), check if another process instance just refreshed this session
+        if (sharedSessionStore) {
+          try {
+            const cachedAfterFail = await sharedSessionStore.get(cacheKey);
+            if (cachedAfterFail && cachedAfterFail.access_token) {
+              return cachedAfterFail;
+            }
+          } catch {}
+        }
         const errText = await res.text();
         throw new Error(`Token refresh failed (${res.status}): ${errText}`);
       }
 
       const data = await res.json();
+      if (sharedSessionStore) {
+        try {
+          await sharedSessionStore.set(cacheKey, data, 60);
+        } catch {}
+      }
       return data;
     } finally {
       inFlightRefreshes.delete(refreshToken);
@@ -105,7 +139,8 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
   // Auto-refresh expired session if refresh_token is available
   if (refreshToken && sessionExpiresAt && sessionExpiresAt <= Date.now() && issuer && clientId) {
     try {
-      const refreshed = await coordinateTokenRefresh(refreshToken, issuer, clientId, clientSecret);
+      const sessionId = parsedSession?.session_id || parsedSession?.user?.sub;
+      const refreshed = await coordinateTokenRefresh(refreshToken, issuer, clientId, clientSecret, sessionId);
       token = refreshed.access_token;
       refreshToken = refreshed.refresh_token || refreshToken;
       sessionExpiresAt = Date.now() + (refreshed.expires_in || 3600) * 1000;
@@ -122,7 +157,15 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
         });
       }
     } catch (refreshErr) {
-      // Refresh failed; proceed to validate token or fail
+      // Refresh failed and could not be recovered from shared session store;
+      // Invalidate stale cookie and return controlled session_expired recovery response
+      res.clearCookie('app_session', { path: '/' });
+      return res.status(401).json({
+        error: 'session_expired',
+        message: 'Session credentials were rotated by another process instance or expired. Re-authentication required.',
+        recovery_flow: 'reauthenticate',
+        login_url: '/auth/login',
+      });
     }
   }
 
@@ -175,7 +218,13 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
     }
 
     // Approach 2: Token Introspection Endpoint (RFC 7662)
-    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret || ''}`).toString('base64');
+    const introspectParams: Record<string, string> = {
+      token,
+      client_id: clientId,
+    };
+    if (clientSecret) introspectParams.client_secret = clientSecret;
+
     const introspectRes = await fetch(`${issuer}/api/auth/oauth2/introspect`, {
       method: 'POST',
       headers: {
@@ -183,11 +232,7 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
         'Authorization': `Basic ${basicAuth}`,
         Accept: 'application/json',
       },
-      body: new URLSearchParams({
-        token,
-        client_id: clientId,
-        client_secret: clientSecret,
-      }).toString(),
+      body: new URLSearchParams(introspectParams).toString(),
     });
 
     if (introspectRes.ok) {

@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { refreshAccessToken } from '@/lib/oauth';
+import { refreshAccessToken, requireEnv } from '@/lib/oauth';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+function getJWKS(issuer: string) {
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`));
+  }
+  return jwks;
+}
 
 export async function GET(request: NextRequest) {
   // Check auth_session cookie or Bearer token header
@@ -36,10 +45,20 @@ export async function GET(request: NextRequest) {
       // Invalid session cookie format
     }
   } else if (authHeader?.startsWith('Bearer ')) {
-    isAuthenticated = true;
     const token = authHeader.replace('Bearer ', '');
-    tokenPreview = `${token.slice(0, 10)}...${token.slice(-6)}`;
-    userEmail = 'Bearer Token Client';
+    try {
+      const issuer = requireEnv('AUTH_ISSUER');
+      const clientId = requireEnv('CLIENT_ID');
+      const { payload } = await jwtVerify(token, getJWKS(issuer), {
+        issuer,
+        audience: clientId,
+      });
+      isAuthenticated = true;
+      userEmail = (payload.email as string) || (payload.sub as string) || 'Bearer Token Client';
+      tokenPreview = `${token.slice(0, 10)}...${token.slice(-6)}`;
+    } catch {
+      isAuthenticated = false;
+    }
   }
 
   if (!isAuthenticated) {

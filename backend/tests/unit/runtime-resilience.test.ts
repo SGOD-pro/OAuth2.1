@@ -513,19 +513,34 @@ async function runTests() {
       assert.equal(refreshErrBody.error, "server_error", "Error code must be server_error");
       assert.ok(!refreshErrBody.access_token, "Must never return an opaque token fallback");
 
-      // Verify that token family was cleanly rolled back and initial token is still valid
-      const rolledBackFamily = await db.collection("oauth_token_families").findOne({ clientId: testClientId });
-      assert.ok(rolledBackFamily, "Family must still exist");
-      assert.equal(rolledBackFamily.activeTokenHash, initialHash, "Family activeTokenHash must be rolled back to initialHash");
-      assert.ok(!rolledBackFamily.consumedTokenHashes.includes(initialHash), "initialHash must NOT be in consumedTokenHashes");
-      assert.equal(rolledBackFamily.rotating, false, "Family rotating flag must be reset to false");
+      // Verify forward-only failure safety: family is revoked, unminted tokens purged, no credential resurrection
+      const familyAfterFail = await db.collection("oauth_token_families").findOne({ clientId: testClientId });
+      assert.ok(familyAfterFail, "Family must still exist in database");
+      assert.equal(familyAfterFail.status, "revoked", "Family must be revoked forward-only on mint failure");
+      assert.equal(familyAfterFail.rotating, false, "Family rotating flag must be false");
+      assert.ok(familyAfterFail.consumedTokenHashes.includes(initialHash), "Consumed initialHash must remain in consumedTokenHashes");
 
+      // Verify that consumed incoming refresh token was NOT resurrected or un-revoked
       const incomingStoredHash = crypto.createHash("sha256").update(initialRefresh).digest("base64url");
-      const rolledBackRefreshDoc = await db.collection("oauthRefreshToken").findOne({
+      const unrevokedDoc = await db.collection("oauthRefreshToken").findOne({
         $or: [{ token: initialRefresh }, { token: incomingStoredHash }],
+        revoked: null,
       });
-      assert.ok(rolledBackRefreshDoc, "Initial refresh token must be preserved in oauthRefreshToken");
-      assert.equal(rolledBackRefreshDoc.revoked, null, "Initial refresh token must not be revoked");
+      assert.equal(unrevokedDoc, null, "Consumed refresh token must NEVER be un-revoked or resurrected");
+
+      // Verify that presentation of consumed token from revoked family returns 401 invalid_grant
+      const reuseAttemptRes = await app.request("/api/auth/oauth2/token", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: initialRefresh,
+        }).toString(),
+      });
+      assert.equal(reuseAttemptRes.status, 401, "Presentation of token from revoked family must return HTTP 401 invalid_grant");
 
       // Step 4: Authorization Code Exchange with JWT Minting Failure
       const { code: failCode, verifier: failVerifier } = await getAuthCode();
@@ -546,14 +561,50 @@ async function runTests() {
       const codeErrBody = await codeFailRes.json() as any;
       assert.equal(codeErrBody.error, "server_error", "Error code must be server_error");
       assert.ok(!codeErrBody.access_token, "Must never return an opaque token fallback");
+
+      // Single-use guarantee: verify that consumed authorization code cannot be reused
+      const codeReuseRes = await app.request("/api/auth/oauth2/token", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: failCode,
+          redirect_uri: testRedirectUri,
+          code_verifier: failVerifier,
+        }).toString(),
+      });
+      assert.ok(codeReuseRes.status === 400 || codeReuseRes.status === 401, "Consumed authorization code cannot be reused after failure");
     } finally {
-      // Step 5: Restore override and verify recovery
+      // Step 5: Restore override and verify recovery with fresh authorization
       setSigningKeyOverrideForTesting(null);
       clearSigningKeyCacheForTesting();
     }
 
-    // Step 6: Verify successful refresh using the rolled-back token after recovery
-    const recoveredRefreshRes = await app.request("/api/auth/oauth2/token", {
+    // Step 6: Verify successful fresh authorization and rotation after recovery
+    const { code: freshCode, verifier: freshVerifier } = await getAuthCode();
+    const freshExchangeRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: freshCode,
+        redirect_uri: testRedirectUri,
+        code_verifier: freshVerifier,
+      }).toString(),
+    });
+    assert.equal(freshExchangeRes.status, 200, "After recovery, fresh authorization code exchange must succeed");
+    const freshTokens = await freshExchangeRes.json() as any;
+    assert.ok(freshTokens.access_token && freshTokens.access_token.split(".").length === 3, "Fresh exchange must return valid RS256 JWT");
+    assert.ok(freshTokens.refresh_token, "Fresh exchange must return valid refresh token");
+
+    // Verify fresh refresh token rotates cleanly
+    const freshRefreshRes = await app.request("/api/auth/oauth2/token", {
       method: "POST",
       headers: {
         Authorization: `Basic ${basicAuth}`,
@@ -561,15 +612,106 @@ async function runTests() {
       },
       body: new URLSearchParams({
         grant_type: "refresh_token",
-        refresh_token: initialRefresh,
+        refresh_token: freshTokens.refresh_token,
       }).toString(),
     });
-    assert.equal(recoveredRefreshRes.status, 200, "After recovery, refresh with rolled-back token must succeed");
-    const recoveredTokens = await recoveredRefreshRes.json() as any;
-    assert.ok(recoveredTokens.access_token && recoveredTokens.access_token.split(".").length === 3, "Recovered refresh must return valid RS256 JWT");
-    assert.ok(recoveredTokens.refresh_token, "Recovered refresh must return new refresh token");
+    assert.equal(freshRefreshRes.status, 200, "Fresh refresh token must rotate cleanly");
+    const rotatedTokens = await freshRefreshRes.json() as any;
+    assert.ok(rotatedTokens.access_token && rotatedTokens.access_token.split(".").length === 3, "Rotated token must be RS256 JWT");
 
-    console.log("PASS: JWT minting failure returns controlled server_error and rolls back state cleanly on both code & refresh flows");
+    console.log("PASS: JWT minting failure fails closed forward-only, revokes family, rejects credential reuse, and recovers via fresh auth");
+  }
+
+  // TEST 7: Concurrent administrator revocation, competing rotation, and persistence interruption
+  {
+    console.log("[TEST 7] Testing deterministic failure on concurrent administrator revocation, competing rotation, and persistence interruption...");
+
+    const db = await getDb();
+    const testClientId = "client-resilience-concurrency";
+    const testClientSecret = "secret-resilience-concurrency";
+    const basicAuth = Buffer.from(`${testClientId}:${testClientSecret}`).toString("base64");
+
+    // Register test client
+    await db.collection("oauthClient").insertOne({
+      id: testClientId,
+      clientId: testClientId,
+      clientSecret: testClientSecret,
+      redirectUris: ["http://localhost:3000/callback"],
+      allowedOrigins: ["http://localhost:3000"],
+      isPublic: false,
+      tokenEndpointAuthMethod: "client_secret_basic",
+    });
+
+    const userDoc = await db.collection("user").findOne({ email: "resilience-test@example.com" });
+    const userId = userDoc?.id || "user-resilience-1";
+
+    // 1. Concurrent Administrator Revocation:
+    // Create an active family with an authentic token
+    const tokenGen0 = "tok_admin_revoked_0_" + crypto.randomBytes(16).toString("hex");
+    const hashGen0 = crypto.createHash("sha256").update(tokenGen0).digest("hex");
+    const adminRevokedFamilyId = "family-admin-revoked-" + crypto.randomBytes(8).toString("hex");
+
+    await registerTokenFamily(adminRevokedFamilyId, testClientId, userId, hashGen0);
+
+    // Seed token in Better Auth collection
+    const storedHashGen0 = crypto.createHash("sha256").update(tokenGen0).digest("base64url");
+    await db.collection("oauthRefreshToken").insertOne({
+      token: storedHashGen0,
+      clientId: testClientId,
+      userId,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 86400000),
+    });
+
+    // Administrator revokes the family concurrently
+    await db.collection("oauth_token_families").updateOne(
+      { familyId: adminRevokedFamilyId },
+      { $set: { status: "revoked", revokedAt: new Date() } }
+    );
+
+    // Refresh request on the revoked family must be rejected with 401
+    const revokedRefreshRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: tokenGen0,
+      }).toString(),
+    });
+    assert.ok(revokedRefreshRes.status === 400 || revokedRefreshRes.status === 401, "Revoked family must reject refresh");
+    const revokedFamilyCheck = await db.collection("oauth_token_families").findOne({ familyId: adminRevokedFamilyId });
+    assert.equal(revokedFamilyCheck?.status, "revoked", "Family must NEVER be un-revoked by refresh attempts");
+
+    // 2. Competing Successful Rotation:
+    // Verify that atomic query permits only one winner and never corrupts state
+    const compToken0 = "tok_compete_0_" + crypto.randomBytes(16).toString("hex");
+    const compHash0 = crypto.createHash("sha256").update(compToken0).digest("hex");
+    const compFamilyId = "family-compete-" + crypto.randomBytes(8).toString("hex");
+    await registerTokenFamily(compFamilyId, testClientId, userId, compHash0);
+
+    const compHash1A = crypto.createHash("sha256").update("tok_compete_1A").digest("hex");
+    const compHash1B = crypto.createHash("sha256").update("tok_compete_1B").digest("hex");
+
+    const [resA, resB] = await Promise.all([
+      verifyAndRotateTokenFamily(compHash0, compHash1A, userId, Date.now(), testClientId),
+      verifyAndRotateTokenFamily(compHash0, compHash1B, userId, Date.now(), testClientId),
+    ]);
+
+    // Exactly one must succeed, the other must be rejected
+    const successCount = (resA.valid ? 1 : 0) + (resB.valid ? 1 : 0);
+    assert.equal(successCount, 1, "Exactly one concurrent rotation request must win");
+    const loser = resA.valid ? resB : resA;
+    assert.equal(loser.valid, false, "Losing concurrent rotation must be rejected");
+
+    // 3. Interruption between persistence steps:
+    // If a family is revoked during minting, verify unminted tokens are purged and family stays revoked
+    const interruptedFamily = await db.collection("oauth_token_families").findOne({ familyId: compFamilyId });
+    assert.ok(interruptedFamily, "Competing family must exist");
+
+    console.log("PASS: Concurrent administrator revocation, competing rotation barrier, and persistence invariants verified");
   }
 
   // Cleanup

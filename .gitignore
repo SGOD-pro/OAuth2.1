@@ -27,6 +27,8 @@ test/aws-dashboard/
 # Test outputs & suites
 backend/tests/*
 !backend/tests/security/
+!backend/tests/unit/
+!backend/tests/e2e/
 backend/tests/security/*.log
 *.test.log
 test-results/

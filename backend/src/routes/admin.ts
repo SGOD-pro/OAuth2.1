@@ -638,19 +638,20 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
     is_public: targetIsPublic,
   };
 
-  const validation = validateOAuthClientConfiguration(targetState, {
-    serverEnvironment: config.env,
-    isNewClient: false,
-    allowDevClientsInProduction: config.allowDevClientsInProduction,
-    isSuperAdminOp: isSuperAdmin(sessionUser),
-  });
+  let applicationType = oldClient.applicationType || oldClient.application_type || "web";
+  if (hasNewRedirectUris || targetIsDev !== Boolean(oldClient.isDev ?? oldClient.is_dev) || hasNewAllowedOrigins) {
+    const validation = validateOAuthClientConfiguration(targetState, {
+      serverEnvironment: config.env,
+      isNewClient: false,
+      allowDevClientsInProduction: config.allowDevClientsInProduction,
+      isSuperAdminOp: isSuperAdmin(sessionUser),
+    });
 
-  if (!validation.valid) {
-    return c.json({ error: validation.error }, 400);
+    if (!validation.valid) {
+      return c.json({ error: validation.error }, 400);
+    }
+    applicationType = validation.effectiveApplicationType;
   }
-
-  // application_type is strictly security-derived; request body cannot override
-  const applicationType = validation.effectiveApplicationType;
 
   const updatePayload: any = {};
   if (targetClientName) updatePayload.client_name = targetClientName;

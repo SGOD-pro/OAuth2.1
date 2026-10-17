@@ -55,6 +55,9 @@ export function validateRedirectUri(
     const isPrivate = isPrivateOrLocalHost(url.hostname);
 
     if (options.isDev) {
+      if (options.env === "production" && options.allowDevInProd === false) {
+        return false;
+      }
       if (isLoopback) {
         return true;
       }

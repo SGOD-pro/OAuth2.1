@@ -1128,29 +1128,34 @@ auth.post("/oauth2/token", async (c) => {
                 if (tokenData && tokenData.access_token) {
                     if (!resolvedUserId) {
                         console.error("[TOKEN_MINTING] Missing resolvedUserId in refresh_token flow; failing closed without opaque fallback");
-                        await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
-                        await database.collection("oauthAccessToken").deleteMany({ token: tokenData.access_token }).catch(() => {});
+                        const newRefreshHash = tokenData.refresh_token
+                            ? crypto.createHash("sha256").update(tokenData.refresh_token).digest("base64url")
+                            : null;
+                        const newAccessHash = tokenData.access_token
+                            ? crypto.createHash("sha256").update(tokenData.access_token).digest("base64url")
+                            : null;
+
+                        // FAIL CLOSED: Purge unminted new tokens; never resurrect consumed old credentials
+                        if (tokenData.refresh_token) {
+                            await database.collection("oauthRefreshToken").deleteMany({
+                                $or: [
+                                    { token: tokenData.refresh_token },
+                                    ...(newRefreshHash ? [{ token: newRefreshHash }] : [])
+                                ]
+                            }).catch(() => {});
+                        }
+                        if (tokenData.access_token) {
+                            await database.collection("oauthAccessToken").deleteMany({
+                                $or: [
+                                    { token: tokenData.access_token },
+                                    ...(newAccessHash ? [{ token: newAccessHash }] : [])
+                                ]
+                            }).catch(() => {});
+                        }
                         if (rotationResult.familyId) {
                             await database.collection("oauth_token_families").updateOne(
                                 { familyId: rotationResult.familyId, activeTokenHash: newHash },
-                                {
-                                    $set: { activeTokenHash: incomingHash },
-                                    $pull: { consumedTokenHashes: incomingHash as any },
-                                }
-                            ).catch(() => {});
-                        }
-                        if (refreshToken) {
-                            await database.collection("oauthRefreshToken").updateOne(
-                                { token: refreshToken },
-                                {
-                                    $setOnInsert: {
-                                        token: refreshToken,
-                                        clientId: canonicalClientId,
-                                        createdAt: new Date(),
-                                        expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
-                                    }
-                                },
-                                { upsert: true }
+                                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
                             ).catch(() => {});
                         }
                         return c.json(
@@ -1171,8 +1176,6 @@ auth.post("/oauth2/token", async (c) => {
 
                     if (!jwtAt) {
                         console.error("[TOKEN_MINTING] Failed to mint RS256 access token in refresh_token flow; failing closed without opaque fallback");
-                        // Compute base64url hashes as stored by Better Auth OAuth provider
-                        const incomingStoredHash = crypto.createHash("sha256").update(refreshToken).digest("base64url");
                         const newRefreshStoredHash = tokenData.refresh_token
                             ? crypto.createHash("sha256").update(tokenData.refresh_token).digest("base64url")
                             : null;
@@ -1180,7 +1183,7 @@ auth.post("/oauth2/token", async (c) => {
                             ? crypto.createHash("sha256").update(tokenData.access_token).digest("base64url")
                             : null;
 
-                        // FAIL CLOSED: Purge newly minted refresh and access tokens (both plaintext and stored hash formats)
+                        // FAIL CLOSED: Purge newly minted refresh and access tokens
                         if (tokenData.refresh_token) {
                             await database.collection("oauthRefreshToken").deleteMany({
                                 $or: [
@@ -1198,32 +1201,12 @@ auth.post("/oauth2/token", async (c) => {
                             }).catch(() => {});
                         }
 
-                        // Revert the family rotation so caller's existing token remains valid and not in consumedTokenHashes
+                        // Revoke the token family forward-only so neither consumed incoming token nor unminted token is usable.
+                        // NEVER resurrect consumed/deleted credentials or reverse concurrent administrator revocations.
                         if (rotationResult.familyId) {
                             await database.collection("oauth_token_families").updateOne(
                                 { familyId: rotationResult.familyId, activeTokenHash: newHash },
-                                {
-                                    $set: { activeTokenHash: incomingHash, rotating: false },
-                                    $pull: { consumedTokenHashes: incomingHash as any },
-                                }
-                            ).catch(() => {});
-                        }
-
-                        // Also restore old refresh token record in oauthRefreshToken by un-revoking it
-                        if (refreshToken) {
-                            await database.collection("oauthRefreshToken").updateOne(
-                                { $or: [{ token: refreshToken }, { token: incomingStoredHash }] },
-                                {
-                                    $set: { revoked: null, rotatedAt: null },
-                                    $setOnInsert: {
-                                        token: incomingStoredHash,
-                                        clientId: canonicalClientId,
-                                        userId: resolvedUserId,
-                                        createdAt: new Date(),
-                                        expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
-                                    }
-                                },
-                                { upsert: true }
+                                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
                             ).catch(() => {});
                         }
 

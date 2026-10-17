@@ -135,11 +135,17 @@ Harden token minting failure handling to fail closed with controlled 500 server_
    - [x] Implement consumer refresh coordination mutex and auto-refresh in test apps (Slice 6)
    - [x] Verify all 11 local consumer end-to-end flows against disposable MongoDB (Slice 6)
    - [x] Add CI verification workflow for bug-fix branch and pull requests without deployment (Slice 6)
+   - [x] Enforce forward-only token family revocation and eliminate upsert resurrection (Review Finding 1)
+   - [x] Verify real IdP process restart retaining disposable database in test:process-restart (Review Finding 3)
+   - [x] Verify cross-process consumer refresh race coordination in test:cross-process-refresh (Review Finding 4)
+   - [x] Build live multi-process network consumer E2E suite in test:network-consumer-e2e (Review Finding 2)
+   - [x] Build local zero-dependency in-memory security test runner in test:all-security:local (Review Finding 5)
+   - [x] Label in-process protocol test suite honestly as protocol test (Review Finding 2)
 - [x] Verify it: `/check verify local consumer E2E and resilience hardening`
 - [x] Test it: `/test local consumer E2E and resilience hardening`
 - [x] Review it: `/check review local consumer E2E and resilience hardening`
 - [x] Document it: `/document local consumer E2E and resilience hardening`
-[0002](../specs/0002-runtime-resilience-and-key-resolution/index.md) · code in `backend/src/routes/auth.ts`, `backend/src/db/state.ts`, `test/next-app/`, `test/react-express-app/`, `backend/tests/e2e/local-consumer-e2e.test.ts`
+[0002](../specs/0002-runtime-resilience-and-key-resolution/index.md) · code in `backend/src/routes/auth.ts`, `backend/src/db/state.ts`, `backend/tests/e2e/`, `backend/scripts/run-all-security.ts`, `test/next-app/`, `test/react-express-app/`
 
 ## Deferred
 Out of scope for the current remediation slice, kept so the plan stays honest.

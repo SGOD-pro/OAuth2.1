@@ -82,7 +82,7 @@ app.get('/auth/login', (req, res) => {
   authUrl.searchParams.set('client_id', CLIENT_ID);
   authUrl.searchParams.set('redirect_uri', CALLBACK_URL);
   authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('scope', 'openid profile email');
+  authUrl.searchParams.set('scope', 'openid profile email offline_access');
   authUrl.searchParams.set('state', state);
   authUrl.searchParams.set('code_challenge', codeChallenge);
   authUrl.searchParams.set('code_challenge_method', 'S256');
@@ -217,7 +217,13 @@ app.post('/auth/refresh', async (req, res) => {
     }
     return res.json(tokens);
   } catch (err: any) {
-    return res.status(401).json({ error: 'refresh_failed', message: err.message });
+    res.clearCookie('app_session', { path: '/' });
+    return res.status(401).json({
+      error: 'session_expired',
+      message: `Token refresh failed (${err?.message}). Re-authentication required.`,
+      recovery_flow: 'reauthenticate',
+      login_url: '/auth/login',
+    });
   }
 });
 

@@ -65,6 +65,14 @@ export async function POST(request: NextRequest) {
     return response;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Refresh failed';
-    return NextResponse.json({ error: 'refresh_failed', message }, { status: 401 });
+    const errorResponse = NextResponse.json({
+      error: 'session_expired',
+      message: `Token refresh failed (${message}). Re-authentication required.`,
+      recovery_flow: 'reauthenticate',
+      login_url: '/api/auth/login',
+    }, { status: 401 });
+    errorResponse.cookies.delete('auth_session');
+    cookieStore.delete('auth_session');
+    return errorResponse;
   }
 }

@@ -3,6 +3,11 @@ _Steps derived from spec 0002 acceptance criteria. `/check verify` runs these; `
 
 ## Automated commands
 - [x] `npm --prefix backend run test:runtime-resilience` → Runs unit test suite asserting connection timeouts and event listeners, bounded public key cache and key identifier isolation, self healing RS256 key generation with fail closed encryption error handling, in flight concurrent token rotation race tolerance, stale rotation lock reclamation, and grace window replay theft cascade revocation with 0 failures → AC-1, AC-2, AC-3, AC-4, AC-5, AC-6
+- [x] `npm --prefix backend run test:process-restart` → Runs real IdP process restart test retaining disposable database with 0 failures → AC-1, AC-3
+- [x] `npm --prefix backend run test:cross-process-refresh` → Runs multi process concurrent consumer refresh coordination test with 0 failures → AC-5, AC-6
+- [x] `npm --prefix backend run test:network-consumer-e2e` → Runs live multi process network consumer E2E test suite across Next.js, Express, and IdP with 0 failures → AC-3, AC-5, AC-6
+- [x] `npm --prefix backend run test:local-consumer-e2e` → Runs 11 flow in process protocol consumer E2E test suite with 0 failures → AC-1, AC-3, AC-5, AC-6
+- [x] `npm --prefix backend run test:all-security:local` → Runs all 14 security test suites locally against in memory MongoDB with 0 failures → AC-1, AC-2, AC-3, AC-4, AC-5, AC-6
 - [x] `npm --prefix backend run test:admin-scoping` → Runs admin scoping unit suite asserting role isolation and Super Admin preservation with 0 failures → AC-3
 - [x] `npm --prefix backend run security:integration-check` → Verifies integration contract rules and client isolation policies with 0 violations → AC-3, AC-5
 - [x] `npm --prefix backend run security:docs-check` → Verifies route manifest and documentation consistency with 0 errors → AC-1, AC-3
