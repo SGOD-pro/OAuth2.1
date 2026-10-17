@@ -124,9 +124,14 @@ export const SignIn: React.FC = () => {
         setError(msg);
         toast.error(msg);
       } else {
-        const dest = (res?.data as { url?: string } | undefined)?.url || callbackURL;
+        setRedirecting(true);
+        const data = res?.data as { url?: string; redirect?: boolean } | undefined;
+        if (data?.redirect && data?.url) {
+          // Better Auth client redirectPlugin has already initiated navigation to data.url
+          return;
+        }
+        const dest = data?.url || callbackURL;
         if (dest) {
-          setRedirecting(true);
           window.location.assign(dest);
         } else {
           setLoading(false);
@@ -180,9 +185,14 @@ export const SignIn: React.FC = () => {
         signInForm.setValue('email', values.email);
         setTab('sign-in');
       } else {
-        const dest = (signInRes?.data as { url?: string } | undefined)?.url || callbackURL;
+        setRedirecting(true);
+        const data = signInRes?.data as { url?: string; redirect?: boolean } | undefined;
+        if (data?.redirect && data?.url) {
+          // Better Auth client redirectPlugin has already initiated navigation to data.url
+          return;
+        }
+        const dest = data?.url || callbackURL;
         if (dest) {
-          setRedirecting(true);
           window.location.assign(dest);
         } else {
           setLoading(false);

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { config } from "../config";
 import { ObjectId } from "mongodb";
 
@@ -782,4 +783,15 @@ export async function checkUserAppRegistration(
   });
 
   return Boolean(reg);
+}
+
+/**
+ * Computes a SHA-256 hash formatted as base64url or hex.
+ * Centralizes token hash generation for OAuth credentials.
+ */
+export function hashToken(
+  token: string,
+  encoding: "base64url" | "hex" = "base64url",
+): string {
+  return crypto.createHash("sha256").update(token).digest(encoding);
 }

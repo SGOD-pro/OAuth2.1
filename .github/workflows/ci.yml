@@ -100,6 +100,40 @@ jobs:
       - name: Run Local Consumer E2E Test Suite
         run: npm run test:local-consumer-e2e
 
+      - name: Install Next.js Consumer Dependencies & Build
+        working-directory: test/next-app
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Express Consumer Dependencies & Build
+        working-directory: test/react-express-app/backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Frontend Dependencies & Build UI
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build:ui
+
+      - name: Install Playwright Chromium with OS Dependencies
+        working-directory: backend
+        run: npx playwright install chromium --with-deps
+
+      - name: Run Real Process Restart Lifecycle Test Suite
+        run: npm run test:process-restart
+
+      - name: Run Cross-Process Refresh Coordination & Single-Winner Test Suite
+        run: npm run test:cross-process-refresh
+
+      - name: Run Multi-Process Network Consumer E2E Test Suite
+        run: npm run test:network-consumer-e2e
+
+      - name: Run Live Browser E2E Test Suite (Playwright)
+        run: npm run test:browser-e2e
+
       - name: Run Automated Security Test Suite
         working-directory: backend
         env:

@@ -25,6 +25,8 @@ function getDevGatewaySecret(): string | undefined {
 
 const devGatewaySecret = getDevGatewaySecret()
 
+const backendTarget = process.env.BACKEND_URL || 'http://localhost:3000'
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -49,7 +51,7 @@ export default defineConfig({
 
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: backendTarget,
         changeOrigin: true,
         headers: devGatewaySecret ? { 'x-gateway-secret': devGatewaySecret } : undefined,
         configure: (proxy) => {
@@ -61,7 +63,24 @@ export default defineConfig({
         },
       },
       '/.well-known': {
-        target: 'http://localhost:3000',
+        target: backendTarget,
+        changeOrigin: true,
+      },
+    },
+  },
+
+  preview: {
+    host: '0.0.0.0',
+    port: 5174,
+    allowedHosts: true,
+    proxy: {
+      '/api': {
+        target: backendTarget,
+        changeOrigin: true,
+        headers: devGatewaySecret ? { 'x-gateway-secret': devGatewaySecret } : undefined,
+      },
+      '/.well-known': {
+        target: backendTarget,
         changeOrigin: true,
       },
     },

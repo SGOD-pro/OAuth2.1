@@ -13,8 +13,8 @@ const backendDir = path.resolve(__dirname, "../../");
 const expressDir = path.resolve(backendDir, "../test/react-express-app/backend");
 
 console.log("================================================================");
-console.log("  SWYRA AUTH -- CROSS-PROCESS CONSUMER REFRESH COORDINATION TEST");
-console.log("  Testing Multi-Process Consumer Isolation & Recovery Guarantees");
+console.log("  SWYRA AUTH -- CROSS-PROCESS REFRESH RACE & RECOVERY TEST");
+console.log("  Testing Multi-Process Single-Winner Semantics & Reauthentication Recovery");
 console.log("================================================================\n");
 
 async function getAvailablePort(): Promise<number> {

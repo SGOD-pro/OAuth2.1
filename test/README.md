@@ -7,9 +7,14 @@ This directory contains two standalone, fully functional client applications bui
 
 ---
 
-## 📋 Quick Setup & Dashboard Registration
+## 📋 Quick Setup & Prerequisites
 
-Before launching the test apps, register them in your **SWYRA M Admin Console** (`/admin/clients`):
+Before launching the test apps or running automated multi process and browser test suites, ensure consumer dependencies and builds are prepared:
+* Next.js consumer: run `npm ci && npm run build` in `test/next-app`
+* Express consumer: run `npm ci && npm run build` in `test/react-express-app/backend`
+* IdP frontend: run `npm ci && npm run build:ui` in `frontend`
+
+Next, register your test clients in your **SWYRA M Admin Console** (`/admin/clients`):
 
 ### 1. Register Next.js App in Admin Dashboard
 - **Application Name:** `Next.js Test App`

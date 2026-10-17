@@ -1,8 +1,8 @@
 import { useSearchParams } from 'react-router-dom';
 
 function isValidClientId(value: string): boolean {
-  // Accept any alphanumeric string between 20-100 chars
-  return /^[a-zA-Z0-9_-]{20,100}$/.test(value);
+  // Accept any alphanumeric string between 8-128 chars
+  return /^[a-zA-Z0-9_-]{8,128}$/.test(value);
 }
 
 function isValidRedirectUri(uri: string | null): boolean {

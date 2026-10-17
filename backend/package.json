@@ -20,6 +20,7 @@
     "test:network-consumer-e2e": "tsx tests/e2e/network-consumer-e2e.test.ts",
     "test:process-restart": "tsx tests/e2e/idp-process-restart.test.ts",
     "test:cross-process-refresh": "tsx tests/e2e/cross-process-refresh.test.ts",
+    "test:browser-e2e": "tsx tests/e2e/browser-e2e.test.ts",
     "test:unit": "npm-run-all2 test:admin-scoping test:runtime-resilience test:gateway-pipeline test:dev-isolation test:config-simplification",
     "test:admin-scoping": "tsx tests/unit/admin-scoping.test.ts",
     "test:runtime-resilience": "tsx tests/unit/runtime-resilience.test.ts",

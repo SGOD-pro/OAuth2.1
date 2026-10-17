@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     return NextResponse.redirect(
-      new URL(`/?error=${encodeURIComponent(errorDescription || error)}`, request.url)
+      new URL(`/?error=${encodeURIComponent(errorDescription || error)}`, redirectUri)
     );
   }
 
@@ -24,13 +24,13 @@ export async function GET(request: NextRequest) {
   if (!state || !storedState || state !== storedState) {
     console.error(`[OAuth State Mismatch] Received state: "${state}", Stored state: "${storedState}"`);
     return NextResponse.redirect(
-      new URL('/?error=Invalid+OAuth+state+mismatch', request.url)
+      new URL('/?error=Invalid+OAuth+state+mismatch', redirectUri)
     );
   }
 
   if (!code || !codeVerifier) {
     return NextResponse.redirect(
-      new URL('/?error=Missing+authorization+code+or+verifier', request.url)
+      new URL('/?error=Missing+authorization+code+or+verifier', redirectUri)
     );
   }
 
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
     cookieStore.delete('oauth_verifier');
     cookieStore.delete('oauth_state');
 
-    const response = NextResponse.redirect(new URL('/dashboard', request.url));
+    const response = NextResponse.redirect(new URL('/dashboard', redirectUri));
     response.cookies.set('auth_session', JSON.stringify(sessionPayload), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Authentication failed';
     return NextResponse.redirect(
-      new URL(`/?error=${encodeURIComponent(message)}`, request.url)
+      new URL(`/?error=${encodeURIComponent(message)}`, redirectUri)
     );
   }
 }

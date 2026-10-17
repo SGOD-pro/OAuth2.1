@@ -16,7 +16,7 @@ import {
     consumeOAuthTransaction,
 } from "../db/state";
 import { rateLimiters, checkRateLimit } from "../cache/redis";
-import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration } from "../utils/security";
+import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, hashToken } from "../utils/security";
 import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
 
@@ -913,7 +913,7 @@ auth.post("/oauth2/token", async (c) => {
 
     // -- B2: Refresh Token Lifecycle & Family Revocation ---------------------------
     if (grantType === "refresh_token" && refreshToken) {
-        const incomingHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
+        const incomingHash = hashToken(refreshToken, "hex");
 
         // Fail-Closed: Check if this token family exists and belongs to the authenticated client
         const existingFamily = await database.collection("oauth_token_families").findOne({
@@ -1102,7 +1102,7 @@ auth.post("/oauth2/token", async (c) => {
                     }
                 }
 
-                const newHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
+                const newHash = hashToken(tokenData.refresh_token, "hex");
                 const rotationResult = await verifyAndRotateTokenFamily(incomingHash, newHash, resolvedUserId, Date.now(), canonicalClientId);
 
                 if (rotationResult.replayed) {
@@ -1129,10 +1129,10 @@ auth.post("/oauth2/token", async (c) => {
                     if (!resolvedUserId) {
                         console.error("[TOKEN_MINTING] Missing resolvedUserId in refresh_token flow; failing closed without opaque fallback");
                         const newRefreshHash = tokenData.refresh_token
-                            ? crypto.createHash("sha256").update(tokenData.refresh_token).digest("base64url")
+                            ? hashToken(tokenData.refresh_token, "base64url")
                             : null;
                         const newAccessHash = tokenData.access_token
-                            ? crypto.createHash("sha256").update(tokenData.access_token).digest("base64url")
+                            ? hashToken(tokenData.access_token, "base64url")
                             : null;
 
                         // FAIL CLOSED: Purge unminted new tokens; never resurrect consumed old credentials
@@ -1177,10 +1177,10 @@ auth.post("/oauth2/token", async (c) => {
                     if (!jwtAt) {
                         console.error("[TOKEN_MINTING] Failed to mint RS256 access token in refresh_token flow; failing closed without opaque fallback");
                         const newRefreshStoredHash = tokenData.refresh_token
-                            ? crypto.createHash("sha256").update(tokenData.refresh_token).digest("base64url")
+                            ? hashToken(tokenData.refresh_token, "base64url")
                             : null;
                         const newAccessStoredHash = tokenData.access_token
-                            ? crypto.createHash("sha256").update(tokenData.access_token).digest("base64url")
+                            ? hashToken(tokenData.access_token, "base64url")
                             : null;
 
                         // FAIL CLOSED: Purge newly minted refresh and access tokens
@@ -1314,7 +1314,7 @@ auth.post("/oauth2/token", async (c) => {
             let initialHash: string | null = null;
             let familyId: string | null = null;
             if (tokenData && tokenData.refresh_token) {
-                initialHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
+                initialHash = hashToken(tokenData.refresh_token, "hex");
                 familyId = crypto.randomUUID();
 
                 // Strictly bind token family to canonicalClientId and resolvedUserId
@@ -1366,10 +1366,10 @@ auth.post("/oauth2/token", async (c) => {
                 if (!jwtAt) {
                     console.error("[TOKEN_MINTING] Failed to mint RS256 access token in authorization_code flow; failing closed without opaque fallback");
                     const newRefreshStoredHash = tokenData.refresh_token
-                        ? crypto.createHash("sha256").update(tokenData.refresh_token).digest("base64url")
+                        ? hashToken(tokenData.refresh_token, "base64url")
                         : null;
                     const newAccessStoredHash = tokenData.access_token
-                        ? crypto.createHash("sha256").update(tokenData.access_token).digest("base64url")
+                        ? hashToken(tokenData.access_token, "base64url")
                         : null;
 
                     // FAIL CLOSED: Purge any created tokens and token family state so no partial/unusable credentials survive
