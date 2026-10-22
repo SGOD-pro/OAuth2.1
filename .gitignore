@@ -40,3 +40,4 @@ image.png
 # Generated secret-bearing deployment configuration
 vercel.json
 frontend/vercel.json
+.playwright-mcp

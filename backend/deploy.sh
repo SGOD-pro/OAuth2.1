@@ -50,12 +50,16 @@ echo "☁️ Deploying to AWS via SAM with parameter overrides..."
 BETTER_AUTH_URL="${BETTER_AUTH_URL:-https://oauth21.vercel.app}"
 GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com}"
 FRONTEND_URL="${FRONTEND_URL:-https://oauth21.vercel.app}"
+UPSTASH_REDIS_REST_URL="${UPSTASH_REDIS_REST_URL:-}"
+UPSTASH_REDIS_REST_TOKEN="${UPSTASH_REDIS_REST_TOKEN:-}"
 
 sam deploy \
   --parameter-overrides \
     BetterAuthUrl="${BETTER_AUTH_URL}" \
     GoogleClientId="${GOOGLE_CLIENT_ID}" \
     FrontendUrl="${FRONTEND_URL}" \
-    InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"
+    InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}" \
+    UpstashRedisRestUrl="${UPSTASH_REDIS_REST_URL}" \
+    UpstashRedisRestToken="${UPSTASH_REDIS_REST_TOKEN}"
 
 echo "✅ Deployment complete!"

@@ -16,12 +16,28 @@ console.log('================================================================');
 console.log('  TEST SUITE: Gateway Secret Persistence & Deploy Pipeline');
 console.log('================================================================');
 
+const rootEnvPath = path.join(repoRoot, '.env');
+const backendEnvPath = path.join(repoRoot, 'backend/.env');
+const rootEnvBackup = path.join(repoRoot, '.env.pipeline-test-bak');
+const backendEnvBackup = path.join(repoRoot, 'backend/.env.pipeline-test-bak');
+
 function cleanGeneratedFiles() {
   if (fs.existsSync(rootVercelJson)) fs.unlinkSync(rootVercelJson);
   if (fs.existsSync(frontendVercelJson)) fs.unlinkSync(frontendVercelJson);
 }
 
+function stashLocalEnvFiles() {
+  if (fs.existsSync(rootEnvPath)) fs.renameSync(rootEnvPath, rootEnvBackup);
+  if (fs.existsSync(backendEnvPath)) fs.renameSync(backendEnvPath, backendEnvBackup);
+}
+
+function restoreLocalEnvFiles() {
+  if (fs.existsSync(rootEnvBackup)) fs.renameSync(rootEnvBackup, rootEnvPath);
+  if (fs.existsSync(backendEnvBackup)) fs.renameSync(backendEnvBackup, backendEnvPath);
+}
+
 try {
+  stashLocalEnvFiles();
   // Test 1: Clean command removes vercel.json files
   console.log('[TEST 1] Testing --clean argument behavior...');
   fs.writeFileSync(rootVercelJson, '{"test": true}');
@@ -213,4 +229,5 @@ try {
   console.log('================================================================');
 } finally {
   cleanGeneratedFiles();
+  restoreLocalEnvFiles();
 }
