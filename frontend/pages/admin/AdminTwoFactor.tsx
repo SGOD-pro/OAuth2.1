@@ -70,7 +70,8 @@ export const AdminTwoFactor: React.FC = () => {
       }>;
       const userRes = await getSessionFn();
       const currentUser = userRes?.data?.user;
-      if (currentUser?.role === 'admin' && currentUser?.scopedClientId !== null) {
+      const isScoped = typeof currentUser?.scopedClientId === 'string' && currentUser.scopedClientId.trim().length > 0;
+      if (currentUser?.role === 'admin' && isScoped) {
         await authClient.signOut({});
         navigate('/admin/login?error=access_denied_scoped', { replace: true });
         return;

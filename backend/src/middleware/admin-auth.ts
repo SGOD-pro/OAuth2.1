@@ -505,7 +505,12 @@ export const requireAdmin = createMiddleware(async (c, next) => {
 
 export function isSuperAdmin(user: any): boolean {
   if (!user) return false;
-  return user.role === "admin" && user.scopedClientId === null;
+  return (
+    user.role === "admin" &&
+    (user.scopedClientId === null ||
+      user.scopedClientId === undefined ||
+      user.scopedClientId === "")
+  );
 }
 
 /**

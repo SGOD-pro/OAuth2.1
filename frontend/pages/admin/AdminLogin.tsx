@@ -54,7 +54,8 @@ export const AdminLogin: React.FC = () => {
 
   useEffect(() => {
     if (!isPending && user) {
-      if (user.role === 'admin' && user.scopedClientId === null) {
+      const isScoped = typeof user.scopedClientId === 'string' && user.scopedClientId.trim().length > 0;
+      if (user.role === 'admin' && !isScoped) {
         navigate('/admin', { replace: true });
       }
     }
@@ -106,7 +107,8 @@ export const AdminLogin: React.FC = () => {
         return;
       }
 
-      if (scopedClientId !== null) {
+      const isScoped = typeof scopedClientId === 'string' && scopedClientId.trim().length > 0;
+      if (isScoped) {
         await authClient.signOut({});
         const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
         setError(msg);
@@ -141,7 +143,8 @@ export const AdminLogin: React.FC = () => {
 
   const role = user?.role;
   const isAuthenticated = !!user;
-  const isConflictingSession = isAuthenticated && (role !== 'admin' || user?.scopedClientId !== null);
+  const isScoped = typeof user?.scopedClientId === 'string' && user.scopedClientId.trim().length > 0;
+  const isConflictingSession = isAuthenticated && (role !== 'admin' || isScoped);
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-background relative">

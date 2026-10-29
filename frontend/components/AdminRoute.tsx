@@ -16,7 +16,8 @@ interface AdminRouteProps {
 export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
   const { data: session, isPending } = useSession();
   const user = session?.user as { role?: string; scopedClientId?: string | null } | undefined;
-  const isSuperAdmin = user?.role === 'admin' && user?.scopedClientId === null;
+  const isScopedAdmin = typeof user?.scopedClientId === 'string' && user.scopedClientId.trim().length > 0;
+  const isSuperAdmin = user?.role === 'admin' && !isScopedAdmin;
 
   if (isPending) return <RouteLoader />;
   
@@ -24,10 +25,10 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
     return <Navigate to="/admin/login" replace />;
   }
 
-  // Consumer application admins have scopedClientId set.
+  // Consumer application admins have scopedClientId set to a non-empty client ID.
   // They are strictly admins for their assigned consumer application via OAuth,
   // and MUST NEVER be granted access to the central IdP management console.
-  if (user?.role === 'admin' && user?.scopedClientId !== null) {
+  if (user?.role === 'admin' && isScopedAdmin) {
     return <Navigate to="/admin/login?error=access_denied_scoped" replace />;
   }
 
