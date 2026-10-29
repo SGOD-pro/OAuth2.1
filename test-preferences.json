@@ -1,0 +1,9 @@
+{
+  "tool": "tsx",
+  "gate": null,
+  "additionalTools": ["node:assert/strict"],
+  "e2eTool": "none",
+  "testDir": "backend/tests/unit",
+  "filePattern": "*.test.ts",
+  "packageManager": "npm"
+}

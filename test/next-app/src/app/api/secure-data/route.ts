@@ -1,4 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { refreshAccessToken, requireEnv } from '@/lib/oauth';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+function getJWKS(issuer: string) {
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`));
+  }
+  return jwks;
+}
 
 export async function GET(request: NextRequest) {
   // Check auth_session cookie or Bearer token header
@@ -8,23 +18,54 @@ export async function GET(request: NextRequest) {
   let isAuthenticated = false;
   let userEmail = 'Unknown';
   let tokenPreview = '';
+  let updatedSession: any = null;
 
   if (sessionCookie) {
     try {
       const session = JSON.parse(sessionCookie);
+      const isExpired = session.createdAt && session.tokens?.expires_in && (session.createdAt + session.tokens.expires_in * 1000 <= Date.now());
+
+      if (isExpired && session.tokens?.refresh_token) {
+        try {
+          const newTokens = await refreshAccessToken(session.tokens.refresh_token);
+          session.tokens = newTokens;
+          session.createdAt = Date.now();
+          updatedSession = session;
+        } catch {
+          // auto-refresh failed
+        }
+      }
+
       if (session?.tokens?.access_token) {
+        const issuer = requireEnv('AUTH_ISSUER');
+        const clientId = requireEnv('CLIENT_ID');
+        const { payload } = await jwtVerify(session.tokens.access_token, getJWKS(issuer), {
+          issuer,
+          audience: clientId,
+        });
         isAuthenticated = true;
-        userEmail = session.user?.email || session.user?.sub || 'Authenticated User';
+        userEmail = session.user?.email || (payload.email as string) || session.user?.sub || (payload.sub as string) || 'Authenticated User';
         tokenPreview = `${session.tokens.access_token.slice(0, 10)}...${session.tokens.access_token.slice(-6)}`;
       }
     } catch {
-      // Invalid session cookie format
+      // Invalid session cookie format or token verification failed
+      isAuthenticated = false;
     }
   } else if (authHeader?.startsWith('Bearer ')) {
-    isAuthenticated = true;
     const token = authHeader.replace('Bearer ', '');
-    tokenPreview = `${token.slice(0, 10)}...${token.slice(-6)}`;
-    userEmail = 'Bearer Token Client';
+    try {
+      const issuer = requireEnv('AUTH_ISSUER');
+      const clientId = requireEnv('CLIENT_ID');
+      const { payload } = await jwtVerify(token, getJWKS(issuer), {
+        issuer,
+        audience: clientId,
+      });
+      isAuthenticated = true;
+      userEmail = (payload.email as string) || (payload.sub as string) || 'Bearer Token Client';
+      tokenPreview = `${token.slice(0, 10)}...${token.slice(-6)}`;
+    } catch {
+      isAuthenticated = false;
+    }
   }
 
   if (!isAuthenticated) {
@@ -38,7 +79,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Return realistic dummy secure telemetry data
-  return NextResponse.json({
+  const response = NextResponse.json({
     status: 'SECURE_STREAM_ACTIVE',
     authorizedUser: userEmail,
     tokenPreview,
@@ -71,4 +112,16 @@ export async function GET(request: NextRequest) {
       }
     }
   });
+
+  if (updatedSession) {
+    response.cookies.set('auth_session', JSON.stringify(updatedSession), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: updatedSession.tokens?.expires_in || 3600,
+    });
+  }
+
+  return response;
 }

@@ -89,6 +89,21 @@ async function run() {
   });
 
   console.log(`✅ Stored credential with ObjectId reference in 'account' collection.`);
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const conflictingAppAdmins = await db.collection("app_admins").find({ email: normalizedEmail }).toArray();
+  if (conflictingAppAdmins.length > 0) {
+    console.log(`\n⚠️ Notice: Email "${email}" is also registered as an App Admin in 'app_admins' for:`);
+    conflictingAppAdmins.forEach((a: any) => console.log(`   - Client ID: ${a.clientId}`));
+    console.log(`🛡️ Your Global Super Admin account (scopedClientId: null) is protected against demotion during cold starts.`);
+    if (process.argv.includes("--clean-scoped")) {
+      const del = await db.collection("app_admins").deleteMany({ email: normalizedEmail });
+      console.log(`🧹 Removed ${del.deletedCount} conflicting record(s) from 'app_admins'.`);
+    } else {
+      console.log(`💡 Tip: Pass --clean-scoped if you wish to remove this email from 'app_admins'.`);
+    }
+  }
+
   console.log(`\n🎉 Success! Admin user is ready:`);
   console.log(`   Email: ${email}`);
   console.log(`   Role : admin`);

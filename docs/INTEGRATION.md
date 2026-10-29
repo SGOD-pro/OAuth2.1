@@ -182,6 +182,10 @@ SWYRA Auth issues RS256-signed JWTs for both **ID Tokens** and **Access Tokens**
    - `aud` MUST strictly match the consumer's `${CLIENT_ID}`.
 6. **Fail-Closed Configuration:** All environment variables must fail closed. No expressions like `AUTH_CALLBACK_URL || "http://localhost:3000/callback"`. If configuration is missing, the application must abort startup.
 7. **Refresh Token Rotation:** Refresh tokens rotate on every exchange. Replaying an old refresh token instantly revokes the entire token family.
+8. **Supported Multi Process Topology and Refresh Guarantees:**
+   * **Supported Topology**: Single process BFF, or multi process BFF with sticky sessions routing requests for the same session to the same instance.
+   * **Multi Instance Deployments Without Shared Cache**: When multiple backend instances handle requests for the same session without a shared distributed cache like Redis, concurrent token refreshes follow atomic single winner semantics. The winning process receives the rotated token pair. The losing process detects that the previous token was consumed, clears its local cookie, and returns a deterministic HTTP 401 `session_expired` response with recovery guidance (`recovery_flow: "reauthenticate"`, `login_url: "/auth/login"`). This behavior provides clean reauthentication recovery upon a race condition, not seamless distributed coordination.
+   * **Seamless Distributed Coordination**: Deployments that require seamless token sharing across multiple concurrent worker processes without reauthentication prompts should configure a shared session store backed by Redis or a database to coordinate in flight refresh requests.
 
 ---
 

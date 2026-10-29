@@ -80,8 +80,14 @@ export const config = {
     },
 
     get internalGatewaySecret(): string | undefined {
-        const secret = process.env.INTERNAL_GATEWAY_SECRET ?? parsedEnv.INTERNAL_GATEWAY_SECRET
+        const secret = process.env.INTERNAL_GATEWAY_SECRET !== undefined
+            ? process.env.INTERNAL_GATEWAY_SECRET
+            : parsedEnv.INTERNAL_GATEWAY_SECRET
         if (this.env === 'production' && (!secret || secret.trim().length < 32)) {
+            const reason = !secret
+                ? 'Missing or empty INTERNAL_GATEWAY_SECRET'
+                : `INTERNAL_GATEWAY_SECRET length (${secret.trim().length}) is under required minimum of 32 characters`
+            console.error(`[CONFIG_ERROR] ${reason}. Production deployments require a 32+ character internal gateway secret.`)
             throw new Error('INTERNAL_GATEWAY_SECRET must be explicitly configured in production (minimum 32 characters)')
         }
         return secret

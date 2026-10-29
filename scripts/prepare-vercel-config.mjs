@@ -18,6 +18,19 @@ if (process.argv.includes('--clean')) {
   process.exit(0);
 }
 
+const isIfPresent = process.argv.includes('--if-present');
+const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+const skipDeploymentPrep = process.env.SKIP_DEPLOYMENT_PREP === '1' || process.argv.includes('--skip-deployment-prep');
+
+if (skipDeploymentPrep) {
+  if (isProduction) {
+    console.error('[prepare-vercel-config] FATAL: Deployment preparation cannot be skipped in production mode.');
+    process.exit(1);
+  }
+  console.log('[prepare-vercel-config] Skipping deployment preparation (explicitly requested for local build).');
+  process.exit(0);
+}
+
 let gatewaySecret = process.env.INTERNAL_GATEWAY_SECRET;
 
 if (!gatewaySecret) {
@@ -32,7 +45,22 @@ if (!gatewaySecret) {
 }
 
 if (!gatewaySecret) {
-  console.error('[prepare-vercel-config] FATAL: INTERNAL_GATEWAY_SECRET not found in env or backend/.env');
+  const rootEnvPath = path.join(rootDir, '.env');
+  if (fs.existsSync(rootEnvPath)) {
+    const envContent = fs.readFileSync(rootEnvPath, 'utf8');
+    const match = envContent.match(/^INTERNAL_GATEWAY_SECRET=(.*)$/m);
+    if (match && match[1]) {
+      gatewaySecret = match[1].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+}
+
+if (!gatewaySecret) {
+  if (isIfPresent && !isProduction) {
+    console.warn('[prepare-vercel-config] INTERNAL_GATEWAY_SECRET not found; skipping vercel.json generation for local non-production build (--if-present).');
+    process.exit(0);
+  }
+  console.error('[prepare-vercel-config] FATAL: INTERNAL_GATEWAY_SECRET not found in env or backend/.env (required in production)');
   process.exit(1);
 }
 
@@ -41,6 +69,9 @@ if (gatewaySecret.length < 32) {
   process.exit(1);
 }
 
+const defaultLambdaUrl = 'https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws';
+const lambdaBackendUrl = (process.env.LAMBDA_BACKEND_URL || defaultLambdaUrl).trim().replace(/\/+$/, '');
+
 // Generate from template or structure
 const baseTemplate = fs.existsSync(rootTemplate)
   ? JSON.parse(fs.readFileSync(rootTemplate, 'utf8'))
@@ -48,7 +79,7 @@ const baseTemplate = fs.existsSync(rootTemplate)
       routes: [
         {
           src: '/api/(.*)',
-          dest: 'https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/api/$1',
+          dest: `${lambdaBackendUrl}/api/$1`,
           transforms: [
             {
               type: 'request.headers',
@@ -62,7 +93,7 @@ const baseTemplate = fs.existsSync(rootTemplate)
         },
         {
           src: '/.well-known/(.*)',
-          dest: 'https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws/.well-known/$1',
+          dest: `${lambdaBackendUrl}/.well-known/$1`,
         },
         {
           handle: 'filesystem',
@@ -74,9 +105,18 @@ const baseTemplate = fs.existsSync(rootTemplate)
       ],
     };
 
-const configStr = JSON.stringify(baseTemplate, null, 2).replace(
+let configStr = JSON.stringify(baseTemplate, null, 2);
+
+if (process.env.LAMBDA_BACKEND_URL) {
+  configStr = configStr.replace(
+    /https:\/\/yu6fcg6yx4xmq5u4we5n6j3ywm0inmis\.lambda-url\.ap-south-1\.on\.aws/g,
+    () => lambdaBackendUrl
+  );
+}
+
+configStr = configStr.replace(
   /__INTERNAL_GATEWAY_SECRET__/g,
-  gatewaySecret
+  () => gatewaySecret
 );
 
 fs.writeFileSync(rootVercelJson, configStr + '\n');

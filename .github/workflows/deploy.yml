@@ -199,6 +199,8 @@ jobs:
         working-directory: backend
         env:
           INTERNAL_GATEWAY_SECRET: ${{ secrets.INTERNAL_GATEWAY_SECRET }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
         run: |
           echo "Deploying SAM stack with parameter overrides..."
           sam deploy \
@@ -208,7 +210,9 @@ jobs:
               BetterAuthUrl="https://oauth21.vercel.app" \
               GoogleClientId="851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com" \
               FrontendUrl="https://oauth21.vercel.app" \
-              InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"
+              InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}" \
+              UpstashRedisRestUrl="${UPSTASH_REDIS_REST_URL}" \
+              UpstashRedisRestToken="${UPSTASH_REDIS_REST_TOKEN}"
 
       - name: Smoke Test Deployed Lambda Health Endpoint (Blocking Gate)
         run: |
@@ -325,5 +329,21 @@ jobs:
             echo "OIDC discovery probe successful (HTTP 200)."
           else
             echo "ERROR: OIDC discovery probe returned non-200 code: $DISC_STATUS"
+            exit 1
+          fi
+
+          echo "Probing authenticated gateway perimeter via /api/admin/clients..."
+          # The edge gateway MUST inject x-gateway-secret into backend requests.
+          # If injected, backend proceeds to admin authentication and returns HTTP 401 Unauthorized (since no session exists).
+          # If the gateway secret was missing, rejected, or bypassed, backend returns HTTP 403 Forbidden.
+          GATEWAY_STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/api/admin/clients || true)
+          echo "Gateway probe returned HTTP $GATEWAY_STATUS"
+          if [ "$GATEWAY_STATUS" -eq 401 ]; then
+            echo "Authenticated gateway smoke check successful (HTTP 401: gateway secret accepted, session required)."
+          else
+            echo "ERROR: Authenticated gateway probe failed. Expected HTTP 401 (gateway secret injected, unauthorized session), but got HTTP $GATEWAY_STATUS."
+            if [ "$GATEWAY_STATUS" -eq 403 ]; then
+              echo "ERROR DETAIL: HTTP 403 indicates edge proxy failed to inject x-gateway-secret or backend rejected gateway secret."
+            fi
             exit 1
           fi

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { config } from "../config";
 import { ObjectId } from "mongodb";
 
@@ -7,12 +8,26 @@ import { ObjectId } from "mongodb";
  */
 export function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  return (
+  if (
     host === "localhost" ||
     host === "127.0.0.1" ||
     host === "::1" ||
     host.endsWith(".localhost")
-  );
+  ) {
+    return true;
+  }
+  if (host.startsWith("::ffff:")) {
+    const rest = host.slice(7);
+    if (rest.includes(".")) {
+      return rest === "127.0.0.1" || rest.startsWith("127.");
+    }
+    const parts = rest.split(":");
+    if (parts.length === 2) {
+      const w1 = parseInt(parts[0], 16);
+      return !isNaN(w1) && ((w1 >> 8) & 0xff) === 127;
+    }
+  }
+  return false;
 }
 
 /**
@@ -32,30 +47,30 @@ export function validateRedirectUri(
 
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
     if (uri.includes("*")) return false;
-    // https://evil@legit.example/ ?" userinfo enables open-redirect tricks
+    if (uri.includes("#")) return false;
+    // userinfo enables open-redirect tricks
     if (url.username || url.password) return false;
     if (!url.hostname) return false;
 
-    const currentEnv = options.env ?? config.env;
+    const isLoopback = isLoopbackHost(url.hostname);
+    const isPrivate = isPrivateOrLocalHost(url.hostname);
 
-    if (currentEnv === "production") {
-      const allowDev = options.allowDevInProd !== undefined
-        ? options.allowDevInProd
-        : (process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION === "false" ? false : true);
-
-      if (options.isDev && allowDev) {
-        const isLoopback = isLoopbackHost(url.hostname);
-        if (!isLoopback) {
-          if (url.protocol !== "https:") return false;
-          if (isPrivateOrLocalHost(url.hostname)) return false;
-        }
-      } else {
-        if (url.protocol !== "https:") return false;
-        if (isPrivateOrLocalHost(url.hostname)) return false;
+    if (options.isDev) {
+      if (options.env === "production" && options.allowDevInProd === false) {
+        return false;
       }
+      if (isLoopback) {
+        return true;
+      }
+      if (url.protocol !== "https:") return false;
+      if (isPrivate) return false;
+      return true;
+    } else {
+      if (isLoopback) return false;
+      if (url.protocol !== "https:") return false;
+      if (isPrivate) return false;
+      return true;
     }
-
-    return true;
   } catch {
     return false;
   }
@@ -111,13 +126,41 @@ export interface ClientConfigValidationResult {
 }
 
 /**
+ * Automatically derive allowed CORS origins from redirect URIs.
+ * Extracts unique web origins (http:// and https:// with host and optional port).
+ * Non web schemes (for example, custom mobile app schemes like myapp://callback) are safely skipped.
+ */
+export function deriveAllowedOriginsFromRedirectUris(redirectUris: string[]): string[] {
+  if (!Array.isArray(redirectUris)) return [];
+
+  const originsSet = new Set<string>();
+
+  for (const uri of redirectUris) {
+    if (!uri || typeof uri !== "string") continue;
+    try {
+      const parsed = new URL(uri.trim());
+      // Only http and https protocols generate valid web CORS origins
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        if (parsed.origin && parsed.origin !== "null") {
+          originsSet.add(parsed.origin);
+        }
+      }
+    } catch {
+      // Invalid URL syntax is safely skipped during origin derivation
+    }
+  }
+
+  return Array.from(originsSet);
+}
+
+/**
  * Central Policy Function: Validates OAuth client configuration across
  * IdP server environment (NODE_ENV) and target OAuth client mode (isDev).
  *
  * Enforces per-client security boundary:
- * - Production client (isDev: false): loopback and non-HTTPS are strictly forbidden.
- * - Development client (isDev: true): loopback URIs (localhost, 127.0.0.1, ::1, *.localhost)
- *   are permitted per RFC 8252, while intranet/private IPs remain forbidden.
+ * - Production client (isDev: false): strictly HTTPS, zero loopback, zero private/intranet IPs.
+ * - Development client (isDev: true): dual mode permitted (strict loopback URIs and valid public HTTPS URIs),
+ *   while non-loopback HTTP and private/intranet IPs remain strictly forbidden.
  * - Application type is automatically resolved to "native" when loopback or dev mode is active.
  * - isDev and isPublic remain completely independent.
  */
@@ -136,7 +179,12 @@ export function validateOAuthClientConfiguration(
   const effectiveRedirectUris = Array.isArray(rawRedirectUris) ? rawRedirectUris : [];
 
   const rawAllowedOrigins = targetState.allowed_origins || targetState.allowedOrigins;
-  const effectiveAllowedOrigins = Array.isArray(rawAllowedOrigins) ? rawAllowedOrigins : [];
+  let effectiveAllowedOrigins = Array.isArray(rawAllowedOrigins) ? [...rawAllowedOrigins] : [];
+
+  // Automatically derive allowed CORS origins from redirect URIs if empty or omitted
+  if (effectiveAllowedOrigins.length === 0 && effectiveRedirectUris.length > 0) {
+    effectiveAllowedOrigins = deriveAllowedOriginsFromRedirectUris(effectiveRedirectUris);
+  }
 
   const defaultFailResult: ClientConfigValidationResult = {
     valid: false,
@@ -156,31 +204,13 @@ export function validateOAuthClientConfiguration(
   }
 
   // When creating a new client in production with isDev=true:
-  // - If caller is a verified Super Admin (isSuperAdminOp=true) AND all redirect URIs and origins are strict loopback: permit.
+  // - If caller is a verified Super Admin (isSuperAdminOp=true): permit.
   // - Otherwise, fail closed unless ALLOW_DEV_CLIENTS_IN_PRODUCTION=true is explicitly set.
   if (isNewClient && serverEnv === "production" && effectiveIsDev) {
-    const allLoopback = effectiveRedirectUris.every((u) => {
-      try {
-        return isLoopbackHost(new URL(u).hostname);
-      } catch {
-        return false;
-      }
-    }) && effectiveAllowedOrigins.every((o) => {
-      try {
-        return isLoopbackHost(new URL(o).hostname);
-      } catch {
-        return false;
-      }
-    });
-
-    if (options.isSuperAdminOp && allLoopback) {
-      // Super Admin explicitly creating a localhost-only dev client on production IdP: permitted
-    } else if (!allowDevInProd) {
+    if (!options.isSuperAdminOp && !allowDevInProd) {
       return {
         ...defaultFailResult,
-        error: !options.isSuperAdminOp
-          ? "Only Super Admins may create new OAuth clients in development mode."
-          : "Development clients may use only loopback redirect URIs and origins (localhost, 127.0.0.1, [::1]).",
+        error: "Only Super Admins may create new OAuth clients in development mode.",
       };
     }
   }
@@ -217,34 +247,41 @@ export function validateOAuthClientConfiguration(
     const isLoopback = isLoopbackHost(parsedUrl.hostname);
     const isPrivate = isPrivateOrLocalHost(parsedUrl.hostname);
 
-    if (serverEnv === "production") {
-      if (!effectiveIsDev) {
-        // Production client: strictly HTTPS, no loopback, no private IPs
-        if (isLoopback) {
+    if (effectiveIsDev) {
+      // Development client: permits loopback (http/https) and valid public HTTPS
+      if (!isLoopback) {
+        if (parsedUrl.protocol !== "https:") {
           return {
             ...defaultFailResult,
-            error: "Loopback redirect URIs are permitted only for development-mode OAuth clients. Switch the application to Development Mode or provide HTTPS redirect URIs.",
+            error: `Invalid redirect URI: "${uri}". Non-loopback redirect URIs must use HTTPS.`,
           };
         }
         if (isPrivate) {
-          return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Private and intranet IP addresses are forbidden.` };
-        }
-        if (parsedUrl.protocol !== "https:") {
-          return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Production OAuth clients require HTTPS redirect URIs.` };
-        }
-      } else {
-        // Development client in production: loopback ONLY per strict dev client policy
-        if (!isLoopback) {
           return {
             ...defaultFailResult,
-            error: `Invalid redirect URI: "${uri}". Development clients may use only loopback redirect URIs (localhost, 127.0.0.1, [::1]). For external domains, disable Development Mode and use HTTPS.`,
+            error: `Invalid redirect URI: "${uri}". Private and intranet IP addresses are forbidden.`,
           };
         }
       }
     } else {
-      // Development server (NODE_ENV !== "production")
-      if (!isLoopback && isPrivate) {
-        return { ...defaultFailResult, error: `Invalid redirect URI: "${uri}". Private intranet IP addresses are forbidden.` };
+      // Production client: strictly HTTPS, zero loopback, zero private IPs
+      if (isLoopback) {
+        return {
+          ...defaultFailResult,
+          error: "Loopback redirect URIs are permitted only for development-mode OAuth clients. Switch the application to Development Mode or provide HTTPS redirect URIs.",
+        };
+      }
+      if (isPrivate) {
+        return {
+          ...defaultFailResult,
+          error: `Invalid redirect URI: "${uri}". Private and intranet IP addresses are forbidden.`,
+        };
+      }
+      if (parsedUrl.protocol !== "https:") {
+        return {
+          ...defaultFailResult,
+          error: `Invalid redirect URI: "${uri}". Production OAuth clients require HTTPS redirect URIs.`,
+        };
       }
     }
   }
@@ -278,28 +315,41 @@ export function validateOAuthClientConfiguration(
     const isLoopback = isLoopbackHost(parsedOrigin.hostname);
     const isPrivate = isPrivateOrLocalHost(parsedOrigin.hostname);
 
-    if (serverEnv === "production") {
-      if (!effectiveIsDev) {
-        if (isLoopback) {
+    if (effectiveIsDev) {
+      // Development client: permits loopback (http/https) and valid public HTTPS
+      if (!isLoopback) {
+        if (parsedOrigin.protocol !== "https:") {
           return {
             ...defaultFailResult,
-            error: "Loopback origins are permitted only for development-mode OAuth clients. Switch the application to Development Mode or provide HTTPS origins.",
+            error: `Invalid allowed origin: "${origin}". Non-loopback CORS origins must use HTTPS.`,
           };
         }
         if (isPrivate) {
-          return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Private and intranet IP addresses are forbidden.` };
-        }
-        if (parsedOrigin.protocol !== "https:") {
-          return { ...defaultFailResult, error: `Invalid allowed origin: "${origin}". Production OAuth clients require HTTPS allowed origins.` };
-        }
-      } else {
-        // Development client in production: loopback ONLY
-        if (!isLoopback) {
           return {
             ...defaultFailResult,
-            error: `Invalid allowed origin: "${origin}". Development clients may use only loopback CORS origins (localhost, 127.0.0.1, [::1]). For external domains, disable Development Mode and use HTTPS.`,
+            error: `Invalid allowed origin: "${origin}". Private and intranet IP addresses are forbidden.`,
           };
         }
+      }
+    } else {
+      // Production client: strictly HTTPS, zero loopback, zero private IPs
+      if (isLoopback) {
+        return {
+          ...defaultFailResult,
+          error: "Loopback origins are permitted only for development-mode OAuth clients. Switch the application to Development Mode or provide HTTPS origins.",
+        };
+      }
+      if (isPrivate) {
+        return {
+          ...defaultFailResult,
+          error: `Invalid allowed origin: "${origin}". Private and intranet IP addresses are forbidden.`,
+        };
+      }
+      if (parsedOrigin.protocol !== "https:") {
+        return {
+          ...defaultFailResult,
+          error: `Invalid allowed origin: "${origin}". Production OAuth clients require HTTPS allowed origins.`,
+        };
       }
     }
   }
@@ -315,6 +365,10 @@ export function validateOAuthClientConfiguration(
   });
 
   const effectiveApplicationType: "native" | "web" = (effectiveIsDev || hasLoopback) ? "native" : "web";
+  const requestedAppType = targetState.application_type || targetState.applicationType;
+  if (requestedAppType === "web" && effectiveApplicationType === "native") {
+    console.info("[CLIENT_CONFIG] Requested application_type 'web' overridden to 'native' per RFC 8252 for development/loopback client.");
+  }
 
   return {
     valid: true,
@@ -363,6 +417,24 @@ export function isPrivateOrLocalHost(hostname: string): boolean {
     host.endsWith(".local")
   ) {
     return true;
+  }
+
+  // IPv4-mapped IPv6 addresses (e.g. ::ffff:192.168.1.1 or ::ffff:c0a8:101)
+  if (host.startsWith("::ffff:")) {
+    const rest = host.slice(7);
+    if (rest.includes(".")) {
+      return isPrivateOrLocalHost(rest);
+    }
+    const parts = rest.split(":");
+    if (parts.length === 2) {
+      const w1 = parseInt(parts[0], 16);
+      const w2 = parseInt(parts[1], 16);
+      if (!isNaN(w1) && !isNaN(w2)) {
+        const ipv4 = `${(w1 >> 8) & 0xff}.${w1 & 0xff}.${(w2 >> 8) & 0xff}.${w2 & 0xff}`;
+        return isPrivateOrLocalHost(ipv4);
+      }
+    }
+    return true; // Unknown/malformed ::ffff: mapped address, fail closed
   }
 
   // IPv4
@@ -517,16 +589,63 @@ export interface CanonicalOAuthClient {
   _id: any;
   id: string;
   clientId: string;
+  client_id?: string;
   clientSecret?: string;
   client_secret?: string;
   name: string;
+  client_name?: string;
   redirectUris: string[];
+  redirect_uris?: string[];
   allowedOrigins: string[];
+  allowed_origins?: string[];
   disabled: boolean;
   isDev: boolean;
+  is_dev?: boolean;
   isPublic: boolean;
+  is_public?: boolean;
   skipConsent: boolean;
+  skip_consent?: boolean;
   [key: string]: any;
+}
+
+/**
+ * Normalize OAuth client configuration fields so both camelCase and snake_case properties
+ * are present, consistent, and cleanly resolved across all data stores and route handlers.
+ */
+export function normalizeOAuthClientFields<T extends Record<string, any>>(rawClient: T): T & CanonicalOAuthClient {
+  if (!rawClient || typeof rawClient !== "object") return rawClient as any;
+
+  const canonicalId = String(rawClient.clientId || rawClient.client_id || rawClient.id || rawClient._id || "");
+  const redirectUris = (rawClient.redirectUris || rawClient.redirect_uris || []) as string[];
+  const rawOrigins = (rawClient.allowedOrigins || rawClient.allowed_origins || []) as string[];
+  const allowedOrigins = rawOrigins.length > 0 ? rawOrigins : deriveAllowedOriginsFromRedirectUris(redirectUris);
+  const isPublic = rawClient.isPublic !== false && rawClient.is_public !== false;
+  const isDev = Boolean(rawClient.isDev || rawClient.is_dev);
+  const disabled = Boolean(rawClient.disabled);
+  const name = String(rawClient.name || rawClient.client_name || "Application").trim();
+  const clientSecret = rawClient.clientSecret || rawClient.client_secret;
+  const skipConsent = Boolean(rawClient.skipConsent || rawClient.skip_consent);
+
+  return {
+    ...rawClient,
+    id: canonicalId,
+    clientId: canonicalId,
+    client_id: canonicalId,
+    name,
+    client_name: name,
+    redirectUris,
+    redirect_uris: redirectUris,
+    allowedOrigins,
+    allowed_origins: allowedOrigins,
+    isDev,
+    is_dev: isDev,
+    isPublic,
+    is_public: isPublic,
+    disabled,
+    skipConsent,
+    skip_consent: skipConsent,
+    ...(clientSecret ? { clientSecret, client_secret: clientSecret } : {}),
+  } as any;
 }
 
 /**
@@ -560,22 +679,7 @@ export async function resolveOAuthClient(
 
   if (!raw) return null;
 
-  const canonicalId = raw.clientId || raw.client_id || raw.id || String(raw._id);
-  const redirectUris = raw.redirectUris || raw.redirect_uris || [];
-  const allowedOrigins = raw.allowedOrigins || raw.allowed_origins || [];
-  const isPublic = raw.isPublic !== false && raw.is_public !== false;
-  const disabled = Boolean(raw.disabled);
-
-  return {
-    ...raw,
-    id: canonicalId,
-    clientId: canonicalId,
-    name: raw.name || raw.client_name || "Application",
-    redirectUris,
-    allowedOrigins,
-    isPublic,
-    disabled,
-  };
+  return normalizeOAuthClientFields(raw);
 }
 
 /**
@@ -679,4 +783,15 @@ export async function checkUserAppRegistration(
   });
 
   return Boolean(reg);
+}
+
+/**
+ * Computes a SHA-256 hash formatted as base64url or hex.
+ * Centralizes token hash generation for OAuth credentials.
+ */
+export function hashToken(
+  token: string,
+  encoding: "base64url" | "hex" = "base64url",
+): string {
+  return crypto.createHash("sha256").update(token).digest(encoding);
 }

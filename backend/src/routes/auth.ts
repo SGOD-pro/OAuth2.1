@@ -16,13 +16,13 @@ import {
     consumeOAuthTransaction,
 } from "../db/state";
 import { rateLimiters, checkRateLimit } from "../cache/redis";
-import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration } from "../utils/security";
+import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, hashToken } from "../utils/security";
 import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
 
-import { importJWK, SignJWT, jwtVerify } from "jose";
+import { importJWK, SignJWT, jwtVerify, decodeJwt, decodeProtectedHeader, generateKeyPair, exportJWK } from "jose";
 import { getIdpPublicKey } from "../middleware/admin-auth";
-import { symmetricDecrypt } from "better-auth/crypto";
+import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 
 export const auth = new Hono();
 
@@ -30,7 +30,133 @@ let cachedPrivateKey: any = null;
 let cachedKeyId: string = "";
 let lastPrivateKeyFetch = 0;
 
-async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | null> {
+export async function resolveUserRoleForClient(
+    database: any,
+    userDoc: any,
+    clientId: string
+): Promise<{ role: string; scopedClientId: string | null }> {
+    if (!userDoc) {
+        return { role: "user", scopedClientId: null };
+    }
+
+    // 1. Global Super Admin: always role: "admin", scopedClientId: null
+    if (userDoc.role === "admin" && userDoc.scopedClientId === null) {
+        return { role: "admin", scopedClientId: null };
+    }
+
+    if (!clientId) {
+        return { role: userDoc.role || "user", scopedClientId: userDoc.scopedClientId || null };
+    }
+
+    // 2. Direct scoped match on primary user document
+    if (userDoc.role === "admin" && userDoc.scopedClientId === clientId) {
+        return { role: "admin", scopedClientId: clientId };
+    }
+
+    // 3. Check app_admins collection by userId and email
+    const userIdStr = (userDoc.id || userDoc._id)?.toString();
+    const adminOrConditions: any[] = [];
+    if (userIdStr) adminOrConditions.push({ userId: userIdStr });
+    if (userDoc._id) adminOrConditions.push({ userId: userDoc._id });
+    if (userDoc.email) {
+        adminOrConditions.push({ email: userDoc.email.toLowerCase().trim() });
+    }
+    if (adminOrConditions.length > 0) {
+        const appAdmin = await database.collection("app_admins").findOne({
+            clientId,
+            $or: adminOrConditions,
+            isActive: { $ne: false },
+        });
+        if (appAdmin) {
+            return { role: "admin", scopedClientId: clientId };
+        }
+    }
+
+    // 4. Check user_app_registrations collection for appRole: "admin"
+    const orConditions: any[] = [];
+    if (userIdStr) orConditions.push({ userId: userIdStr });
+    if (userDoc._id) orConditions.push({ userId: userDoc._id });
+    if (orConditions.length > 0) {
+        const reg = await database.collection("user_app_registrations").findOne({
+            clientId,
+            $or: orConditions,
+            appRole: "admin",
+        });
+        if (reg) {
+            return { role: "admin", scopedClientId: clientId };
+        }
+    }
+
+    // 5. Default to role: "user" with scopedClientId null for this client
+    return { role: "user", scopedClientId: null };
+}
+
+async function generateAndStoreFreshKeypair(database: any): Promise<{ privateKey: any; kid: string } | null> {
+    try {
+        const { publicKey, privateKey } = await generateKeyPair("RS256", { extractable: true });
+        const publicJwk: any = await exportJWK(publicKey);
+        const privateJwk: any = await exportJWK(privateKey);
+        const kid = `idp-key-${crypto.randomUUID()}`;
+        publicJwk.kid = kid;
+        publicJwk.alg = "RS256";
+        publicJwk.use = "sig";
+        privateJwk.kid = kid;
+        privateJwk.alg = "RS256";
+        privateJwk.use = "sig";
+
+        let storedPrivateKey: any = typeof privateJwk === "string" ? privateJwk : JSON.stringify(privateJwk);
+        if (config.auth.secret) {
+            try {
+                const enc = await symmetricEncrypt({
+                    key: config.auth.secret,
+                    data: JSON.stringify(privateJwk),
+                });
+                storedPrivateKey = JSON.stringify(enc);
+            } catch (encryptErr) {
+                console.error("[getIdpSigningKey] Critical: Failed to symmetrically encrypt fresh private key at rest:", encryptErr);
+                return null;
+            }
+        }
+
+        const newDoc = {
+            _id: kid as any,
+            id: kid,
+            kid,
+            publicKey: JSON.stringify(publicJwk),
+            privateKey: storedPrivateKey,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+
+        await database.collection("jwks").insertOne(newDoc);
+        console.log(`[getIdpSigningKey] Self-healed: generated and stored fresh RS256 keypair (kid: ${kid})`);
+
+        cachedPrivateKey = privateKey;
+        cachedKeyId = kid;
+        lastPrivateKeyFetch = Date.now();
+        return { privateKey: cachedPrivateKey, kid: cachedKeyId };
+    } catch (healErr) {
+        console.error("[getIdpSigningKey] Catastrophic failure self-healing RS256 keypair:", healErr);
+        return null;
+    }
+}
+
+let signingKeyOverrideForTesting: (() => Promise<{ privateKey: any; kid: string } | null>) | null = null;
+export function setSigningKeyOverrideForTesting(override: (() => Promise<{ privateKey: any; kid: string } | null>) | null): void {
+    signingKeyOverrideForTesting = override;
+}
+
+export function clearSigningKeyCacheForTesting(): void {
+    cachedPrivateKey = null;
+    cachedKeyId = "";
+    lastPrivateKeyFetch = 0;
+    signingKeyOverrideForTesting = null;
+}
+
+export async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | null> {
+    if (signingKeyOverrideForTesting) {
+        return signingKeyOverrideForTesting();
+    }
     const now = Date.now();
     if (cachedPrivateKey && cachedKeyId && now - lastPrivateKeyFetch < 60_000) {
         return { privateKey: cachedPrivateKey, kid: cachedKeyId };
@@ -41,7 +167,8 @@ async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | nu
         { sort: { createdAt: -1 } }
     );
     if (!jwksRecord || !jwksRecord.privateKey) {
-        return null;
+        console.warn("[getIdpSigningKey] No valid signing key found in database. Self-healing with fresh keypair...");
+        return generateAndStoreFreshKeypair(database);
     }
     try {
         let rawData: any;
@@ -71,7 +198,13 @@ async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | nu
         }
 
         if (typeof jwk === "string") {
-            jwk = JSON.parse(jwk);
+            try {
+                jwk = JSON.parse(jwk);
+            } catch {}
+        }
+
+        if (!jwk || typeof jwk !== "object" || !jwk.kty) {
+            throw new Error("Invalid or unreadable JWK private key format");
         }
 
         cachedPrivateKey = await importJWK(jwk, "RS256");
@@ -79,12 +212,15 @@ async function getIdpSigningKey(): Promise<{ privateKey: any; kid: string } | nu
         lastPrivateKeyFetch = now;
         return { privateKey: cachedPrivateKey, kid: cachedKeyId };
     } catch (err) {
-        console.error("[getIdpSigningKey] Error preparing IDP signing key:", err);
-        return null;
+        console.warn("[getIdpSigningKey] Existing signing key is unreadable or corrupted. Self-healing with fresh keypair...", err);
+        if (jwksRecord && jwksRecord._id) {
+            await database.collection("jwks").deleteOne({ _id: jwksRecord._id }).catch(() => {});
+        }
+        return generateAndStoreFreshKeypair(database);
     }
 }
 
-async function mintJwtAccessToken(params: {
+export async function mintJwtAccessToken(params: {
     userId: string;
     clientId: string;
     expiresInSeconds?: number;
@@ -103,8 +239,7 @@ async function mintJwtAccessToken(params: {
             $or: orConditions
         });
 
-        const role = userDoc?.role || "user";
-        const scopedClientId = userDoc?.scopedClientId || null;
+        const { role, scopedClientId } = await resolveUserRoleForClient(database, userDoc, params.clientId);
         const email = userDoc?.email || undefined;
         const name = userDoc?.name || undefined;
         const ttl = params.expiresInSeconds || 900;
@@ -124,6 +259,7 @@ async function mintJwtAccessToken(params: {
             .setIssuer(config.auth.baseURL)
             .setAudience(params.clientId)
             .setExpirationTime(`${ttl}s`)
+            .setJti(crypto.randomUUID())
             .sign(signingKey.privateKey);
 
         return jwt;
@@ -584,26 +720,50 @@ auth.get("/oauth2/authorize", async (c) => {
 
     // E. Determine authenticated user from session & MongoDB
     let sessionUser: any = null;
-    try {
-        const sessionResult = await authProvider.api.getSession({
-            headers: getHeaders(c),
-        });
-        if (sessionResult?.user) {
-            const userDoc = await database.collection("user").findOne({
-                $or: [
-                    { id: sessionResult.user.id },
-                    { _id: (sessionResult.user as any)._id },
-                    { email: sessionResult.user.email },
-                ],
+    const isPromptLogin = c.req.query("prompt") === "login";
+    if (!isPromptLogin) {
+        try {
+            const sessionResult = await authProvider.api.getSession({
+                headers: getHeaders(c),
             });
-            sessionUser = { ...sessionResult.user, ...userDoc };
+            if (sessionResult?.user) {
+                const userDoc = await database.collection("user").findOne({
+                    $or: [
+                        { id: sessionResult.user.id },
+                        { _id: (sessionResult.user as any)._id },
+                        { email: sessionResult.user.email },
+                    ],
+                });
+                sessionUser = { ...sessionResult.user, ...userDoc };
+            }
+        } catch {
+            sessionUser = null;
         }
-    } catch {
-        sessionUser = null;
     }
 
     const forwardToBetterAuth = async () => {
-        const res = await authProvider.handler(c.req.raw);
+        let rawReq = c.req.raw;
+        if (isPromptLogin) {
+            const h = new Headers(rawReq.headers);
+            const cookieHeader = h.get("cookie") || "";
+            const filteredCookies = cookieHeader
+                .split(";")
+                .map((part) => part.trim())
+                .filter((part) => !part.startsWith("better-auth.session_token=") && !part.startsWith("__Secure-better-auth.session_token="))
+                .join("; ");
+            if (filteredCookies) {
+                h.set("cookie", filteredCookies);
+            } else {
+                h.delete("cookie");
+            }
+            rawReq = new Request(rawReq.url, {
+                method: rawReq.method,
+                headers: h,
+                body: rawReq.body,
+                redirect: "manual",
+            });
+        }
+        const res = await authProvider.handler(rawReq);
         const headers = new Headers(res.headers);
         headers.append("set-cookie", `oauth_transaction_id=${transactionId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
         headers.append("set-cookie", `current_client_id=${canonicalClientId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
@@ -753,7 +913,7 @@ auth.post("/oauth2/token", async (c) => {
 
     // -- B2: Refresh Token Lifecycle & Family Revocation ---------------------------
     if (grantType === "refresh_token" && refreshToken) {
-        const incomingHash = crypto.createHash("sha256").update(refreshToken).digest("hex");
+        const incomingHash = hashToken(refreshToken, "hex");
 
         // Fail-Closed: Check if this token family exists and belongs to the authenticated client
         const existingFamily = await database.collection("oauth_token_families").findOne({
@@ -783,14 +943,20 @@ auth.post("/oauth2/token", async (c) => {
             );
         }
 
+        const staleLockThreshold = new Date(Date.now() - 15000);
+
         // Atomic compare-and-swap to claim rotation rights for this token family
         // Scoped strictly by canonicalClientId to prevent cross-client CAS contention
+        // Allows reclaiming a stale lock if a previous rotation timed out or crashed (> 15s)
         const claim = await database.collection("oauth_token_families").findOneAndUpdate(
             {
                 activeTokenHash: incomingHash,
                 clientId: canonicalClientId,
                 status: "active",
-                rotating: { $ne: true },
+                $or: [
+                    { rotating: { $ne: true } },
+                    { rotatingAt: { $lt: staleLockThreshold } },
+                ],
             },
             {
                 $set: { rotating: true, rotatingAt: new Date() },
@@ -805,7 +971,13 @@ auth.post("/oauth2/token", async (c) => {
                 $or: [{ activeTokenHash: incomingHash }, { consumedTokenHashes: incomingHash }]
             });
 
-            if (currentDoc && (currentDoc as any).rotating === true) {
+            const isActivelyRotating =
+                currentDoc &&
+                (currentDoc as any).rotating === true &&
+                (currentDoc as any).rotatingAt &&
+                new Date((currentDoc as any).rotatingAt).getTime() > Date.now() - 15000;
+
+            if (isActivelyRotating) {
                 return c.json(
                     {
                         error: "invalid_grant",
@@ -930,7 +1102,7 @@ auth.post("/oauth2/token", async (c) => {
                     }
                 }
 
-                const newHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
+                const newHash = hashToken(tokenData.refresh_token, "hex");
                 const rotationResult = await verifyAndRotateTokenFamily(incomingHash, newHash, resolvedUserId, Date.now(), canonicalClientId);
 
                 if (rotationResult.replayed) {
@@ -943,26 +1115,121 @@ auth.post("/oauth2/token", async (c) => {
                     );
                 }
 
-                if (tokenData && tokenData.access_token && resolvedUserId) {
+                if (!rotationResult.valid) {
+                    return c.json(
+                        {
+                            error: "invalid_grant",
+                            error_description: "Refresh token was already consumed or is invalid",
+                        },
+                        400
+                    );
+                }
+
+                if (tokenData && tokenData.access_token) {
+                    if (!resolvedUserId) {
+                        console.error("[TOKEN_MINTING] Missing resolvedUserId in refresh_token flow; failing closed without opaque fallback");
+                        const newRefreshHash = tokenData.refresh_token
+                            ? hashToken(tokenData.refresh_token, "base64url")
+                            : null;
+                        const newAccessHash = tokenData.access_token
+                            ? hashToken(tokenData.access_token, "base64url")
+                            : null;
+
+                        // FAIL CLOSED: Purge unminted new tokens; never resurrect consumed old credentials
+                        if (tokenData.refresh_token) {
+                            await database.collection("oauthRefreshToken").deleteMany({
+                                $or: [
+                                    { token: tokenData.refresh_token },
+                                    ...(newRefreshHash ? [{ token: newRefreshHash }] : [])
+                                ]
+                            }).catch(() => {});
+                        }
+                        if (tokenData.access_token) {
+                            await database.collection("oauthAccessToken").deleteMany({
+                                $or: [
+                                    { token: tokenData.access_token },
+                                    ...(newAccessHash ? [{ token: newAccessHash }] : [])
+                                ]
+                            }).catch(() => {});
+                        }
+                        if (rotationResult.familyId) {
+                            await database.collection("oauth_token_families").updateOne(
+                                { familyId: rotationResult.familyId, activeTokenHash: newHash },
+                                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+                            ).catch(() => {});
+                        }
+                        return c.json(
+                            {
+                                error: "server_error",
+                                error_description: "Failed to resolve authenticated user identity for token minting",
+                            },
+                            500
+                        );
+                    }
+
                     const jwtAt = await mintJwtAccessToken({
                         userId: resolvedUserId,
                         clientId: canonicalClientId,
                         expiresInSeconds: tokenData.expires_in || 900,
                         scope: tokenData.scope,
                     });
-                    if (jwtAt) {
-                        await database.collection("oauthAccessToken").insertOne({
-                            token: jwtAt,
-                            clientId: canonicalClientId,
-                            userId: resolvedUserId,
-                            expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
-                            createdAt: new Date(),
-                            scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
-                        }).catch(() => {});
-                        tokenData.access_token = jwtAt;
-                        if (tokenData.id_token) {
-                            tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
+
+                    if (!jwtAt) {
+                        console.error("[TOKEN_MINTING] Failed to mint RS256 access token in refresh_token flow; failing closed without opaque fallback");
+                        const newRefreshStoredHash = tokenData.refresh_token
+                            ? hashToken(tokenData.refresh_token, "base64url")
+                            : null;
+                        const newAccessStoredHash = tokenData.access_token
+                            ? hashToken(tokenData.access_token, "base64url")
+                            : null;
+
+                        // FAIL CLOSED: Purge newly minted refresh and access tokens
+                        if (tokenData.refresh_token) {
+                            await database.collection("oauthRefreshToken").deleteMany({
+                                $or: [
+                                    { token: tokenData.refresh_token },
+                                    ...(newRefreshStoredHash ? [{ token: newRefreshStoredHash }] : [])
+                                ]
+                            }).catch(() => {});
                         }
+                        if (tokenData.access_token) {
+                            await database.collection("oauthAccessToken").deleteMany({
+                                $or: [
+                                    { token: tokenData.access_token },
+                                    ...(newAccessStoredHash ? [{ token: newAccessStoredHash }] : [])
+                                ]
+                            }).catch(() => {});
+                        }
+
+                        // Revoke the token family forward-only so neither consumed incoming token nor unminted token is usable.
+                        // NEVER resurrect consumed/deleted credentials or reverse concurrent administrator revocations.
+                        if (rotationResult.familyId) {
+                            await database.collection("oauth_token_families").updateOne(
+                                { familyId: rotationResult.familyId, activeTokenHash: newHash },
+                                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+                            ).catch(() => {});
+                        }
+
+                        return c.json(
+                            {
+                                error: "server_error",
+                                error_description: "Failed to mint RS256 access token",
+                            },
+                            500
+                        );
+                    }
+
+                    await database.collection("oauthAccessToken").insertOne({
+                        token: jwtAt,
+                        clientId: canonicalClientId,
+                        userId: resolvedUserId,
+                        expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
+                        createdAt: new Date(),
+                        scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                    }).catch(() => {});
+                    tokenData.access_token = jwtAt;
+                    if (tokenData.id_token) {
+                        tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
                     }
                     return c.json(tokenData, 200);
                 }
@@ -1044,9 +1311,11 @@ auth.post("/oauth2/token", async (c) => {
                 }
             }
 
+            let initialHash: string | null = null;
+            let familyId: string | null = null;
             if (tokenData && tokenData.refresh_token) {
-                const initialHash = crypto.createHash("sha256").update(tokenData.refresh_token).digest("hex");
-                const familyId = crypto.randomUUID();
+                initialHash = hashToken(tokenData.refresh_token, "hex");
+                familyId = crypto.randomUUID();
 
                 // Strictly bind token family to canonicalClientId and resolvedUserId
                 try {
@@ -1068,26 +1337,82 @@ auth.post("/oauth2/token", async (c) => {
                 }
             }
 
-            if (tokenData && tokenData.access_token && resolvedUserId) {
+            if (tokenData && tokenData.access_token) {
+                if (!resolvedUserId) {
+                    console.error("[TOKEN_MINTING] Missing resolvedUserId in authorization_code flow; failing closed without opaque fallback");
+                    if (tokenData.refresh_token) {
+                        await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
+                        if (familyId) {
+                            await database.collection("oauth_token_families").deleteMany({ familyId }).catch(() => {});
+                        }
+                    }
+                    await database.collection("oauthAccessToken").deleteMany({ token: tokenData.access_token }).catch(() => {});
+                    return c.json(
+                        {
+                            error: "server_error",
+                            error_description: "Failed to resolve authenticated user identity for token minting",
+                        },
+                        500
+                    );
+                }
+
                 const jwtAt = await mintJwtAccessToken({
                     userId: resolvedUserId,
                     clientId: canonicalClientId,
                     expiresInSeconds: tokenData.expires_in || 900,
                     scope: tokenData.scope,
                 });
-                if (jwtAt) {
-                    await database.collection("oauthAccessToken").insertOne({
-                        token: jwtAt,
-                        clientId: canonicalClientId,
-                        userId: resolvedUserId,
-                        expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
-                        createdAt: new Date(),
-                        scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
-                    }).catch(() => {});
-                    tokenData.access_token = jwtAt;
-                    if (tokenData.id_token) {
-                        tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
+
+                if (!jwtAt) {
+                    console.error("[TOKEN_MINTING] Failed to mint RS256 access token in authorization_code flow; failing closed without opaque fallback");
+                    const newRefreshStoredHash = tokenData.refresh_token
+                        ? hashToken(tokenData.refresh_token, "base64url")
+                        : null;
+                    const newAccessStoredHash = tokenData.access_token
+                        ? hashToken(tokenData.access_token, "base64url")
+                        : null;
+
+                    // FAIL CLOSED: Purge any created tokens and token family state so no partial/unusable credentials survive
+                    if (tokenData.refresh_token) {
+                        await database.collection("oauthRefreshToken").deleteMany({
+                            $or: [
+                                { token: tokenData.refresh_token },
+                                ...(newRefreshStoredHash ? [{ token: newRefreshStoredHash }] : [])
+                            ]
+                        }).catch(() => {});
+                        if (familyId) {
+                            await database.collection("oauth_token_families").deleteMany({ familyId }).catch(() => {});
+                        }
                     }
+                    if (tokenData.access_token) {
+                        await database.collection("oauthAccessToken").deleteMany({
+                            $or: [
+                                { token: tokenData.access_token },
+                                ...(newAccessStoredHash ? [{ token: newAccessStoredHash }] : [])
+                            ]
+                        }).catch(() => {});
+                    }
+
+                    return c.json(
+                        {
+                            error: "server_error",
+                            error_description: "Failed to mint RS256 access token",
+                        },
+                        500
+                    );
+                }
+
+                await database.collection("oauthAccessToken").insertOne({
+                    token: jwtAt,
+                    clientId: canonicalClientId,
+                    userId: resolvedUserId,
+                    expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
+                    createdAt: new Date(),
+                    scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                }).catch(() => {});
+                tokenData.access_token = jwtAt;
+                if (tokenData.id_token) {
+                    tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
                 }
                 return c.json(tokenData, 200);
             }
@@ -1117,7 +1442,12 @@ auth.get("/oauth2/userinfo", async (c) => {
         // Fallback for RS256 JWT access tokens if Better Auth expects opaque tokens
         if (res.status !== 200 && bearerToken && bearerToken.includes(".")) {
             try {
-                const publicKey = await getIdpPublicKey();
+                let kid: string | undefined;
+                try {
+                    const header = decodeProtectedHeader(bearerToken);
+                    kid = header.kid;
+                } catch {}
+                const publicKey = await getIdpPublicKey(kid);
                 if (publicKey) {
                     const { payload } = await jwtVerify(bearerToken, publicKey, {
                         algorithms: ["RS256"],
@@ -1132,12 +1462,14 @@ auth.get("/oauth2/userinfo", async (c) => {
                                 ...(ObjectId.isValid(userId) ? [{ _id: new ObjectId(userId) }] : [])
                             ]
                         });
+                        const targetClientId = (payload.client_id || payload.azp || (typeof payload.aud === "string" ? payload.aud : payload.aud?.[0]) || "") as string;
+                        const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
                         return c.json({
                             sub: userId,
                             email: userDoc?.email || payload.email,
                             name: userDoc?.name || payload.name || (userDoc?.email ? userDoc.email.split("@")[0] : userId),
-                            role: userDoc?.role || (payload.role as string) || "user",
-                            scoped_client_id: userDoc?.scopedClientId || (payload.scoped_client_id as string | null) || null,
+                            role: resolved.role,
+                            scoped_client_id: resolved.scopedClientId,
                         }, 200);
                     }
                 }
@@ -1173,13 +1505,17 @@ auth.get("/oauth2/userinfo", async (c) => {
                     const userDoc = await database.collection("user").findOne({
                         $or: orConditions
                     });
-                    if (userDoc) {
-                        data.role = userDoc.role || "user";
-                        data.scoped_client_id = userDoc.scopedClientId || null;
-                    } else {
-                        data.role = data.role || "user";
-                        data.scoped_client_id = data.scoped_client_id || null;
+
+                    let targetClientId = c.req.query("client_id") || "";
+                    if (!targetClientId && bearerToken) {
+                        try {
+                            const decoded: any = decodeJwt(bearerToken);
+                            targetClientId = (decoded?.client_id || decoded?.azp || (typeof decoded?.aud === "string" ? decoded.aud : decoded?.aud?.[0]) || "") as string;
+                        } catch {}
                     }
+                    const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
+                    data.role = resolved.role;
+                    data.scoped_client_id = resolved.scopedClientId;
                     return c.json(data, 200);
                 }
                 return c.json(data, 200);
@@ -1238,7 +1574,12 @@ auth.post("/oauth2/introspect", async (c) => {
                     authClientId = params.get("client_id") || undefined;
                 }
 
-                const publicKey = await getIdpPublicKey();
+                let kid: string | undefined;
+                try {
+                    const header = decodeProtectedHeader(token);
+                    kid = header.kid;
+                } catch {}
+                const publicKey = await getIdpPublicKey(kid);
                 if (publicKey) {
                     const { payload } = await jwtVerify(token, publicKey, {
                         algorithms: ["RS256"],
@@ -1266,6 +1607,19 @@ auth.post("/oauth2/introspect", async (c) => {
                         return c.json({ active: false }, 200);
                     }
 
+                    // Dynamically resolve user role to ensure freshly revoked or granted admin privileges reflect immediately
+                    const userId = String(payload.sub || tokenDoc.userId || "");
+                    const orConditions: any[] = [{ id: userId }];
+                    if (payload.email) orConditions.push({ email: payload.email });
+                    if (ObjectId.isValid(userId)) {
+                        orConditions.push({ _id: new ObjectId(userId) });
+                    }
+                    const userDoc = await database.collection("user").findOne({
+                        $or: orConditions,
+                    });
+
+                    const resolved = await resolveUserRoleForClient(database, userDoc, tokenClientId);
+
                     return c.json({
                         active: true,
                         sub: payload.sub,
@@ -1275,8 +1629,8 @@ auth.post("/oauth2/introspect", async (c) => {
                         iat: payload.iat,
                         iss: payload.iss,
                         token_type: "Bearer",
-                        role: payload.role || "user",
-                        scoped_client_id: payload.scoped_client_id || null,
+                        role: resolved.role,
+                        scoped_client_id: resolved.scopedClientId,
                     }, 200);
                 }
             } catch {
@@ -1433,42 +1787,24 @@ auth.post("/oauth2/continue", async (c) => {
 });
 
 // 8. Prevent Dynamic Client Registration & Direct Client Manipulation Endpoints
-auth.all("/oauth2/register", (c) =>
-    c.json({ error: "access_denied", error_description: "Dynamic client registration is disabled" }, 403)
-);
-auth.all("/oauth2/register/*", (c) =>
-    c.json({ error: "access_denied", error_description: "Dynamic client registration is disabled" }, 403)
-);
-auth.all("/oauth2/create-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client creation is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/update-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client update is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/delete-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client deletion is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/get-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client lookup is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/get-clients", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client lookup is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/public-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct public client lookup is forbidden." }, 403)
-);
-auth.all("/oauth2/public-client-prelogin", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct public client lookup is forbidden." }, 403)
-);
-auth.all("/oauth2/client/rotate-secret", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct secret rotation is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/client/*", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client management is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/clients/*", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client management is forbidden. Use /api/admin/clients." }, 403)
-);
+[
+    { path: "/oauth2/register", description: "Dynamic client registration is disabled" },
+    { path: "/oauth2/register/*", description: "Dynamic client registration is disabled" },
+    { path: "/oauth2/create-client", description: "Direct client creation is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/update-client", description: "Direct client update is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/delete-client", description: "Direct client deletion is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/get-client", description: "Direct client lookup is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/get-clients", description: "Direct client lookup is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/public-client", description: "Direct public client lookup is forbidden." },
+    { path: "/oauth2/public-client-prelogin", description: "Direct public client lookup is forbidden." },
+    { path: "/oauth2/client/rotate-secret", description: "Direct secret rotation is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/client/*", description: "Direct client management is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/clients/*", description: "Direct client management is forbidden. Use /api/admin/clients." },
+].forEach(({ path, description }) => {
+    auth.all(path, (c) =>
+        c.json({ error: "access_denied", error_description: description }, 403)
+    );
+});
 
 // 9. Super-Admin Gate for Better-Auth Internal Admin Routes
 async function checkBetterAuthAdminAccess(c: any) {
@@ -1522,7 +1858,7 @@ async function handleSocialCallback(c: any) {
         }
     }
     if (!clientId) {
-        clientId = getCookie(c, "current_client_id");
+        clientId = getCookie(c, "current_client_id") || null;
     }
 
     if (clientId) {

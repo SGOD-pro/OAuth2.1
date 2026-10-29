@@ -1,6 +1,16 @@
 import { MongoClient } from "mongodb";
 import { config } from "dotenv";
-config({ path: "hono/.env" });
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+// Dual path environment lookup: checks for a local .env file inside backend first,
+// falling back to the repository root .env file when invoked from repository root.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envPath = fs.existsSync(path.resolve(__dirname, ".env"))
+    ? path.resolve(__dirname, ".env")
+    : path.resolve(__dirname, "../.env");
+config({ path: envPath });
 
 async function run() {
     const client = new MongoClient(process.env.MONGO_URI);

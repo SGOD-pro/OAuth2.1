@@ -36,3 +36,28 @@ export function isStrongPassword(password: string): boolean {
 export function isPublicSignupEnabled(): boolean {
   return import.meta.env.VITE_PUBLIC_SIGNUP_ENABLED !== 'false';
 }
+
+/**
+ * Extract unique, valid web origins (protocol + host + optional port)
+ * from registered HTTP and HTTPS OAuth redirect URIs. Non-web schemes
+ * (such as custom native mobile schemes) are safely skipped.
+ */
+export function deriveOrigins(uris: string[]): string[] {
+  if (!Array.isArray(uris)) return [];
+  const origins = new Set<string>();
+  for (const uri of uris) {
+    if (!uri || typeof uri !== 'string') continue;
+    try {
+      const parsed = new URL(uri.trim());
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        if (parsed.origin && parsed.origin !== 'null') {
+          origins.add(parsed.origin);
+        }
+      }
+    } catch {
+      // Safely ignore non-web or malformed URIs
+    }
+  }
+  return Array.from(origins);
+}
+
