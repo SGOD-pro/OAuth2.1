@@ -282,11 +282,47 @@ admin.get("/stats", requireSuperAdmin, async (c) => {
 admin.get("/logs", requireSuperAdmin, async (c) => {
   try {
     const database = await getDb();
-    const [sessions, audits, userDocs] = await Promise.all([
+    const [sessions, audits] = await Promise.all([
       database.collection("session").find().sort({ createdAt: -1 }).limit(50).toArray(),
       database.collection("admin_audit").find().sort({ timestamp: -1 }).limit(50).toArray(),
-      database.collection("user").find({}).toArray(),
     ]);
+
+    const userIds = new Set<string>();
+    sessions.forEach((s: any) => {
+      if (s.userId) userIds.add(String(s.userId));
+    });
+    audits.forEach((a: any) => {
+      if (a.actorUserId) userIds.add(String(a.actorUserId));
+    });
+
+    const stringIds = Array.from(userIds);
+    const objectIds = stringIds
+      .filter((id) => ObjectId.isValid(id))
+      .map((id) => {
+        try {
+          return new ObjectId(id);
+        } catch {
+          return null;
+        }
+      })
+      .filter((id): id is ObjectId => id !== null);
+
+    // MongoDB user documents use string id for Better Auth or ObjectId for _id
+    const userDocs =
+      stringIds.length > 0
+        ? await database
+            .collection("user")
+            .find(
+              {
+                $or: [
+                  ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
+                  { id: { $in: stringIds } },
+                ],
+              },
+              { projection: { email: 1, id: 1 } }
+            )
+            .toArray()
+        : [];
 
     const userMap = new Map<string, string>();
     userDocs.forEach((u: any) => {

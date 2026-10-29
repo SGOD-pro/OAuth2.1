@@ -1787,42 +1787,24 @@ auth.post("/oauth2/continue", async (c) => {
 });
 
 // 8. Prevent Dynamic Client Registration & Direct Client Manipulation Endpoints
-auth.all("/oauth2/register", (c) =>
-    c.json({ error: "access_denied", error_description: "Dynamic client registration is disabled" }, 403)
-);
-auth.all("/oauth2/register/*", (c) =>
-    c.json({ error: "access_denied", error_description: "Dynamic client registration is disabled" }, 403)
-);
-auth.all("/oauth2/create-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client creation is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/update-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client update is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/delete-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client deletion is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/get-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client lookup is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/get-clients", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client lookup is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/public-client", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct public client lookup is forbidden." }, 403)
-);
-auth.all("/oauth2/public-client-prelogin", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct public client lookup is forbidden." }, 403)
-);
-auth.all("/oauth2/client/rotate-secret", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct secret rotation is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/client/*", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client management is forbidden. Use /api/admin/clients." }, 403)
-);
-auth.all("/oauth2/clients/*", (c) =>
-    c.json({ error: "access_denied", error_description: "Direct client management is forbidden. Use /api/admin/clients." }, 403)
-);
+[
+    { path: "/oauth2/register", description: "Dynamic client registration is disabled" },
+    { path: "/oauth2/register/*", description: "Dynamic client registration is disabled" },
+    { path: "/oauth2/create-client", description: "Direct client creation is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/update-client", description: "Direct client update is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/delete-client", description: "Direct client deletion is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/get-client", description: "Direct client lookup is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/get-clients", description: "Direct client lookup is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/public-client", description: "Direct public client lookup is forbidden." },
+    { path: "/oauth2/public-client-prelogin", description: "Direct public client lookup is forbidden." },
+    { path: "/oauth2/client/rotate-secret", description: "Direct secret rotation is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/client/*", description: "Direct client management is forbidden. Use /api/admin/clients." },
+    { path: "/oauth2/clients/*", description: "Direct client management is forbidden. Use /api/admin/clients." },
+].forEach(({ path, description }) => {
+    auth.all(path, (c) =>
+        c.json({ error: "access_denied", error_description: description }, 403)
+    );
+});
 
 // 9. Super-Admin Gate for Better-Auth Internal Admin Routes
 async function checkBetterAuthAdminAccess(c: any) {
