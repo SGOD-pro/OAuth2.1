@@ -203,16 +203,23 @@ jobs:
           UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
         run: |
           echo "Deploying SAM stack with parameter overrides..."
+          PARAMS=(
+            BetterAuthUrl="https://oauth21.vercel.app"
+            GoogleClientId="851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com"
+            FrontendUrl="https://oauth21.vercel.app"
+            InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"
+          )
+          if [ -n "${UPSTASH_REDIS_REST_URL}" ]; then
+            PARAMS+=(UpstashRedisRestUrl="${UPSTASH_REDIS_REST_URL}")
+          fi
+          if [ -n "${UPSTASH_REDIS_REST_TOKEN}" ]; then
+            PARAMS+=(UpstashRedisRestToken="${UPSTASH_REDIS_REST_TOKEN}")
+          fi
+
           sam deploy \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              BetterAuthUrl="https://oauth21.vercel.app" \
-              GoogleClientId="851793713357-efu64vah4peecto0r4l1vnc9ctlpc043.apps.googleusercontent.com" \
-              FrontendUrl="https://oauth21.vercel.app" \
-              InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}" \
-              UpstashRedisRestUrl="${UPSTASH_REDIS_REST_URL}" \
-              UpstashRedisRestToken="${UPSTASH_REDIS_REST_TOKEN}"
+            --parameter-overrides "${PARAMS[@]}"
 
       - name: Smoke Test Deployed Lambda Health Endpoint (Blocking Gate)
         run: |

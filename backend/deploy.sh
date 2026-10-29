@@ -53,13 +53,22 @@ FRONTEND_URL="${FRONTEND_URL:-https://oauth21.vercel.app}"
 UPSTASH_REDIS_REST_URL="${UPSTASH_REDIS_REST_URL:-}"
 UPSTASH_REDIS_REST_TOKEN="${UPSTASH_REDIS_REST_TOKEN:-}"
 
+OVERRIDE_PARAMS=(
+  BetterAuthUrl="${BETTER_AUTH_URL}"
+  GoogleClientId="${GOOGLE_CLIENT_ID}"
+  FrontendUrl="${FRONTEND_URL}"
+  InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}"
+)
+
+if [ -n "${UPSTASH_REDIS_REST_URL}" ]; then
+  OVERRIDE_PARAMS+=(UpstashRedisRestUrl="${UPSTASH_REDIS_REST_URL}")
+fi
+
+if [ -n "${UPSTASH_REDIS_REST_TOKEN}" ]; then
+  OVERRIDE_PARAMS+=(UpstashRedisRestToken="${UPSTASH_REDIS_REST_TOKEN}")
+fi
+
 sam deploy \
-  --parameter-overrides \
-    BetterAuthUrl="${BETTER_AUTH_URL}" \
-    GoogleClientId="${GOOGLE_CLIENT_ID}" \
-    FrontendUrl="${FRONTEND_URL}" \
-    InternalGatewaySecret="${INTERNAL_GATEWAY_SECRET}" \
-    UpstashRedisRestUrl="${UPSTASH_REDIS_REST_URL}" \
-    UpstashRedisRestToken="${UPSTASH_REDIS_REST_TOKEN}"
+  --parameter-overrides "${OVERRIDE_PARAMS[@]}"
 
 echo "✅ Deployment complete!"
