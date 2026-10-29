@@ -176,13 +176,6 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
     });
   }
 
-  // If we have a valid non-expired BFF session cookie with user profile, authenticate immediately
-  if (sessionUser && Object.keys(sessionUser).length > 0 && (!sessionExpiresAt || sessionExpiresAt > Date.now())) {
-    req.user = sessionUser as AuthenticatedRequest['user'];
-    req.accessToken = token;
-    return next();
-  }
-
   if (!issuer || !clientId) {
     return res.status(500).json({ error: 'misconfigured', message: 'Missing AUTH_ISSUER or CLIENT_ID in environment' });
   }
@@ -199,22 +192,30 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
         key = getJWKS(jwksUrl);
       }
       
-      const { payload } = await jwtVerify(token, key);
+      const { payload } = await jwtVerify(token, key, {
+        issuer,
+        audience: clientId,
+      });
 
-      // Strict App-Isolation: Validate token audience / client_id
-      const tokenClientId = (payload as any).client_id || (payload as any).azp || (payload as any).aud;
-      if (tokenClientId && typeof tokenClientId === 'string' && clientId && tokenClientId !== clientId) {
-        return res.status(403).json({
-          error: 'forbidden',
-          message: 'Access token was not issued for this application (Client ID mismatch)',
-        });
-      }
-
-      req.user = payload as AuthenticatedRequest['user'];
+      req.user = (sessionUser && Object.keys(sessionUser).length > 0)
+        ? (sessionUser as AuthenticatedRequest['user'])
+        : (payload as AuthenticatedRequest['user']);
       req.accessToken = token;
       return next();
-    } catch {
-      // If token is an opaque token or JWKS verification falls back, use Token Introspection
+    } catch (jwtErr: any) {
+      if (jwtErr?.code === 'ERR_JWT_EXPIRED') {
+        return res.status(401).json({
+          error: 'token_expired',
+          message: 'Access token has expired',
+        });
+      }
+      if (jwtErr?.code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') {
+        return res.status(403).json({
+          error: 'forbidden',
+          message: 'Access token was not issued for this application (claim mismatch)',
+        });
+      }
+      // If token is an opaque token or key retrieval failed, try Token Introspection
     }
 
     // Approach 2: Token Introspection Endpoint (RFC 7662)
@@ -269,23 +270,11 @@ export async function requireAuth(req: AuthenticatedRequest, res: Response, next
       }
     }
 
-    // Fallback: If sessionUser is available, use it
-    if (sessionUser && Object.keys(sessionUser).length > 0) {
-      req.user = sessionUser as AuthenticatedRequest['user'];
-      req.accessToken = token;
-      return next();
-    }
-
     return res.status(401).json({
       error: 'invalid_token',
       message: 'Access token validation failed',
     });
   } catch (err: unknown) {
-    if (sessionUser && Object.keys(sessionUser).length > 0) {
-      req.user = sessionUser as AuthenticatedRequest['user'];
-      req.accessToken = token;
-      return next();
-    }
     const msg = err instanceof Error ? err.message : 'Token verification error';
     return res.status(401).json({
       error: 'unauthorized',

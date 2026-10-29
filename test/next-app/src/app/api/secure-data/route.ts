@@ -37,12 +37,19 @@ export async function GET(request: NextRequest) {
       }
 
       if (session?.tokens?.access_token) {
+        const issuer = requireEnv('AUTH_ISSUER');
+        const clientId = requireEnv('CLIENT_ID');
+        const { payload } = await jwtVerify(session.tokens.access_token, getJWKS(issuer), {
+          issuer,
+          audience: clientId,
+        });
         isAuthenticated = true;
-        userEmail = session.user?.email || session.user?.sub || 'Authenticated User';
+        userEmail = session.user?.email || (payload.email as string) || session.user?.sub || (payload.sub as string) || 'Authenticated User';
         tokenPreview = `${session.tokens.access_token.slice(0, 10)}...${session.tokens.access_token.slice(-6)}`;
       }
     } catch {
-      // Invalid session cookie format
+      // Invalid session cookie format or token verification failed
+      isAuthenticated = false;
     }
   } else if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.replace('Bearer ', '');

@@ -1,10 +1,5 @@
 import { getDb } from "./mongo";
 import { selfHealAppAdmins } from "../utils/admin-sync";
-import {
-  getCachedTokenFamilyStatus,
-  setCachedTokenFamilyStatus,
-  invalidateCachedTokenFamily,
-} from "../cache/redis";
 
 export interface RateLimitEntry {
   count: number;
@@ -249,8 +244,6 @@ export async function registerTokenFamily(
     createdAt: new Date(),
     updatedAt: new Date(),
   });
-
-  await setCachedTokenFamilyStatus(familyId, "active");
 }
 
 export async function verifyAndRotateTokenFamily(
@@ -300,7 +293,6 @@ export async function verifyAndRotateTokenFamily(
 
   // 2. Check if family is already revoked
   if (doc.status === "revoked") {
-    await invalidateCachedTokenFamily(doc.familyId);
     return { valid: false, replayed: true, familyId: doc.familyId, clientId: doc.clientId };
   }
 
@@ -338,7 +330,6 @@ export async function verifyAndRotateTokenFamily(
       console.warn(`[TOKEN_FAMILY_REPLAY] Warning: Family ${doc.familyId} has missing userId/clientId; revoking family record only to prevent cross-user DoS`);
     }
 
-    await invalidateCachedTokenFamily(doc.familyId);
     await recordAdminAudit({
       action: "token_family_revoked_on_replay",
       targetClientId: doc.clientId,
@@ -392,7 +383,6 @@ export async function verifyAndRotateTokenFamily(
       };
     }
 
-    await setCachedTokenFamilyStatus(doc.familyId, "active");
     return {
       valid: true,
       replayed: false,
