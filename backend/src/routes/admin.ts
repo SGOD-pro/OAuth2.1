@@ -11,9 +11,11 @@ import {
   resolveOAuthClient,
   deriveAllowedOriginsFromRedirectUris,
   normalizeOAuthClientFields,
+  hasDangerousMongoKeys,
+  validateSafePrimitiveString,
 } from "../utils/security";
 import { invalidateOriginCache, recordAdminAudit } from "../db/state";
-import { requireAdmin, requireSuperAdmin, requireScopedAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
+import { requireAdmin, requireSuperAdmin, requireScopedAdmin, requireConsumerAppAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
@@ -33,6 +35,31 @@ export const admin = new Hono<{
 
 // Gateway trust perimeter: enforce trusted gateway boundary on all admin endpoints
 admin.use("*", requireGatewayTrust);
+
+// Enforce NoSQL injection, operator injection, and prototype pollution defenses on all admin JSON bodies
+admin.use("*", async (c, next) => {
+  const method = c.req.method;
+  if (method === "POST" || method === "PUT" || method === "PATCH") {
+    const contentType = c.req.header("content-type") || "";
+    if (contentType.includes("application/json")) {
+      try {
+        const rawClone = c.req.raw.clone();
+        const parsed = await rawClone.json().catch(() => null);
+        if (parsed && hasDangerousMongoKeys(parsed)) {
+          return c.json(
+            {
+              error: "invalid_input",
+              code: "ERR_INVALID_INPUT",
+              message: "Invalid input: operator injection and prototype modification rejected",
+            },
+            400
+          );
+        }
+      } catch {}
+    }
+  }
+  return next();
+});
 
 // -- Super-Admin Only Routes ---------------------------------------------
 
@@ -479,8 +506,19 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
 
     const userId = newUser?.user?.id || (newUser as any)?.id;
 
-    // 2. Set explicit domain role: "app-admin" if scoped, "super-admin" if unscoped
-    const explicitRole = scopedClientId ? "app-admin" : "super-admin";
+    // 2. USER-REQUIRED POLICY: swyra@auth2.1.com is the sole Global Super Administrator.
+    // Explicit domain role: "app-admin" if scoped, "super-admin" ONLY if swyra@auth2.1.com, else "user"
+    if (!scopedClientId && email !== "swyra@auth2.1.com" && (body.role === "admin" || body.role === "super-admin" || body.role === "app-admin")) {
+      return c.json(
+        {
+          error: "swyra@auth2.1.com is the sole Global Super Administrator. Application administrators must be scoped to an application client ID.",
+          code: "ERR_SCOPED_CLIENT_REQUIRED",
+        },
+        400
+      );
+    }
+
+    const explicitRole = scopedClientId ? "app-admin" : (email === "swyra@auth2.1.com" ? "super-admin" : "user");
     await database.collection("user").updateOne(
       { $or: [{ id: userId }, { _id: userId }, { email }] } as any,
       {
@@ -540,7 +578,7 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
         id: userId,
         email,
         name,
-        role: "admin",
+        role: explicitRole,
         scopedClientId,
         tempPassword: isTempPassword ? password : null,
         mustChangePassword: isTempPassword,
@@ -609,8 +647,16 @@ admin.get("/clients/:id", requireScopedAdmin, async (c) => {
 // 8. Patch OAuth Client by ID (Super-Admin or Assigned Scoped-Admin)
 admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   const id = c.req.param("id");
-  const body = await c.req.json();
+  const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
+
+  // Reject conflicting client IDs between route and body
+  if (body.clientId && typeof body.clientId === "string" && body.clientId !== id) {
+    return c.json({ error: "Conflicting clientId in request body", code: "ERR_CONFLICTING_CLIENT_ID" }, 400);
+  }
+  if (body.client_id && typeof body.client_id === "string" && body.client_id !== id) {
+    return c.json({ error: "Conflicting client_id in request body", code: "ERR_CONFLICTING_CLIENT_ID" }, 400);
+  }
 
   // Prevent scoped admins from modifying client_id or ownership
   delete body.client_id;
@@ -833,7 +879,7 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
 });
 
 // 9. Dedicated Scoped Application Configuration Routes
-admin.get("/app/:clientId/config", requireScopedAdmin, async (c) => {
+admin.get("/app/:clientId/config", requireConsumerAppAdmin, async (c) => {
   const clientId = c.req.param("clientId");
   try {
     const result = (await authApi.getOAuthClient({
@@ -849,7 +895,7 @@ admin.get("/app/:clientId/config", requireScopedAdmin, async (c) => {
   }
 });
 
-admin.patch("/app/:clientId/config", requireScopedAdmin, async (c) => {
+admin.patch("/app/:clientId/config", requireConsumerAppAdmin, async (c) => {
   const clientId = c.req.param("clientId");
   const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
@@ -1245,6 +1291,11 @@ const updateAppAdminHandler = async (c: any) => {
   const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
 
+  // Reject conflicting client IDs between route and body
+  if (body.clientId && typeof body.clientId === "string" && body.clientId !== clientId) {
+    return c.json({ error: "Conflicting clientId in request body", code: "ERR_CONFLICTING_CLIENT_ID" }, 400);
+  }
+
   let adminObjId: ObjectId;
   try {
     adminObjId = new ObjectId(adminId);
@@ -1494,8 +1545,12 @@ admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
     const canonicalClientId = client.clientId;
 
     const query: Record<string, any> = { clientId: canonicalClientId };
-    if (queryUserId && typeof queryUserId === "string") {
-      query.userId = queryUserId.trim();
+    if (queryUserId !== undefined) {
+      const validUserId = validateSafePrimitiveString(queryUserId, "userId");
+      if (!validUserId) {
+        return c.json({ error: "Invalid userId parameter", code: "ERR_INVALID_INPUT" }, 400);
+      }
+      query.userId = validUserId;
     }
     const regs = await database
       .collection("user_app_registrations")

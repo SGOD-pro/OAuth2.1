@@ -16,7 +16,7 @@ import {
     consumeOAuthTransaction,
 } from "../db/state";
 import { rateLimiters, checkRateLimit } from "../cache/redis";
-import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, hashToken } from "../utils/security";
+import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, hashToken, hasDangerousMongoKeys, validateSafePrimitiveString } from "../utils/security";
 import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
 
@@ -401,6 +401,30 @@ auth.get("/oauth/initiate", async (c) => {
 // 2. Sign-In App-Isolation Check + Target-Keyed Rate Limit + Constant-Time Protection (Fix B10 & Part 2)
 auth.post("/sign-in/email", async (c) => {
     const body = await c.req.raw.clone().json().catch(() => null);
+
+    // Defense against NoSQL operator injection and prototype pollution
+    if (body && hasDangerousMongoKeys(body)) {
+        return c.json(
+            {
+                status: false,
+                error: "invalid_input",
+                message: "Invalid input: operator injection and prototype modification rejected",
+            },
+            400
+        );
+    }
+
+    if (body && (body.email !== undefined && typeof body.email !== "string")) {
+        return c.json(
+            {
+                status: false,
+                error: "invalid_input",
+                message: "Email must be a primitive string",
+            },
+            400
+        );
+    }
+
     const clientId = await extractClientId(c, body);
     const database = await getDb();
 
@@ -540,6 +564,30 @@ auth.post("/sign-in/email", async (c) => {
 // 3. Sign-Up App-Isolation Registration
 auth.post("/sign-up/email", async (c) => {
     const body = await c.req.raw.clone().json().catch(() => null);
+
+    // Defense against NoSQL operator injection and prototype pollution
+    if (body && hasDangerousMongoKeys(body)) {
+        return c.json(
+            {
+                status: false,
+                error: "invalid_input",
+                message: "Invalid input: operator injection and prototype modification rejected",
+            },
+            400
+        );
+    }
+
+    if (body && (body.email !== undefined && typeof body.email !== "string")) {
+        return c.json(
+            {
+                status: false,
+                error: "invalid_input",
+                message: "Email must be a primitive string",
+            },
+            400
+        );
+    }
+
     const clientId = await extractClientId(c, body);
     const database = await getDb();
 

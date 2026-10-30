@@ -195,3 +195,29 @@ Normal subsequent rotation                      REPLAY THEFT DETECTED:
 - **Key Storage:** RSA 2048-bit keypairs generated and stored securely in MongoDB collection `oauthKey`.
 - **Public Metadata:** JWKS keys published at `/.well-known/jwks.json` and OpenID Discovery at `/.well-known/openid-configuration`.
 - **Consumer Offline Verification:** Consumer applications never make per-request network calls to verify tokens. They cache JWKS keys and perform cryptographic verification locally.
+
+---
+
+## 7. Portal Isolation and Session Context Separation
+
+SWYRA Auth cleanly separates the central identity provider console from consumer application sessions:
+
+1. **Independent Consumer App Sessions:**
+   Consumer applications run on separate domain origins (such as `app.example.com` or local ports). Each consumer application establishes its own local session cookies or tokens using the OAuth 2.1 code exchange. Logging out of or switching accounts on the central identity provider does not clear unrelated consumer application cookies.
+2. **Single Active Identity Provider Context:**
+   The central management console on `${AUTH_ISSUER}` maintains exactly one active identity context per browser origin. If a user signed in to a consumer application navigates to `/admin/login`, the interface detects the consumer identity and presents a frictionless account switching banner.
+3. **Explicit Account Switching Without Loops:**
+   Clicking the account switch action invalidates the current identity provider session and clears form state without redirect loops, allowing the platform Global Super Administrator to sign in cleanly.
+4. **Mutually Exclusive Role Boundary:**
+   `swyra@auth2.1.com` is the sole platform Global Super Administrator. Application administrators can only manage their explicitly assigned applications through application portal routes, and standard end users possess zero administrative access.
+
+---
+
+## 8. Offline Token Verification and Revocation Latency
+
+1. **Short Lifespan Tokens:**
+   Access tokens are signed RS256 JWTs with a maximum lifespan of 15 minutes (900 seconds).
+2. **Offline Verification Window:**
+   Consumer resource servers verify tokens locally against the cached public key set at `/.well-known/jwks.json`. If you revoke or demote an administrator, downstream resource servers will accept the cryptographically valid token until its 15 minute lifespan expires.
+3. **Real Time Mitigation:**
+   When high security workflows require immediate revocation, resource servers must query the real time introspection endpoint at `/api/auth/oauth2/introspect`. Central identity provider administrative endpoints query database state and token revocation timestamps on every request, enforcing zero delay revocation.

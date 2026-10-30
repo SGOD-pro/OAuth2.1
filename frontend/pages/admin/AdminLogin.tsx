@@ -106,17 +106,19 @@ export const AdminLogin: React.FC = () => {
 
       if (isAppAdmin) {
         await authClient.signOut({});
-        const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
+        const msg = 'Access denied: swyra@auth2.1.com is the sole Global Super Administrator. Application administrators must sign in through their application portal.';
         setError(msg);
         toast.error(msg);
+        form.setValue('password', '');
         return;
       }
 
       if (!isSuperAdmin) {
         await authClient.signOut({});
-        const msg = 'Access denied: Administrator privileges required.';
+        const msg = 'Access denied: swyra@auth2.1.com is the sole Global Super Administrator authorized for the platform console.';
         setError(msg);
         toast.error(msg);
+        form.setValue('password', '');
         return;
       }
 
@@ -135,7 +137,9 @@ export const AdminLogin: React.FC = () => {
     setLoading(true);
     try {
       await authClient.signOut({});
-      window.location.href = '/admin/login';
+      setError(null);
+      navigate('/admin/login', { replace: true });
+      window.location.reload();
     } catch {
       setLoading(false);
     }
@@ -148,7 +152,9 @@ export const AdminLogin: React.FC = () => {
   const role = user?.role;
   const isAuthenticated = !!user;
   const isScoped = typeof user?.scopedClientId === 'string' && user.scopedClientId.trim().length > 0;
-  const isConflictingSession = isAuthenticated && (role !== 'admin' || isScoped);
+  const isSuperAdmin = role === 'super-admin' || (role === 'admin' && user?.scopedClientId === null);
+  const isCurrentAppAdmin = role === 'app-admin' || isScoped;
+  const isConflictingSession = isAuthenticated && !isSuperAdmin;
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-background relative">
@@ -178,10 +184,16 @@ export const AdminLogin: React.FC = () => {
                   <h4 className="font-sans font-medium text-amber-900 dark:text-amber-200 text-sm">
                     Active consumer session detected
                   </h4>
-                  <p className="font-sans text-muted-foreground mt-1.5 leading-relaxed">
-                    {user?.scopedClientId
-                      ? 'You are signed in as an Application Administrator. Sign out to clear this session before signing in with Global Super Admin credentials.'
-                      : 'Your current account does not have administrator privileges. Sign out to continue.'}
+                  <div className="mt-2 space-y-1 text-muted-foreground">
+                    <p>
+                      Signed in as: <strong className="text-foreground">{user?.email}</strong>
+                    </p>
+                    <p className="text-[11px]">
+                      Account role: <span className="font-medium text-foreground">{isCurrentAppAdmin ? 'Application Administrator' : 'Standard User'}</span>
+                    </p>
+                  </div>
+                  <p className="font-sans text-muted-foreground mt-2 leading-relaxed text-[11px]">
+                    The MAuth Platform Console is reserved exclusively for the Global Super Administrator (swyra@auth2.1.com). Application administrators must manage their assigned application through their application portal.
                   </p>
                 </div>
                 <Button
@@ -190,8 +202,17 @@ export const AdminLogin: React.FC = () => {
                   className="w-full h-10 font-medium"
                   disabled={loading}
                 >
-                  {loading ? 'Signing out...' : 'Sign out to continue'}
+                  {loading ? 'Switching account...' : 'Sign in with a different account'}
                 </Button>
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => { window.location.href = '/'; }}
+                    className="font-sans text-xs text-muted-foreground hover:text-foreground underline underline-offset-4"
+                  >
+                    Return to home
+                  </button>
+                </div>
               </div>
             ) : (
               <Form {...form}>

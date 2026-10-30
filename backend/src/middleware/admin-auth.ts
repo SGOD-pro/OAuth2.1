@@ -118,26 +118,31 @@ export async function checkUserIsClientAdmin(
   userIdStr: string,
   clientId: string
 ): Promise<boolean> {
-  if (!database || !clientId) return false;
+  if (!database || !clientId || typeof clientId !== "string") return false;
+  const cleanClientId = clientId.trim();
+  if (!cleanClientId || cleanClientId.startsWith("$")) return false;
+
   // USER-REQUIRED POLICY: Super admins must never receive consumer app-admin privileges
   if (isSuperAdmin(userDoc)) return false;
 
-  const resolvedUserId = userIdStr || (userDoc?.id || userDoc?._id)?.toString();
-  if (!resolvedUserId) return false;
+  const resolvedUserId = (typeof userIdStr === "string" ? userIdStr : (userDoc?.id || userDoc?._id)?.toString()) || "";
+  if (!resolvedUserId || resolvedUserId.startsWith("$")) return false;
 
   // 1. Primary scopedClientId match if role is app-admin or legacy admin
-  if (isAppAdmin(userDoc) && userDoc.scopedClientId === clientId) {
+  if (isAppAdmin(userDoc) && userDoc.scopedClientId === cleanClientId) {
     return true;
   }
 
   // 2. Authoritative check in user_app_registrations keyed by stable userId and clientId
   const userConditions: any[] = [{ userId: resolvedUserId }];
-  if (ObjectId.isValid(resolvedUserId)) {
-    userConditions.push({ userId: new ObjectId(resolvedUserId) });
+  if (ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24) {
+    try {
+      userConditions.push({ userId: new ObjectId(resolvedUserId) });
+    } catch {}
   }
 
   const reg = await database.collection("user_app_registrations").findOne({
-    clientId,
+    clientId: cleanClientId,
     $or: userConditions,
     appRole: "admin",
   });
@@ -145,7 +150,7 @@ export async function checkUserIsClientAdmin(
 
   // 3. Authoritative check in app_admins by stable userId (email alone never grants privileges)
   const appAdmin = await database.collection("app_admins").findOne({
-    clientId,
+    clientId: cleanClientId,
     $or: userConditions,
     isActive: { $ne: false },
   });
@@ -177,55 +182,51 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
     return { user: existingUser, session: existingSession };
   }
 
-  // 1. Try Better Auth Session (Cookie / Session token)
-  const session = await authProvider.api.getSession({
-    headers: getHeaders(c),
-  });
+  // Check for presence of both Session Cookie and Bearer Token
+  const authHeader = c.req.header("authorization") || c.req.header("Authorization");
+  const hasBearer = Boolean(authHeader && authHeader.startsWith("Bearer "));
+  let session: any = null;
 
-  if (session && session.user) {
-    const database = await getDb();
-    const userDoc = await database.collection("user").findOne({
-      $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
-    });
-
-    if (userDoc && (userDoc.disabled === true || userDoc.isActive === false || userDoc.banned === true)) {
-      return null;
+  // Resolve session identity from cookie (supports Better Auth signed session cookies)
+  let cookieSessionUser: any = null;
+  let sessionObj: any = null;
+  const cookieHeader = c.req.header("cookie") || c.req.header("Cookie");
+  if (cookieHeader) {
+    const rawMatch = cookieHeader.match(/(?:^|;\s*)(?:__Secure-)?better-auth\.session_token=([^;]+)/);
+    if (rawMatch && rawMatch[1]) {
+      const rawToken = decodeURIComponent(rawMatch[1]).split(".")[0];
+      const database = await getDb();
+      const sessDoc = await database.collection("session").findOne({
+        token: rawToken,
+        expiresAt: { $gt: new Date() },
+      });
+      if (sessDoc && sessDoc.userId) {
+        const uId = sessDoc.userId;
+        const uConditions: any[] = [{ id: uId }, { id: String(uId) }];
+        if (ObjectId.isValid(uId) && String(uId).length === 24) {
+          try {
+            uConditions.push({ _id: new ObjectId(uId) });
+          } catch {}
+        }
+        cookieSessionUser = await database.collection("user").findOne({
+          $or: uConditions,
+        });
+        sessionObj = sessDoc;
+      }
     }
-
-    let scopedClientId: string | null | undefined;
-    if (userDoc?.scopedClientId === null) {
-      scopedClientId = null;
-    } else if (typeof userDoc?.scopedClientId === "string" && userDoc.scopedClientId.trim().length > 0) {
-      scopedClientId = userDoc.scopedClientId.trim();
-    } else {
-      scopedClientId = undefined;
-    }
-
-    let role = userDoc?.role || session.user.role || "user";
-    if (userDoc?.role === "super-admin" || (userDoc?.role === "admin" && scopedClientId === null)) {
-      role = "super-admin";
-      scopedClientId = null;
-    } else if (userDoc?.role === "app-admin" || (userDoc?.role === "admin" && typeof scopedClientId === "string")) {
-      role = "app-admin";
-    }
-
-    const fullUser = {
-      ...session.user,
-      ...userDoc,
-      role,
-      scopedClientId,
-    };
-    c.set("user", fullUser);
-    c.set("session", session.session);
-    c.set("authMethod", "session");
-    c.set("hasPlatformAudience", true);
-
-    return { user: fullUser, session: session.session };
   }
 
-  // 2. Try OAuth 2.1 RS256 Bearer Token
-  const authHeader = c.req.header("authorization") || c.req.header("Authorization");
-  if (authHeader && authHeader.startsWith("Bearer ")) {
+  // Fallback to Better Auth getSession API if not already resolved via direct cookie token
+  if (!cookieSessionUser) {
+    try {
+      session = await authProvider.api.getSession({
+        headers: getHeaders(c),
+      });
+    } catch {}
+  }
+
+  // 1. If Bearer Token is supplied, evaluate OAuth 2.1 RS256 Bearer Token
+  if (hasBearer) {
     const token = authHeader.slice(7).trim();
     if (!token) return null;
 
@@ -249,6 +250,19 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       const sub = payload.sub;
       if (!sub || typeof sub !== "string" || sub.trim().length === 0) {
         return null;
+      }
+
+      // Conflicting Credentials Defense:
+      // If caller supplied both a cookie session and a bearer token, they must identify the same user
+      if (cookieSessionUser) {
+        const sessionUserId = String(cookieSessionUser.id || cookieSessionUser._id || "");
+        const sessionEmail = String(cookieSessionUser.email || "").toLowerCase().trim();
+        const tokenSub = String(sub).toLowerCase().trim();
+        const isSameIdentity = sessionUserId === sub || sessionEmail === tokenSub;
+        if (!isSameIdentity) {
+          // Conflicting credentials from different accounts: fail closed
+          return null;
+        }
       }
 
       // Mandatory Audience Claim
@@ -282,16 +296,31 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       }
 
       const orConditions: any[] = [{ id: sub }, { email: sub }];
-      if (ObjectId.isValid(sub)) {
-        orConditions.push({ _id: new ObjectId(sub) });
+      if (ObjectId.isValid(sub) && sub.length === 24) {
+        try {
+          orConditions.push({ _id: new ObjectId(sub) });
+        } catch {}
       }
       const userDoc = await database.collection("user").findOne({
         $or: orConditions,
       });
 
-      // If user document exists, account must not be disabled
-      if (userDoc && (userDoc.disabled === true || userDoc.isActive === false)) {
+      // User MUST exist in database and account must not be disabled/banned
+      if (!userDoc || userDoc.disabled === true || userDoc.isActive === false || userDoc.banned === true) {
         return null;
+      }
+
+      // Revocation timestamps check: reject replayed tokens issued before revocation or password change
+      if (payload.iat && typeof payload.iat === "number") {
+        const tokenIatMs = payload.iat * 1000;
+        if (userDoc.tokensRevokedBefore) {
+          const revokedMs = new Date(userDoc.tokensRevokedBefore).getTime();
+          if (tokenIatMs < revokedMs) return null;
+        }
+        if (userDoc.passwordChangedAt) {
+          const passChangedMs = new Date(userDoc.passwordChangedAt).getTime();
+          if (tokenIatMs < passChangedMs) return null;
+        }
       }
 
       // Role authorization:
@@ -301,10 +330,10 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       let role = "user";
       const isTokenAdmin = payload.role === "admin" || payload.role === "super-admin" || payload.role === "app-admin";
       if (isTokenAdmin) {
-        if (!userDoc || userDoc.role === "admin" || userDoc.role === "super-admin" || userDoc.role === "app-admin") {
-          if (userDoc?.role === "super-admin" || (userDoc?.role === "admin" && userDoc?.scopedClientId === null)) {
+        if (userDoc.role === "admin" || userDoc.role === "super-admin" || userDoc.role === "app-admin") {
+          if (userDoc.role === "super-admin" || (userDoc.role === "admin" && userDoc.scopedClientId === null)) {
             role = "super-admin";
-          } else if (userDoc?.role === "app-admin" || (userDoc?.role === "admin" && typeof userDoc?.scopedClientId === "string")) {
+          } else if (userDoc.role === "app-admin" || (userDoc.role === "admin" && typeof userDoc.scopedClientId === "string")) {
             role = "app-admin";
           } else {
             role = (payload.role as string) || "admin";
@@ -327,17 +356,13 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       }
 
       let dbScope: string | null | undefined;
-      if (userDoc) {
-        if (userDoc.scopedClientId === null) {
-          dbScope = null;
-        } else if (typeof userDoc.scopedClientId === "string") {
-          const trimmed = userDoc.scopedClientId.trim();
-          dbScope = trimmed.length > 0 ? trimmed : undefined;
-        } else {
-          dbScope = undefined;
-        }
-      } else {
+      if (userDoc.scopedClientId === null) {
         dbScope = null;
+      } else if (typeof userDoc.scopedClientId === "string") {
+        const trimmed = userDoc.scopedClientId.trim();
+        dbScope = trimmed.length > 0 ? trimmed : undefined;
+      } else {
+        dbScope = undefined;
       }
 
       if (typeof tokenScope === "string" && typeof dbScope === "string" && tokenScope !== dbScope) {
@@ -378,6 +403,62 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       // Invalid signature, wrong algorithm (e.g. HS256), expired token, wrong issuer, etc.
       return null;
     }
+  }
+
+  // 3. Fall back to Session Cookie if present
+  let activeSessionUser = session?.user;
+  let activeSessionObj = session?.session;
+
+  if (!activeSessionUser && cookieSessionUser) {
+    activeSessionUser = cookieSessionUser;
+    activeSessionObj = sessionObj;
+  }
+
+  if (activeSessionUser) {
+    const database = await getDb();
+    const orConds: any[] = [];
+    if (activeSessionUser.id) orConds.push({ id: activeSessionUser.id });
+    if (activeSessionUser.email) orConds.push({ email: activeSessionUser.email });
+    if ((activeSessionUser as any)._id) {
+      orConds.push({ _id: (activeSessionUser as any)._id });
+    }
+    const userDoc = await database.collection("user").findOne({
+      $or: orConds,
+    });
+
+    if (!userDoc || userDoc.disabled === true || userDoc.isActive === false || userDoc.banned === true) {
+      return null;
+    }
+
+    let scopedClientId: string | null | undefined;
+    if (userDoc?.scopedClientId === null) {
+      scopedClientId = null;
+    } else if (typeof userDoc?.scopedClientId === "string" && userDoc.scopedClientId.trim().length > 0) {
+      scopedClientId = userDoc.scopedClientId.trim();
+    } else {
+      scopedClientId = undefined;
+    }
+
+    let role = userDoc?.role || activeSessionUser.role || "user";
+    if (userDoc?.role === "super-admin" || (userDoc?.role === "admin" && scopedClientId === null)) {
+      role = "super-admin";
+      scopedClientId = null;
+    } else if (userDoc?.role === "app-admin" || (userDoc?.role === "admin" && typeof scopedClientId === "string")) {
+      role = "app-admin";
+    }
+
+    const fullUser = {
+      ...activeSessionUser,
+      ...userDoc,
+      role,
+      scopedClientId,
+    };
+    c.set("user", fullUser);
+    c.set("session", activeSessionObj || { id: `session-${fullUser.id}`, userId: fullUser.id });
+    c.set("authMethod", "session");
+    c.set("hasPlatformAudience", true);
+
+    return { user: fullUser, session: activeSessionObj || { id: `session-${fullUser.id}`, userId: fullUser.id } };
   }
 
   return null;
@@ -534,6 +615,7 @@ export const requireAdmin = createMiddleware(async (c, next) => {
 
   // 2. Enforce User Authentication
   const auth = await getAuthenticatedUser(c);
+
   if (!auth) {
     return c.json(
       {
@@ -605,6 +687,7 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
 
   // 2. Enforce User Authentication
   const auth = await getAuthenticatedUser(c);
+
   if (!auth) {
     return c.json(
       {
@@ -684,6 +767,7 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
 
   // 2. Enforce User Authentication
   const auth = await getAuthenticatedUser(c);
+
   if (!auth) {
     return c.json(
       {
@@ -816,6 +900,7 @@ export const requireConsumerAppAdmin = createMiddleware(async (c, next) => {
 
   // 2. Enforce User Authentication
   const auth = await getAuthenticatedUser(c);
+
   if (!auth) {
     return c.json(
       {

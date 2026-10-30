@@ -763,6 +763,65 @@ export function isRegisteredRedirectUri(
 }
 
 /**
+ * Detects whether an object or array contains dangerous MongoDB operator keys
+ * (keys starting with '$'), dotted path keys (containing '.'), or prototype pollution keys.
+ */
+export function hasDangerousMongoKeys(input: any): boolean {
+  if (!input || typeof input !== "object") return false;
+
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (hasDangerousMongoKeys(item)) return true;
+    }
+    return false;
+  }
+
+  for (const key of Object.keys(input)) {
+    if (
+      key.startsWith("$") ||
+      key.includes(".") ||
+      key === "__proto__" ||
+      key === "constructor" ||
+      key === "prototype"
+    ) {
+      return true;
+    }
+    if (typeof input[key] === "object" && input[key] !== null) {
+      if (hasDangerousMongoKeys(input[key])) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Validates that an input is a safe non-empty primitive string without operator characters.
+ */
+export function validateSafePrimitiveString(
+  val: any,
+  fieldName: string = "parameter",
+  options: { minLength?: number; maxLength?: number; allowEmpty?: boolean } = {}
+): string | null {
+  if (typeof val !== "string") {
+    return null;
+  }
+  const trimmed = val.trim();
+  if (!options.allowEmpty && trimmed.length === 0) {
+    return null;
+  }
+  if (options.minLength && trimmed.length < options.minLength) {
+    return null;
+  }
+  if (options.maxLength && trimmed.length > options.maxLength) {
+    return null;
+  }
+  if (trimmed.startsWith("$") || trimmed.includes("\0")) {
+    return null;
+  }
+  return trimmed;
+}
+
+/**
  * Check whether a user is registered for an application in user_app_registrations.
  * Uses authenticated server-side userId and canonical client ID.
  */
@@ -772,14 +831,25 @@ export async function checkUserAppRegistration(
   canonicalClientId: string,
 ): Promise<boolean> {
   if (!userId || !canonicalClientId) return false;
+  if (typeof userId !== "string" || typeof canonicalClientId !== "string") return false;
+  const cleanUserId = userId.trim();
+  const cleanClientId = canonicalClientId.trim();
+  if (!cleanUserId || !cleanClientId || cleanUserId.startsWith("$") || cleanClientId.startsWith("$")) {
+    return false;
+  }
+
+  const userConditions: any[] = [
+    { userId: cleanUserId },
+  ];
+  if (ObjectId.isValid(cleanUserId) && cleanUserId.length === 24) {
+    try {
+      userConditions.push({ userId: new ObjectId(cleanUserId) });
+    } catch {}
+  }
 
   const reg = await db.collection("user_app_registrations").findOne({
-    clientId: canonicalClientId,
-    $or: [
-      { userId: String(userId) },
-      { userId },
-      ...(ObjectId.isValid(userId) ? [{ userId: new ObjectId(userId) }] : []),
-    ],
+    clientId: cleanClientId,
+    $or: userConditions,
   });
 
   return Boolean(reg);

@@ -20,6 +20,8 @@ const securityTestFiles = [
   "tests/security/deployed-consumer-suite.ts",
   "tests/security/aws-dashboard-integration-suite.ts",
   "tests/security/test-app-management-auth.ts",
+  "tests/security/adversarial-role-tampering.test.ts",
+  "tests/security/nosql-injection-boundary.test.ts",
   "tests/security/e2e-oidc-interop.test.ts",
 ];
 

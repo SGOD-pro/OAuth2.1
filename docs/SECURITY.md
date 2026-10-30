@@ -114,6 +114,15 @@ Management endpoints enforce strict audience matching on bearer tokens:
    - Signed OAuth token claims are authoritative. Database fallback values CANNOT elevate a signed `role: "user"` token to `role: "admin"`.
    - Scoped administrator tokens cannot escalate to global super admin. Conflicting tenant scopes between token claims and database records fail closed.
 
+### 5.3 NoSQL Injection and Parameter Boundary Defense
+Every incoming email, user ID, client ID, search filter, and update payload is checked for primitive types before database query construction. The gateway rejects objects with operator keys such as `$ne`, `$gt`, and `$set`, dotted path keys, arrays where strings are required, and prototype pollution properties including `__proto__`, `constructor`, and `prototype`. All malicious payloads receive controlled 400 validation failures and fail closed without database execution.
+
+### 5.4 Conflicting Authentication Credentials Defense
+If an attacker or corrupted browser profile sends both an active session cookie and an HTTP Bearer token, the server verifies that both credentials resolve to the same user identity. If the cookie identity conflicts with the token subject, the request fails closed immediately with 401 unauthenticated.
+
+### 5.5 Offline Token Revocation Delay and Real Time Mitigation
+Access tokens issued by SWYRA Auth are RS256 JWTs with a short lifespan of 15 minutes. When you configure resource servers to verify access tokens offline through `/.well-known/jwks.json`, your resource server trusts cryptographically valid signatures until the token expires. If you revoke or demote an administrator, offline verification on resource servers may honor existing tokens for up to 15 minutes. For immediate revocation, your application must call token introspection at `/api/auth/oauth2/introspect` or token revocation at `/api/auth/oauth2/revoke`. On central IdP management endpoints, the server validates user document state and revocation timestamps on every request, providing immediate real time revocation.
+
 ---
 
 ## 6. Automated Security Validation Suite

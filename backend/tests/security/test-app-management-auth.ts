@@ -3,7 +3,13 @@ dotenv.config();
 
 // Ensure test verifies security invariants
 process.env.NODE_ENV = "test";
-process.env.MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/test_security";
+import { MongoMemoryServer } from "mongodb-memory-server";
+let mongod: any = null;
+if (!process.env.MONGO_URI || process.env.MONGO_URI.includes("mongodb.net") || process.env.MONGO_URI.includes("cluster0")) {
+  mongod = await MongoMemoryServer.create();
+  process.env.MONGO_URI = mongod.getUri();
+}
+
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "http://localhost:3000";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
@@ -580,6 +586,10 @@ await runTest("STRICT-2: Admin with scopedClientId: undefined CANNOT create appl
 console.log("================================================================");
 console.log(`  APPLICATION MANAGEMENT AUTH RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
+
+if (mongod) {
+  await mongod.stop();
+}
 
 if (failed > 0) {
   process.exit(1);
