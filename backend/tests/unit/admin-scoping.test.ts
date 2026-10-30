@@ -179,13 +179,9 @@ async function runTests() {
       userId: superAdminUserId.toString(),
       clientId: "client-acme",
     });
-    assert.ok(reg, "Registration should be upserted");
-    assert.equal(reg.appRole, "admin", "Registration appRole should be admin");
+    assert.equal(reg, null, "Registration must NOT be created because Super Admin cannot be assigned as App Admin");
 
-    const auditRecord = await mockDb.collection("admin_audit").findOne({ targetClientId: "client-acme" });
-    assert.ok(auditRecord, "Audit record should be created on admin identity sync");
-    assert.equal(auditRecord.action, "admin_identity_synced");
-    console.log("PASS: AC-1 Super Admin preserved during syncAppAdminIdentity");
+    console.log("PASS: AC-1 Super Admin preserved during syncAppAdminIdentity (mutually exclusive role)");
   }
 
   // TEST 2: Multi app admin preserves primary scope and adds registration (AC-2)
@@ -239,9 +235,9 @@ async function runTests() {
       ],
     });
 
-    // Super Admin should be admin for any client
+    // Super Admin should be role: "user" for any consumer client (never receives consumer app-admin privileges)
     const res1 = await resolveUserRoleForClient(mockDb, superAdmin, "client-random");
-    assert.equal(res1.role, "admin");
+    assert.equal(res1.role, "user");
     assert.equal(res1.scopedClientId, null);
 
     // Multi Admin requesting client-alpha (primary scope)
@@ -300,7 +296,7 @@ async function runTests() {
     });
 
     const user = await mockDb.collection("user").findOne({ _id: adminUserId });
-    assert.equal(user.role, "admin", "User must remain admin because client-two is still active");
+    assert.equal(user.role, "app-admin", "User must remain app-admin because client-two is still active");
     assert.equal(user.scopedClientId, "client-two", "scopedClientId should re-point to remaining client");
 
     // Now remove client-two
@@ -355,7 +351,7 @@ async function runTests() {
 
     const userAfterFirstRemoval = await mockDb.collection("user").findOne({ _id: adminUserId });
     assert.ok(userAfterFirstRemoval, "User must exist");
-    assert.equal(userAfterFirstRemoval.role, "admin", "User must remain admin because client-beta survives in user_app_registrations");
+    assert.equal(userAfterFirstRemoval.role, "app-admin", "User must remain app-admin because client-beta survives in user_app_registrations");
     assert.equal(userAfterFirstRemoval.scopedClientId, "client-beta", "scopedClientId must re-point to surviving client-beta");
 
     // Remove client-beta (last remaining assignment)
@@ -387,7 +383,7 @@ async function runTests() {
       ],
     });
 
-    assert.equal(await checkUserIsClientAdmin(mockDb, superAdmin, superAdmin._id.toString(), "client-any"), true);
+    assert.equal(await checkUserIsClientAdmin(mockDb, superAdmin, superAdmin._id.toString(), "client-any"), false);
     assert.equal(await checkUserIsClientAdmin(mockDb, multiAdmin, multiAdminId.toString(), "client-x"), true);
     assert.equal(await checkUserIsClientAdmin(mockDb, multiAdmin, multiAdminId.toString(), "client-y"), true);
     assert.equal(await checkUserIsClientAdmin(mockDb, multiAdmin, multiAdminId.toString(), "client-z"), true);
@@ -488,8 +484,7 @@ async function runTests() {
       userId: superAdminUserId.toString(),
       clientId: "client-background-sync",
     });
-    assert.ok(reg, "Registration should be ensured");
-    assert.equal(reg.appRole, "admin");
+    assert.equal(reg, null, "Registration must NOT be created because Super Admin is protected from app-admin assignment");
 
     console.log("PASS: AC-1 & AC-2 selfHealAppAdmins background sweep preserves Super Admin");
   }
@@ -522,7 +517,7 @@ async function runTests() {
     });
 
     const user1 = await mockDb.collection("user").findOne({ _id: adminUserId });
-    assert.equal(user1.role, "admin");
+    assert.equal(user1.role, "app-admin");
     assert.equal(user1.scopedClientId, "client-second");
 
     // Remove client-second
@@ -607,15 +602,15 @@ async function runTests() {
     const resNull = await resolveUserRoleForClient(mockDb, null, "client-any");
     assert.deepEqual(resNull, { role: "user", scopedClientId: null });
 
-    // Empty clientId for non super admin retains existing role and scope
+    // Empty clientId fails closed to standard user role and null scope
     const userDoc = { role: "custom-role", scopedClientId: "client-prev" };
     const resEmpty = await resolveUserRoleForClient(mockDb, userDoc, "");
-    assert.deepEqual(resEmpty, { role: "custom-role", scopedClientId: "client-prev" });
+    assert.deepEqual(resEmpty, { role: "user", scopedClientId: null });
 
-    // Global super admin with empty clientId returns admin and null scope
+    // Global super admin returns role: "user" and scopedClientId: null for consumer client contexts
     const superAdmin = { role: "admin", scopedClientId: null };
     const resSuperEmpty = await resolveUserRoleForClient(mockDb, superAdmin, "");
-    assert.deepEqual(resSuperEmpty, { role: "admin", scopedClientId: null });
+    assert.deepEqual(resSuperEmpty, { role: "user", scopedClientId: null });
 
     console.log("PASS: AC-3 resolveUserRoleForClient edge cases handled cleanly");
   }

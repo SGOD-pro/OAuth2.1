@@ -85,14 +85,22 @@ When `isPublic = false`, the application is an enterprise tenant:
 
 ## 5. Administrative Authorization Separation & Token Audience Rules
 
-### 5.1 Admin Role & Scope Model
-- **Super Administrator (`role: "admin"`, `scopedClientId: null`):** Authorized to manage global platform resources, register new clients, and provision administrators.
-- **Application Administrator (`role: "admin"`, `scopedClientId: "<clientId>"`):** Authorized to manage only their designated client. Scoped administrators cannot:
-  - Modify or view other clients (Cross-Tenant Access Forbidden).
-  - Mutate security boundary flags (`isDev`, `isPublic`).
-  - Delete their application or any other application.
-  - Access Super-Admin endpoints.
-  - Access the central platform management dashboard (`/admin/*`).
+### 5.1 Explicit Domain Roles and Mutual Exclusivity
+SWYRA Auth defines three explicit domain roles:
+- **Global Super Admin (`role: "super-admin"`, `scopedClientId: null`):** Authorized for the central MAuth platform dashboard and platform management only. Super admins retain client registration, client configuration, and administrator provisioning through platform APIs. Super admins never receive consumer application admin privileges or enter consumer application admin portals using their platform identity.
+- **Application Admin (`role: "app-admin"`, `scopedClientId: "<clientId>"`):** Authorized for the admin portals of explicitly assigned registered clients only. App admins must never enter the MAuth dashboard or invoke platform management APIs. Multiple application assignments are preserved.
+- **End User (`role: "user"`, `scopedClientId: null`):** Standard application user with no administrative privileges.
+
+One identity cannot simultaneously be a super admin and an app admin. All authorization checks fail closed when roles or scopes are ambiguous, missing, or contradictory.
+
+Stable error codes and request IDs are emitted across all authorization boundaries:
+- `ERR_GATEWAY_FORBIDDEN`: Request rejected at the trusted gateway boundary.
+- `ERR_SUPER_ADMIN_REQUIRED`: Platform management endpoint invoked by an app admin or unauthorized identity.
+- `ERR_CROSS_TENANT_FORBIDDEN`: App admin attempted to access an application outside their explicit assignments.
+- `ERR_ROLE_FORBIDDEN`: Caller lacks the required administrative role.
+- `ERR_IDENTITY_CONFLICT`: Operation attempted to assign conflicting roles to one identity.
+- `ERR_AUDIENCE_FORBIDDEN`: Bearer token audience does not match the target platform or client scope.
+- `ERR_PASSWORD_CHANGE_REQUIRED`: Account has a temporary password that must be rotated before accessing admin operations.
 
 ### 5.2 Strict Bearer Token Audience Rules
 Management endpoints enforce strict audience matching on bearer tokens:

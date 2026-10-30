@@ -112,6 +112,24 @@ SWYRA Auth emits standard, machine-readable OAuth 2.1 / RFC 6749 error codes. Be
 
 ---
 
+### 2.8 Diagnosing MAuth Console 403 Forbidden Rejections
+
+- **Symptom:** Administrator signs in at `/admin/login` and receives the message: "Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal."
+- **Root Cause:**
+  1. The identity signing in possesses the `app-admin` role or has client scoping (`scopedClientId`). Application administrators manage their application through their consumer app portal and are forbidden from the central MAuth console.
+  2. An administrator account was created without explicit domain role assignment or had conflicting legacy records.
+- **Safe Resolution:**
+  - Application administrators must access their assigned application by signing in through that application OAuth flow at `${AUTH_ISSUER}/api/auth/oauth2/authorize`.
+  - For central platform administration, sign in with an explicit Global Super Admin account (`role: "super-admin"` and `scopedClientId: null`).
+  - To check error causes in logs, inspect the stable `code` field and `x-request-id` header:
+    - `ERR_GATEWAY_FORBIDDEN`: Missing or invalid `x-gateway-secret` header.
+    - `ERR_SUPER_ADMIN_REQUIRED`: Caller possesses `app-admin` but attempted a platform operation.
+    - `ERR_CROSS_TENANT_FORBIDDEN`: Application admin attempted access to an unassigned client.
+    - `ERR_ROLE_FORBIDDEN`: Standard user attempted an administrative route.
+    - `ERR_IDENTITY_CONFLICT`: Attempted assignment of a super admin identity as an application admin.
+
+---
+
 ## 3. Safe Debugging Protocols
 
 When diagnosing authentication issues:

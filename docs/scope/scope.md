@@ -21,6 +21,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 | 4 | Dev isolation and dual mode client URIs | Slice 4 | done |
 | 5 | Application configuration simplification | Slice 5 | done |
 | 6 | Local consumer E2E and resilience hardening | Slice 6 | done |
+| 7 | Explicit administrator identities and portal isolation | Slice 7 | in-progress |
 
 ## Existing foundations
 
@@ -146,6 +147,24 @@ Harden token minting failure handling to fail closed with controlled 500 server_
 - [x] Review it: `/check review local consumer E2E and resilience hardening`
 - [x] Document it: `/document local consumer E2E and resilience hardening`
 [0002](../specs/0002-runtime-resilience-and-key-resolution/index.md) · code in `backend/src/routes/auth.ts`, `backend/src/db/state.ts`, `backend/tests/e2e/`, `backend/scripts/run-all-security.ts`, `test/next-app/`, `test/react-express-app/`
+
+## Slice 7: Explicit administrator identities and portal isolation
+
+### 7. Explicit administrator identities and portal isolation · in-progress
+Implement explicit mutually exclusive administrator identities and enforce MAuth platform dashboard versus consumer application portal isolation.
+**Done when:** super-admin and app-admin roles are mutually exclusive, super-admin identity never receives consumer app-admin privileges or enters consumer admin portals, app-admin cannot enter MAuth console or invoke platform APIs, and per-client app-admin assignments are authoritative by stable user ID.
+- [x] Build it: `/develop explicit administrator identities and portal isolation`
+   - [x] Define domain roles and structured error codes with request IDs in admin middleware
+   - [x] Enforce consumer app admin isolation in resolveUserRoleForClient and OAuth routes
+   - [x] Configure Better Auth admin plugin access controls and prevent privilege injection
+   - [x] Reconcile identity lifecycle paths and reject assigning super admins as app admins
+   - [x] Implement read only audit and apply migration for legacy identities
+   - [x] Align frontend admin console guards and session handling
+- [ ] Verify it: `/check verify explicit administrator identities and portal isolation`
+- [ ] Test it: `/test explicit administrator identities and portal isolation`
+- [ ] Review it (fresh model): `/check review explicit administrator identities and portal isolation`
+- [ ] Document it: `/document explicit administrator identities and portal isolation`
+[0007](../specs/0007-explicit-administrator-identities-and-portal-isolation/index.md) · code in `backend/src/middleware/admin-auth.ts`, `backend/src/routes/auth.ts`, `backend/src/utils/admin-sync.ts`, `backend/scripts/migrate-identity-roles.ts`, `frontend/components/AdminRoute.tsx`, `frontend/pages/admin/AdminLogin.tsx`
 
 ## Deferred
 Out of scope for the current remediation slice, kept so the plan stays honest.

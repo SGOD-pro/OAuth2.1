@@ -54,8 +54,8 @@ export const AdminLogin: React.FC = () => {
 
   useEffect(() => {
     if (!isPending && user) {
-      const isScoped = typeof user.scopedClientId === 'string' && user.scopedClientId.trim().length > 0;
-      if (user.role === 'admin' && !isScoped) {
+      const isSuperAdmin = user.role === 'super-admin' || (user.role === 'admin' && user.scopedClientId === null);
+      if (isSuperAdmin) {
         navigate('/admin', { replace: true });
       }
     }
@@ -101,16 +101,20 @@ export const AdminLogin: React.FC = () => {
       const userRole = currentUser?.role;
       const scopedClientId = currentUser?.scopedClientId;
 
-      if (userRole !== 'admin') {
-        setError('Access denied: Administrator privileges required.');
-        toast.error('Access denied: Administrator privileges required.');
+      const isAppAdmin = userRole === 'app-admin' || (userRole === 'admin' && typeof scopedClientId === 'string' && scopedClientId.trim().length > 0);
+      const isSuperAdmin = userRole === 'super-admin' || (userRole === 'admin' && scopedClientId === null);
+
+      if (isAppAdmin) {
+        await authClient.signOut({});
+        const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
+        setError(msg);
+        toast.error(msg);
         return;
       }
 
-      const isScoped = typeof scopedClientId === 'string' && scopedClientId.trim().length > 0;
-      if (isScoped) {
+      if (!isSuperAdmin) {
         await authClient.signOut({});
-        const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
+        const msg = 'Access denied: Administrator privileges required.';
         setError(msg);
         toast.error(msg);
         return;

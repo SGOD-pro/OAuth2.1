@@ -479,12 +479,13 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
 
     const userId = newUser?.user?.id || (newUser as any)?.id;
 
-    // 2. Set role: "admin", scopedClientId, emailVerified: true, and mustChangePassword
+    // 2. Set explicit domain role: "app-admin" if scoped, "super-admin" if unscoped
+    const explicitRole = scopedClientId ? "app-admin" : "super-admin";
     await database.collection("user").updateOne(
       { $or: [{ id: userId }, { _id: userId }, { email }] } as any,
       {
         $set: {
-          role: "admin",
+          role: explicitRole,
           emailVerified: true,
           scopedClientId: scopedClientId,
           mustChangePassword: isTempPassword,
@@ -493,7 +494,7 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
       }
     );
 
-    // 3. If assigned to a client, link to oauthClient document
+    // 3. If assigned to a client, link to oauthClient and user_app_registrations
     if (scopedClientId) {
       await database.collection("oauthClient").updateOne(
         { $or: [{ clientId: scopedClientId }, { client_id: scopedClientId }, { id: scopedClientId }] },
@@ -504,6 +505,19 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
             updatedAt: new Date(),
           },
         }
+      );
+
+      await database.collection("user_app_registrations").updateOne(
+        { clientId: scopedClientId, userId: String(userId) },
+        {
+          $set: {
+            userId: String(userId),
+            clientId: scopedClientId,
+            appRole: "admin",
+            registeredAt: new Date(),
+          },
+        },
+        { upsert: true }
       );
     }
 
@@ -1135,6 +1149,20 @@ admin.post("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
 
     const canonicalClientId = client.clientId;
 
+    // USER-REQUIRED POLICY: Reject assigning an existing super-admin identity as an app admin.
+    const userInDb = await database.collection("user").findOne({ email });
+    if (userInDb && (userInDb.role === "super-admin" || (userInDb.role === "admin" && userInDb.scopedClientId === null))) {
+      const reqId = c.get("requestId") || c.req.header("x-request-id");
+      return c.json(
+        {
+          error: "Identity conflict: Global Super Admin cannot be assigned as an Application Administrator",
+          code: "ERR_IDENTITY_CONFLICT",
+          requestId: reqId,
+        },
+        409
+      );
+    }
+
     // Check email uniqueness within this application
     const existing = await database.collection("app_admins").findOne({
       clientId: canonicalClientId,
@@ -1263,6 +1291,20 @@ const updateAppAdminHandler = async (c: any) => {
         return c.json({ error: "Valid email address is required" }, 400);
       }
       if (newEmail !== existing.email) {
+        // USER-REQUIRED POLICY: Reject assigning an existing super-admin identity as an app admin.
+        const superAdminCheck = await database.collection("user").findOne({ email: newEmail });
+        if (superAdminCheck && (superAdminCheck.role === "super-admin" || (superAdminCheck.role === "admin" && superAdminCheck.scopedClientId === null))) {
+          const reqId = c.get("requestId") || c.req.header("x-request-id");
+          return c.json(
+            {
+              error: "Identity conflict: Global Super Admin cannot be assigned as an Application Administrator",
+              code: "ERR_IDENTITY_CONFLICT",
+              requestId: reqId,
+            },
+            409
+          );
+        }
+
         const conflict = await database.collection("app_admins").findOne({
           clientId: canonicalClientId,
           email: newEmail,

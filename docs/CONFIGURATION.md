@@ -66,10 +66,21 @@ Every client application registered in SWYRA Auth possesses a document in the `o
 | `allowedOrigins` | Array&lt;String&gt; | `[]` | Origins permitted for CORS requests to `/oauth2/token` and `/oauth2/userinfo`. |
 | `isPublic` | Boolean | `true` | **Tenancy Mode:** `true` = open to all platform users; `false` = restricted to pre-assigned users. |
 | `isDev` | Boolean | `false` | **Client Mode:** `true` = loopback (`http://localhost:*`) permitted; `false` = strict HTTPS only. |
-| `disabled` | Boolean | `false` | Administrative kill-switch. When `true`, all authentication requests are blocked (403). |
+| `disabled` | Boolean | `false` | Administrative kill switch. When `true`, all authentication requests are blocked (403). |
 | `skipConsent` | Boolean | `false` | When `true`, trusted first-party clients bypass the interactive consent prompt. |
 | `adminUserId` | String | `null` | User ID of the designated Application Administrator. |
 | `adminEmail` | String | `null` | Email of the designated Application Administrator. |
+
+### 3.1 User Account Identity Schema (MongoDB `user`)
+
+User identities in the centralized `user` collection maintain the following domain authorization fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `role` | String | Domain role. Allowed values: `"super-admin"`, `"app-admin"`, `"user"`. |
+| `scopedClientId` | String \| null | Canonical client identifier for application administrators. Strictly `null` for super admins and standard users. |
+| `mustChangePassword` | Boolean | When true, caller must set a permanent password before accessing administrative features. |
+| `banned` | Boolean | Administrative suspension flag. Deactivated accounts fail authentication closed. |
 
 ---
 

@@ -105,6 +105,39 @@ Confidential OAuth clients may rotate secrets without downtime:
 2. Update the consumer application's `CLIENT_SECRET` environment variable.
 3. Restart the consumer application.
 
+### 3.3 Identity Domain Role Migration Runbook
+
+Before upgrading production to the mutually exclusive administrator model, execute the migration procedure:
+
+1. **Create Database Backup:**
+   ```bash
+   mongodump --uri="$MONGO_URI" --out="backup_$(date +%Y%m%d_%H%M%S)"
+   ```
+
+2. **Run Read Only Audit Dry Run:**
+   ```bash
+   npm --prefix backend run migrate:roles
+   ```
+   Inspect the classification summary:
+   - **Class A (`super-admin`):** Global administrators with explicit null scope.
+   - **Class B (`app-admin`):** Application administrators with active client assignments.
+   - **Class C (`user`):** Standard end users.
+   - **Class D (Flagged):** Conflicting or ambiguous records. These are never automatically promoted.
+
+3. **Resolve Class D Flagged Accounts:**
+   If any accounts are flagged in Class D, operators must inspect records and resolve them before or after migration.
+
+4. **Apply Migration:**
+   ```bash
+   npm --prefix backend run migrate:roles:apply
+   ```
+   The migration updates domain roles, deletes active session cookies for migrated users, and revokes refresh token families in `oauth_token_families`. Note that active RS256 access tokens remain valid until their expiration window completes (maximum fifteen minutes).
+
+5. **Rollback Procedure (if required):**
+   ```bash
+   mongorestore --uri="$MONGO_URI" backup_<timestamp>/
+   ```
+
 ---
 
 ## 4. Production Pre-Flight Checklist

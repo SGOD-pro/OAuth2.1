@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
+import crypto from "node:crypto";
 
 import admin from "./routes/admin";
 import auth from "./routes/auth";
@@ -32,6 +33,13 @@ if (config.env !== "production" && config.trustedProxyCidrs.length === 0) {
 		"all requests share a single 'unknown' bucket. Set this before going to production.",
 	);
 }
+
+app.use("*", async (c, next) => {
+	const reqId = c.req.header("x-request-id") || crypto.randomUUID();
+	c.set("requestId", reqId);
+	c.header("x-request-id", reqId);
+	await next();
+});
 
 app.use("*", dynamicCors);
 app.use("*", async (c, next) => {

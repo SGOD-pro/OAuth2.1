@@ -1,10 +1,36 @@
 import { config } from "../config"
 import { betterAuth } from "better-auth";
 import { admin, jwt, twoFactor } from "better-auth/plugins";
+import { createAccessControl } from "better-auth/plugins/access";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { client, database } from "../db/mongo";
 import { isLoopbackHost, isStrongPassword } from "./security";
+
+const accessControl = createAccessControl({
+    user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'impersonate-admins', 'delete', 'set-password', 'set-email', 'get', 'update'],
+    session: ['list', 'revoke', 'delete']
+});
+
+const superAdminRole = accessControl.newRole({
+    user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'impersonate-admins', 'delete', 'set-password', 'set-email', 'get', 'update'],
+    session: ['list', 'revoke', 'delete'],
+});
+
+const legacyAdminRole = accessControl.newRole({
+    user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'delete', 'set-password', 'set-email', 'get', 'update'],
+    session: ['list', 'revoke', 'delete'],
+});
+
+const appAdminRole = accessControl.newRole({
+    user: [],
+    session: [],
+});
+
+const userRole = accessControl.newRole({
+    user: [],
+    session: [],
+});
 
 
 export const AUTH_INSTANCE = Symbol("AUTH_INSTANCE");
@@ -121,6 +147,13 @@ export const authProvider = betterAuth({
 
         admin({
             defaultRole: "user",
+            adminRoles: ["super-admin", "admin"],
+            roles: {
+                "super-admin": superAdminRole,
+                admin: legacyAdminRole,
+                "app-admin": appAdminRole,
+                user: userRole,
+            },
         }),
 
         // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”

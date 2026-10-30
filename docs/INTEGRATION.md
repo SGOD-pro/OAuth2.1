@@ -94,16 +94,16 @@ sequenceDiagram
 ```
 
 ### 3.3 Application Administration Authorization
-Application administrators are identities managed within the IdP whose administrative scope is restricted to a specific application:
-- **Global Super Admin:** `role: "admin"`, `scoped_client_id: null` (Full platform administration).
-- **Application Admin:** `role: "admin"`, `scoped_client_id: "client-xyz"` (Can manage only client `client-xyz`).
+Application administrators are identities managed within the IdP whose administrative scope is restricted to explicit applications:
+- **Global Super Admin:** `role: "super-admin"`, `scoped_client_id: null` (Platform dashboard and platform management only. Super admin identities receive standard user claims upon consumer login and are prohibited from accessing consumer admin portals).
+- **Application Admin:** `role: "app-admin"`, `scoped_client_id: "client-xyz"` (Authorized only for assigned client portals. Prohibited from accessing the central MAuth console).
 
 The consumer application inspects the cryptographically signed JWT or calls `/api/auth/oauth2/userinfo`:
 ```typescript
 function isApplicationAdmin(claims: { role?: string; scoped_client_id?: string | null }, expectedClientId: string): boolean {
   if (claims.role !== "admin") return false;
-  // Super Admin has global privileges; Scoped Admin matches clientId
-  return claims.scoped_client_id === null || claims.scoped_client_id === expectedClientId;
+  // Scoped Admin matches clientId. Super admin platform identities do not enter consumer admin portals.
+  return claims.scoped_client_id === expectedClientId;
 }
 ```
 
@@ -111,8 +111,8 @@ function isApplicationAdmin(claims: { role?: string; scoped_client_id?: string |
 
 Application Administrators are provisioned via the Super Admin API (`POST /api/admin/clients/:clientId/app-admins`) or the Admin Console:
 - When an App Admin is created or updated, their identity and credentials are automatically synchronized directly into the centralized IdP `user` and `account` tables.
-- The administrator's centralized user record receives:
-  - `role: "admin"`
+- The administrator centralized user record receives:
+  - `role: "app-admin"`
   - `scopedClientId: "<clientId>"`
   - `emailVerified: true`
   - Explicit assignment in `user_app_registrations` (guaranteeing access to private applications).

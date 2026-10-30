@@ -35,14 +35,14 @@ async function run() {
   let userObjId: ObjectId;
 
   if (user) {
-    console.log(`\nℹ️ Found existing user record for "${email}". Updating role to admin...`);
+    console.log(`\nℹ️ Found existing user record for "${email}". Updating role to super-admin...`);
     userObjId = user._id instanceof ObjectId ? user._id : new ObjectId(String(user._id));
 
     await db.collection("user").updateOne(
       { _id: user._id },
       {
         $set: {
-          role: "admin",
+          role: "super-admin",
           scopedClientId: null,
           emailVerified: true,
           updatedAt: now,
@@ -58,7 +58,7 @@ async function run() {
       name,
       email,
       emailVerified: true,
-      role: "admin",
+      role: "super-admin",
       scopedClientId: null,
       banned: false,
       createdAt: now,
@@ -93,20 +93,20 @@ async function run() {
   const normalizedEmail = email.toLowerCase().trim();
   const conflictingAppAdmins = await db.collection("app_admins").find({ email: normalizedEmail }).toArray();
   if (conflictingAppAdmins.length > 0) {
-    console.log(`\n⚠️ Notice: Email "${email}" is also registered as an App Admin in 'app_admins' for:`);
+    console.log(`\n⚠️ Notice: Email "${email}" was registered as an App Admin in 'app_admins' for:`);
     conflictingAppAdmins.forEach((a: any) => console.log(`   - Client ID: ${a.clientId}`));
-    console.log(`🛡️ Your Global Super Admin account (scopedClientId: null) is protected against demotion during cold starts.`);
-    if (process.argv.includes("--clean-scoped")) {
-      const del = await db.collection("app_admins").deleteMany({ email: normalizedEmail });
-      console.log(`🧹 Removed ${del.deletedCount} conflicting record(s) from 'app_admins'.`);
-    } else {
-      console.log(`💡 Tip: Pass --clean-scoped if you wish to remove this email from 'app_admins'.`);
-    }
+    console.log(`🛡️ Mutually exclusive role policy: Removing conflicting app-admin records for Global Super Admin.`);
+    const delAdmins = await db.collection("app_admins").deleteMany({ email: normalizedEmail });
+    const delRegs = await db.collection("user_app_registrations").deleteMany({
+      $or: [{ userId: String(userObjId) }, { userId: userObjId }],
+      appRole: "admin",
+    });
+    console.log(`🧹 Cleaned ${delAdmins.deletedCount} app_admins and ${delRegs.deletedCount} admin registration record(s).`);
   }
 
-  console.log(`\n🎉 Success! Admin user is ready:`);
+  console.log(`\n🎉 Success! Global Super Admin user is ready:`);
   console.log(`   Email: ${email}`);
-  console.log(`   Role : admin`);
+  console.log(`   Role : super-admin`);
   console.log(`\nYou can now log in at: https://oauth21.vercel.app/admin/login\n`);
 
   await closeDb();

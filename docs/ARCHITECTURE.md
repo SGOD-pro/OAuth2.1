@@ -99,7 +99,7 @@ SWYRA Auth implements multi-tenant isolation via the `isPublic` property on the 
 
 ## 4. Administrative Role Hierarchy
 
-SWYRA Auth enforces a clear distinction between platform-level and application-level administrators:
+SWYRA Auth enforces explicit separation between platform level and application level administrators:
 
 ```mermaid
 classDiagram
@@ -111,20 +111,22 @@ classDiagram
     }
 
     class GlobalSuperAdmin {
-        +role = "admin"
+        +role = "super-admin"
         +scopedClientId = null
         +Can create/delete clients
         +Can provision global users
         +Can manage platform config
+        +CANNOT enter consumer admin portals
     }
 
     class ApplicationAdmin {
-        +role = "admin"
+        +role = "app-admin"
         +scopedClientId = "client-123"
         +Can update own client-123
         +Can view client-123 users
         +CANNOT manage client-456
-        +CANNOT access super-admin APIs
+        +CANNOT access super admin APIs
+        +CANNOT access MAuth dashboard
     }
 
     class EndUser {
@@ -139,7 +141,8 @@ classDiagram
 ```
 
 ### Administrative Claims in Tokens
-When an administrator completes the OAuth 2.1 flow, their administrative scope is emitted in the RS256 JWT ID token and UserInfo endpoint:
+When an administrator completes the OAuth 2.1 flow for an application:
+1. An explicitly assigned application admin receives their scope in the RS256 JWT ID token and UserInfo endpoint:
 ```json
 {
   "sub": "6ac2611c1878f531c3f91a05",
@@ -148,6 +151,7 @@ When an administrator completes the OAuth 2.1 flow, their administrative scope i
   "scoped_client_id": "client-123"
 }
 ```
+2. A super admin signing in to a consumer application receives standard user claims (`role: "user"`, `scoped_client_id: null`) to prevent consumer admin portal access using platform credentials.
 
 ---
 

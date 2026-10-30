@@ -65,31 +65,63 @@ export async function syncAppAdminIdentity(
   // 1. Upsert into user collection
   let user = await database.collection("user").findOne({ email: normalizedEmail });
   let userId: ObjectId;
-  const isSuperAdmin = user && user.role === "admin" && user.scopedClientId === null;
+  const isSuperAdmin = Boolean(
+    user &&
+    (user.role === "super-admin" || (user.role === "admin" && user.scopedClientId === null))
+  );
+
+  // USER-REQUIRED POLICY: Reject assigning an existing super-admin identity as an app admin.
+  // One identity cannot simultaneously be super-admin and app-admin.
+  if (isSuperAdmin) {
+    console.warn(`[ADMIN_SYNC] Identity conflict: ${normalizedEmail} is a Global Super Admin. Skipped assignment as App Admin for client "${clientId}" (mutually exclusive roles).`);
+    return;
+  }
 
   if (user) {
     userId = user._id instanceof ObjectId ? user._id : new ObjectId(String(user._id));
+    const userIdStr = userId.toString();
 
-    // Never demote, alter password, or ban a Global Super Admin!
-    if (!isSuperAdmin) {
-      const userUpdate: any = {
-        role: "admin",
-        emailVerified: true,
-        updatedAt: now,
-      };
+    // USER-REQUIRED POLICY: Changing one app assignment must not ban or modify unrelated assignments.
+    let isBanned = false;
+    if (typeof isActive === "boolean") {
+      if (!isActive) {
+        const otherActive = await database.collection("app_admins").findOne({
+          $or: [{ userId: userIdStr }, { email: normalizedEmail }, { _id: user._id }],
+          clientId: { $ne: clientId },
+          isActive: { $ne: false },
+        });
+        isBanned = !otherActive;
+      } else {
+        isBanned = false;
+      }
+    }
 
-      // Only assign scopedClientId if user doesn't already have one or is already scoped to this client
+    const userUpdate: any = {
+      role: "app-admin",
+      emailVerified: true,
+      updatedAt: now,
+      banned: isBanned,
+    };
+
+    if (isActive !== false) {
       if (!user.scopedClientId || user.scopedClientId === clientId) {
         userUpdate.scopedClientId = clientId;
       }
-      if (name) userUpdate.name = name;
-      if (typeof isActive === "boolean") userUpdate.banned = !isActive;
-
-      await database.collection("user").updateOne(
-        { _id: user._id },
-        { $set: userUpdate }
-      );
+    } else if (user.scopedClientId === clientId) {
+      const otherActive = await database.collection("app_admins").findOne({
+        $or: [{ userId: userIdStr }, { email: normalizedEmail }, { _id: user._id }],
+        clientId: { $ne: clientId },
+        isActive: { $ne: false },
+      });
+      userUpdate.scopedClientId = otherActive?.clientId || null;
     }
+
+    if (name) userUpdate.name = name;
+
+    await database.collection("user").updateOne(
+      { _id: user._id },
+      { $set: userUpdate }
+    );
   } else {
     userId = new ObjectId();
     const newUserDoc = {
@@ -97,7 +129,7 @@ export async function syncAppAdminIdentity(
       name: name || "Administrator",
       email: normalizedEmail,
       emailVerified: true,
-      role: "admin",
+      role: "app-admin",
       banned: isActive === false,
       twoFactorEnabled: false,
       scopedClientId: clientId,
@@ -146,21 +178,28 @@ export async function syncAppAdminIdentity(
   }
 
   // 3. Ensure explicit assignment in user_app_registrations for private client access with appRole: "admin"
-  await database.collection("user_app_registrations").updateOne(
-    {
+  if (isActive === false) {
+    await database.collection("user_app_registrations").deleteMany({
       clientId: clientId,
       $or: [{ userId: userIdStr }, { userId: userId }],
-    },
-    {
-      $set: {
-        userId: userIdStr,
+    });
+  } else {
+    await database.collection("user_app_registrations").updateOne(
+      {
         clientId: clientId,
-        appRole: "admin",
-        registeredAt: createdAt || now,
+        $or: [{ userId: userIdStr }, { userId: userId }],
       },
-    },
-    { upsert: true }
-  );
+      {
+        $set: {
+          userId: userIdStr,
+          clientId: clientId,
+          appRole: "admin",
+          registeredAt: createdAt || now,
+        },
+      },
+      { upsert: true }
+    );
+  }
 
   await recordSyncAudit(database, {
     action: user ? "admin_identity_synced" : "admin_identity_created",
@@ -206,7 +245,10 @@ export async function removeAppAdminIdentity(
   if (user) {
     const userEmail = (user.email || normalizedEmail || "").toLowerCase().trim();
     const userIdStr = (user.id || user._id).toString();
-    const isSuperAdmin = user.role === "admin" && user.scopedClientId === null;
+    const isSuperAdmin = Boolean(
+      user.role === "super-admin" ||
+      (user.role === "admin" && user.scopedClientId === null)
+    );
 
     // Delete membership for the specified clientId first
     await database.collection("user_app_registrations").deleteMany({
@@ -216,10 +258,11 @@ export async function removeAppAdminIdentity(
 
     if (!isSuperAdmin) {
       // Check if user still administers other applications via app_admins or user_app_registrations
+      // Key authoritative checks by stable userId, including fallback to normalized email
       const adminQueryConditions: any[] = [];
-      if (userEmail) adminQueryConditions.push({ email: userEmail });
       adminQueryConditions.push({ userId: userIdStr });
       if (user._id) adminQueryConditions.push({ userId: user._id });
+      if (userEmail) adminQueryConditions.push({ email: userEmail });
 
       const otherAdmins = await database.collection("app_admins").find({
         $or: adminQueryConditions,
@@ -247,12 +290,12 @@ export async function removeAppAdminIdentity(
       }
 
       if (survivingClientIds.size > 0) {
-        // User remains an admin for another client; update scopedClientId deterministically
+        // User remains an app admin for another client; update scopedClientId deterministically
         const sortedClients = Array.from(survivingClientIds).sort();
         const nextClientId = sortedClients[0];
         await database.collection("user").updateOne(
           { _id: user._id },
-          { $set: { role: "admin", scopedClientId: nextClientId, updatedAt: new Date() } }
+          { $set: { role: "app-admin", scopedClientId: nextClientId, updatedAt: new Date() } }
         );
         await recordSyncAudit(database, {
           action: "admin_identity_repointed",
@@ -278,7 +321,7 @@ export async function removeAppAdminIdentity(
           targetUserId: userIdStr,
           details: {
             removedClientId: clientId,
-            previousRole: "admin",
+            previousRole: user.role,
             newRole: "user",
             email: userEmail,
           },
@@ -294,7 +337,8 @@ export async function removeAppAdminIdentity(
  */
 export async function selfHealAppAdmins(database: Db): Promise<void> {
   try {
-    const admins = await database.collection("app_admins").find({}).toArray();
+    // Only self-heal active app_admins records; deactivated or deleted assignments must not be resurrected
+    const admins = await database.collection("app_admins").find({ isActive: { $ne: false } }).toArray();
     for (const a of admins) {
       if (!a.email || !a.clientId) continue;
       await syncAppAdminIdentity(database, {

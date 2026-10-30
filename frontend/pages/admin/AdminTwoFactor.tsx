@@ -70,14 +70,24 @@ export const AdminTwoFactor: React.FC = () => {
       }>;
       const userRes = await getSessionFn();
       const currentUser = userRes?.data?.user;
-      const isScoped = typeof currentUser?.scopedClientId === 'string' && currentUser.scopedClientId.trim().length > 0;
-      if (currentUser?.role === 'admin' && isScoped) {
+      const isExplicitAppAdmin = currentUser?.role === 'app-admin';
+      const isLegacyScoped = currentUser?.role === 'admin' && typeof currentUser?.scopedClientId === 'string' && currentUser.scopedClientId.trim().length > 0;
+      const isAppAdmin = isExplicitAppAdmin || isLegacyScoped;
+      const isSuperAdmin = currentUser?.role === 'super-admin' || (currentUser?.role === 'admin' && currentUser?.scopedClientId === null);
+
+      if (isAppAdmin) {
         await authClient.signOut({});
         navigate('/admin/login?error=access_denied_scoped', { replace: true });
         return;
       }
 
-      toast.success('Two-factor authentication verified');
+      if (!isSuperAdmin) {
+        await authClient.signOut({});
+        navigate('/admin/login?error=access_denied', { replace: true });
+        return;
+      }
+
+      toast.success('Two factor authentication verified');
       navigate('/admin', { replace: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Network error validating code';

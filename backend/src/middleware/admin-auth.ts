@@ -5,6 +5,37 @@ import { getHeaders, resolveOAuthClient, timingSafeEqualStr, isLoopbackHost } fr
 import { getDb } from "../db/mongo";
 import { ObjectId } from "mongodb";
 import { config } from "../config";
+import crypto from "node:crypto";
+
+export type DomainRole = "super-admin" | "app-admin" | "user";
+
+export function isSuperAdmin(user: any): boolean {
+  if (!user) return false;
+  if (user.role === "super-admin") {
+    // Super admin role must not have client scoping
+    return !user.scopedClientId || user.scopedClientId === null;
+  }
+  // Legacy role: "admin" strictly requires explicit null scope (never infer from missing/undefined)
+  if (user.role === "admin" && user.scopedClientId === null) {
+    return true;
+  }
+  return false;
+}
+
+export function isAppAdmin(user: any): boolean {
+  if (!user) return false;
+  if (user.role === "app-admin") {
+    return true;
+  }
+  if (user.role === "admin" && typeof user.scopedClientId === "string" && user.scopedClientId.trim().length > 0) {
+    return true;
+  }
+  return false;
+}
+
+export function isAnyAdmin(user: any): boolean {
+  return isSuperAdmin(user) || isAppAdmin(user);
+}
 
 interface CachedPublicKey {
   key: any;
@@ -88,36 +119,37 @@ export async function checkUserIsClientAdmin(
   clientId: string
 ): Promise<boolean> {
   if (!database || !clientId) return false;
-  if (userDoc?.role === "admin" && userDoc?.scopedClientId === null) return true;
-  if (userDoc?.role === "admin" && userDoc?.scopedClientId === clientId) return true;
+  // USER-REQUIRED POLICY: Super admins must never receive consumer app-admin privileges
+  if (isSuperAdmin(userDoc)) return false;
 
-  const adminOrConditions: any[] = [];
-  if (userIdStr) adminOrConditions.push({ userId: userIdStr });
-  if (userDoc?._id) adminOrConditions.push({ userId: userDoc._id });
-  if (userDoc?.email) {
-    adminOrConditions.push({ email: userDoc.email.toLowerCase().trim() });
+  const resolvedUserId = userIdStr || (userDoc?.id || userDoc?._id)?.toString();
+  if (!resolvedUserId) return false;
+
+  // 1. Primary scopedClientId match if role is app-admin or legacy admin
+  if (isAppAdmin(userDoc) && userDoc.scopedClientId === clientId) {
+    return true;
   }
 
-  if (adminOrConditions.length > 0) {
-    const appAdmin = await database.collection("app_admins").findOne({
-      clientId,
-      $or: adminOrConditions,
-      isActive: { $ne: false },
-    });
-    if (appAdmin) return true;
+  // 2. Authoritative check in user_app_registrations keyed by stable userId and clientId
+  const userConditions: any[] = [{ userId: resolvedUserId }];
+  if (ObjectId.isValid(resolvedUserId)) {
+    userConditions.push({ userId: new ObjectId(resolvedUserId) });
   }
 
-  const orConditions: any[] = [];
-  if (userIdStr) orConditions.push({ userId: userIdStr });
-  if (userDoc?._id) orConditions.push({ userId: userDoc._id });
-  if (orConditions.length > 0) {
-    const reg = await database.collection("user_app_registrations").findOne({
-      clientId,
-      $or: orConditions,
-      appRole: "admin",
-    });
-    if (reg) return true;
-  }
+  const reg = await database.collection("user_app_registrations").findOne({
+    clientId,
+    $or: userConditions,
+    appRole: "admin",
+  });
+  if (reg) return true;
+
+  // 3. Authoritative check in app_admins by stable userId (email alone never grants privileges)
+  const appAdmin = await database.collection("app_admins").findOne({
+    clientId,
+    $or: userConditions,
+    isActive: { $ne: false },
+  });
+  if (appAdmin) return true;
 
   return false;
 }
@@ -156,7 +188,7 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
     });
 
-    if (userDoc && (userDoc.disabled === true || userDoc.isActive === false)) {
+    if (userDoc && (userDoc.disabled === true || userDoc.isActive === false || userDoc.banned === true)) {
       return null;
     }
 
@@ -169,9 +201,18 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       scopedClientId = undefined;
     }
 
+    let role = userDoc?.role || session.user.role || "user";
+    if (userDoc?.role === "super-admin" || (userDoc?.role === "admin" && scopedClientId === null)) {
+      role = "super-admin";
+      scopedClientId = null;
+    } else if (userDoc?.role === "app-admin" || (userDoc?.role === "admin" && typeof scopedClientId === "string")) {
+      role = "app-admin";
+    }
+
     const fullUser = {
       ...session.user,
       ...userDoc,
+      role,
       scopedClientId,
     };
     c.set("user", fullUser);
@@ -258,9 +299,16 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       // If the token explicitly grants 'user' (or omits role), the caller cannot be elevated to 'admin'.
       // If a database record exists, caller only possesses 'admin' if BOTH token and DB agree.
       let role = "user";
-      if (payload.role === "admin") {
-        if (!userDoc || userDoc.role === "admin") {
-          role = "admin";
+      const isTokenAdmin = payload.role === "admin" || payload.role === "super-admin" || payload.role === "app-admin";
+      if (isTokenAdmin) {
+        if (!userDoc || userDoc.role === "admin" || userDoc.role === "super-admin" || userDoc.role === "app-admin") {
+          if (userDoc?.role === "super-admin" || (userDoc?.role === "admin" && userDoc?.scopedClientId === null)) {
+            role = "super-admin";
+          } else if (userDoc?.role === "app-admin" || (userDoc?.role === "admin" && typeof userDoc?.scopedClientId === "string")) {
+            role = "app-admin";
+          } else {
+            role = (payload.role as string) || "admin";
+          }
         }
       }
 
@@ -433,8 +481,15 @@ export function verifyGatewaySecret(c: any): boolean {
  */
 export const requireGatewayTrust = createMiddleware(async (c, next) => {
   if (!verifyGatewaySecret(c)) {
+    const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
+    c.header("x-request-id", reqId);
     return c.json(
-      { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+      {
+        error: "forbidden",
+        code: "ERR_GATEWAY_FORBIDDEN",
+        message: "Direct access to management endpoints forbidden; gateway authentication required",
+        requestId: reqId,
+      },
       403
     );
   }
@@ -461,10 +516,18 @@ export function extractTargetClientId(c: any): string | null {
 }
 
 export const requireAdmin = createMiddleware(async (c, next) => {
+  const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
+  c.header("x-request-id", reqId);
+
   // 1. Enforce Gateway Trust Boundary
   if (!verifyGatewaySecret(c)) {
     return c.json(
-      { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+      {
+        error: "forbidden",
+        code: "ERR_GATEWAY_FORBIDDEN",
+        message: "Direct access to management endpoints forbidden; gateway authentication required",
+        requestId: reqId,
+      },
       403
     );
   }
@@ -472,13 +535,28 @@ export const requireAdmin = createMiddleware(async (c, next) => {
   // 2. Enforce User Authentication
   const auth = await getAuthenticatedUser(c);
   if (!auth) {
-    return c.json({ error: "Authentication required" }, 401);
+    return c.json(
+      {
+        error: "Authentication required",
+        code: "ERR_UNAUTHENTICATED",
+        message: "Authentication required",
+        requestId: reqId,
+      },
+      401
+    );
   }
 
-  // 3. Enforce Admin Role
-  const role = auth.user?.role;
-  if (role !== "admin") {
-    return c.json({ error: "Admin access required" }, 403);
+  // 3. Enforce Admin Role (either super-admin or app-admin, but not user or conflicting/unknown)
+  if (!isAnyAdmin(auth.user)) {
+    return c.json(
+      {
+        error: "Admin access required",
+        code: "ERR_ROLE_FORBIDDEN",
+        message: "Admin access required",
+        requestId: reqId,
+      },
+      403
+    );
   }
 
   // 4. Strict Bearer-Token Audience Validation for Central Platform Management APIs:
@@ -492,7 +570,9 @@ export const requireAdmin = createMiddleware(async (c, next) => {
         return c.json(
           {
             error: "forbidden",
+            code: "ERR_AUDIENCE_FORBIDDEN",
             message: "Token audience invalid: Central platform management APIs require platform administrator audience",
+            requestId: reqId,
           },
           403
         );
@@ -503,19 +583,22 @@ export const requireAdmin = createMiddleware(async (c, next) => {
   return next();
 });
 
-export function isSuperAdmin(user: any): boolean {
-  if (!user) return false;
-  return user.role === "admin" && user.scopedClientId === null;
-}
-
 /**
  * Super-Admin Middleware: Global operations only (client creation, user provisioning, global stats/logs)
  */
 export const requireSuperAdmin = createMiddleware(async (c, next) => {
+  const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
+  c.header("x-request-id", reqId);
+
   // 1. Enforce Gateway Trust Boundary
   if (!verifyGatewaySecret(c)) {
     return c.json(
-      { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+      {
+        error: "forbidden",
+        code: "ERR_GATEWAY_FORBIDDEN",
+        message: "Direct access to management endpoints forbidden; gateway authentication required",
+        requestId: reqId,
+      },
       403
     );
   }
@@ -523,13 +606,28 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
   // 2. Enforce User Authentication
   const auth = await getAuthenticatedUser(c);
   if (!auth) {
-    return c.json({ error: "Authentication required" }, 401);
+    return c.json(
+      {
+        error: "Authentication required",
+        code: "ERR_UNAUTHENTICATED",
+        message: "Authentication required",
+        requestId: reqId,
+      },
+      401
+    );
   }
 
   // 3. Enforce Admin Role
-  const role = auth.user?.role;
-  if (role !== "admin") {
-    return c.json({ error: "Admin access required" }, 403);
+  if (!isAnyAdmin(auth.user)) {
+    return c.json(
+      {
+        error: "Admin access required",
+        code: "ERR_ROLE_FORBIDDEN",
+        message: "Admin access required",
+        requestId: reqId,
+      },
+      403
+    );
   }
 
   // 4. Enforce Super-Admin Privilege Scope
@@ -537,21 +635,24 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
     return c.json(
       {
         error: "forbidden",
+        code: "ERR_SUPER_ADMIN_REQUIRED",
         message: "Super-Admin privileges required for this global administrative operation",
+        requestId: reqId,
       },
       403
     );
   }
 
   // 5. Strict Bearer Token Audience Validation for Central Platform Management APIs:
-  // Must possess platform administrator audience. Arbitrary registered client IDs are strictly rejected.
   if (c.get("authMethod") === "bearer") {
     const hasPlatformAud = c.get("hasPlatformAudience");
     if (!hasPlatformAud) {
       return c.json(
         {
           error: "forbidden",
+          code: "ERR_AUDIENCE_FORBIDDEN",
           message: "Token audience invalid: Central platform management APIs require platform administrator audience",
+          requestId: reqId,
         },
         403
       );
@@ -562,13 +663,21 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
 });
 
 /**
- * Scoped-Admin Middleware: App-level operations only (managing own client config)
+ * Scoped-Admin Middleware: App-level operations (managing registered clients or own client config)
  */
 export const requireScopedAdmin = createMiddleware(async (c, next) => {
+  const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
+  c.header("x-request-id", reqId);
+
   // 1. Enforce Gateway Trust Boundary
   if (!verifyGatewaySecret(c)) {
     return c.json(
-      { error: "forbidden", message: "Direct access to management endpoints forbidden; gateway authentication required" },
+      {
+        error: "forbidden",
+        code: "ERR_GATEWAY_FORBIDDEN",
+        message: "Direct access to management endpoints forbidden; gateway authentication required",
+        requestId: reqId,
+      },
       403
     );
   }
@@ -576,13 +685,28 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
   // 2. Enforce User Authentication
   const auth = await getAuthenticatedUser(c);
   if (!auth) {
-    return c.json({ error: "Authentication required" }, 401);
+    return c.json(
+      {
+        error: "Authentication required",
+        code: "ERR_UNAUTHENTICATED",
+        message: "Authentication required",
+        requestId: reqId,
+      },
+      401
+    );
   }
 
   // 3. Enforce Admin Role
-  const role = auth.user?.role;
-  if (role !== "admin") {
-    return c.json({ error: "Admin access required" }, 403);
+  if (!isAnyAdmin(auth.user)) {
+    return c.json(
+      {
+        error: "Admin access required",
+        code: "ERR_ROLE_FORBIDDEN",
+        message: "Admin access required",
+        requestId: reqId,
+      },
+      403
+    );
   }
 
   // 4. Enforce mandatory password change for freshly provisioned temporary accounts
@@ -590,7 +714,9 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
     return c.json(
       {
         error: "password_change_required",
+        code: "ERR_PASSWORD_CHANGE_REQUIRED",
         message: "Temporary password must be changed before accessing admin operations",
+        requestId: reqId,
       },
       403
     );
@@ -600,7 +726,12 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
   const targetClientId = extractTargetClientId(c);
   if (!targetClientId) {
     return c.json(
-      { error: "forbidden", message: "Target application client ID is required for scoped admin operations" },
+      {
+        error: "forbidden",
+        code: "ERR_TARGET_CLIENT_REQUIRED",
+        message: "Target application client ID is required for scoped admin operations",
+        requestId: reqId,
+      },
       403
     );
   }
@@ -616,7 +747,7 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
     : null;
 
   // Strict Scoped Admin Semantics:
-  // Must be either a verified global super admin (scopedClientId === null)
+  // Must be either a verified global super admin (scopedClientId === null) managing registered app
   // OR a verified scoped admin whose scopedClientId matches the canonicalTargetId.
   if (!isGlobal) {
     let isAuthorized = scopedClientId === canonicalTargetId;
@@ -628,7 +759,9 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
       return c.json(
         {
           error: "forbidden",
+          code: "ERR_CROSS_TENANT_FORBIDDEN",
           message: "Cross-tenant access forbidden: you can only manage your own assigned application",
+          requestId: reqId,
         },
         403
       );
@@ -647,7 +780,9 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
       return c.json(
         {
           error: "forbidden",
+          code: "ERR_AUDIENCE_FORBIDDEN",
           message: `Token audience invalid: bearer token audience does not match target application '${canonicalTargetId}'`,
+          requestId: reqId,
         },
         403
       );
@@ -655,5 +790,115 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
   }
 
   c.set("scopedClientId", scopedClientId || null);
+  return next();
+});
+
+/**
+ * Consumer App-Admin Guard: Strictly for consumer app administrative operations for a specific client.
+ * USER-REQUIRED POLICY: Super admins must never receive consumer app-admin privileges or enter consumer admin portals.
+ */
+export const requireConsumerAppAdmin = createMiddleware(async (c, next) => {
+  const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
+  c.header("x-request-id", reqId);
+
+  // 1. Enforce Gateway Trust Boundary
+  if (!verifyGatewaySecret(c)) {
+    return c.json(
+      {
+        error: "forbidden",
+        code: "ERR_GATEWAY_FORBIDDEN",
+        message: "Direct access to management endpoints forbidden; gateway authentication required",
+        requestId: reqId,
+      },
+      403
+    );
+  }
+
+  // 2. Enforce User Authentication
+  const auth = await getAuthenticatedUser(c);
+  if (!auth) {
+    return c.json(
+      {
+        error: "unauthorized",
+        code: "ERR_UNAUTHENTICATED",
+        message: "Authentication required",
+        requestId: reqId,
+      },
+      401
+    );
+  }
+
+  // 3. Super Admins must NEVER receive consumer app-admin privileges or enter consumer admin portals
+  if (isSuperAdmin(auth.user)) {
+    return c.json(
+      {
+        error: "forbidden",
+        code: "ERR_SUPER_ADMIN_NOT_CONSUMER_ADMIN",
+        message: "Super-Admin identities cannot perform consumer application admin operations. Use an assigned application admin identity.",
+        requestId: reqId,
+      },
+      403
+    );
+  }
+
+  // 4. Must be an App Admin
+  if (!isAppAdmin(auth.user)) {
+    return c.json(
+      {
+        error: "forbidden",
+        code: "ERR_ROLE_FORBIDDEN",
+        message: "Application administrator privileges required",
+        requestId: reqId,
+      },
+      403
+    );
+  }
+
+  // 5. Must change password if temporary
+  if (auth.user?.mustChangePassword === true) {
+    return c.json(
+      {
+        error: "password_change_required",
+        code: "ERR_PASSWORD_CHANGE_REQUIRED",
+        message: "Temporary password must be changed before accessing admin operations",
+        requestId: reqId,
+      },
+      403
+    );
+  }
+
+  const targetClientId = extractTargetClientId(c);
+  if (!targetClientId) {
+    return c.json(
+      {
+        error: "forbidden",
+        code: "ERR_TARGET_CLIENT_REQUIRED",
+        message: "Target application client ID is required for consumer admin operations",
+        requestId: reqId,
+      },
+      403
+    );
+  }
+
+  const database = await getDb();
+  const resolvedClient = await resolveOAuthClient(database, targetClientId);
+  const canonicalTargetId = resolvedClient ? resolvedClient.clientId : targetClientId;
+
+  const userIdStr = (auth.user?.id || auth.user?._id)?.toString() || "";
+  const isAuthorized = await checkUserIsClientAdmin(database, auth.user, userIdStr, canonicalTargetId);
+
+  if (!isAuthorized) {
+    return c.json(
+      {
+        error: "forbidden",
+        code: "ERR_CROSS_TENANT_FORBIDDEN",
+        message: "Cross-tenant access forbidden: you can only manage your own assigned application",
+        requestId: reqId,
+      },
+      403
+    );
+  }
+
+  c.set("scopedClientId", canonicalTargetId);
   return next();
 });

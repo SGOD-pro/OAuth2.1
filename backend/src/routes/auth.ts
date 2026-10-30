@@ -21,7 +21,7 @@ import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
 
 import { importJWK, SignJWT, jwtVerify, decodeJwt, decodeProtectedHeader, generateKeyPair, exportJWK } from "jose";
-import { getIdpPublicKey } from "../middleware/admin-auth";
+import { getIdpPublicKey, checkUserIsClientAdmin } from "../middleware/admin-auth";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 
 export const auth = new Hono();
@@ -39,55 +39,26 @@ export async function resolveUserRoleForClient(
         return { role: "user", scopedClientId: null };
     }
 
-    // 1. Global Super Admin: always role: "admin", scopedClientId: null
-    if (userDoc.role === "admin" && userDoc.scopedClientId === null) {
-        return { role: "admin", scopedClientId: null };
+    // 1. Global Super Admin: MAuth platform dashboard only.
+    // USER-REQUIRED POLICY: Super admins must NEVER receive consumer app-admin privileges or enter consumer admin portals using their platform identity.
+    if (isSuperAdmin(userDoc)) {
+        return { role: "user", scopedClientId: null };
     }
 
     if (!clientId) {
-        return { role: userDoc.role || "user", scopedClientId: userDoc.scopedClientId || null };
+        return { role: "user", scopedClientId: null };
     }
 
-    // 2. Direct scoped match on primary user document
-    if (userDoc.role === "admin" && userDoc.scopedClientId === clientId) {
-        return { role: "admin", scopedClientId: clientId };
-    }
-
-    // 3. Check app_admins collection by userId and email
+    // 2. Application Administrator: verify explicit assignment for this target clientId
     const userIdStr = (userDoc.id || userDoc._id)?.toString();
-    const adminOrConditions: any[] = [];
-    if (userIdStr) adminOrConditions.push({ userId: userIdStr });
-    if (userDoc._id) adminOrConditions.push({ userId: userDoc._id });
-    if (userDoc.email) {
-        adminOrConditions.push({ email: userDoc.email.toLowerCase().trim() });
-    }
-    if (adminOrConditions.length > 0) {
-        const appAdmin = await database.collection("app_admins").findOne({
-            clientId,
-            $or: adminOrConditions,
-            isActive: { $ne: false },
-        });
-        if (appAdmin) {
+    if (userIdStr && database) {
+        const isClientAdmin = await checkUserIsClientAdmin(database, userDoc, userIdStr, clientId);
+        if (isClientAdmin) {
             return { role: "admin", scopedClientId: clientId };
         }
     }
 
-    // 4. Check user_app_registrations collection for appRole: "admin"
-    const orConditions: any[] = [];
-    if (userIdStr) orConditions.push({ userId: userIdStr });
-    if (userDoc._id) orConditions.push({ userId: userDoc._id });
-    if (orConditions.length > 0) {
-        const reg = await database.collection("user_app_registrations").findOne({
-            clientId,
-            $or: orConditions,
-            appRole: "admin",
-        });
-        if (reg) {
-            return { role: "admin", scopedClientId: clientId };
-        }
-    }
-
-    // 5. Default to role: "user" with scopedClientId null for this client
+    // 3. Default to role: "user" with scopedClientId null
     return { role: "user", scopedClientId: null };
 }
 
@@ -295,17 +266,32 @@ async function resignIdTokenWithNewAtHash(idToken: string, newAccessToken: strin
 }
 
 export function isSuperAdmin(user: any): boolean {
-    return Boolean(
-        user &&
-        user.role === "admin" &&
-        user.scopedClientId === null
-    );
+    if (!user) return false;
+    if (user.role === "super-admin") {
+        return user.scopedClientId === null;
+    }
+    if (user.role === "admin" && user.scopedClientId === null) {
+        return true;
+    }
+    return false;
+}
+
+export function isAppAdmin(user: any): boolean {
+    if (!user) return false;
+    if (user.role === "app-admin") return true;
+    if (user.role === "admin" && typeof user.scopedClientId === "string" && user.scopedClientId.trim().length > 0) {
+        return true;
+    }
+    return false;
 }
 
 export function hasAppAccessBypass(user: any, canonicalClientId: string): boolean {
-    if (!user || user.role !== "admin") return false;
-    if (isSuperAdmin(user)) return true;
-    return user.scopedClientId === canonicalClientId;
+    if (!user) return false;
+    // USER-REQUIRED POLICY: Super Admin has NO bypass for consumer applications
+    if (isSuperAdmin(user)) return false;
+    // App Admin has bypass only if explicitly scoped to this application
+    if (isAppAdmin(user) && user.scopedClientId === canonicalClientId) return true;
+    return false;
 }
 
 // Helper to extract clientId from various locations with authoritative transaction state resolution
@@ -2014,6 +2000,60 @@ auth.get("/jwks", async (c) => {
         headers: c.req.raw.headers,
     });
     return authProvider.handler(forwardReq);
+});
+
+// Better-Auth internal admin routes (/api/auth/admin/*): strictly super-admin only
+auth.all("/admin/*", async (c) => {
+    const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
+    c.header("x-request-id", reqId);
+
+    const { verifyGatewaySecret } = await import("../middleware/admin-auth");
+    if (!verifyGatewaySecret(c)) {
+        return c.json(
+            {
+                error: "forbidden",
+                code: "ERR_GATEWAY_FORBIDDEN",
+                message: "Direct access to management endpoints forbidden; gateway authentication required",
+                requestId: reqId,
+            },
+            403
+        );
+    }
+
+    const session = await authProvider.api.getSession({
+        headers: getHeaders(c),
+    });
+    if (!session || !session.user) {
+        return c.json(
+            {
+                error: "forbidden",
+                code: "ERR_UNAUTHENTICATED",
+                message: "Authentication required",
+                requestId: reqId,
+            },
+            403
+        );
+    }
+
+    const database = await getDb();
+    const userDoc = await database.collection("user").findOne({
+        $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
+    });
+
+    const isSuper = isSuperAdmin(userDoc) || isSuperAdmin(session.user);
+    if (!isSuper) {
+        return c.json(
+            {
+                error: "forbidden",
+                code: "ERR_SUPER_ADMIN_REQUIRED",
+                message: "Super-Admin privileges required for this global administrative operation",
+                requestId: reqId,
+            },
+            403
+        );
+    }
+
+    return authProvider.handler(c.req.raw);
 });
 
 // Catch-all delegate to Better Auth
