@@ -650,18 +650,12 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
 
-  // Reject conflicting client IDs between route and body
-  if (body.clientId && typeof body.clientId === "string" && body.clientId !== id) {
-    return c.json({ error: "Conflicting clientId in request body", code: "ERR_CONFLICTING_CLIENT_ID" }, 400);
-  }
-  if (body.client_id && typeof body.client_id === "string" && body.client_id !== id) {
-    return c.json({ error: "Conflicting client_id in request body", code: "ERR_CONFLICTING_CLIENT_ID" }, 400);
-  }
-
-  // Prevent scoped admins from modifying client_id or ownership
+  // Prevent modifying client_id, clientId, id, userId, or role (strip tampering fields)
   delete body.client_id;
+  delete body.clientId;
   delete body.id;
   delete body.userId;
+  delete body.role;
 
   if (!isSuperAdmin(sessionUser)) {
     delete body.isPublic;
@@ -1149,6 +1143,11 @@ admin.post("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
   const clientId = c.req.param("clientId");
   const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
+
+  // Reject conflicting client IDs between route and body
+  if (body.clientId && typeof body.clientId === "string" && body.clientId !== clientId) {
+    return c.json({ error: "Conflicting clientId in request body", code: "ERR_CONFLICTING_CLIENT_ID" }, 400);
+  }
 
   const email = typeof body.email === "string" ? body.email.toLowerCase().trim() : "";
   const password = typeof body.password === "string" ? body.password : "";

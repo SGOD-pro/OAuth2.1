@@ -253,12 +253,13 @@ await runTest("NOSQL-9: Query param with operator injection is rejected with 400
 });
 
 await runTest("NOSQL-10: Conflicting route client ID vs body client ID is rejected with 400", async () => {
-  const res = await app.request("/api/admin/clients/app-alpha", {
-    method: "PATCH",
+  const res = await app.request("/api/admin/clients/app-alpha/app-admins", {
+    method: "POST",
     headers: getTestHeaders({ Authorization: `Bearer ${superToken}` }),
     body: JSON.stringify({
       clientId: "app-beta",
-      name: "Conflicting Client Attempt",
+      email: "conflicting_admin@example.com",
+      password: "StrongPassword123!Aa",
     }),
   });
   assert.equal(res.status, 400, "Conflicting client ID between route and body must return 400");

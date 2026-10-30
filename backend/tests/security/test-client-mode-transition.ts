@@ -6,10 +6,24 @@ process.env.NODE_ENV = "production";
 process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION = "false";
 process.env.BETTER_AUTH_URL = "https://auth.example.com";
 process.env.FRONTEND_URL = "https://app.example.com";
-process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
+process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET && process.env.BETTER_AUTH_SECRET.length >= 32
+  ? process.env.BETTER_AUTH_SECRET
+  : "a".repeat(32);
+process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
+process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
+process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET && process.env.INTERNAL_GATEWAY_SECRET.length >= 32
+  ? process.env.INTERNAL_GATEWAY_SECRET
+  : "g".repeat(32);
 process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repeat(32);
 process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "127.0.0.1/32,10.0.0.0/8";
+
+import { MongoMemoryServer } from "mongodb-memory-server";
+let mongod: any = null;
+if (!process.env.MONGO_URI || process.env.MONGO_URI.includes("mongodb.net") || process.env.MONGO_URI.includes("cluster0")) {
+  mongod = await MongoMemoryServer.create();
+  process.env.MONGO_URI = mongod.getUri();
+}
 
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -812,6 +826,10 @@ await runTest("TRANS-Q: Changing isDev must not silently change isPublic", async
 console.log("================================================================");
 console.log(`  TRANSITION SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
+
+if (mongod) {
+  await mongod.stop();
+}
 
 if (failed > 0) {
   process.exit(1);
