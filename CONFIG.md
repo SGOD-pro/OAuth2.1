@@ -8,9 +8,9 @@ typescript
 Now that the account exists in the database, run the script to grant it admin privileges:
 ```bash
 cd hono
-npx ts-node scripts/make-admin.ts the-email-you-just-used@example.com
+npx tsx scripts/make-admin.ts the-email-you-just-used@example.com
 
-npx tsx scripts/make-admin.ts swyra@auth2.1.com
+npx tsx scripts/make-admin.ts admin@example.com
 ```
 **Step 3: Log in to the Admin Panel**
 1. Now you can go to http://localhost:5173/admin.

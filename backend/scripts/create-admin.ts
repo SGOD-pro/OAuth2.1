@@ -11,7 +11,7 @@ async function run() {
   if (!email || !password) {
     console.log("\n❌ Usage: npm run admin:create -- <email> <password> [name]\n");
     console.log("Example:");
-    console.log("  npm run admin:create -- swyra@auth2.1.com \"AdminPassword@123!\"\n");
+    console.log("  npm run admin:create -- admin@example.com \"AdminPassword@123!\"\n");
     process.exit(1);
   }
 

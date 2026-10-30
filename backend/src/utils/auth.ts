@@ -33,6 +33,17 @@ const userRole = accessControl.newRole({
 });
 
 
+export function isSuperAdminUser(user: any): boolean {
+    if (!user) return false;
+    if (user.role === "super-admin") {
+        return user.scopedClientId === null || user.scopedClientId === undefined;
+    }
+    if (user.role === "admin" && user.scopedClientId === null) {
+        return true;
+    }
+    return false;
+}
+
 export const AUTH_INSTANCE = Symbol("AUTH_INSTANCE");
 export type AuthInstance = ReturnType<typeof betterAuth>;
 
@@ -214,7 +225,7 @@ export const authProvider = betterAuth({
             // Security: Strictly disable dynamic client registration and enforce Super-Admin only privileges
             allowDynamicClientRegistration: false,
             clientPrivileges: async ({ user }: any) => {
-                return Boolean(user && user.role === "admin" && user.scopedClientId === null);
+                return isSuperAdminUser(user);
             },
 
             accessToken: {

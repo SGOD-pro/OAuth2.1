@@ -209,7 +209,7 @@ SWYRA Auth cleanly separates the central identity provider console from consumer
 3. **Explicit Account Switching Without Loops:**
    Clicking the account switch action invalidates the current identity provider session and clears form state without redirect loops, allowing the platform Global Super Administrator to sign in cleanly.
 4. **Mutually Exclusive Role Boundary:**
-   `swyra@auth2.1.com` is the sole platform Global Super Administrator. Application administrators can only manage their explicitly assigned applications through application portal routes, and standard end users possess zero administrative access.
+   Verified `super-admin` identities hold exclusive platform management access. Application administrators can only manage their explicitly assigned applications through application portal routes, and standard end users possess zero administrative access.
 
 ---
 

@@ -443,7 +443,7 @@ await runTest("SIGNUP-1: Attempting to supply role: 'super-admin' in signup fail
   }
 });
 
-await runTest("PROVISION-1: POST /api/admin/users cannot create super-admin for non-swyra email", async () => {
+await runTest("PROVISION-1: POST /api/admin/users requires scopedClientId when provisioning app-admin (400)", async () => {
   const superToken = await mintToken({
     sub: superAdminId,
     role: "super-admin",
@@ -455,14 +455,249 @@ await runTest("PROVISION-1: POST /api/admin/users cannot create super-admin for 
     headers: getTestHeaders({ Authorization: `Bearer ${superToken}` }),
     body: JSON.stringify({
       email: "new-admin-attempt@example.com",
-      role: "super-admin",
+      role: "app-admin",
       // omitted scopedClientId
     }),
   });
 
-  assert.equal(res.status, 400, "Non-swyra email must be rejected when attempting to create super-admin");
+  assert.equal(res.status, 400, "App admin without scopedClientId must be rejected (400)");
   const data = await res.json();
   assert.equal(data.code, "ERR_SCOPED_CLIENT_REQUIRED");
+});
+
+await runTest("PROVISION-2: POST /api/admin/users rejects super-admin with scopedClientId (400)", async () => {
+  const superToken = await mintToken({
+    sub: superAdminId,
+    role: "super-admin",
+    aud: "http://localhost:3000",
+  });
+
+  const res = await app.request("/api/admin/users", {
+    method: "POST",
+    headers: getTestHeaders({ Authorization: `Bearer ${superToken}` }),
+    body: JSON.stringify({
+      email: "super-with-scope@example.com",
+      role: "super-admin",
+      scopedClientId: "app-alpha",
+    }),
+  });
+
+  assert.equal(res.status, 400, "Super admin with scopedClientId must be rejected (400)");
+  const data = await res.json();
+  assert.equal(data.code, "ERR_SUPER_ADMIN_CANNOT_BE_SCOPED");
+});
+
+// ==============================================================================
+// 7. DB Fallback & Zero Elevation Regressions
+// ==============================================================================
+
+await runTest("FALLBACK-1: App-admin token cannot acquire platform privileges via DB fallback (401)", async () => {
+  // Create user who in DB has role: "super-admin"
+  const dualUserId = new ObjectId().toString();
+  await db.collection("user").insertOne({
+    _id: new ObjectId(dualUserId),
+    id: dualUserId,
+    email: "dual-role@example.com",
+    role: "super-admin",
+    scopedClientId: null,
+    emailVerified: true,
+    createdAt: new Date(),
+  });
+
+  // Mint an app-admin token for this user
+  const appAdminToken = await mintToken({
+    sub: dualUserId,
+    role: "app-admin",
+    scoped_client_id: "app-alpha",
+    aud: ["app-alpha", "http://localhost:3000"],
+  });
+
+  // Request central platform endpoint: MUST NOT elevate to super-admin via DB record
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${appAdminToken}` }),
+  });
+
+  assert.equal(res.status, 401, "App admin token must not elevate to super admin via DB fallback (401)");
+});
+
+// ==============================================================================
+// 8. Session Cookie Tampering & Cryptographic Verification Regressions
+// ==============================================================================
+
+await runTest("COOKIE-1: Tampered session cookie signature fails authentication (401)", async () => {
+  // Sign in genuinely to get authentic session
+  const cookieEmail = `cookie_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const cookiePass = "CookiePass123!Aa";
+  await authProvider.api.signUpEmail({
+    body: { email: cookieEmail, password: cookiePass, name: "Cookie User" },
+  });
+  await db.collection("user").updateOne(
+    { email: cookieEmail },
+    { $set: { role: "super-admin", scopedClientId: null, emailVerified: true } }
+  );
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: cookieEmail, password: cookiePass }),
+  });
+  assert.equal(loginRes.status, 200);
+  const setCookie = loginRes.headers.get("set-cookie") || "";
+  const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
+  assert.ok(match, "Session cookie must exist");
+  const rawCookieVal = match[1];
+
+  // Tamper with the HMAC signature part of the cookie
+  const parts = decodeURIComponent(rawCookieVal).split(".");
+  const tamperedCookieVal = encodeURIComponent(`${parts[0]}.forgedHMACSignature1234567890`);
+
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: `better-auth.session_token=${tamperedCookieVal}` }),
+  });
+
+  assert.equal(res.status, 401, "Tampered session cookie signature must be rejected with 401");
+});
+
+await runTest("COOKIE-2: Revoked session via tokensRevokedBefore returns 401", async () => {
+  const revokeEmail = `revoked_cookie_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const revokePass = "RevokePass123!Aa";
+  await authProvider.api.signUpEmail({
+    body: { email: revokeEmail, password: revokePass, name: "Revoke Cookie User" },
+  });
+  await db.collection("user").updateOne(
+    { email: revokeEmail },
+    { $set: { role: "super-admin", scopedClientId: null, emailVerified: true } }
+  );
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: revokeEmail, password: revokePass }),
+  });
+  assert.equal(loginRes.status, 200);
+  const cookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  // Now set tokensRevokedBefore in database to future
+  await db.collection("user").updateOne(
+    { email: revokeEmail },
+    { $set: { tokensRevokedBefore: new Date(Date.now() + 60_000) } }
+  );
+
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: cookie }),
+  });
+
+  assert.equal(res.status, 401, "Session created before tokensRevokedBefore must return 401");
+});
+
+// ==============================================================================
+// 9. Ambiguous Legacy Admin Token Regressions
+// ==============================================================================
+
+await runTest("LEGACY-1: Ambiguous legacy admin token with missing scope fails closed (401)", async () => {
+  const legacyToken = await mintToken({
+    sub: superAdminId,
+    role: "admin",
+    // scoped_client_id omitted entirely (undefined)
+    aud: "http://localhost:3000",
+  });
+
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${legacyToken}` }),
+  });
+
+  assert.equal(res.status, 401, "Ambiguous legacy admin token with undefined scope must return 401");
+});
+
+await runTest("LEGACY-2: Ambiguous legacy admin token with empty string scope fails closed (401)", async () => {
+  const legacyToken = await mintToken({
+    sub: superAdminId,
+    role: "admin",
+    scoped_client_id: "",
+    aud: "http://localhost:3000",
+  });
+
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${legacyToken}` }),
+  });
+
+  assert.equal(res.status, 401, "Ambiguous legacy admin token with empty string scope must return 401");
+});
+
+// ==============================================================================
+// 10. Role-Based Policy Independence From Hardcoded Emails
+// ==============================================================================
+
+await runTest("EMAIL-1: Non-swyra email with super-admin role has valid platform access", async () => {
+  const arbitrarySuperId = new ObjectId().toString();
+  await db.collection("user").insertOne({
+    _id: new ObjectId(arbitrarySuperId),
+    id: arbitrarySuperId,
+    email: "platform-ops@enterprise.acme",
+    role: "super-admin",
+    scopedClientId: null,
+    emailVerified: true,
+    createdAt: new Date(),
+  });
+
+  const superToken = await mintToken({
+    sub: arbitrarySuperId,
+    role: "super-admin",
+    scoped_client_id: null,
+    aud: "http://localhost:3000",
+  });
+
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${superToken}` }),
+  });
+
+  assert.equal(res.status, 200, "Super admin with arbitrary email must succeed");
+});
+
+await runTest("EMAIL-2: Account with swyra email but role: 'user' is forbidden (403)", async () => {
+  const fakeSwyraId = new ObjectId().toString();
+  await db.collection("user").insertOne({
+    _id: new ObjectId(fakeSwyraId),
+    id: fakeSwyraId,
+    email: "imposter-swyra@auth2.1.com",
+    role: "user",
+    scopedClientId: null,
+    emailVerified: true,
+    createdAt: new Date(),
+  });
+
+  const userToken = await mintToken({
+    sub: fakeSwyraId,
+    role: "user",
+    aud: "http://localhost:3000",
+  });
+
+  const res = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${userToken}` }),
+  });
+
+  assert.equal(res.status, 403, "User role must be rejected regardless of email");
+});
+
+await runTest("CLIENT-PRIV-1: Reconciled clientPrivileges accepts super-admin and rejects app-admin", async () => {
+  const { isSuperAdminUser } = await import("../../src/utils/auth");
+
+  assert.equal(isSuperAdminUser({ role: "super-admin", scopedClientId: null }), true);
+  assert.equal(isSuperAdminUser({ role: "super-admin", scopedClientId: undefined }), true);
+  assert.equal(isSuperAdminUser({ role: "super-admin", scopedClientId: "app-1" }), false);
+  assert.equal(isSuperAdminUser({ role: "super-admin", scopedClientId: "" }), false);
+  assert.equal(isSuperAdminUser({ role: "admin", scopedClientId: null }), true);
+  assert.equal(isSuperAdminUser({ role: "admin", scopedClientId: "app-1" }), false);
+  assert.equal(isSuperAdminUser({ role: "admin", scopedClientId: undefined }), false);
+  assert.equal(isSuperAdminUser({ role: "app-admin", scopedClientId: "app-1" }), false);
+  assert.equal(isSuperAdminUser({ role: "user" }), false);
 });
 
 console.log("\n================================================================");

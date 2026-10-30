@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
+import { isSuperAdminUser, isAppAdminUser } from '@/lib/role-predicates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
@@ -70,10 +71,8 @@ export const AdminTwoFactor: React.FC = () => {
       }>;
       const userRes = await getSessionFn();
       const currentUser = userRes?.data?.user;
-      const isExplicitAppAdmin = currentUser?.role === 'app-admin';
-      const isLegacyScoped = currentUser?.role === 'admin' && typeof currentUser?.scopedClientId === 'string' && currentUser.scopedClientId.trim().length > 0;
-      const isAppAdmin = isExplicitAppAdmin || isLegacyScoped;
-      const isSuperAdmin = currentUser?.role === 'super-admin' || (currentUser?.role === 'admin' && currentUser?.scopedClientId === null);
+      const isSuperAdmin = isSuperAdminUser(currentUser);
+      const isAppAdmin = isAppAdminUser(currentUser);
 
       if (isAppAdmin) {
         await authClient.signOut({});

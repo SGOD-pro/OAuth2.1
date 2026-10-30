@@ -21,6 +21,7 @@ const securityTestFiles = [
   "tests/security/aws-dashboard-integration-suite.ts",
   "tests/security/test-app-management-auth.ts",
   "tests/security/adversarial-role-tampering.test.ts",
+  "tests/security/account-switch-e2e.test.ts",
   "tests/security/nosql-injection-boundary.test.ts",
   "tests/security/e2e-oidc-interop.test.ts",
 ];

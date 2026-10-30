@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useSession } from '../lib/auth-client';
+import { isSuperAdminUser, isAppAdminUser } from '../lib/role-predicates';
 import { RouteLoader } from './RouteLoader';
 import { ErrorBoundary } from './ErrorBoundary';
 
@@ -17,10 +18,8 @@ export const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
   const { data: session, isPending } = useSession();
   const user = session?.user as { role?: string; scopedClientId?: string | null } | undefined;
   
-  const isExplicitAppAdmin = user?.role === 'app-admin';
-  const isLegacyScopedAdmin = user?.role === 'admin' && typeof user?.scopedClientId === 'string' && user.scopedClientId.trim().length > 0;
-  const isAppAdmin = isExplicitAppAdmin || isLegacyScopedAdmin;
-  const isSuperAdmin = user?.role === 'super-admin' || (user?.role === 'admin' && user?.scopedClientId === null);
+  const isSuperAdmin = isSuperAdminUser(user);
+  const isAppAdmin = isAppAdminUser(user);
 
   if (isPending) return <RouteLoader />;
   

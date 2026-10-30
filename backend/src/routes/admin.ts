@@ -506,34 +506,68 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
 
     const userId = newUser?.user?.id || (newUser as any)?.id;
 
-    // 2. USER-REQUIRED POLICY: swyra@auth2.1.com is the sole Global Super Administrator.
-    // Explicit domain role: "app-admin" if scoped, "super-admin" ONLY if swyra@auth2.1.com, else "user"
-    if (!scopedClientId && email !== "swyra@auth2.1.com" && (body.role === "admin" || body.role === "super-admin" || body.role === "app-admin")) {
+    // 2. Explicit domain role enforcement:
+    // "app-admin": requires non-empty scopedClientId.
+    // "super-admin": unscoped platform admin only.
+    // "user": standard non-privileged user.
+    let explicitRole: "super-admin" | "app-admin" | "user" = "user";
+    if (body.role === "app-admin" || (body.role === "admin" && scopedClientId)) {
+      if (!scopedClientId) {
+        return c.json(
+          {
+            error: "Application administrators must be scoped to an application client ID.",
+            code: "ERR_SCOPED_CLIENT_REQUIRED",
+          },
+          400
+        );
+      }
+      explicitRole = "app-admin";
+    } else if (body.role === "super-admin") {
+      if (scopedClientId) {
+        return c.json(
+          {
+            error: "Super administrators cannot be scoped to a client ID.",
+            code: "ERR_SUPER_ADMIN_CANNOT_BE_SCOPED",
+          },
+          400
+        );
+      }
+      explicitRole = "super-admin";
+    } else if (body.role === "admin" && !scopedClientId) {
       return c.json(
         {
-          error: "swyra@auth2.1.com is the sole Global Super Administrator. Application administrators must be scoped to an application client ID.",
+          error: "Application administrators must be scoped to an application client ID.",
           code: "ERR_SCOPED_CLIENT_REQUIRED",
         },
         400
       );
+    } else {
+      if (scopedClientId) {
+        return c.json(
+          {
+            error: "Standard users cannot be scoped as application administrators.",
+            code: "ERR_USER_CANNOT_BE_SCOPED",
+          },
+          400
+        );
+      }
+      explicitRole = "user";
     }
-
-    const explicitRole = scopedClientId ? "app-admin" : (email === "swyra@auth2.1.com" ? "super-admin" : "user");
     await database.collection("user").updateOne(
       { $or: [{ id: userId }, { _id: userId }, { email }] } as any,
       {
         $set: {
           role: explicitRole,
           emailVerified: true,
-          scopedClientId: scopedClientId,
+          scopedClientId: explicitRole === "app-admin" ? scopedClientId : null,
           mustChangePassword: isTempPassword,
           updatedAt: new Date(),
         },
       }
     );
 
-    // 3. If assigned to a client, link to oauthClient and user_app_registrations
-    if (scopedClientId) {
+    // 3. If assigned to a client as an application administrator, link to oauthClient and user_app_registrations
+    if (explicitRole === "app-admin" && scopedClientId) {
       await database.collection("oauthClient").updateOne(
         { $or: [{ clientId: scopedClientId }, { client_id: scopedClientId }, { id: scopedClientId }] },
         {

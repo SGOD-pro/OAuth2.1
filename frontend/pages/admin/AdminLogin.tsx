@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { authClient, useSession } from '@/lib/auth-client';
+import { isSuperAdminUser, isAppAdminUser } from '@/lib/role-predicates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -29,7 +30,7 @@ export const AdminLogin: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const { data: session, isPending } = useSession();
+  const { data: session, isPending, refetch } = useSession();
 
   const form = useForm<z.infer<typeof adminLoginSchema>>({
     resolver: zodResolver(adminLoginSchema),
@@ -54,8 +55,7 @@ export const AdminLogin: React.FC = () => {
 
   useEffect(() => {
     if (!isPending && user) {
-      const isSuperAdmin = user.role === 'super-admin' || (user.role === 'admin' && user.scopedClientId === null);
-      if (isSuperAdmin) {
+      if (isSuperAdminUser(user)) {
         navigate('/admin', { replace: true });
       }
     }
@@ -98,24 +98,19 @@ export const AdminLogin: React.FC = () => {
       }>;
       const userRes = await getSessionFn();
       const currentUser = userRes?.data?.user;
-      const userRole = currentUser?.role;
-      const scopedClientId = currentUser?.scopedClientId;
 
-      const isAppAdmin = userRole === 'app-admin' || (userRole === 'admin' && typeof scopedClientId === 'string' && scopedClientId.trim().length > 0);
-      const isSuperAdmin = userRole === 'super-admin' || (userRole === 'admin' && scopedClientId === null);
-
-      if (isAppAdmin) {
+      if (isAppAdminUser(currentUser)) {
         await authClient.signOut({});
-        const msg = 'Access denied: swyra@auth2.1.com is the sole Global Super Administrator. Application administrators must sign in through their application portal.';
+        const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
         setError(msg);
         toast.error(msg);
         form.setValue('password', '');
         return;
       }
 
-      if (!isSuperAdmin) {
+      if (!isSuperAdminUser(currentUser)) {
         await authClient.signOut({});
-        const msg = 'Access denied: swyra@auth2.1.com is the sole Global Super Administrator authorized for the platform console.';
+        const msg = 'Access denied: Administrator privileges required for the platform console.';
         setError(msg);
         toast.error(msg);
         form.setValue('password', '');
@@ -135,12 +130,42 @@ export const AdminLogin: React.FC = () => {
 
   const handleSignOut = async () => {
     setLoading(true);
+    setError(null);
     try {
-      await authClient.signOut({});
+      const res = await authClient.signOut({});
+      if (res?.error) {
+        const errorMsg = res.error.message || 'Failed to sign out current session. Please try again.';
+        setError(errorMsg);
+        toast.error(errorMsg);
+        setLoading(false);
+        return;
+      }
+
+      // Invalidate and refetch session state using supported SDK APIs
+      if (typeof refetch === 'function') {
+        await refetch();
+      }
+
+      // Verify that the server session is actually cleared
+      const getSessionFn = authClient.getSession as unknown as () => Promise<{
+        data?: { user?: unknown };
+        error?: unknown;
+      }>;
+      const verified = await getSessionFn().catch(() => null);
+      if (verified?.data?.user) {
+        setError('Session is still active on server. Please retry account switch.');
+        setLoading(false);
+        return;
+      }
+
+      form.reset({ email: '', password: '' });
       setError(null);
-      navigate('/admin/login', { replace: true });
-      window.location.reload();
-    } catch {
+      toast.success('Session cleared. Please sign in with administrator credentials.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to clear session. Please retry.';
+      setError(msg);
+      toast.error(msg);
+    } finally {
       setLoading(false);
     }
   };
@@ -149,11 +174,9 @@ export const AdminLogin: React.FC = () => {
     return <RouteLoader />;
   }
 
-  const role = user?.role;
   const isAuthenticated = !!user;
-  const isScoped = typeof user?.scopedClientId === 'string' && user.scopedClientId.trim().length > 0;
-  const isSuperAdmin = role === 'super-admin' || (role === 'admin' && user?.scopedClientId === null);
-  const isCurrentAppAdmin = role === 'app-admin' || isScoped;
+  const isSuperAdmin = isSuperAdminUser(user);
+  const isCurrentAppAdmin = isAppAdminUser(user);
   const isConflictingSession = isAuthenticated && !isSuperAdmin;
 
   return (
@@ -193,9 +216,17 @@ export const AdminLogin: React.FC = () => {
                     </p>
                   </div>
                   <p className="font-sans text-muted-foreground mt-2 leading-relaxed text-[11px]">
-                    The MAuth Platform Console is reserved exclusively for the Global Super Administrator (swyra@auth2.1.com). Application administrators must manage their assigned application through their application portal.
+                    The MAuth Platform Console is reserved exclusively for Global Super Administrators. Application administrators must manage their assigned application through their application portal.
                   </p>
                 </div>
+                {error && (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+                    <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>{error}</span>
+                  </div>
+                )}
                 <Button
                   type="button"
                   onClick={handleSignOut}
