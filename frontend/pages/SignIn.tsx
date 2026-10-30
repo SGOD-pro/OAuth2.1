@@ -55,11 +55,18 @@ export const SignIn: React.FC = () => {
   }, [isPrivateApp]);
 
   const callbackURL = useMemo(() => {
-    const explicit = safeCallbackURL(searchParams.get('callbackURL'));
-    if (explicit) return explicit;
-
+    // 1. Authoritative OAuth continuation takes strict precedence
     if (searchParams.get('client_id') && searchParams.get('redirect_uri')) {
       return `/api/auth/oauth2/authorize?${searchParams.toString()}`;
+    }
+
+    // 2. Otherwise inspect explicit callbackURL, strictly rejecting platform administrator routes
+    const rawCallback = searchParams.get('callbackURL');
+    if (rawCallback) {
+      const explicit = safeCallbackURL(rawCallback);
+      if (explicit && !explicit.startsWith('/admin') && !explicit.startsWith('/api/admin')) {
+        return explicit;
+      }
     }
 
     return undefined;
@@ -118,21 +125,27 @@ export const SignIn: React.FC = () => {
           (res.error as unknown as { code?: string }).code === "TWO_FACTOR_REQUIRED";
         if (is2FA) {
           toast.info('Two-factor authentication required. Please complete verification.');
+          window.location.assign(`/two-factor${window.location.search}`);
           return;
         }
         const msg = res.error.message || 'Invalid email or password. Please check your credentials.';
         setError(msg);
         toast.error(msg);
       } else {
+        if ((res?.data as { twoFactorRedirect?: boolean })?.twoFactorRedirect) {
+          window.location.assign(`/two-factor${window.location.search}`);
+          return;
+        }
         setRedirecting(true);
         const data = res?.data as { url?: string; redirect?: boolean } | undefined;
-        if (data?.redirect && data?.url) {
+        const isOAuth = Boolean(searchParams.get('client_id') && searchParams.get('redirect_uri'));
+        const safeDest = isOAuth ? `/api/auth/oauth2/authorize?${searchParams.toString()}` : callbackURL;
+        if (data?.redirect && data?.url && !data.url.includes('/admin') && !isOAuth) {
           // Better Auth client redirectPlugin has already initiated navigation to data.url
           return;
         }
-        const dest = data?.url || callbackURL;
-        if (dest) {
-          window.location.assign(dest);
+        if (safeDest) {
+          window.location.assign(safeDest);
         } else {
           setLoading(false);
           toast.success("Signed in successfully.");
@@ -187,13 +200,14 @@ export const SignIn: React.FC = () => {
       } else {
         setRedirecting(true);
         const data = signInRes?.data as { url?: string; redirect?: boolean } | undefined;
-        if (data?.redirect && data?.url) {
+        const isOAuth = Boolean(searchParams.get('client_id') && searchParams.get('redirect_uri'));
+        const safeDest = isOAuth ? `/api/auth/oauth2/authorize?${searchParams.toString()}` : callbackURL;
+        if (data?.redirect && data?.url && !data.url.includes('/admin') && !isOAuth) {
           // Better Auth client redirectPlugin has already initiated navigation to data.url
           return;
         }
-        const dest = data?.url || callbackURL;
-        if (dest) {
-          window.location.assign(dest);
+        if (safeDest) {
+          window.location.assign(safeDest);
         } else {
           setLoading(false);
           toast.success("Account created and signed in successfully.");

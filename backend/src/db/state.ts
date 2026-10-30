@@ -440,12 +440,10 @@ export async function getOAuthTransaction(criteria: {
   const db = await getDb();
   const query: any = { status: "pending", expiresAt: { $gt: new Date() } };
 
-  if (criteria.transactionId && criteria.state) {
-    query.$or = [{ transactionId: criteria.transactionId }, { state: criteria.state }];
+  if (criteria.state) {
+    query.state = criteria.state;
   } else if (criteria.transactionId) {
     query.transactionId = criteria.transactionId;
-  } else if (criteria.state) {
-    query.state = criteria.state;
   } else {
     return null;
   }

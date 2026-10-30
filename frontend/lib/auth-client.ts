@@ -16,10 +16,18 @@ export const authClient = createAuthClient({
   baseURL: typeof window !== 'undefined' ? window.location.origin : (import.meta.env.VITE_AUTH_URL || 'http://localhost:3000'),
   plugins: [
     oauthProviderClient(),
-    // Intercepts sign-in when 2FA is required; redirects to the TOTP page.
+    // Intercepts sign-in when 2FA is required and redirects to the appropriate challenge page
     twoFactorClient({
       onTwoFactorRedirect() {
-        window.location.href = "/admin/two-factor";
+        if (typeof window !== 'undefined') {
+          const path = window.location.pathname;
+          const search = window.location.search;
+          if (path.startsWith('/admin')) {
+            window.location.href = `/admin/two-factor${search}`;
+          } else {
+            window.location.href = `/two-factor${search}`;
+          }
+        }
       },
     }),
   ],

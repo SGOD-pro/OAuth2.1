@@ -8,6 +8,7 @@ import './index.css';
 import './App.css';
 
 const SignIn = lazy(() => import('@/pages/SignIn').then((module) => ({ default: module.SignIn })));
+const TwoFactor = lazy(() => import('@/pages/TwoFactor').then((module) => ({ default: module.TwoFactor })));
 const ForgotPassword = lazy(() =>
   import('@/pages/ForgotPassword').then((module) => ({ default: module.ForgotPassword }))
 );
@@ -52,6 +53,7 @@ const router = createBrowserRouter([
  
   { path: '/', element: <Navigate to="/auth" replace /> },
   { path: '/auth', element: withLayout(<SignIn />) },
+  { path: '/two-factor', element: withLayout(<TwoFactor />) },
   { path: '/forgot-password', element: withLayout(<ForgotPassword />) },
   { path: '/reset-password', element: withLayout(<ResetPassword />) },
   { path: '/consent', element: withLayout(<Consent />) },
