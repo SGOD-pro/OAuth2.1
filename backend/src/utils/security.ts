@@ -861,6 +861,106 @@ export async function checkUserAppRegistration(
 }
 
 /**
+ * Authoritative check for user access to an application.
+ *
+ * Rules:
+ * 1. Super Admin has NO bypass or membership in consumer applications.
+ * 2. Explicit revocation/suspension/deactivation in EITHER user_app_registrations
+ *    OR app_admins strictly and immediately denies access.
+ * 3. Active registration in user_app_registrations grants access.
+ * 4. Active administrator record in app_admins grants access.
+ * 5. A removed, revoked, or non-existent assignment CANNOT regain access
+ *    through user.scopedClientId or cached claims.
+ */
+export async function checkUserHasAppAccess(
+  db: any,
+  userOrId: any,
+  canonicalClientId: string,
+): Promise<boolean> {
+  if (!db || !userOrId || !canonicalClientId) return false;
+  const cleanClientId = typeof canonicalClientId === "string" ? canonicalClientId.trim() : "";
+  if (!cleanClientId || cleanClientId.startsWith("$")) return false;
+
+  const userDoc = typeof userOrId === "object" ? userOrId : null;
+  const userIdStr = (
+    typeof userOrId === "string"
+      ? userOrId
+      : (userDoc?.id || userDoc?._id || userDoc?.userId)?.toString()
+  ) || "";
+  const cleanUserId = userIdStr.trim();
+  if (!cleanUserId || cleanUserId.startsWith("$")) return false;
+
+  // USER-REQUIRED POLICY: Super Admin has NO bypass or membership in consumer applications
+  if (userDoc) {
+    if (userDoc.role === "super-admin" && userDoc.scopedClientId === null) return false;
+    if (userDoc.role === "admin" && userDoc.scopedClientId === null) return false;
+  }
+
+  const userConditions: any[] = [{ userId: cleanUserId }];
+  if (ObjectId.isValid(cleanUserId) && cleanUserId.length === 24) {
+    try {
+      userConditions.push({ userId: new ObjectId(cleanUserId) });
+    } catch {}
+  }
+
+  const adminConditions: any[] = [...userConditions];
+  if (userDoc?.email && typeof userDoc.email === "string") {
+    adminConditions.push({ email: userDoc.email.toLowerCase().trim() });
+  }
+
+  const inactiveConditions = [
+    { isActive: false },
+    { active: false },
+    { disabled: true },
+    { revoked: true },
+    { status: { $in: ["inactive", "revoked", "suspended", "disabled"] } },
+  ];
+
+  // 1. Explicit revocation in user_app_registrations
+  const revokedReg = await db.collection("user_app_registrations").findOne({
+    clientId: cleanClientId,
+    $or: userConditions,
+    $and: [{ $or: inactiveConditions }],
+  });
+  if (revokedReg) return false;
+
+  // 2. Explicit revocation in app_admins
+  const revokedAdmin = await db.collection("app_admins").findOne({
+    clientId: cleanClientId,
+    $or: adminConditions,
+    $and: [{ $or: inactiveConditions }],
+  });
+  if (revokedAdmin) return false;
+
+  // 3. Active registration in user_app_registrations
+  const activeReg = await db.collection("user_app_registrations").findOne({
+    clientId: cleanClientId,
+    $or: userConditions,
+    status: { $nin: ["inactive", "revoked", "suspended", "disabled"] },
+    revoked: { $ne: true },
+    disabled: { $ne: true },
+    isActive: { $ne: false },
+    active: { $ne: false },
+  });
+  if (activeReg) return true;
+
+  // 4. Active admin in app_admins
+  const activeAdmin = await db.collection("app_admins").findOne({
+    clientId: cleanClientId,
+    $or: adminConditions,
+    status: { $nin: ["inactive", "revoked", "suspended", "disabled"] },
+    revoked: { $ne: true },
+    disabled: { $ne: true },
+    isActive: { $ne: false },
+    active: { $ne: false },
+  });
+  if (activeAdmin) return true;
+
+  // 5. Removed or non-existent assignment: scopedClientId alone NEVER grants access
+  return false;
+}
+
+/**
  * Computes a SHA-256 hash formatted as base64url or hex.
  * Centralizes token hash generation for OAuth credentials.
  */

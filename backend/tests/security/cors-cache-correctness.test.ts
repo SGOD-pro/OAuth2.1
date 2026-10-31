@@ -1,3 +1,7 @@
+// Guaranteed clean environment: never inherit external Redis credentials
+delete process.env.UPSTASH_REDIS_REST_URL;
+delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";
@@ -29,7 +33,13 @@ const {
   invalidateClientOrigins,
   extractClientOrigins,
   clearOriginCache,
+  startOriginCheck,
+  getRedisOutageDetected,
+  setRedisOutageDetectedForTesting,
 } = await import("../../src/cache/origin-cache");
+const { setRedisClientForTesting } = await import("../../src/cache/redis");
+const { Redis } = await import("@upstash/redis");
+const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- CORS CACHE & INVALIDATION CORRECTNESS SUITE");
@@ -435,6 +445,106 @@ await runTest("CORS-8: Cache functions fall back safely when Redis is unavailabl
   await invalidateOrigins([fallbackOrigin]);
   const invalidatedVal = await getCachedOrigin(fallbackOrigin);
   assert.equal(invalidatedVal, null, "MongoDB invalidation must succeed when Redis is unavailable");
+});
+
+// =============================================================================
+// TEST 9: Deterministic race test: in-flight read cannot repopulate stale cache after client mutation
+// =============================================================================
+await runTest("CORS-9: Stale cache repopulation is strictly prevented during concurrent reads and client mutations", async () => {
+  const raceOrigin = "https://race-test.example.com";
+
+  // Create a client with raceOrigin
+  const createRes = await app.request("/api/admin/clients", {
+    method: "POST",
+    headers: getAdminHeaders(),
+    body: JSON.stringify({
+      client_name: "Race Test Client",
+      redirect_uris: [`${raceOrigin}/callback`],
+      allowed_origins: [raceOrigin],
+      is_public: false,
+    }),
+  });
+  assert.equal(createRes.status, 201);
+  const created = await createRes.json();
+  const clientId = created.client_id || created.clientId || created.id;
+
+  // Verify origin is initially allowed and uncached
+  await clearOriginCache();
+  assert.equal(await getCachedOrigin(raceOrigin), null);
+  assert.equal(await isOriginAllowed(raceOrigin), true);
+
+  // 1. Thread A: In-flight read begins at t1
+  const inFlightCheck = startOriginCheck(raceOrigin);
+  assert.ok(inFlightCheck.startTime > 0);
+
+  // 2. Thread B: Concurrent mutation: client is disabled and cache is invalidated at t2
+  const disableRes = await app.request(`/api/admin/clients/${clientId}`, {
+    method: "PATCH",
+    headers: getAdminHeaders(),
+    body: JSON.stringify({
+      disabled: true,
+    }),
+  });
+  assert.equal(disableRes.status, 200);
+
+  // 3. Thread A: Read check finishes and attempts to write stale 'true' with t1 context
+  await setCachedOrigin(raceOrigin, true, inFlightCheck);
+
+  // 4. Assert: Stale 'true' MUST NOT be cached!
+  const cachedAfterRace = await getCachedOrigin(raceOrigin);
+  assert.equal(cachedAfterRace, null, "Cache must NOT be repopulated with stale allowed entry after concurrent invalidation");
+
+  // Subsequent check must return false
+  assert.equal(await isOriginAllowed(raceOrigin), false, "Disabled client origin must be disallowed");
+});
+
+// =============================================================================
+// TEST 10: Redis-backed cache with disposable Redis mock: outage and recovery consistency
+// =============================================================================
+await runTest("CORS-10: Disposable Redis mock verifies outage fallback, invalidation recovery, and stale key purging", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  try {
+    const redisOrigin = "https://redis-disposable.example.com";
+
+    // 1. Write an entry to mock Redis and verify read hit
+    await setCachedOrigin(redisOrigin, true);
+    assert.equal(await getCachedOrigin(redisOrigin), true);
+    assert.equal(mockRedis.has(`swyra:origin:${redisOrigin}`), true);
+
+    // 2. Simulate Redis Outage during client invalidation
+    mockRedis.simulateOutage();
+
+    // Invalidation during outage fails for Redis but marks outage detected
+    await invalidateOrigins([redisOrigin]);
+    assert.equal(getRedisOutageDetected(), true, "Redis outage must be detected and recorded");
+
+    // During outage: getCachedOrigin must fall back cleanly to MongoDB
+    const fallbackVal = await getCachedOrigin(redisOrigin);
+    assert.equal(fallbackVal, null, "Must fall back to MongoDB during Redis outage");
+
+    // 3. Simulate Redis Recovery: Redis is reachable again with stale keys
+    mockRedis.simulateRecovery();
+    // Simulate that stale key survived in Redis because invalidation missed it
+    mockRedis.set(`swyra:origin:${redisOrigin}`, true, 300);
+    assert.equal(mockRedis.has(`swyra:origin:${redisOrigin}`), true);
+
+    // When getCachedOrigin is called, recovery logic detects outage and flushes Redis
+    const postRecoveryVal = await getCachedOrigin(redisOrigin);
+    assert.equal(postRecoveryVal, null, "Stale key must not be returned upon Redis recovery");
+    assert.equal(mockRedis.has(`swyra:origin:${redisOrigin}`), false, "Stale key must be purged from Redis during recovery");
+    assert.equal(getRedisOutageDetected(), false, "Redis outage state must be cleared after recovery flush");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+  }
 });
 
 await closeDb();

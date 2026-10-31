@@ -4,6 +4,7 @@ import { config } from "../config";
 import {
   getCachedOrigin,
   setCachedOrigin,
+  startOriginCheck,
 } from "../cache/origin-cache";
 import { getDb } from "../db/mongo";
 import { isLoopbackHost, normalizeOrigin, originMatchesRedirectUri, getTrustedClientIp } from "../utils/security";
@@ -152,6 +153,7 @@ export async function dynamicCors(c: Context, next: Next) {
     return;
   }
 
+  const checkContext = startOriginCheck(normalizedOrigin);
   let allowed = await getCachedOrigin(normalizedOrigin);
 
   if (allowed === null) {
@@ -164,7 +166,7 @@ export async function dynamicCors(c: Context, next: Next) {
 
     try {
       allowed = await isOriginAllowed(normalizedOrigin);
-      await setCachedOrigin(normalizedOrigin, allowed);
+      await setCachedOrigin(normalizedOrigin, allowed, checkContext);
     } catch {
       allowed = false;
     }

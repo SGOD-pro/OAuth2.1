@@ -1,3 +1,7 @@
+// Guaranteed clean environment: never inherit external Redis credentials
+delete process.env.UPSTASH_REDIS_REST_URL;
+delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";
@@ -21,10 +25,11 @@ process.env.TRUSTED_PROXY_CIDRS = "127.0.0.1/32,10.0.0.0/8";
 const { getDb, closeDb } = await import("../../src/db/mongo");
 const { default: app } = await import("../../src/app");
 const { authProvider } = await import("../../src/utils/auth");
-const { checkUserAppRegistration } = await import("../../src/utils/security");
+const { checkUserAppRegistration, checkUserHasAppAccess, hashToken } = await import("../../src/utils/security");
 const { checkUserIsClientAdmin } = await import("../../src/middleware/admin-auth");
 const { isOriginAllowed } = await import("../../src/middleware/cors");
 const { config } = await import("../../src/config");
+const { registerTokenFamily } = await import("../../src/db/state");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- MEMBERSHIP LIFECYCLE & ORIGIN RESTRICTION SUITE");
@@ -63,11 +68,30 @@ function getTestHeaders(extra: Record<string, string> = {}): Headers {
   return h;
 }
 
+// Seed Super Admin for test harness operations
+const superAdminEmail = "super_membership@swyra.com";
+const superAdminPass = "SuperMemberPass123!Aa";
+const superSignUp = await authProvider.api.signUpEmail({
+  body: { email: superAdminEmail, password: superAdminPass, name: "Super Admin Member" },
+});
+await db.collection("user").updateOne(
+  { email: superAdminEmail },
+  { $set: { role: "super-admin", scopedClientId: null, emailVerified: true } }
+);
+const superLoginRes = await app.request("/api/auth/sign-in/email", {
+  method: "POST",
+  headers: getTestHeaders(),
+  body: JSON.stringify({ email: superAdminEmail, password: superAdminPass }),
+});
+const superCookie = (superLoginRes.headers.get("set-cookie") || "").split(";")[0];
+
 // -----------------------------------------------------------------------------
 // SETUP BASE FIXTURES
 // -----------------------------------------------------------------------------
 const privateClientId = "test_private_client_" + crypto.randomBytes(4).toString("hex");
 await db.collection("oauthClient").insertOne({
+  _id: privateClientId as any,
+  id: privateClientId,
   clientId: privateClientId,
   client_id: privateClientId,
   clientSecret: "secret_" + crypto.randomBytes(16).toString("hex"),
@@ -78,6 +102,7 @@ await db.collection("oauthClient").insertOne({
   redirectUris: ["https://private-app.example.com/callback"],
   allowedOrigins: ["https://private-app.example.com"],
   createdAt: new Date(),
+  updatedAt: new Date(),
 });
 
 // Create test user
@@ -325,6 +350,346 @@ await runTest("MEM-6: Removing user membership deletes record and revokes tokens
     userId: testUserId,
   });
   assert.equal(remainingTokens, 0, "All access tokens must be deleted");
+});
+
+// =============================================================================
+// TEST 7: Real Route: POST /api/auth/sign-in/email denies private app access
+// =============================================================================
+await runTest("MEM-7: Real sign-in route rejects revoked or removed user even with scopedClientId", async () => {
+  const email = `route_user_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const pass = "RouteUserPass123!Aa";
+  const signUp = await authProvider.api.signUpEmail({
+    body: { email, password: pass, name: "Route Test User" },
+  });
+  const uid = String(signUp.user.id);
+
+  // Set user doc with scopedClientId pointing to private client
+  await db.collection("user").updateOne(
+    { _id: new ObjectId(uid) },
+    { $set: { role: "user", scopedClientId: privateClientId } }
+  );
+
+  // Case A: Explicitly revoked registration in user_app_registrations
+  await db.collection("user_app_registrations").insertOne({
+    userId: uid,
+    clientId: privateClientId,
+    status: "revoked",
+    revoked: true,
+    createdAt: new Date(),
+  });
+
+  const revokedRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email, password: pass, clientId: privateClientId }),
+  });
+  assert.equal(revokedRes.status, 403, "Revoked registration must be rejected with 403");
+  const revokedJson = await revokedRes.json();
+  assert.equal(revokedJson.error, "access_denied");
+
+  // Case B: Removed assignment (delete record from user_app_registrations)
+  // User still possesses scopedClientId on user document
+  await db.collection("user_app_registrations").deleteMany({ userId: uid, clientId: privateClientId });
+
+  const removedRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email, password: pass, clientId: privateClientId }),
+  });
+  assert.equal(removedRes.status, 403, "Removed assignment cannot regain access through scopedClientId");
+
+  // Case C: Active registration allows sign-in
+  await db.collection("user_app_registrations").insertOne({
+    userId: uid,
+    clientId: privateClientId,
+    status: "active",
+    createdAt: new Date(),
+  });
+  const allowedRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email, password: pass, clientId: privateClientId }),
+  });
+  assert.equal(allowedRes.status, 200, "Active user registration must succeed on sign-in");
+});
+
+// =============================================================================
+// TEST 8: Real Route: GET /api/auth/oauth2/authorize rejects revoked or removed user
+// =============================================================================
+await runTest("MEM-8: Real authorize route redirects with error=access_denied for revoked or removed user", async () => {
+  const email = `oauth_auth_user_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const pass = "OAuthUserPass123!Aa";
+  const signUp = await authProvider.api.signUpEmail({
+    body: { email, password: pass, name: "OAuth Auth User" },
+  });
+  const uid = String(signUp.user.id);
+
+  // Authenticate to get session cookie
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email, password: pass }),
+  });
+  assert.equal(loginRes.status, 200);
+  const sessionCookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  // Configure redirectUri on client
+  const redirectUri = "https://private-app.example.com/callback";
+  await db.collection("oauthClient").updateOne(
+    { clientId: privateClientId },
+    { $set: { redirectUris: [redirectUri], allowedOrigins: ["https://private-app.example.com"] } }
+  );
+
+  // Case A: User has revoked registration
+  await db.collection("user_app_registrations").insertOne({
+    userId: uid,
+    clientId: privateClientId,
+    status: "revoked",
+    revoked: true,
+    createdAt: new Date(),
+  });
+
+  const authRevokedRes = await app.request(
+    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=state_xyz`,
+    {
+      method: "GET",
+      headers: getTestHeaders({ Cookie: sessionCookie }),
+    }
+  );
+  assert.equal(authRevokedRes.status, 302);
+  const revokedLocation = authRevokedRes.headers.get("location") || "";
+  assert.ok(revokedLocation.includes("error=access_denied"), "Authorize must redirect with error=access_denied");
+
+  // Case B: User has removed assignment (delete record) but scopedClientId is set
+  await db.collection("user_app_registrations").deleteMany({ userId: uid, clientId: privateClientId });
+  await db.collection("user").updateOne({ _id: new ObjectId(uid) }, { $set: { scopedClientId: privateClientId } });
+
+  const authRemovedRes = await app.request(
+    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=state_xyz`,
+    {
+      method: "GET",
+      headers: getTestHeaders({ Cookie: sessionCookie }),
+    }
+  );
+  assert.equal(authRemovedRes.status, 302);
+  const removedLocation = authRemovedRes.headers.get("location") || "";
+  assert.ok(removedLocation.includes("error=access_denied"), "Removed user must redirect with error=access_denied");
+
+  // Case C: Super-Admin has NO bypass for consumer applications
+  const superAdminEmail = `super_no_bypass_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const superAdminSignUp = await authProvider.api.signUpEmail({
+    body: { email: superAdminEmail, password: pass, name: "Super Admin No Bypass" },
+  });
+  await db.collection("user").updateOne(
+    { email: superAdminEmail },
+    { $set: { role: "super-admin", scopedClientId: null, emailVerified: true } }
+  );
+  const superLoginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: superAdminEmail, password: pass }),
+  });
+  const superCookie = (superLoginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  const superAuthRes = await app.request(
+    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=state_super`,
+    {
+      method: "GET",
+      headers: getTestHeaders({ Cookie: superCookie }),
+    }
+  );
+  assert.equal(superAuthRes.status, 302);
+  const superLoc = superAuthRes.headers.get("location") || "";
+  assert.ok(superLoc.includes("error=access_denied"), "Super-Admin must be denied authorization for consumer app");
+});
+
+// =============================================================================
+// TEST 9: Real Route: POST /api/auth/oauth2/token rejects token refresh for revoked/removed user
+// =============================================================================
+await runTest("MEM-9: Real token route rejects token refresh when user is revoked or removed", async () => {
+  const email = `token_user_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const pass = "TokenUserPass123!Aa";
+  const signUp = await authProvider.api.signUpEmail({
+    body: { email, password: pass, name: "Token User" },
+  });
+  const uid = String(signUp.user.id);
+
+  const clientDoc = await db.collection("oauthClient").findOne({ clientId: privateClientId });
+  const clientSecret = clientDoc.clientSecret;
+
+  const rawRefreshToken = "rt_test_" + crypto.randomBytes(16).toString("hex");
+  const rawHash = hashToken(rawRefreshToken, "hex");
+
+  // Register active token family for this user on the private client
+  await registerTokenFamily("fam_" + crypto.randomBytes(8).toString("hex"), privateClientId, uid, rawHash);
+  await db.collection("oauthRefreshToken").insertOne({
+    token: rawRefreshToken,
+    clientId: privateClientId,
+    userId: uid,
+    createdAt: new Date(),
+  });
+
+  // User registration is explicitly revoked
+  await db.collection("user_app_registrations").insertOne({
+    userId: uid,
+    clientId: privateClientId,
+    status: "revoked",
+    revoked: true,
+    createdAt: new Date(),
+  });
+
+  const tokenRes = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      "content-type": "application/x-www-form-urlencoded",
+    }),
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: rawRefreshToken,
+      client_id: privateClientId,
+      client_secret: clientSecret,
+    }).toString(),
+  });
+  assert.equal(tokenRes.status, 401, "Token refresh must be rejected with 401 for revoked user");
+  const tokenJson = await tokenRes.json();
+  assert.equal(tokenJson.error, "invalid_grant");
+  assert.ok(tokenJson.error_description.includes("no longer authorized"));
+});
+
+// =============================================================================
+// TEST 10: Admin Routes: Revoked or removed app admin cannot manage application
+// =============================================================================
+await runTest("MEM-10: Revoked or removed app admin is strictly forbidden on admin management routes", async () => {
+  const adminEmail = `admin_mgmt_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const adminPass = "AdminMgmtPass123!Aa";
+  const signUp = await authProvider.api.signUpEmail({
+    body: { email: adminEmail, password: adminPass, name: "Admin Mgmt User" },
+  });
+  const adminUid = String(signUp.user.id);
+
+  // Set user role to app-admin scoped to privateClientId
+  await db.collection("user").updateOne(
+    { _id: new ObjectId(adminUid) },
+    { $set: { role: "app-admin", scopedClientId: privateClientId, emailVerified: true } }
+  );
+
+  // Insert active app_admins record
+  const adminDocId = new ObjectId();
+  await db.collection("app_admins").insertOne({
+    _id: adminDocId,
+    userId: adminUid,
+    clientId: privateClientId,
+    email: adminEmail,
+    role: "admin",
+    isActive: true,
+    status: "active",
+    createdAt: new Date(),
+  });
+
+  // Login as app admin
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: adminEmail, password: adminPass }),
+  });
+  assert.equal(loginRes.status, 200);
+  const adminCookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  // While active: can access scoped app endpoint
+  const activeRes = await app.request(`/api/admin/app/${privateClientId}/config`, {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: adminCookie }),
+  });
+  assert.equal(activeRes.status, 200, "Active app admin must have access");
+
+  // Now revoke in app_admins: isActive: false, status: "revoked"
+  await db.collection("app_admins").updateOne(
+    { _id: adminDocId },
+    { $set: { isActive: false, status: "revoked" } }
+  );
+
+  const revokedRes = await app.request(`/api/admin/app/${privateClientId}/config`, {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: adminCookie }),
+  });
+  assert.equal(revokedRes.status, 403, "Revoked app admin must receive 403 Forbidden");
+
+  // Now delete app_admins record completely (removed assignment)
+  await db.collection("app_admins").deleteOne({ _id: adminDocId });
+  await db.collection("user_app_registrations").deleteMany({ clientId: privateClientId, userId: adminUid });
+  // User still holds scopedClientId: privateClientId on their user record
+  const removedRes = await app.request(`/api/admin/app/${privateClientId}/config`, {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: adminCookie }),
+  });
+  assert.equal(removedRes.status, 403, "Removed app admin must receive 403 Forbidden even if scopedClientId matches");
+});
+
+// =============================================================================
+// TEST 11: Production-mode integration test: trustedOrigins, CORS, and CSRF
+// =============================================================================
+await runTest("MEM-11: Production-mode integration validates trustedOrigins, CORS, and CSRF boundaries", async () => {
+  const savedEnv = process.env.NODE_ENV;
+  const savedAllowDev = process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION;
+
+  try {
+    process.env.NODE_ENV = "production";
+    process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION = "false";
+
+    // 1. Better Auth trustedOrigins does NOT contain localhost in production
+    const reqWithLocalhost = new Request("http://localhost:3000/api/auth/sign-in/email", {
+      headers: { origin: "http://localhost:3000" },
+    });
+    const prodOrigins = await (authProvider as any).options.trustedOrigins(reqWithLocalhost);
+    assert.equal(
+      prodOrigins.includes("http://localhost:3000"),
+      false,
+      "Localhost origin must NOT be present in trustedOrigins in production"
+    );
+    assert.equal(
+      prodOrigins.includes("http://127.0.0.1:5174"),
+      false,
+      "127.0.0.1 origin must NOT be present in trustedOrigins in production"
+    );
+
+    // 2. Real HTTP request with localhost Origin in production fails CORS with 403
+    const corsRes = await app.request("/api/auth/sign-in/email", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:3000",
+        "Access-Control-Request-Method": "POST",
+      },
+    });
+    assert.equal(corsRes.status, 403, "CORS preflight for unallowed localhost origin must be rejected with 403");
+
+    // 3. Registered production HTTPS origin is trusted
+    const prodOrigin = "https://customer-portal.swyra.com";
+    const reqWithProdOrigin = new Request("http://localhost:3000/api/auth/sign-in/email", {
+      headers: { origin: prodOrigin },
+    });
+    const prodOriginsAfter = await (authProvider as any).options.trustedOrigins(reqWithProdOrigin);
+    assert.equal(
+      prodOriginsAfter.includes(prodOrigin),
+      true,
+      "Registered production HTTPS origin must be present in trustedOrigins"
+    );
+
+    const corsProdRes = await app.request("/api/auth/sign-in/email", {
+      method: "OPTIONS",
+      headers: {
+        Origin: prodOrigin,
+        "Access-Control-Request-Method": "POST",
+      },
+    });
+    assert.equal(corsProdRes.status, 204, "CORS preflight for registered production HTTPS origin must succeed with 204");
+  } finally {
+    process.env.NODE_ENV = savedEnv;
+    if (savedAllowDev === undefined) {
+      delete process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION;
+    } else {
+      process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION = savedAllowDev;
+    }
+  }
 });
 
 await closeDb();

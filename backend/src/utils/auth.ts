@@ -5,7 +5,8 @@ import { createAccessControl } from "better-auth/plugins/access";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { client, database } from "../db/mongo";
-import { isLoopbackHost, isStrongPassword } from "./security";
+import { isLoopbackHost, isStrongPassword, normalizeOrigin } from "./security";
+import { isOriginAllowed } from "../middleware/cors";
 
 const accessControl = createAccessControl({
     user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'impersonate-admins', 'delete', 'set-password', 'set-email', 'get', 'update'],
@@ -51,28 +52,57 @@ export const authProvider = betterAuth({
     appName: "SWYRA Auth", // TOTP issuer label shown in authenticator apps
     baseURL: config.auth.baseURL,
     trustedOrigins: async (request?: Request) => {
-        const origins = new Set<string>([
-            config.frontendUrl,
-            "https://oauth21.vercel.app",
-            "https://app.example.com",
-            "http://localhost:5174",
-            "http://localhost:5173",
-            "http://localhost:3000",
-            "http://localhost:5175",
-            "http://localhost:3001",
-            "http://127.0.0.1:5174",
-            "http://127.0.0.1:3000",
-        ].filter(Boolean));
+        const isProduction = config.env === "production";
+        const allowDevInProd = config.allowDevClientsInProduction;
+
+        const origins = new Set<string>();
+        if (config.frontendUrl) {
+            const normFrontend = normalizeOrigin(config.frontendUrl);
+            if (normFrontend) origins.add(normFrontend);
+        }
+
+        // Only in development do we populate default local dev loopback origins
+        if (!isProduction) {
+            origins.add("http://localhost:5174");
+            origins.add("http://localhost:5173");
+            origins.add("http://localhost:3000");
+            origins.add("http://localhost:5175");
+            origins.add("http://localhost:3001");
+            origins.add("http://127.0.0.1:5174");
+            origins.add("http://127.0.0.1:3000");
+        }
 
         if (request) {
             const reqOrigin = request.headers.get("origin");
             if (reqOrigin) {
-                try {
-                    const u = new URL(reqOrigin);
-                    if (isLoopbackHost(u.hostname)) {
-                        origins.add(u.origin);
+                const normalized = normalizeOrigin(reqOrigin);
+                if (normalized) {
+                    let isLoopback = false;
+                    try {
+                        isLoopback = isLoopbackHost(new URL(normalized).hostname);
+                    } catch {}
+
+                    if (!isProduction) {
+                        if (isLoopback) {
+                            origins.add(normalized);
+                        } else {
+                            try {
+                                const allowed = await isOriginAllowed(normalized);
+                                if (allowed) origins.add(normalized);
+                            } catch {}
+                        }
+                    } else {
+                        // In production: loopback is strictly prohibited unless explicitly configured dev mode
+                        if (isLoopback && !allowDevInProd) {
+                            // Do not trust loopback origin in production
+                        } else {
+                            try {
+                                const allowed = await isOriginAllowed(normalized);
+                                if (allowed) origins.add(normalized);
+                            } catch {}
+                        }
                     }
-                } catch {}
+                }
             }
         }
         return Array.from(origins);

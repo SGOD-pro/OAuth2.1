@@ -888,13 +888,20 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
 admin.get("/app/:clientId/config", requireConsumerAppAdmin, async (c) => {
   const clientId = c.req.param("clientId");
   try {
-    const result = (await authApi.getOAuthClient({
-      headers: getHeaders(c),
-      query: { client_id: clientId },
-    })) as Record<string, unknown> | null;
+    const database = await getDb();
+    let result: any = await resolveOAuthClient(database, clientId);
+    if (!result) {
+      try {
+        result = (await authApi.getOAuthClient({
+          headers: getHeaders(c),
+          query: { client_id: clientId },
+        })) as Record<string, unknown> | null;
+      } catch {}
+    }
 
     if (!result) return c.json({ error: "Application not found" }, 404);
-    const { client_secret: _omit, ...safeResult } = result as { client_secret?: unknown } & Record<string, unknown>;
+    const normalized = normalizeOAuthClientFields({ ...(result || {}), id: result.clientId || clientId, clientId: result.clientId || clientId });
+    const { client_secret: _omit, clientSecret: _omit2, _id: _omit3, ...safeResult } = normalized as any;
     return c.json(safeResult);
   } catch {
     return c.json({ error: "Application not found or unauthorized" }, 404);

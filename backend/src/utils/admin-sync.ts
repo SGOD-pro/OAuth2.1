@@ -338,15 +338,29 @@ export async function removeAppAdminIdentity(
 export async function selfHealAppAdmins(database: Db): Promise<void> {
   try {
     // Only self-heal active app_admins records; deactivated or deleted assignments must not be resurrected
-    const admins = await database.collection("app_admins").find({ isActive: { $ne: false } }).toArray();
+    const admins = await database.collection("app_admins").find({
+      isActive: { $ne: false },
+      active: { $ne: false },
+      disabled: { $ne: true },
+      revoked: { $ne: true },
+      status: { $nin: ["inactive", "revoked", "suspended", "disabled"] },
+    }).toArray();
     for (const a of admins) {
       if (!a.email || !a.clientId) continue;
+      const isRecordActive =
+        a.isActive !== false &&
+        a.active !== false &&
+        a.disabled !== true &&
+        a.revoked !== true &&
+        !["inactive", "revoked", "suspended", "disabled"].includes(a.status);
+      if (!isRecordActive) continue;
+
       await syncAppAdminIdentity(database, {
         email: a.email,
         clientId: a.clientId,
         name: a.name,
         hashedPassword: a.password,
-        isActive: a.isActive !== false,
+        isActive: true,
         createdAt: a.createdAt,
       });
     }

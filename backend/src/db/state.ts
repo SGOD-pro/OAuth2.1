@@ -14,8 +14,9 @@ interface RateLimitDoc {
 
 interface OriginCacheDoc {
   _id: string;
-  allowed: boolean;
+  allowed?: boolean | null;
   cachedAt: Date;
+  invalidatedAt?: Date;
 }
 
 export interface TokenFamilyDoc {
@@ -184,26 +185,45 @@ export async function getOriginCache(
     .collection<OriginCacheDoc>("origin_cache")
     .findOne({ _id: `ORIGIN#${origin}` });
 
-  return entry?.allowed ?? null;
+  if (!entry || entry.allowed === null || entry.allowed === undefined) {
+    return null;
+  }
+
+  return entry.allowed;
 }
 
 export async function putOriginCache(
   origin: string,
   allowed: boolean,
-): Promise<void> {
+  startTime?: number,
+): Promise<boolean> {
   await ensureTtlIndexes();
 
   const db = await getDb();
-  await db.collection<OriginCacheDoc>("origin_cache").updateOne(
-    { _id: `ORIGIN#${origin}` },
+  const collection = db.collection<OriginCacheDoc>("origin_cache");
+  const id = `ORIGIN#${origin}`;
+
+  if (typeof startTime === "number") {
+    const existing = await collection.findOne({ _id: id });
+    if (existing?.invalidatedAt && existing.invalidatedAt.getTime() >= startTime) {
+      // Concurrent invalidation occurred while origin check was in flight.
+      // Refuse to write to prevent stale cache repopulation.
+      return false;
+    }
+  }
+
+  await collection.updateOne(
+    { _id: id },
     {
       $set: {
         allowed,
         cachedAt: new Date(),
       },
+      $unset: { invalidatedAt: "" },
     },
     { upsert: true },
   );
+  return true;
 }
 
 export async function invalidateOriginCache(
@@ -213,15 +233,38 @@ export async function invalidateOriginCache(
 
   const db = await getDb();
   const collection = db.collection<OriginCacheDoc>("origin_cache");
+  const now = new Date();
 
   if (origins && origins.length > 0) {
-    await collection.deleteMany({
-      _id: { $in: origins.map((origin) => `ORIGIN#${origin}`) },
-    });
+    const ids = origins.map((origin) => `ORIGIN#${origin}`);
+    for (const id of ids) {
+      await collection.updateOne(
+        { _id: id },
+        {
+          $set: {
+            allowed: null,
+            invalidatedAt: now,
+            cachedAt: now,
+          },
+        },
+        { upsert: true },
+      );
+    }
     return;
   }
 
   await collection.deleteMany({ _id: /^ORIGIN#/ });
+  await collection.updateOne(
+    { _id: "ORIGIN#__GLOBAL_TOMBSTONE__" },
+    {
+      $set: {
+        allowed: null,
+        invalidatedAt: now,
+        cachedAt: now,
+      },
+    },
+    { upsert: true },
+  );
 }
 
 // -------------------------------------------------------------

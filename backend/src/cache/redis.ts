@@ -41,7 +41,7 @@ export const redisEnabled = config.redis.enabled;
  */
 const REDIS_CALL_TIMEOUT_MS = 2000;
 
-export const redis = redisEnabled
+export let redis = redisEnabled
   ? new Redis({
       url: config.redis.url!,
       token: config.redis.token!,
@@ -49,6 +49,10 @@ export const redis = redisEnabled
       signal: () => AbortSignal.timeout(REDIS_CALL_TIMEOUT_MS),
     })
   : null;
+
+export function setRedisClientForTesting(client: Redis | null): void {
+  redis = client;
+}
 
 if (!redisEnabled && config.env === "production") {
   console.warn(
@@ -152,33 +156,46 @@ export async function getCachedOriginRedis(origin: string): Promise<boolean | nu
   }
 }
 
-export async function setCachedOriginRedis(origin: string, allowed: boolean): Promise<void> {
-  if (!redis) return;
+export async function setCachedOriginRedis(
+  origin: string,
+  allowed: boolean,
+  startTime?: number,
+): Promise<boolean> {
+  if (!redis) return false;
   try {
+    if (typeof startTime === "number") {
+      const invTime = await redis.get<number>(`swyra:origin:inv:${origin}`);
+      if (invTime && Number(invTime) >= startTime) {
+        return false;
+      }
+    }
     await redis.set(`swyra:origin:${origin}`, allowed, { ex: ORIGIN_CACHE_TTL_SECONDS });
+    return true;
   } catch (error) {
     console.error({ event: "redis_origin_cache_write_failed", origin, error: String(error) });
+    return false;
   }
 }
 
 export async function invalidateCachedOriginRedis(origins?: string[]): Promise<void> {
   if (!redis) return;
-  try {
-    if (origins && origins.length > 0) {
-      await redis.del(...origins.map((o) => `swyra:origin:${o}`));
-      return;
+  const now = Date.now();
+  if (origins && origins.length > 0) {
+    const delKeys = origins.map((o) => `swyra:origin:${o}`);
+    await redis.del(...delKeys);
+    for (const o of origins) {
+      await redis.set(`swyra:origin:inv:${o}`, now, { ex: 30 }).catch(() => {});
     }
-    let cursor: string | number = 0;
-    do {
-      const result: [string, string[]] = await redis.scan(cursor, {
-        match: "swyra:origin:*",
-        count: 100,
-      });
-      const [nextCursor, keys] = result;
-      if (keys.length > 0) await redis.del(...keys);
-      cursor = nextCursor;
-    } while (String(cursor) !== "0");
-  } catch (error) {
-    console.error({ event: "redis_origin_cache_invalidate_failed", error: String(error) });
+    return;
   }
+  let cursor: string | number = 0;
+  do {
+    const result: [string, string[]] = await redis.scan(cursor, {
+      match: "swyra:origin:*",
+      count: 100,
+    });
+    const [nextCursor, keys] = result;
+    if (keys.length > 0) await redis.del(...keys);
+    cursor = nextCursor;
+  } while (String(cursor) !== "0");
 }

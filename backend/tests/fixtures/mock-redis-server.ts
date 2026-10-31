@@ -1,0 +1,155 @@
+import http from "node:http";
+
+export interface MockRedisServerInstance {
+  server: http.Server;
+  url: string;
+  port: number;
+  token: string;
+  simulateOutage: () => void;
+  simulateRecovery: () => void;
+  get: (key: string) => any;
+  set: (key: string, value: any, ttlSeconds?: number) => void;
+  has: (key: string) => boolean;
+  clear: () => void;
+  close: () => Promise<void>;
+}
+
+export function createMockRedisServer(): Promise<MockRedisServerInstance> {
+  return new Promise((resolve, reject) => {
+    const store = new Map<string, { value: any; expiresAt?: number }>();
+    let isOutage = false;
+
+    function isExpired(entry: { value: any; expiresAt?: number }): boolean {
+      if (!entry.expiresAt) return false;
+      return Date.now() > entry.expiresAt;
+    }
+
+    const server = http.createServer((req, res) => {
+      if (isOutage) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Service Unavailable (Simulated Redis Outage)" }));
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        try {
+          let commands: any[][] = [];
+          if (req.url === "/pipeline") {
+            commands = JSON.parse(body);
+          } else {
+            // Single command endpoint: POST / with body ["OP", ...args]
+            commands = [JSON.parse(body)];
+          }
+
+          const results = commands.map((cmd) => {
+            const [op, ...args] = cmd;
+            const lower = String(op).toLowerCase();
+
+            if (lower === "set") {
+              const [key, value, ...optArgs] = args;
+              let ttlSeconds: number | undefined;
+              for (let i = 0; i < optArgs.length; i++) {
+                if (String(optArgs[i]).toLowerCase() === "ex" && optArgs[i + 1] !== undefined) {
+                  ttlSeconds = Number(optArgs[i + 1]);
+                  break;
+                }
+              }
+              store.set(key, {
+                value,
+                expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : undefined,
+              });
+              return { result: "OK" };
+            }
+
+            if (lower === "get") {
+              const [key] = args;
+              const entry = store.get(key);
+              if (!entry || isExpired(entry)) {
+                if (entry) store.delete(key);
+                return { result: null };
+              }
+              return { result: entry.value };
+            }
+
+            if (lower === "del") {
+              let deletedCount = 0;
+              for (const k of args) {
+                if (store.delete(k)) deletedCount++;
+              }
+              return { result: deletedCount };
+            }
+
+            if (lower === "scan") {
+              const now = Date.now();
+              const validKeys: string[] = [];
+              for (const [k, v] of store.entries()) {
+                if (!isExpired(v)) {
+                  validKeys.push(k);
+                } else {
+                  store.delete(k);
+                }
+              }
+              // Format: [nextCursor, keys]
+              return { result: ["0", validKeys] };
+            }
+
+            return { result: null };
+          });
+
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(req.url === "/pipeline" ? results : results[0]));
+        } catch (err: any) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err?.message || String(err) }));
+        }
+      });
+    });
+
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        reject(new Error("Failed to get server address"));
+        return;
+      }
+      const port = addr.port;
+      const url = `http://127.0.0.1:${port}`;
+      const token = "mock-redis-test-token";
+
+      resolve({
+        server,
+        url,
+        port,
+        token,
+        simulateOutage: () => {
+          isOutage = true;
+        },
+        simulateRecovery: () => {
+          isOutage = false;
+        },
+        get: (key: string) => {
+          const entry = store.get(key);
+          if (!entry || isExpired(entry)) return null;
+          return entry.value;
+        },
+        set: (key: string, value: any, ttlSeconds?: number) => {
+          store.set(key, {
+            value,
+            expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : undefined,
+          });
+        },
+        has: (key: string) => {
+          const entry = store.get(key);
+          if (!entry || isExpired(entry)) return false;
+          return true;
+        },
+        clear: () => store.clear(),
+        close: () =>
+          new Promise<void>((res) => {
+            server.close(() => res());
+          }),
+      });
+    });
+  });
+}

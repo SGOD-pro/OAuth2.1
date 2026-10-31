@@ -139,11 +139,16 @@ export async function checkUserIsClientAdmin(
     } catch {}
   }
 
-  // 1. Authoritative check in app_admins by stable userId
+  const adminConditions: any[] = [...userConditions];
+  if (userDoc?.email && typeof userDoc.email === "string") {
+    adminConditions.push({ email: userDoc.email.toLowerCase().trim() });
+  }
+
+  // 1. Authoritative check in app_admins by stable userId and email
   // An inactive, revoked, suspended, or disabled record MUST strictly deny administration
   const appAdmin = await database.collection("app_admins").findOne({
     clientId: cleanClientId,
-    $or: userConditions,
+    $or: adminConditions,
   });
   if (appAdmin) {
     const isInactive =
@@ -153,10 +158,10 @@ export async function checkUserIsClientAdmin(
       appAdmin.revoked === true ||
       ["inactive", "revoked", "suspended", "disabled"].includes(appAdmin.status);
     if (isInactive) return false;
-    return true;
   }
 
   // 2. Authoritative check in user_app_registrations keyed by stable userId and clientId
+  // An inactive, revoked, suspended, or disabled record MUST strictly deny administration
   const reg = await database.collection("user_app_registrations").findOne({
     clientId: cleanClientId,
     $or: userConditions,
@@ -168,12 +173,28 @@ export async function checkUserIsClientAdmin(
       reg.disabled === true ||
       reg.revoked === true ||
       ["inactive", "revoked", "suspended", "disabled"].includes(reg.status);
-    if (isRegInactive || reg.appRole !== "admin") return false;
+    if (isRegInactive) return false;
+    // Explicit non-admin role in registrations denies admin rights even if legacy scopedClientId matches
+    if (reg.appRole && reg.appRole !== "admin") return false;
+  }
+
+  // 3. Positive grant: active record in app_admins OR active admin role in user_app_registrations
+  if (appAdmin && appAdmin.isActive !== false && !["inactive", "revoked", "suspended", "disabled"].includes(appAdmin.status)) {
+    return true;
+  }
+  if (reg && reg.appRole === "admin" && reg.isActive !== false && !["inactive", "revoked", "suspended", "disabled"].includes(reg.status)) {
     return true;
   }
 
-  // 3. Fallback scopedClientId match if role is app-admin or legacy admin and user is not banned
-  if (isAppAdmin(userDoc) && userDoc.scopedClientId === cleanClientId && !userDoc.banned && userDoc.disabled !== true) {
+  // 4. Fallback scopedClientId match ONLY for legacy single-tenant admin accounts (role: "admin", NOT modern "app-admin")
+  // Modern app-admin assignments must be explicitly backed by app_admins or user_app_registrations;
+  // removed or revoked app-admin assignments cannot regain access through scopedClientId
+  if (
+    userDoc?.role === "admin" &&
+    userDoc?.scopedClientId === cleanClientId &&
+    !userDoc?.banned &&
+    userDoc?.disabled !== true
+  ) {
     return true;
   }
 

@@ -1,3 +1,7 @@
+// Guaranteed clean environment: never inherit external Redis credentials
+delete process.env.UPSTASH_REDIS_REST_URL;
+delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
 import crypto from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { performance } from "node:perf_hooks";

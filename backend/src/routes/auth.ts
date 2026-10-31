@@ -16,7 +16,7 @@ import {
     consumeOAuthTransaction,
 } from "../db/state";
 import { rateLimiters, checkRateLimit } from "../cache/redis";
-import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, hashToken, hasDangerousMongoKeys, validateSafePrimitiveString } from "../utils/security";
+import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, checkUserHasAppAccess, hashToken, hasDangerousMongoKeys, validateSafePrimitiveString } from "../utils/security";
 import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
 
@@ -285,12 +285,15 @@ export function isAppAdmin(user: any): boolean {
     return false;
 }
 
-export function hasAppAccessBypass(user: any, canonicalClientId: string): boolean {
-    if (!user) return false;
-    // USER-REQUIRED POLICY: Super Admin has NO bypass for consumer applications
-    if (isSuperAdmin(user)) return false;
-    // App Admin has bypass only if explicitly scoped to this application
-    if (isAppAdmin(user) && user.scopedClientId === canonicalClientId) return true;
+export async function hasAppAccessBypass(
+    databaseOrUser: any,
+    userOrClientId: any,
+    maybeClientId?: string
+): Promise<boolean> {
+    if (maybeClientId && typeof maybeClientId === "string") {
+        return checkUserHasAppAccess(databaseOrUser, userOrClientId, maybeClientId);
+    }
+    // Fail closed: in-memory evaluation without database state is strictly forbidden
     return false;
 }
 
@@ -547,10 +550,9 @@ auth.post("/sign-in/email", async (c) => {
             );
         } else if (clientDoc && !clientDoc.isPublic && canonicalClientId && clientCtx.isBoundOAuthFlow) {
             // Private application: verify authorization boundary before proceeding
-            const userId = String(user.id || user._id);
-            const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
+            const hasAccess = await checkUserHasAppAccess(database, user, canonicalClientId);
 
-            if (!isRegistered && !hasAppAccessBypass(user, canonicalClientId)) {
+            if (!hasAccess) {
                 return c.json(
                     {
                         status: false,
@@ -882,10 +884,9 @@ auth.get("/oauth2/authorize", async (c) => {
     if (!client.isPublic) {
         if (sessionUser) {
             // User is already authenticated with a valid global session
-            const userId = String(sessionUser.id || (sessionUser as any)._id);
-            const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
+            const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 
-            if (!isRegistered && !hasAppAccessBypass(sessionUser, canonicalClientId)) {
+            if (!hasAccess) {
                 // Deny authorization immediately! Do NOT issue code or continue to token issuance.
                 const errorUrl = new URL(redirectUri);
                 errorUrl.searchParams.set("error", "access_denied");
@@ -1099,11 +1100,45 @@ auth.post("/oauth2/token", async (c) => {
         let preRefreshUserId: string | undefined = existingFamily?.userId;
         if (!preRefreshUserId) {
             try {
-                const oldDoc = await database.collection("oauthRefreshToken").findOne({ token: refreshToken });
+                const oldDoc = await database.collection("oauthRefreshToken").findOne({
+                    $or: [
+                        { token: refreshToken },
+                        { token: hashToken(refreshToken, "base64url") },
+                        { token: hashToken(refreshToken, "hex") }
+                    ]
+                });
                 if (oldDoc && oldDoc.userId) {
                     preRefreshUserId = String(oldDoc.userId);
                 }
             } catch {}
+        }
+
+        // CRITICAL SECURITY INVARIANT:
+        // Revoked or removed user cannot refresh tokens on private applications
+        if (!clientDoc.isPublic && preRefreshUserId) {
+            const userDoc = await database.collection("user").findOne({
+                $or: [{ id: preRefreshUserId }, { _id: preRefreshUserId as any }]
+            });
+            const hasAccess = await checkUserHasAppAccess(database, userDoc || preRefreshUserId, canonicalClientId);
+
+            if (!hasAccess) {
+                // Immediately purge issued tokens and revoke family
+                await Promise.all([
+                    database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: preRefreshUserId }),
+                    database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: preRefreshUserId }),
+                    database.collection("oauth_token_families").updateMany(
+                        { clientId: canonicalClientId, userId: preRefreshUserId },
+                        { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+                    ),
+                ]);
+                return c.json(
+                    {
+                        error: "invalid_grant",
+                        error_description: "User is no longer authorized for this private application",
+                    },
+                    401
+                );
+            }
         }
 
         // Forward to Better Auth for native rotation
@@ -1166,12 +1201,12 @@ auth.post("/oauth2/token", async (c) => {
                 // CRITICAL SECURITY INVARIANT:
                 // Removed user cannot refresh old application authorization on private applications!
                 if (!clientDoc.isPublic && resolvedUserId) {
-                    const isRegistered = await checkUserAppRegistration(database, resolvedUserId, canonicalClientId);
                     const userDoc = await database.collection("user").findOne({
                         $or: [{ id: resolvedUserId }, { _id: resolvedUserId as any }]
                     });
+                    const hasAccess = await checkUserHasAppAccess(database, userDoc || resolvedUserId, canonicalClientId);
 
-                    if (!isRegistered && !hasAppAccessBypass(userDoc, canonicalClientId)) {
+                    if (!hasAccess) {
                         // Immediately purge issued tokens and revoke family
                         await Promise.all([
                             database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
@@ -1792,11 +1827,10 @@ auth.post("/oauth2/consent", async (c) => {
         }
 
         if (!clientDoc.isPublic) {
-            const userId = String(sessionUser.id || (sessionUser as any)._id);
             const canonicalClientId = clientDoc.clientId;
-            const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
+            const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 
-            if (!isRegistered && !hasAppAccessBypass(sessionUser, canonicalClientId)) {
+            if (!hasAccess) {
                 return c.json({
                     error: "access_denied",
                     error_description: "Access restricted: Your account is not authorized for this private application"
@@ -1858,11 +1892,10 @@ auth.post("/oauth2/continue", async (c) => {
             const database = await getDb();
             const clientDoc = await resolveOAuthClient(database, clientId);
             if (clientDoc && !clientDoc.isPublic) {
-                const userId = String(sessionUser.id || (sessionUser as any)._id);
                 const canonicalClientId = clientDoc.clientId;
-                const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
+                const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 
-                if (!isRegistered && !hasAppAccessBypass(sessionUser, canonicalClientId)) {
+                if (!hasAccess) {
                     return c.json({
                         error: "access_denied",
                         error_description: "Access restricted: Your account is not authorized for this private application"
@@ -2033,9 +2066,9 @@ async function handleSocialCallback(c: any) {
 
                 if (!clientDoc.isPublic) {
                     // Private application: verify authorization boundary
-                    const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
+                    const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 
-                    if (!isRegistered && !hasAppAccessBypass(sessionUser, canonicalClientId)) {
+                    if (!hasAccess) {
                         // CRITICAL: Fail-Closed deterministic cleanup!
                         // Identify and revoke the exact created session, without destroying the user's
                         // entire account or other devices' unrelated sessions.

@@ -33,6 +33,7 @@ tests/*
 !tests/security/
 !tests/unit/
 !tests/e2e/
+!tests/fixtures/
 tests/security/*.log
 test-results/
 

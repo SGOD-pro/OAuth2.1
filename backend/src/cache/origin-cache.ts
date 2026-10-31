@@ -56,20 +56,68 @@ export function extractClientOrigins(client: any): string[] {
   return Array.from(origins);
 }
 
+export interface OriginCheckContext {
+  origin: string;
+  startTime: number;
+}
+
+const lastInvalidatedAt = new Map<string, number>();
+let globalLastInvalidatedAt = 0;
+let redisOutageDetected = false;
+
+export function getRedisOutageDetected(): boolean {
+  return redisOutageDetected;
+}
+
+export function setRedisOutageDetectedForTesting(val: boolean): void {
+  redisOutageDetected = val;
+}
+
+export function getLastInvalidatedAt(origin: string): number {
+  const norm = normalizeOrigin(origin) || origin;
+  return Math.max(lastInvalidatedAt.get(norm) || 0, globalLastInvalidatedAt);
+}
+
+/**
+ * Marks the start of an origin validation check.
+ * The returned context token must be passed to setCachedOrigin to prevent
+ * in-flight reads from repopulating the cache with stale data after a client mutation.
+ */
+export function startOriginCheck(origin: string): OriginCheckContext {
+  const normalized = normalizeOrigin(origin) || origin;
+  return {
+    origin: normalized,
+    startTime: Date.now(),
+  };
+}
+
 export async function getCachedOrigin(
   origin: string,
 ): Promise<boolean | null> {
   const normalized = normalizeOrigin(origin);
   if (!normalized) return false;
 
-  // 1. Check Redis first (fast REST / memory)
-  try {
-    const redisVal = await getCachedOriginRedis(normalized);
-    if (redisVal !== null) {
-      return redisVal;
+  // If a previous Redis outage occurred, Redis may hold stale keys from missed invalidations.
+  // Attempt recovery flush before trusting any Redis cache hit.
+  if (redisOutageDetected) {
+    try {
+      await invalidateCachedOriginRedis();
+      redisOutageDetected = false;
+    } catch {
+      // Redis is still unavailable, skip Redis and fall back to Mongo
     }
-  } catch (err) {
-    console.error({ event: "redis_origin_cache_read_error", origin: normalized, error: String(err) });
+  }
+
+  // 1. Check Redis first (fast REST / memory)
+  if (!redisOutageDetected) {
+    try {
+      const redisVal = await getCachedOriginRedis(normalized);
+      if (redisVal !== null) {
+        return redisVal;
+      }
+    } catch (err) {
+      console.error({ event: "redis_origin_cache_read_error", origin: normalized, error: String(err) });
+    }
   }
 
   // 2. Fall back to MongoDB cache collection
@@ -84,15 +132,27 @@ export async function getCachedOrigin(
 export async function setCachedOrigin(
   origin: string,
   allowed: boolean,
+  checkContext?: OriginCheckContext | number,
 ): Promise<void> {
   const normalized = normalizeOrigin(origin);
   if (!normalized) return;
 
+  const startTime = typeof checkContext === "number" ? checkContext : checkContext?.startTime;
+
+  if (typeof startTime === "number") {
+    const originInv = lastInvalidatedAt.get(normalized) || 0;
+    if (originInv >= startTime || globalLastInvalidatedAt >= startTime) {
+      // A client mutation/invalidation occurred while the read check was in-flight.
+      // Do NOT write to cache; this avoids repopulating stale data.
+      return;
+    }
+  }
+
   await Promise.allSettled([
-    setCachedOriginRedis(normalized, allowed).catch((err) => {
+    setCachedOriginRedis(normalized, allowed, startTime).catch((err) => {
       console.error({ event: "redis_origin_cache_write_error", origin: normalized, error: String(err) });
     }),
-    putOriginCache(normalized, allowed).catch((err) => {
+    putOriginCache(normalized, allowed, startTime).catch((err) => {
       console.error({ event: "mongo_origin_cache_write_error", origin: normalized, error: String(err) });
     }),
   ]);
@@ -107,6 +167,8 @@ export async function invalidateOrigins(
   origins?: string[],
 ): Promise<void> {
   let normalizedOrigins: string[] | undefined;
+  const now = Date.now();
+
   if (origins && Array.isArray(origins) && origins.length > 0) {
     const set = new Set<string>();
     for (const o of origins) {
@@ -125,16 +187,31 @@ export async function invalidateOrigins(
     }
     normalizedOrigins = Array.from(set);
     if (normalizedOrigins.length === 0) return;
+
+    for (const norm of normalizedOrigins) {
+      lastInvalidatedAt.set(norm, now);
+    }
+  } else {
+    globalLastInvalidatedAt = now;
+    lastInvalidatedAt.clear();
   }
+
+  let redisFailed = false;
 
   await Promise.allSettled([
     invalidateCachedOriginRedis(normalizedOrigins).catch((err) => {
+      redisFailed = true;
+      redisOutageDetected = true;
       console.error({ event: "redis_origin_invalidation_error", error: String(err) });
     }),
     invalidateOriginCache(normalizedOrigins).catch((err) => {
       console.error({ event: "mongo_origin_invalidation_error", error: String(err) });
     }),
   ]);
+
+  if (redisFailed) {
+    redisOutageDetected = true;
+  }
 }
 
 /**
