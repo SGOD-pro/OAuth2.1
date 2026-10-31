@@ -17,6 +17,7 @@ interface OriginCacheDoc {
   allowed?: boolean | null;
   cachedAt: Date;
   invalidatedAt?: Date;
+  invalidatedVersion?: number;
 }
 
 export interface TokenFamilyDoc {
@@ -220,6 +221,29 @@ export async function getSharedRedisOutage(db: any): Promise<boolean> {
   }
 }
 
+/**
+ * SHARED MONOTONIC VERSION COUNTER (MongoDB fallback)
+ *
+ * Atomically increments a shared integer version stored in MongoDB and returns
+ * the new value. Used when Redis is unavailable to assign a version to each
+ * origin check without relying on process wall clocks. Monotonically increasing
+ * across all processes that share this MongoDB instance.
+ *
+ * Uses findOneAndUpdate with $inc so that concurrent callers each receive a
+ * unique, ordered version number even under high parallelism.
+ */
+export async function incrementCacheVersionMongo(): Promise<number> {
+  const db = await getDb();
+  const collection = db.collection("origin_cache");
+  const result = await collection.findOneAndUpdate(
+    { _id: "ORIGIN#__CACHE_VERSION__" },
+    { $inc: { version: 1 } } as any,
+    { upsert: true, returnDocument: "after" }
+  );
+  const version = (result as any)?.version ?? (result as any)?.value?.version ?? 1;
+  return typeof version === "number" ? version : 1;
+}
+
 export async function putOriginCache(
   origin: string,
   allowed: boolean,
@@ -235,9 +259,20 @@ export async function putOriginCache(
   // 1. Check global tombstone if startTime is provided
   if (typeof startTime === "number") {
     const globalTombstone = await collection.findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
-    if (globalTombstone?.invalidatedAt && globalTombstone.invalidatedAt.getTime() >= startTime) {
-      // Global invalidation occurred while check was in flight. Refuse to write.
-      return false;
+    if (globalTombstone) {
+      if (
+        typeof globalTombstone.invalidatedVersion === "number" &&
+        globalTombstone.invalidatedVersion >= startTime
+      ) {
+        return false;
+      }
+      if (
+        startTime > 1000000000000 &&
+        globalTombstone.invalidatedAt &&
+        globalTombstone.invalidatedAt.getTime() >= startTime
+      ) {
+        return false;
+      }
     }
   }
 
@@ -245,19 +280,33 @@ export async function putOriginCache(
   // If document does not exist, insert it.
   // If document exists, update ONLY IF it has NOT been invalidated since startTime.
   if (typeof startTime === "number") {
-    const filter = {
+    const isTimestamp = startTime > 1000000000000;
+    const filter: any = {
       _id: id,
-      $or: [
-        { invalidatedAt: { $exists: false } },
-        { invalidatedAt: { $lt: new Date(startTime) } },
+      $and: [
+        {
+          $or: [
+            { invalidatedVersion: { $exists: false } },
+            { invalidatedVersion: { $lt: startTime } },
+          ],
+        },
       ],
     };
+    if (isTimestamp) {
+      filter.$and.push({
+        $or: [
+          { invalidatedAt: { $exists: false } },
+          { invalidatedAt: { $lt: new Date(startTime) } },
+        ],
+      });
+    }
+
     const update = {
       $set: {
         allowed,
         cachedAt: now,
       },
-      $unset: { invalidatedAt: "" },
+      $unset: { invalidatedAt: "", invalidatedVersion: "" },
     };
 
     // Try update first (when document already exists)
@@ -269,8 +318,19 @@ export async function putOriginCache(
     // Check if document exists with an invalidation newer than startTime
     const existing = await collection.findOne({ _id: id });
     if (existing) {
-      // Document exists and had invalidatedAt >= startTime (or filter didn't match)
-      return false;
+      if (
+        typeof existing.invalidatedVersion === "number" &&
+        existing.invalidatedVersion >= startTime
+      ) {
+        return false;
+      }
+      if (
+        isTimestamp &&
+        existing.invalidatedAt &&
+        existing.invalidatedAt.getTime() >= startTime
+      ) {
+        return false;
+      }
     }
 
     // Document didn't exist: attempt atomic insertOne
@@ -298,7 +358,7 @@ export async function putOriginCache(
         allowed,
         cachedAt: now,
       },
-      $unset: { invalidatedAt: "" },
+      $unset: { invalidatedAt: "", invalidatedVersion: "" },
     },
     { upsert: true },
   );
@@ -307,6 +367,7 @@ export async function putOriginCache(
 
 export async function invalidateOriginCache(
   origins?: string[],
+  version?: number,
 ): Promise<void> {
   await ensureTtlIndexes();
 
@@ -324,6 +385,7 @@ export async function invalidateOriginCache(
             $set: {
               allowed: null,
               invalidatedAt: now,
+              ...(typeof version === "number" ? { invalidatedVersion: version } : {}),
               cachedAt: now,
             },
           },
@@ -339,6 +401,7 @@ export async function invalidateOriginCache(
             $set: {
               allowed: null,
               invalidatedAt: now,
+              ...(typeof version === "number" ? { invalidatedVersion: version } : {}),
               cachedAt: now,
             },
           },
@@ -356,6 +419,7 @@ export async function invalidateOriginCache(
       $set: {
         allowed: null,
         invalidatedAt: now,
+        ...(typeof version === "number" ? { invalidatedVersion: version } : {}),
         cachedAt: now,
       },
     },

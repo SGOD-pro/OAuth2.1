@@ -19,6 +19,10 @@ const mongoUri = mongod.getUri();
 
 process.env.NODE_ENV = "test";
 process.env.MONGO_URI = mongoUri;
+
+// Prove MONGO_URI matches the in-process disposable server, not any other loopback listener.
+const { assertIsMemoryServerUri } = await import("../fixtures/test-env-isolation");
+assertIsMemoryServerUri(mongoUri);
 process.env.BETTER_AUTH_SECRET = "a".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -483,8 +487,8 @@ await runTest("CORS-9: Stale cache repopulation is strictly prevented during con
   assert.equal(await isOriginAllowed(raceOrigin), true);
 
   // 1. Thread A: In-flight read begins at t1
-  const inFlightCheck = startOriginCheck(raceOrigin);
-  assert.ok(inFlightCheck.startTime > 0);
+  const inFlightCheck = await startOriginCheck(raceOrigin);
+  assert.ok((inFlightCheck.startVersion ?? inFlightCheck.startTime) > 0);
 
   // 2. Thread B: Concurrent mutation: client is disabled and cache is invalidated at t2
   const disableRes = await app.request(`/api/admin/clients/${clientId}`, {
@@ -740,8 +744,8 @@ await runTest("CORS-13: Atomic Redis Lua invalidation script prevents stale repo
     assert.equal(mockRedis.has(`swyra:origin:${atomicOrigin}`), true);
 
     // 2. Start a read context at t1
-    const ctx = startOriginCheck(atomicOrigin);
-    const t1 = ctx.startTime;
+    const ctx = await startOriginCheck(atomicOrigin);
+    const t1 = ctx.startVersion ?? ctx.startTime;
 
     // Small delay to ensure timestamp difference
     await new Promise((r) => setTimeout(r, 10));
@@ -759,6 +763,82 @@ await runTest("CORS-13: Atomic Redis Lua invalidation script prevents stale repo
     // Stale write must be rejected by Lua script!
     assert.equal(mockRedis.has(`swyra:origin:${atomicOrigin}`), false, "Stale origin must NOT be written to Redis");
     assert.equal(await getCachedOrigin(atomicOrigin), null, "Origin lookup must return null after invalidation");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await markSharedRedisOutage(db, false);
+    setRedisOutageDetectedForTesting(false);
+  }
+});
+
+await runTest("CORS-14: Global Redis invalidation preserves swyra:inv:global marker without deletion by scan", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  try {
+    const o1 = "https://global-test-1.example.com";
+    const o2 = "https://global-test-2.example.com";
+    await setCachedOrigin(o1, true);
+    await setCachedOrigin(o2, true);
+
+    assert.equal(mockRedis.has(`swyra:origin:${o1}`), true);
+    assert.equal(mockRedis.has(`swyra:origin:${o2}`), true);
+
+    // Start in-flight check before global invalidation
+    const inFlight = await startOriginCheck(o1);
+
+    // Perform global invalidation (no origins passed)
+    await invalidateOrigins();
+
+    // Verify: origin keys deleted
+    assert.equal(mockRedis.has(`swyra:origin:${o1}`), false, "Origin 1 must be deleted by scan");
+    assert.equal(mockRedis.has(`swyra:origin:${o2}`), false, "Origin 2 must be deleted by scan");
+
+    // CRITICAL: swyra:inv:global must SURVIVE the scan and NOT be deleted!
+    assert.equal(mockRedis.has("swyra:inv:global"), true, "Global invalidation marker must NOT be deleted by swyra:origin:* scan");
+
+    // An in-flight write from before the global invalidation must be rejected
+    await setCachedOrigin(o1, true, inFlight);
+    assert.equal(mockRedis.has(`swyra:origin:${o1}`), false, "In-flight write before global invalidation must be rejected");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await markSharedRedisOutage(db, false);
+    setRedisOutageDetectedForTesting(false);
+  }
+});
+
+await runTest("CORS-15: Shared monotonic versioning protects against stale writes regardless of clock differences", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  try {
+    const skewedOrigin = "https://skewed-clock.example.com";
+
+    // 1. Check starts and obtains version v1
+    const ctx = await startOriginCheck(skewedOrigin);
+    assert.ok(ctx.startVersion > 0, "startVersion must be positive integer");
+
+    // 2. Invalidation occurs and increments version to v2
+    await invalidateOrigins([skewedOrigin]);
+
+    // 3. Stale write with startVersion v1 must be rejected by version ordering
+    await setCachedOrigin(skewedOrigin, true, ctx);
+
+    assert.equal(mockRedis.has(`swyra:origin:${skewedOrigin}`), false, "Stale write with earlier startVersion must be rejected");
+    assert.equal(await getCachedOrigin(skewedOrigin), null, "Lookup must return null");
   } finally {
     setRedisClientForTesting(null);
     await mockRedis.close();

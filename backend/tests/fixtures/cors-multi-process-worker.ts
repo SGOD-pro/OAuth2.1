@@ -25,19 +25,19 @@ async function handleMessage(msg: any) {
   }
 
   if (msg.type === "START_CHECK") {
-    const check = startOriginCheck(msg.origin);
+    const check = await startOriginCheck(msg.origin);
     if (process.send) {
       process.send({
         type: "CHECK_STARTED",
         origin: msg.origin,
-        startTime: check.startTime,
+        startTime: check.startVersion ?? check.startTime,
       });
     }
     return;
   }
 
   if (msg.type === "COMPLETE_WRITE") {
-    await setCachedOrigin(msg.origin, msg.allowed, { startTime: msg.startTime });
+    await setCachedOrigin(msg.origin, msg.allowed, { origin: msg.origin, startVersion: msg.startTime, startTime: msg.startTime });
     if (process.send) {
       process.send({
         type: "WRITE_COMPLETED",

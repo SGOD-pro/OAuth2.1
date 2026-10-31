@@ -431,18 +431,20 @@ export async function migrateLegacyAppAdmins(
           email: normalizedEmail,
           reason,
         });
-        await recordSyncAudit(database, {
-          action: "legacy_admin_migration_conflict",
-          targetClientId: record.clientId,
-          targetUserId: "unresolved",
-          details: {
-            adminDocId: record._id?.toString() || "unknown",
-            email: normalizedEmail,
-            matchingUserCount: users.length,
-            reason,
-          },
-          timestamp: new Date(),
-        });
+        if (!dryRun) {
+          await recordSyncAudit(database, {
+            action: "legacy_admin_migration_conflict",
+            targetClientId: record.clientId,
+            targetUserId: "unresolved",
+            details: {
+              adminDocId: record._id?.toString() || "unknown",
+              email: normalizedEmail,
+              matchingUserCount: users.length,
+              reason,
+            },
+            timestamp: new Date(),
+          });
+        }
         continue;
       }
 
@@ -460,17 +462,19 @@ export async function migrateLegacyAppAdmins(
           email: normalizedEmail,
           reason: "Cannot migrate super-admin identity to consumer app admin",
         });
-        await recordSyncAudit(database, {
-          action: "legacy_admin_migration_conflict",
-          targetClientId: record.clientId,
-          targetUserId: (targetUser.id || targetUser._id)?.toString() || "unknown",
-          details: {
-            adminDocId: record._id?.toString() || "unknown",
-            email: normalizedEmail,
-            reason: "Cannot migrate super-admin identity to consumer app admin",
-          },
-          timestamp: new Date(),
-        });
+        if (!dryRun) {
+          await recordSyncAudit(database, {
+            action: "legacy_admin_migration_conflict",
+            targetClientId: record.clientId,
+            targetUserId: (targetUser.id || targetUser._id)?.toString() || "unknown",
+            details: {
+              adminDocId: record._id?.toString() || "unknown",
+              email: normalizedEmail,
+              reason: "Cannot migrate super-admin identity to consumer app admin",
+            },
+            timestamp: new Date(),
+          });
+        }
         continue;
       }
 
@@ -498,19 +502,21 @@ export async function migrateLegacyAppAdmins(
             email: normalizedEmail,
             reason: "Potential email reuse: user account created after legacy admin assignment",
           });
-          await recordSyncAudit(database, {
-            action: "legacy_admin_migration_conflict",
-            targetClientId: record.clientId,
-            targetUserId: stableUserId,
-            details: {
-              adminDocId: record._id?.toString() || "unknown",
-              email: normalizedEmail,
-              reason: "Potential email reuse: user account created after legacy admin assignment",
-              assignmentCreatedAt: record.createdAt,
-              userCreatedAt: targetUser.createdAt,
-            },
-            timestamp: new Date(),
-          });
+          if (!dryRun) {
+            await recordSyncAudit(database, {
+              action: "legacy_admin_migration_conflict",
+              targetClientId: record.clientId,
+              targetUserId: stableUserId,
+              details: {
+                adminDocId: record._id?.toString() || "unknown",
+                email: normalizedEmail,
+                reason: "Potential email reuse: user account created after legacy admin assignment",
+                assignmentCreatedAt: record.createdAt,
+                userCreatedAt: targetUser.createdAt,
+              },
+              timestamp: new Date(),
+            });
+          }
           continue;
         }
       }
@@ -583,17 +589,19 @@ export async function migrateLegacyAppAdmins(
           email: normalizedEmail,
           reason: "Explicit revocation in user_app_registrations prevents automatic privilege elevation",
         });
-        await recordSyncAudit(database, {
-          action: "legacy_admin_migration_conflict",
-          targetClientId: record.clientId,
-          targetUserId: stableUserId,
-          details: {
-            adminDocId: record._id?.toString() || "unknown",
-            email: normalizedEmail,
-            reason: "Explicit revocation in user_app_registrations prevents automatic privilege elevation",
-          },
-          timestamp: new Date(),
-        });
+        if (!dryRun) {
+          await recordSyncAudit(database, {
+            action: "legacy_admin_migration_conflict",
+            targetClientId: record.clientId,
+            targetUserId: stableUserId,
+            details: {
+              adminDocId: record._id?.toString() || "unknown",
+              email: normalizedEmail,
+              reason: "Explicit revocation in user_app_registrations prevents automatic privilege elevation",
+            },
+            timestamp: new Date(),
+          });
+        }
         continue;
       }
 
@@ -676,13 +684,18 @@ export async function migrateLegacyAppAdmins(
 
 /**
  * Self-healing sweep: scan all app_admins and ensure they are synced to user and account.
+ *
+ * NOTE: This sweep intentionally does NOT call migrateLegacyAppAdmins(). Legacy migration
+ * is an explicit, operator-reviewed action invoked via the migrate-app-admins CLI with
+ * --apply. Running it automatically in the background would bypass the required human
+ * review step and could silently alter records. Self-heal only repairs identity data
+ * (user doc, account doc, user_app_registrations) for already-stable, explicitly active
+ * app_admins records.
  */
 export async function selfHealAppAdmins(database: Db): Promise<void> {
   try {
-    // 1. Explicitly migrate any legacy email-only records to stable user IDs
-    await migrateLegacyAppAdmins(database);
 
-    // 2. Only self-heal active app_admins records; deactivated or deleted assignments must not be resurrected
+    // Only self-heal active app_admins records; deactivated or deleted assignments must not be resurrected
     const admins = await database.collection("app_admins").find({
       isActive: { $ne: false },
       active: { $ne: false },

@@ -64,8 +64,40 @@ export function validateDisposableMongoUri(uri: string, varName: string = "MONGO
 
   if (isRemote || !isLoopback) {
     throw new Error(
-      `[SECURITY_VIOLATION] Inherited non-disposable Mongo URI detected in test environment (variable: ${varName}). ` +
+      `[SECURITY_VIOLATION] Inherited non-local Mongo URI detected in test environment (variable: ${varName}). ` +
       "Tests and benchmarks must strictly run against a local disposable MongoMemoryServer."
+    );
+  }
+  // NOTE: A URI containing a loopback address is a necessary but not sufficient
+  // guarantee of isolation. A URI like mongodb://localhost:27017/production could
+  // still point at a real shared database. Tests that create a MongoMemoryServer
+  // should call assertIsMemoryServerUri() to prove the URI matches the in-process
+  // disposable instance rather than any other loopback listener.
+}
+
+/**
+ * Proves that the active MONGO_URI matches the URI of a specific MongoMemoryServer
+ * instance. Call this immediately after MongoMemoryServer.create() and before any
+ * database operations to assert that no inherited or ambient URI is in use.
+ *
+ * @param mongodUri - The URI returned by mongod.getUri() from your MongoMemoryServer.
+ * @param envVar - The environment variable to check (defaults to "MONGO_URI").
+ */
+export function assertIsMemoryServerUri(mongodUri: string, envVar: string = "MONGO_URI"): void {
+  const activeUri = process.env[envVar];
+  if (!activeUri) return; // No ambient URI is set — safe by absence.
+
+  // Normalize both URIs for comparison: strip trailing slashes and database name component
+  const normalize = (u: string) => u.replace(/\/+$/, "").replace(/\/[^/]+$/, "");
+  const normalizedActive = normalize(activeUri.toLowerCase());
+  const normalizedMongod = normalize(mongodUri.toLowerCase());
+
+  if (normalizedActive !== normalizedMongod) {
+    throw new Error(
+      `[SECURITY_VIOLATION] Active ${envVar} does not match the disposable MongoMemoryServer URI. ` +
+      `Active: ${activeUri.replace(/:\/\/[^@]*@/, "://<redacted>@")} — ` +
+      `Expected prefix: ${normalizedMongod}. ` +
+      "Tests must only use the in-process MongoMemoryServer, not any other loopback instance."
     );
   }
 }

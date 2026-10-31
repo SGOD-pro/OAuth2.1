@@ -138,6 +138,28 @@ export async function checkRateLimit(
 
 const ORIGIN_CACHE_TTL_SECONDS = 300;
 
+/**
+ * SHARED MONOTONIC VERSION COUNTER
+ *
+ * Returns the current version from a Redis INCR counter — an integer that
+ * increments atomically and is shared across all running instances (Lambda
+ * and otherwise). This replaces Date.now() for invalidation sequencing so
+ * that comparisons between processes are not subject to clock skew.
+ *
+ * Returns null when Redis is unavailable; callers fall back to the MongoDB
+ * version counter in db/state.ts.
+ */
+export async function incrementCacheVersion(): Promise<number | null> {
+  if (!redis) return null;
+  try {
+    const version = await redis.incr("swyra:cache:version");
+    return typeof version === "number" ? version : null;
+  } catch (error) {
+    console.error({ event: "redis_cache_version_incr_failed", error: String(error) });
+    return null;
+  }
+}
+
 const SET_ORIGIN_CACHE_LUA = `
 local originKey = KEYS[1]
 local invKey = KEYS[2]
@@ -204,7 +226,7 @@ export async function setCachedOriginRedis(
   try {
     const originKey = `swyra:origin:${origin}`;
     const invKey = `swyra:origin:inv:${origin}`;
-    const globalInvKey = "swyra:origin:global_inv";
+    const globalInvKey = "swyra:inv:global";
 
     const res = await redis.eval(
       SET_ORIGIN_CACHE_LUA,
@@ -219,20 +241,25 @@ export async function setCachedOriginRedis(
   }
 }
 
-export async function invalidateCachedOriginRedis(origins?: string[]): Promise<void> {
+export async function invalidateCachedOriginRedis(
+  origins?: string[],
+  version?: number,
+): Promise<void> {
   if (!redis) return;
-  const now = Date.now();
+  const marker = typeof version === "number" ? version : Date.now();
   if (origins && origins.length > 0) {
     await redis.eval(
       INVALIDATE_ORIGIN_CACHE_LUA,
       origins,
-      [String(now), "60"],
+      [String(marker), "60"],
     );
     return;
   }
 
-  // Global invalidation: write global tombstone marker first!
-  await redis.set("swyra:origin:global_inv", now, { ex: 60 });
+  // Global invalidation: write global tombstone marker first.
+  // The marker key uses a DIFFERENT prefix (swyra:inv:global) so it cannot be
+  // matched and deleted by the swyra:origin:* scan below.
+  await redis.set("swyra:inv:global", marker, { ex: 60 });
 
   let cursor: string | number = 0;
   do {
@@ -241,7 +268,8 @@ export async function invalidateCachedOriginRedis(origins?: string[]): Promise<v
       count: 100,
     });
     const [nextCursor, keys] = result;
-    if (keys.length > 0) await redis.del(...keys);
+    const originKeys = keys.filter((k) => k.startsWith("swyra:origin:") && k !== "swyra:inv:global");
+    if (originKeys.length > 0) await redis.del(...originKeys);
     cursor = nextCursor;
   } while (String(cursor) !== "0");
 }

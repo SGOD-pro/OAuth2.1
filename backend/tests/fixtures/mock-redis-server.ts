@@ -130,16 +130,42 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
 
             if (lower === "scan") {
               const now = Date.now();
+              let matchPattern: string | null = null;
+              for (let i = 1; i < args.length; i++) {
+                if (String(args[i]).toLowerCase() === "match" && args[i + 1]) {
+                  matchPattern = String(args[i + 1]);
+                  break;
+                }
+              }
+
+              let regex: RegExp | null = null;
+              if (matchPattern) {
+                const escaped = matchPattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+                regex = new RegExp(`^${escaped}$`);
+              }
+
               const validKeys: string[] = [];
               for (const [k, v] of store.entries()) {
-                if (!isExpired(v)) {
-                  validKeys.push(k);
-                } else {
+                if (isExpired(v)) {
                   store.delete(k);
+                } else if (!regex || regex.test(k)) {
+                  validKeys.push(k);
                 }
               }
               // Format: [nextCursor, keys]
               return { result: ["0", validKeys] };
+            }
+
+            if (lower === "incr") {
+              const [key] = args;
+              const entry = store.get(key);
+              let currentVal = 0;
+              if (entry && !isExpired(entry)) {
+                currentVal = Number(entry.value) || 0;
+              }
+              const nextVal = currentVal + 1;
+              store.set(key, { value: nextVal });
+              return { result: nextVal };
             }
 
             return { result: null };

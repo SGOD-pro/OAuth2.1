@@ -4,12 +4,14 @@ import {
   invalidateOriginCache,
   markSharedRedisOutage,
   getSharedRedisOutage,
+  incrementCacheVersionMongo,
 } from "../db/state";
 import { getDb } from "../db/mongo";
 import {
   getCachedOriginRedis,
   setCachedOriginRedis,
   invalidateCachedOriginRedis,
+  incrementCacheVersion,
 } from "./redis";
 import {
   normalizeOrigin,
@@ -61,10 +63,24 @@ export function extractClientOrigins(client: any): string[] {
 
 export interface OriginCheckContext {
   origin: string;
+  /**
+   * Shared monotonic version at the start of this check. Sourced from
+   * Redis INCR (cross-instance) or MongoDB $inc (fallback). Never from
+   * Date.now() or any process-local clock, so comparisons across Lambda
+   * instances or horizontally scaled processes are not subject to clock skew.
+   */
+  startVersion: number;
+  /** @deprecated use startVersion; kept for wire compatibility during transition */
   startTime: number;
 }
 
 const lastInvalidatedAt = new Map<string, number>();
+/**
+ * Maps each normalized origin to the shared version counter value at the
+ * time it was last invalidated. Used for cross-process staleness detection
+ * without relying on wall-clock comparisons.
+ */
+const lastInvalidatedVersion = new Map<string, number>();
 const MAX_INVALIDATION_MAP_SIZE = 1000;
 const INVALIDATION_RETENTION_MS = 60000;
 
@@ -95,10 +111,13 @@ export function getInvalidationMapSizeForTesting(): number {
 
 export function clearInvalidationMapForTesting(): void {
   lastInvalidatedAt.clear();
+  lastInvalidatedVersion.clear();
   globalLastInvalidatedAt = 0;
+  globalLastInvalidatedVersion = 0;
 }
 
 let globalLastInvalidatedAt = 0;
+let globalLastInvalidatedVersion = 0;
 let redisOutageDetected = false;
 
 export function getRedisOutageDetected(): boolean {
@@ -118,12 +137,35 @@ export function getLastInvalidatedAt(origin: string): number {
  * Marks the start of an origin validation check.
  * The returned context token must be passed to setCachedOrigin to prevent
  * in-flight reads from repopulating the cache with stale data after a client mutation.
+ *
+ * The version is fetched from a shared monotonic counter (Redis INCR or MongoDB $inc)
+ * so that comparisons are valid across all running instances without relying on
+ * process-local wall clocks.
  */
-export function startOriginCheck(origin: string): OriginCheckContext {
+export async function startOriginCheck(origin: string): Promise<OriginCheckContext> {
   const normalized = normalizeOrigin(origin) || origin;
+
+  // Fetch a shared monotonic version. Redis INCR is the primary source; MongoDB $inc
+  // is the fallback when Redis is unavailable. Either is atomic and cross-process safe.
+  let version = 0;
+  try {
+    const redisVersion = await incrementCacheVersion();
+    if (redisVersion !== null) {
+      version = redisVersion;
+    } else {
+      version = await incrementCacheVersionMongo();
+    }
+  } catch (err) {
+    // Final fallback: local version still prevents within-process races.
+    // Cross-process clock skew is harmless at worst; the result is a cache miss.
+    version = Date.now();
+    console.warn({ event: "origin_check_version_fallback", origin: normalized, error: String(err) });
+  }
+
   return {
     origin: normalized,
-    startTime: Date.now(),
+    startVersion: version,
+    startTime: version,
   };
 }
 
@@ -182,22 +224,37 @@ export async function setCachedOrigin(
   const normalized = normalizeOrigin(origin);
   if (!normalized) return;
 
-  const startTime = typeof checkContext === "number" ? checkContext : checkContext?.startTime;
+  const startVersion = typeof checkContext === "number"
+    ? checkContext
+    : checkContext?.startVersion ?? checkContext?.startTime;
 
-  if (typeof startTime === "number") {
-    const originInv = lastInvalidatedAt.get(normalized) || 0;
-    if (originInv >= startTime || globalLastInvalidatedAt >= startTime) {
-      // A client mutation/invalidation occurred while the read check was in-flight.
+  if (typeof startVersion === "number" && startVersion > 0) {
+    // Check in-process version map (populated when this process performed invalidation)
+    const originInvVersion = lastInvalidatedVersion.get(normalized) || 0;
+    const globalInvVersion = globalLastInvalidatedVersion;
+
+    // Also check timestamp-based fallback for cross-process invalidations that
+    // happened before shared versioning was adopted on the other end.
+    const originInvTime = lastInvalidatedAt.get(normalized) || 0;
+    const globalInvTime = globalLastInvalidatedAt;
+
+    if (
+      originInvVersion >= startVersion ||
+      globalInvVersion >= startVersion ||
+      originInvTime >= startVersion ||
+      globalInvTime >= startVersion
+    ) {
+      // A client mutation or invalidation occurred while the read check was in-flight.
       // Do NOT write to cache; this avoids repopulating stale data.
       return;
     }
   }
 
   await Promise.allSettled([
-    setCachedOriginRedis(normalized, allowed, startTime).catch((err) => {
+    setCachedOriginRedis(normalized, allowed, startVersion).catch((err) => {
       console.error({ event: "redis_origin_cache_write_error", origin: normalized, error: String(err) });
     }),
-    putOriginCache(normalized, allowed, startTime).catch((err) => {
+    putOriginCache(normalized, allowed, startVersion).catch((err) => {
       console.error({ event: "mongo_origin_cache_write_error", origin: normalized, error: String(err) });
     }),
   ]);
@@ -213,6 +270,21 @@ export async function invalidateOrigins(
 ): Promise<void> {
   let normalizedOrigins: string[] | undefined;
   const now = Date.now();
+
+  // Obtain a shared version to pair with this invalidation so in-flight
+  // origin checks that started before this invalidation cannot re-populate
+  // the cache after it completes.
+  let invalidationVersion = 0;
+  try {
+    const redisVersion = await incrementCacheVersion();
+    if (redisVersion !== null) {
+      invalidationVersion = redisVersion;
+    } else {
+      invalidationVersion = await incrementCacheVersionMongo();
+    }
+  } catch {
+    invalidationVersion = now;
+  }
 
   if (origins && Array.isArray(origins) && origins.length > 0) {
     const set = new Set<string>();
@@ -235,22 +307,25 @@ export async function invalidateOrigins(
 
     for (const norm of normalizedOrigins) {
       lastInvalidatedAt.set(norm, now);
+      lastInvalidatedVersion.set(norm, invalidationVersion);
     }
     pruneInvalidatedAt(now);
   } else {
     globalLastInvalidatedAt = now;
+    globalLastInvalidatedVersion = invalidationVersion;
     lastInvalidatedAt.clear();
+    lastInvalidatedVersion.clear();
   }
 
   let redisFailed = false;
 
   await Promise.allSettled([
-    invalidateCachedOriginRedis(normalizedOrigins).catch((err) => {
+    invalidateCachedOriginRedis(normalizedOrigins, invalidationVersion).catch((err) => {
       redisFailed = true;
       redisOutageDetected = true;
       console.error({ event: "redis_origin_invalidation_error", error: String(err) });
     }),
-    invalidateOriginCache(normalizedOrigins).catch((err) => {
+    invalidateOriginCache(normalizedOrigins, invalidationVersion).catch((err) => {
       console.error({ event: "mongo_origin_invalidation_error", error: String(err) });
     }),
   ]);

@@ -13,6 +13,10 @@ const mongoUri = mongod.getUri();
 
 process.env.NODE_ENV = "test";
 process.env.MONGO_URI = mongoUri;
+
+// Prove MONGO_URI matches the in-process disposable server, not any other loopback listener.
+const { assertIsMemoryServerUri } = await import("../fixtures/test-env-isolation");
+assertIsMemoryServerUri(mongoUri);
 process.env.BETTER_AUTH_SECRET = "b".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -30,7 +34,7 @@ const { checkUserIsClientAdmin } = await import("../../src/middleware/admin-auth
 const { isOriginAllowed } = await import("../../src/middleware/cors");
 const { config } = await import("../../src/config");
 const { registerTokenFamily } = await import("../../src/db/state");
-const { migrateLegacyAppAdmins } = await import("../../src/utils/admin-sync");
+const { migrateLegacyAppAdmins, selfHealAppAdmins } = await import("../../src/utils/admin-sync");
 const {
   isolateTestEnvironment,
   validateDisposableMongoUri,
@@ -1142,9 +1146,121 @@ await runTest("MEM-18: Safe legacy migration handles dry-run, email reuse, and e
 });
 
 // =============================================================================
-// TEST 19: Comprehensive isolation guard alias validation without credential leakage
+// TEST 19: dry-run produces zero database writes including audit records
 // =============================================================================
-await runTest("MEM-19: Isolation guard verifies all Mongo and Redis aliases and redacts sensitive data", async () => {
+await runTest("MEM-19: migrateLegacyAppAdmins dry-run produces zero database writes", async () => {
+  const dryClientId = "test_dry_run_" + crypto.randomBytes(4).toString("hex");
+  const dryEmail = `dry_run_${Date.now()}@example.com`;
+
+  // Create a real user
+  const drySignUp = await authProvider.api.signUpEmail({
+    body: { email: dryEmail, password: "Password123!Aa", name: "Dry Run User" },
+  });
+  const dryUserId = String(drySignUp.user.id);
+
+  // Insert a legacy admin record without userId
+  const dryLegacyDoc = {
+    _id: new ObjectId(),
+    clientId: dryClientId,
+    email: dryEmail,
+    status: "active",
+    createdAt: new Date(),
+  };
+  await db.collection("app_admins").insertOne(dryLegacyDoc);
+
+  // Count audit records before dry run
+  const auditCountBefore = await db.collection("admin_audit").countDocuments({});
+
+  // Run dry-run migration
+  const dryRes = await migrateLegacyAppAdmins(db, { dryRun: true });
+  assert.ok(dryRes.migratedCount >= 1, "Dry run must report the eligible record");
+
+  // Verify: no mutation to app_admins
+  const docAfterDry = await db.collection("app_admins").findOne({ _id: dryLegacyDoc._id });
+  assert.equal(docAfterDry?.userId, undefined, "Dry run must NOT write userId to app_admins");
+
+  // Verify: zero new audit records written
+  const auditCountAfter = await db.collection("admin_audit").countDocuments({});
+  assert.equal(auditCountAfter, auditCountBefore, "Dry run must NOT write any audit records");
+
+  // Verify: no user_app_registrations created
+  const regAfterDry = await db.collection("user_app_registrations").findOne({
+    clientId: dryClientId,
+    $or: [{ userId: dryUserId }, { userId: drySignUp.user.id }],
+  });
+  assert.equal(regAfterDry, null, "Dry run must NOT create user_app_registrations");
+
+  // Cleanup
+  await db.collection("app_admins").deleteOne({ _id: dryLegacyDoc._id });
+});
+
+// =============================================================================
+// TEST 20: selfHealAppAdmins does NOT invoke migrateLegacyAppAdmins
+// =============================================================================
+await runTest("MEM-20: selfHealAppAdmins does not auto-migrate legacy records", async () => {
+  const healClientId = "test_heal_nomig_" + crypto.randomBytes(4).toString("hex");
+  const healEmail = `heal_legacy_${Date.now()}@example.com`;
+
+  // Create a user
+  await authProvider.api.signUpEmail({
+    body: { email: healEmail, password: "Password123!Aa", name: "Heal No Migrate" },
+  });
+
+  // Insert a legacy admin record WITHOUT userId (the kind migrateLegacyAppAdmins would process)
+  const healLegacyDoc = {
+    _id: new ObjectId(),
+    clientId: healClientId,
+    email: healEmail,
+    status: "active",
+    createdAt: new Date(),
+    // userId intentionally absent — this is a legacy record
+  };
+  await db.collection("app_admins").insertOne(healLegacyDoc);
+
+  // Invoke selfHeal
+  await selfHealAppAdmins(db);
+
+  // Verify: legacy record was NOT migrated (userId still absent)
+  const docAfterHeal = await db.collection("app_admins").findOne({ _id: healLegacyDoc._id });
+  assert.equal(
+    docAfterHeal?.userId,
+    undefined,
+    "selfHealAppAdmins must NOT set userId on legacy records — migration requires explicit --apply"
+  );
+
+  // Cleanup
+  await db.collection("app_admins").deleteOne({ _id: healLegacyDoc._id });
+});
+
+// =============================================================================
+// TEST 21: assertIsMemoryServerUri rejects non-matching loopback URIs
+// =============================================================================
+await runTest("MEM-21: assertIsMemoryServerUri blocks non-matching loopback URIs", async () => {
+  // Must pass: mongoUri is the actual memory server URI (already set in process.env.MONGO_URI)
+  assert.doesNotThrow(() => assertIsMemoryServerUri(mongoUri), "Must not throw for matching URI");
+
+  // Must throw: a different loopback URI is not this disposable server
+  let threw = false;
+  try {
+    // Temporarily set MONGO_URI to a different loopback port so the assertion can fire
+    const saved = process.env.MONGO_URI;
+    process.env.MONGO_URI = "mongodb://127.0.0.1:27017/some_other_db";
+    try {
+      assertIsMemoryServerUri(mongoUri);
+    } finally {
+      process.env.MONGO_URI = saved;
+    }
+  } catch (err: any) {
+    threw = true;
+    assert.ok(err.message.includes("SECURITY_VIOLATION"), "Must include SECURITY_VIOLATION");
+  }
+  assert.ok(threw, "assertIsMemoryServerUri must throw when active URI differs from disposable server URI");
+});
+
+// =============================================================================
+// TEST 22: Comprehensive isolation guard alias validation without credential leakage
+// =============================================================================
+await runTest("MEM-22: Isolation guard verifies all Mongo and Redis aliases and redacts sensitive data", async () => {
   // 1. Verify all Mongo aliases are caught
   for (const alias of MONGO_ALIAS_ENV_VARS) {
     process.env[alias] = "mongodb+srv://secret_user:super_secret_password@prod.cluster.mongodb.net/db";
