@@ -1260,7 +1260,7 @@ admin.post("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
 
     // Ensure centralized IdP identity exists in user, account, and user_app_registrations
     try {
-      await syncAppAdminIdentity(database, {
+      const syncResult = await syncAppAdminIdentity(database, {
         email,
         clientId: canonicalClientId,
         name,
@@ -1268,6 +1268,12 @@ admin.post("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
         isActive: true,
         createdAt: now,
       });
+      if (syncResult?.userId) {
+        await database.collection("app_admins").updateOne(
+          { _id: insertResult.insertedId },
+          { $set: { userId: syncResult.userId } }
+        );
+      }
     } catch (provisionErr: any) {
       console.warn("[ADMIN_CREATE_APP_ADMIN] Warning syncing to centralized user collection:", provisionErr?.message || provisionErr);
     }
@@ -1433,6 +1439,7 @@ const updateAppAdminHandler = async (c: any) => {
     // Synchronize updates to centralized Better Auth user, account, and user_app_registrations
     try {
       await syncAppAdminIdentity(database, {
+        userId: updated.userId ? String(updated.userId) : undefined,
         email: updated.email,
         clientId: canonicalClientId,
         name: updated.name,

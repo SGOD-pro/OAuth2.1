@@ -155,7 +155,6 @@ export async function dynamicCors(c: Context, next: Next) {
     return;
   }
 
-  const checkContext = await startOriginCheck(normalizedOrigin);
   let allowed = await getCachedOrigin(normalizedOrigin);
 
   if (allowed === null) {
@@ -167,6 +166,7 @@ export async function dynamicCors(c: Context, next: Next) {
     }
 
     try {
+      const checkContext = await startOriginCheck(normalizedOrigin);
       allowed = await isOriginAllowed(normalizedOrigin);
       await setCachedOrigin(normalizedOrigin, allowed, checkContext);
     } catch {

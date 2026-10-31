@@ -4,14 +4,13 @@ import {
   invalidateOriginCache,
   markSharedRedisOutage,
   getSharedRedisOutage,
-  incrementCacheVersionMongo,
+  getNextAuthoritativeVersion,
 } from "../db/state";
 import { getDb } from "../db/mongo";
 import {
   getCachedOriginRedis,
   setCachedOriginRedis,
   invalidateCachedOriginRedis,
-  incrementCacheVersion,
 } from "./redis";
 import {
   normalizeOrigin,
@@ -64,41 +63,24 @@ export function extractClientOrigins(client: any): string[] {
 export interface OriginCheckContext {
   origin: string;
   /**
-   * Shared monotonic version at the start of this check. Sourced from
-   * Redis INCR (cross-instance) or MongoDB $inc (fallback). Never from
-   * Date.now() or any process-local clock, so comparisons across Lambda
-   * instances or horizontally scaled processes are not subject to clock skew.
+   * Shared monotonic sequence version at the start of this check, sourced
+   * from MongoDB's single authoritative counter. Never from independent Redis
+   * counters or process wall clocks.
    */
   startVersion: number;
-  /** @deprecated use startVersion; kept for wire compatibility during transition */
+  /** @deprecated use startVersion; kept for wire compatibility */
   startTime: number;
 }
 
-const lastInvalidatedAt = new Map<string, number>();
-/**
- * Maps each normalized origin to the shared version counter value at the
- * time it was last invalidated. Used for cross-process staleness detection
- * without relying on wall-clock comparisons.
- */
 const lastInvalidatedVersion = new Map<string, number>();
 const MAX_INVALIDATION_MAP_SIZE = 1000;
-const INVALIDATION_RETENTION_MS = 60000;
 
-function pruneInvalidatedAt(now: number): void {
-  // 1. Time-based pruning: remove entries older than retention window
-  const cutoff = now - INVALIDATION_RETENTION_MS;
-  for (const [originKey, ts] of lastInvalidatedAt.entries()) {
-    if (ts < cutoff) {
-      lastInvalidatedAt.delete(originKey);
-    }
-  }
-
-  // 2. Strict hard bounded cap: evict oldest insertion-order entries when map exceeds MAX_INVALIDATION_MAP_SIZE
-  if (lastInvalidatedAt.size > MAX_INVALIDATION_MAP_SIZE) {
-    const excess = lastInvalidatedAt.size - MAX_INVALIDATION_MAP_SIZE;
+function pruneInvalidatedVersion(): void {
+  if (lastInvalidatedVersion.size > MAX_INVALIDATION_MAP_SIZE) {
+    const excess = lastInvalidatedVersion.size - MAX_INVALIDATION_MAP_SIZE;
     let count = 0;
-    for (const key of lastInvalidatedAt.keys()) {
-      lastInvalidatedAt.delete(key);
+    for (const key of lastInvalidatedVersion.keys()) {
+      lastInvalidatedVersion.delete(key);
       count++;
       if (count >= excess) break;
     }
@@ -106,17 +88,14 @@ function pruneInvalidatedAt(now: number): void {
 }
 
 export function getInvalidationMapSizeForTesting(): number {
-  return lastInvalidatedAt.size;
+  return lastInvalidatedVersion.size;
 }
 
 export function clearInvalidationMapForTesting(): void {
-  lastInvalidatedAt.clear();
   lastInvalidatedVersion.clear();
-  globalLastInvalidatedAt = 0;
   globalLastInvalidatedVersion = 0;
 }
 
-let globalLastInvalidatedAt = 0;
 let globalLastInvalidatedVersion = 0;
 let redisOutageDetected = false;
 
@@ -130,7 +109,7 @@ export function setRedisOutageDetectedForTesting(val: boolean): void {
 
 export function getLastInvalidatedAt(origin: string): number {
   const norm = normalizeOrigin(origin) || origin;
-  return Math.max(lastInvalidatedAt.get(norm) || 0, globalLastInvalidatedAt);
+  return Math.max(lastInvalidatedVersion.get(norm) || 0, globalLastInvalidatedVersion);
 }
 
 /**
@@ -138,29 +117,12 @@ export function getLastInvalidatedAt(origin: string): number {
  * The returned context token must be passed to setCachedOrigin to prevent
  * in-flight reads from repopulating the cache with stale data after a client mutation.
  *
- * The version is fetched from a shared monotonic counter (Redis INCR or MongoDB $inc)
- * so that comparisons are valid across all running instances without relying on
- * process-local wall clocks.
+ * Sourced strictly from MongoDB's single authoritative sequence counter.
+ * If MongoDB is unreachable, this fails closed (throws).
  */
 export async function startOriginCheck(origin: string): Promise<OriginCheckContext> {
   const normalized = normalizeOrigin(origin) || origin;
-
-  // Fetch a shared monotonic version. Redis INCR is the primary source; MongoDB $inc
-  // is the fallback when Redis is unavailable. Either is atomic and cross-process safe.
-  let version = 0;
-  try {
-    const redisVersion = await incrementCacheVersion();
-    if (redisVersion !== null) {
-      version = redisVersion;
-    } else {
-      version = await incrementCacheVersionMongo();
-    }
-  } catch (err) {
-    // Final fallback: local version still prevents within-process races.
-    // Cross-process clock skew is harmless at worst; the result is a cache miss.
-    version = Date.now();
-    console.warn({ event: "origin_check_version_fallback", origin: normalized, error: String(err) });
-  }
+  const version = await getNextAuthoritativeVersion();
 
   return {
     origin: normalized,
@@ -187,7 +149,8 @@ export async function getCachedOrigin(
   // Attempt recovery flush across instances before trusting any Redis cache hit.
   if (isOutage) {
     try {
-      await invalidateCachedOriginRedis();
+      const recoveryVersion = await getNextAuthoritativeVersion(db);
+      await invalidateCachedOriginRedis(undefined, recoveryVersion);
       redisOutageDetected = false;
       if (db) await markSharedRedisOutage(db, false);
     } catch {
@@ -229,22 +192,11 @@ export async function setCachedOrigin(
     : checkContext?.startVersion ?? checkContext?.startTime;
 
   if (typeof startVersion === "number" && startVersion > 0) {
-    // Check in-process version map (populated when this process performed invalidation)
     const originInvVersion = lastInvalidatedVersion.get(normalized) || 0;
     const globalInvVersion = globalLastInvalidatedVersion;
 
-    // Also check timestamp-based fallback for cross-process invalidations that
-    // happened before shared versioning was adopted on the other end.
-    const originInvTime = lastInvalidatedAt.get(normalized) || 0;
-    const globalInvTime = globalLastInvalidatedAt;
-
-    if (
-      originInvVersion >= startVersion ||
-      globalInvVersion >= startVersion ||
-      originInvTime >= startVersion ||
-      globalInvTime >= startVersion
-    ) {
-      // A client mutation or invalidation occurred while the read check was in-flight.
+    if (originInvVersion >= startVersion || globalInvVersion >= startVersion) {
+      // An invalidation occurred at or after this check began.
       // Do NOT write to cache; this avoids repopulating stale data.
       return;
     }
@@ -269,22 +221,9 @@ export async function invalidateOrigins(
   origins?: string[],
 ): Promise<void> {
   let normalizedOrigins: string[] | undefined;
-  const now = Date.now();
 
-  // Obtain a shared version to pair with this invalidation so in-flight
-  // origin checks that started before this invalidation cannot re-populate
-  // the cache after it completes.
-  let invalidationVersion = 0;
-  try {
-    const redisVersion = await incrementCacheVersion();
-    if (redisVersion !== null) {
-      invalidationVersion = redisVersion;
-    } else {
-      invalidationVersion = await incrementCacheVersionMongo();
-    }
-  } catch {
-    invalidationVersion = now;
-  }
+  // Obtain the single authoritative version sequence from MongoDB
+  const invalidationVersion = await getNextAuthoritativeVersion();
 
   if (origins && Array.isArray(origins) && origins.length > 0) {
     const set = new Set<string>();
@@ -306,14 +245,11 @@ export async function invalidateOrigins(
     if (normalizedOrigins.length === 0) return;
 
     for (const norm of normalizedOrigins) {
-      lastInvalidatedAt.set(norm, now);
       lastInvalidatedVersion.set(norm, invalidationVersion);
     }
-    pruneInvalidatedAt(now);
+    pruneInvalidatedVersion();
   } else {
-    globalLastInvalidatedAt = now;
     globalLastInvalidatedVersion = invalidationVersion;
-    lastInvalidatedAt.clear();
     lastInvalidatedVersion.clear();
   }
 

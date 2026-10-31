@@ -847,6 +847,129 @@ await runTest("CORS-15: Shared monotonic versioning protects against stale write
   }
 });
 
+await runTest("CORS-16: Redis-to-MongoDB fallback and recovery with delayed writes and different counter values", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  try {
+    const fallbackOrigin = "https://fallback-recovery.example.com";
+
+    // 1. In-flight check begins at v1 while Redis is active
+    const delayedCheckBeforeOutage = await startOriginCheck(fallbackOrigin);
+    assert.ok(delayedCheckBeforeOutage.startVersion > 0);
+
+    // 2. Redis experiences outage
+    mockRedis.simulateOutage();
+    setRedisOutageDetectedForTesting(true);
+    await markSharedRedisOutage(db, true);
+
+    // 3. During outage: invalidation occurs at v2 (MongoDB authoritative counter increments)
+    await invalidateOrigins([fallbackOrigin]);
+
+    // 4. Delayed write from before outage attempts to write with v1
+    await setCachedOrigin(fallbackOrigin, true, delayedCheckBeforeOutage);
+
+    // Verify: stale write rejected in MongoDB cache!
+    assert.equal(await getCachedOrigin(fallbackOrigin), null, "Delayed write from before outage must be rejected by Mongo cache");
+
+    // 5. Fresh check during outage gets current version v3
+    const freshCheckDuringOutage = await startOriginCheck(fallbackOrigin);
+    assert.ok(freshCheckDuringOutage.startVersion > delayedCheckBeforeOutage.startVersion);
+
+    // Fresh write during outage succeeds in Mongo cache
+    await setCachedOrigin(fallbackOrigin, true, freshCheckDuringOutage);
+    assert.equal(await getCachedOrigin(fallbackOrigin), true, "Fresh write during outage must succeed in Mongo cache");
+
+    // 6. Redis recovers
+    mockRedis.simulateRecovery();
+    // getCachedOrigin triggers recovery flush
+    const cachedAfterRecovery = await getCachedOrigin(fallbackOrigin);
+
+    // 7. Delayed write with pre-recovery version must NOT pollute recovered Redis
+    await setCachedOrigin(fallbackOrigin, true, delayedCheckBeforeOutage);
+    assert.equal(mockRedis.has(`swyra:origin:${fallbackOrigin}`), false, "Old pre-outage write must NOT pollute recovered Redis");
+
+    // 8. Normal fresh check after recovery writes and caches in Redis
+    const checkAfterRecovery = await startOriginCheck(fallbackOrigin);
+    await setCachedOrigin(fallbackOrigin, true, checkAfterRecovery);
+    assert.equal(mockRedis.has(`swyra:origin:${fallbackOrigin}`), true, "Normal write after recovery must populate Redis");
+    assert.equal(await getCachedOrigin(fallbackOrigin), true, "Lookup after recovery returns true");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await markSharedRedisOutage(db, false);
+    setRedisOutageDetectedForTesting(false);
+  }
+});
+
+await runTest("CORS-17: Shared origin used by multiple clients preserved when one is disabled", async () => {
+  const sharedOrigin = "https://multi-client-shared.example.com";
+  const client1Id = "c1_" + crypto.randomBytes(4).toString("hex");
+  const client2Id = "c2_" + crypto.randomBytes(4).toString("hex");
+
+  // Create Client 1 with shared origin
+  await db.collection("oauthClient").insertOne({
+    clientId: client1Id,
+    name: "Client 1",
+    allowedOrigins: [sharedOrigin],
+    redirectUris: ["https://client1.example.com/callback"],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  // Create Client 2 with same shared origin
+  await db.collection("oauthClient").insertOne({
+    clientId: client2Id,
+    name: "Client 2",
+    allowedOrigins: [sharedOrigin],
+    redirectUris: ["https://client2.example.com/callback"],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  // Clear cache and verify allowed
+  await invalidateOrigins([sharedOrigin]);
+  assert.equal(await isOriginAllowed(sharedOrigin), true, "Shared origin initially allowed by both clients");
+
+  const check1 = await startOriginCheck(sharedOrigin);
+  await setCachedOrigin(sharedOrigin, true, check1);
+  assert.equal(await getCachedOrigin(sharedOrigin), true, "Shared origin cached as allowed");
+
+  // Disable Client 1 and invalidate
+  await db.collection("oauthClient").updateOne({ clientId: client1Id }, { $set: { disabled: true } });
+  await invalidateOrigins([sharedOrigin]);
+
+  // Origin MUST STILL BE ALLOWED because Client 2 is active!
+  assert.equal(await isOriginAllowed(sharedOrigin), true, "Shared origin remains allowed because Client 2 is active");
+
+  // Fresh check caches true
+  const check2 = await startOriginCheck(sharedOrigin);
+  await setCachedOrigin(sharedOrigin, true, check2);
+  assert.equal(await getCachedOrigin(sharedOrigin), true, "Shared origin re-cached as allowed");
+
+  // Disable Client 2 and invalidate
+  await db.collection("oauthClient").updateOne({ clientId: client2Id }, { $set: { disabled: true } });
+  await invalidateOrigins([sharedOrigin]);
+
+  // Now origin must be disallowed
+  assert.equal(await isOriginAllowed(sharedOrigin), false, "Shared origin disallowed when all clients are disabled");
+
+  // Negative cache check
+  const check3 = await startOriginCheck(sharedOrigin);
+  await setCachedOrigin(sharedOrigin, false, check3);
+  assert.equal(await getCachedOrigin(sharedOrigin), false, "Negative cache entry preserved");
+
+  // Cleanup
+  await db.collection("oauthClient").deleteMany({ clientId: { $in: [client1Id, client2Id] } });
+  await invalidateOrigins([sharedOrigin]);
+});
+
 await closeDb();
 await mongod.stop();
 

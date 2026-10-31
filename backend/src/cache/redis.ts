@@ -138,44 +138,22 @@ export async function checkRateLimit(
 
 const ORIGIN_CACHE_TTL_SECONDS = 300;
 
-/**
- * SHARED MONOTONIC VERSION COUNTER
- *
- * Returns the current version from a Redis INCR counter — an integer that
- * increments atomically and is shared across all running instances (Lambda
- * and otherwise). This replaces Date.now() for invalidation sequencing so
- * that comparisons between processes are not subject to clock skew.
- *
- * Returns null when Redis is unavailable; callers fall back to the MongoDB
- * version counter in db/state.ts.
- */
-export async function incrementCacheVersion(): Promise<number | null> {
-  if (!redis) return null;
-  try {
-    const version = await redis.incr("swyra:cache:version");
-    return typeof version === "number" ? version : null;
-  } catch (error) {
-    console.error({ event: "redis_cache_version_incr_failed", error: String(error) });
-    return null;
-  }
-}
-
 const SET_ORIGIN_CACHE_LUA = `
 local originKey = KEYS[1]
 local invKey = KEYS[2]
 local globalInvKey = KEYS[3]
 local allowed = ARGV[1]
-local startTime = tonumber(ARGV[2])
+local checkVersion = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 
-if startTime and startTime > 0 then
-    local invTime = redis.call('get', invKey)
-    if invTime and tonumber(invTime) >= startTime then
+if checkVersion and checkVersion > 0 then
+    local invVersion = redis.call('get', invKey)
+    if invVersion and tonumber(invVersion) >= checkVersion then
         return 0
     end
 
-    local globalInv = redis.call('get', globalInvKey)
-    if globalInv and tonumber(globalInv) >= startTime then
+    local globalInvVersion = redis.call('get', globalInvKey)
+    if globalInvVersion and tonumber(globalInvVersion) >= checkVersion then
         return 0
     end
 end
@@ -186,11 +164,11 @@ return 1
 
 export const INVALIDATE_ORIGIN_CACHE_LUA = `
 -- LUA_INVALIDATE_ORIGIN_CACHE
-local now = ARGV[1]
+local invalidationVersion = ARGV[1]
 local ttl = tonumber(ARGV[2]) or 60
 for i = 1, #KEYS do
     local origin = KEYS[i]
-    redis.call("set", "swyra:origin:inv:" .. origin, now, "EX", ttl)
+    redis.call("set", "swyra:origin:inv:" .. origin, invalidationVersion, "EX", ttl)
     redis.call("del", "swyra:origin:" .. origin)
 end
 return 1
@@ -246,7 +224,7 @@ export async function invalidateCachedOriginRedis(
   version?: number,
 ): Promise<void> {
   if (!redis) return;
-  const marker = typeof version === "number" ? version : Date.now();
+  const marker = typeof version === "number" && version > 0 ? version : 0;
   if (origins && origins.length > 0) {
     await redis.eval(
       INVALIDATE_ORIGIN_CACHE_LUA,

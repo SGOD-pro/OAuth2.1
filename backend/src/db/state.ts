@@ -198,7 +198,7 @@ export async function markSharedRedisOutage(db: any, isOutage: boolean): Promise
   try {
     const collection = db.collection("origin_cache");
     await collection.updateOne(
-      { _id: "ORIGIN#__SHARED_REDIS_OUTAGE__" },
+      { _id: "__SHARED_REDIS_OUTAGE__" },
       {
         $set: {
           outage: isOutage,
@@ -214,7 +214,7 @@ export async function getSharedRedisOutage(db: any): Promise<boolean> {
   if (!db) return false;
   try {
     const collection = db.collection("origin_cache");
-    const doc = await collection.findOne({ _id: "ORIGIN#__SHARED_REDIS_OUTAGE__" });
+    const doc = await collection.findOne({ _id: "__SHARED_REDIS_OUTAGE__" });
     return Boolean(doc && doc.outage === true);
   } catch {
     return false;
@@ -222,32 +222,36 @@ export async function getSharedRedisOutage(db: any): Promise<boolean> {
 }
 
 /**
- * SHARED MONOTONIC VERSION COUNTER (MongoDB fallback)
+ * AUTHORITATIVE MONOTONIC VERSION SEQUENCE
  *
- * Atomically increments a shared integer version stored in MongoDB and returns
- * the new value. Used when Redis is unavailable to assign a version to each
- * origin check without relying on process wall clocks. Monotonically increasing
- * across all processes that share this MongoDB instance.
+ * Atomically increments and returns the single authoritative sequence counter
+ * stored in MongoDB. Every origin check and origin invalidation acquires a
+ * sequence number from this authoritative source.
  *
- * Uses findOneAndUpdate with $inc so that concurrent callers each receive a
- * unique, ordered version number even under high parallelism.
+ * Guarantees:
+ * 1. Single authoritative counter: Redis does NOT maintain an independent counter.
+ * 2. Strict integer versioning: millisecond timestamps are NEVER compared with versions.
+ * 3. Safe fallback & recovery: Redis receives the authoritative version from MongoDB.
  */
-export async function incrementCacheVersionMongo(): Promise<number> {
-  const db = await getDb();
-  const collection = db.collection("origin_cache");
+export async function getNextAuthoritativeVersion(db?: any): Promise<number> {
+  const database = db || await getDb();
+  const collection = database.collection("origin_cache");
   const result = await collection.findOneAndUpdate(
-    { _id: "ORIGIN#__CACHE_VERSION__" },
-    { $inc: { version: 1 } } as any,
+    { _id: "__ORIGIN_AUTHORITATIVE_VERSION__" },
+    { $inc: { version: 1 } },
     { upsert: true, returnDocument: "after" }
   );
   const version = (result as any)?.version ?? (result as any)?.value?.version ?? 1;
   return typeof version === "number" ? version : 1;
 }
 
+// Backwards-compatible alias for existing callers/tests
+export const incrementCacheVersionMongo = getNextAuthoritativeVersion;
+
 export async function putOriginCache(
   origin: string,
   allowed: boolean,
-  startTime?: number,
+  version?: number,
 ): Promise<boolean> {
   await ensureTtlIndexes();
 
@@ -256,50 +260,30 @@ export async function putOriginCache(
   const id = `ORIGIN#${origin}`;
   const now = new Date();
 
-  // 1. Check global tombstone if startTime is provided
-  if (typeof startTime === "number") {
+  // 1. Check global tombstone if version is provided
+  if (typeof version === "number" && version > 0) {
     const globalTombstone = await collection.findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
-    if (globalTombstone) {
-      if (
-        typeof globalTombstone.invalidatedVersion === "number" &&
-        globalTombstone.invalidatedVersion >= startTime
-      ) {
-        return false;
-      }
-      if (
-        startTime > 1000000000000 &&
-        globalTombstone.invalidatedAt &&
-        globalTombstone.invalidatedAt.getTime() >= startTime
-      ) {
-        return false;
-      }
+    if (
+      globalTombstone &&
+      typeof globalTombstone.invalidatedVersion === "number" &&
+      globalTombstone.invalidatedVersion >= version
+    ) {
+      // Global invalidation occurred at or after this check began. Refuse to write.
+      return false;
     }
   }
 
   // 2. Atomic write with conditional filter:
   // If document does not exist, insert it.
-  // If document exists, update ONLY IF it has NOT been invalidated since startTime.
-  if (typeof startTime === "number") {
-    const isTimestamp = startTime > 1000000000000;
-    const filter: any = {
+  // If document exists, update ONLY IF it has NOT been invalidated at or after version.
+  if (typeof version === "number" && version > 0) {
+    const filter = {
       _id: id,
-      $and: [
-        {
-          $or: [
-            { invalidatedVersion: { $exists: false } },
-            { invalidatedVersion: { $lt: startTime } },
-          ],
-        },
+      $or: [
+        { invalidatedVersion: { $exists: false } },
+        { invalidatedVersion: { $lt: version } },
       ],
     };
-    if (isTimestamp) {
-      filter.$and.push({
-        $or: [
-          { invalidatedAt: { $exists: false } },
-          { invalidatedAt: { $lt: new Date(startTime) } },
-        ],
-      });
-    }
 
     const update = {
       $set: {
@@ -315,19 +299,12 @@ export async function putOriginCache(
       return true;
     }
 
-    // Check if document exists with an invalidation newer than startTime
+    // Check if document exists with an invalidation newer than or equal to version
     const existing = await collection.findOne({ _id: id });
     if (existing) {
       if (
         typeof existing.invalidatedVersion === "number" &&
-        existing.invalidatedVersion >= startTime
-      ) {
-        return false;
-      }
-      if (
-        isTimestamp &&
-        existing.invalidatedAt &&
-        existing.invalidatedAt.getTime() >= startTime
+        existing.invalidatedVersion >= version
       ) {
         return false;
       }
@@ -343,7 +320,7 @@ export async function putOriginCache(
       return true;
     } catch (insertErr: any) {
       if (insertErr?.code === 11000) {
-        // Document was created concurrently (e.g. invalidation happened). Re-check conditionally.
+        // Document was created concurrently. Re-check conditionally.
         const retryResult = await collection.updateOne(filter, update);
         return retryResult.matchedCount > 0;
       }
@@ -377,18 +354,18 @@ export async function invalidateOriginCache(
 
   if (origins && origins.length > 0) {
     const ids = origins.map((origin) => `ORIGIN#${origin}`);
+    const updateFields: any = {
+      allowed: null,
+      cachedAt: now,
+    };
+    if (typeof version === "number" && version > 0) {
+      updateFields.invalidatedVersion = version;
+    }
     if (typeof collection.bulkWrite === "function") {
       const operations = ids.map((id) => ({
         updateOne: {
           filter: { _id: id },
-          update: {
-            $set: {
-              allowed: null,
-              invalidatedAt: now,
-              ...(typeof version === "number" ? { invalidatedVersion: version } : {}),
-              cachedAt: now,
-            },
-          },
+          update: { $set: updateFields },
           upsert: true,
         },
       }));
@@ -397,14 +374,7 @@ export async function invalidateOriginCache(
       for (const id of ids) {
         await collection.updateOne(
           { _id: id },
-          {
-            $set: {
-              allowed: null,
-              invalidatedAt: now,
-              ...(typeof version === "number" ? { invalidatedVersion: version } : {}),
-              cachedAt: now,
-            },
-          },
+          { $set: updateFields },
           { upsert: true },
         );
       }
@@ -412,17 +382,17 @@ export async function invalidateOriginCache(
     return;
   }
 
-  await collection.deleteMany({ _id: /^ORIGIN#/ });
+  await collection.deleteMany({ _id: /^ORIGIN#https?:\/\// });
+  const globalFields: any = {
+    allowed: null,
+    cachedAt: now,
+  };
+  if (typeof version === "number" && version > 0) {
+    globalFields.invalidatedVersion = version;
+  }
   await collection.updateOne(
     { _id: "ORIGIN#__GLOBAL_TOMBSTONE__" },
-    {
-      $set: {
-        allowed: null,
-        invalidatedAt: now,
-        ...(typeof version === "number" ? { invalidatedVersion: version } : {}),
-        cachedAt: now,
-      },
-    },
+    { $set: globalFields },
     { upsert: true },
   );
 }

@@ -2,7 +2,13 @@ import { ObjectId, Db } from "mongodb";
 
 export interface SyncAppAdminParams {
   /**
-   * Application administrator email. Required to key user upsert and Better Auth account synchronization.
+   * Immutable user ID. When provided, synchronization is strictly bound to this
+   * exact identity. A different user will never be assigned or elevated solely
+   * because their email matches.
+   */
+  userId?: string;
+  /**
+   * Application administrator email.
    */
   email: string;
   clientId: string;
@@ -46,9 +52,9 @@ export async function recordSyncAudit(
 export async function syncAppAdminIdentity(
   database: Db,
   params: SyncAppAdminParams
-): Promise<void> {
-  const { email, clientId, name, hashedPassword, isActive, previousEmail, createdAt } = params;
-  if (!email || !clientId) return;
+): Promise<{ userId: string } | null> {
+  const { userId: explicitUserId, email, clientId, name, hashedPassword, isActive, previousEmail, createdAt } = params;
+  if (!email || !clientId) return null;
 
   const normalizedEmail = email.toLowerCase().trim();
   const now = new Date();
@@ -62,9 +68,26 @@ export async function syncAppAdminIdentity(
     );
   }
 
-  // 1. Upsert into user collection
-  let user = await database.collection("user").findOne({ email: normalizedEmail });
+  // 1. Resolve user by immutable userId (if provided) or by email (if initial creation)
+  let user: any = null;
   let userId: ObjectId;
+
+  if (explicitUserId) {
+    const rawId = String(explicitUserId).trim();
+    const userConditions = [
+      { id: rawId },
+      ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : [{ _id: rawId }]),
+    ];
+    user = await database.collection("user").findOne({ $or: userConditions });
+
+    if (!user) {
+      console.warn(`[ADMIN_SYNC] Identity mismatch: User with ID "${rawId}" does not exist. Refusing to bind assignment to a different user.`);
+      return null;
+    }
+  } else {
+    user = await database.collection("user").findOne({ email: normalizedEmail });
+  }
+
   const isSuperAdmin = Boolean(
     user &&
     (user.role === "super-admin" || (user.role === "admin" && user.scopedClientId === null))
@@ -74,7 +97,7 @@ export async function syncAppAdminIdentity(
   // One identity cannot simultaneously be super-admin and app-admin.
   if (isSuperAdmin) {
     console.warn(`[ADMIN_SYNC] Identity conflict: ${normalizedEmail} is a Global Super Admin. Skipped assignment as App Admin for client "${clientId}" (mutually exclusive roles).`);
-    return;
+    return null;
   }
 
   if (user) {
@@ -231,6 +254,8 @@ export async function syncAppAdminIdentity(
     },
     timestamp: now,
   });
+
+  return { userId: userIdStr };
 }
 
 /**
@@ -685,17 +710,20 @@ export async function migrateLegacyAppAdmins(
 /**
  * Self-healing sweep: scan all app_admins and ensure they are synced to user and account.
  *
- * NOTE: This sweep intentionally does NOT call migrateLegacyAppAdmins(). Legacy migration
- * is an explicit, operator-reviewed action invoked via the migrate-app-admins CLI with
- * --apply. Running it automatically in the background would bypass the required human
- * review step and could silently alter records. Self-heal only repairs identity data
- * (user doc, account doc, user_app_registrations) for already-stable, explicitly active
- * app_admins records.
+ * Guarantees:
+ * 1. Stable Identity Binding: uses immutable userId. Does NOT grant an assignment to a
+ *    different user solely because their email matches.
+ * 2. Legacy Quarantine: legacy records lacking a stable userId are quarantined for the
+ *    explicit, auditable migration (migrate-app-admins CLI). Never auto-migrated here.
+ * 3. Deleted User Protection: if a user account was deleted or recreated with a new userId,
+ *    the old app_admins record is NOT attached to the new user.
+ * 4. Revocation Preservation: never reactivates an explicitly revoked, disabled, or
+ *    suspended record from either app_admins or user_app_registrations.
+ * 5. Super Admin Protection: Global Super Admins cannot be consumer app admins.
  */
 export async function selfHealAppAdmins(database: Db): Promise<void> {
   try {
-
-    // Only self-heal active app_admins records; deactivated or deleted assignments must not be resurrected
+    // Only query active app_admins records; deactivated or deleted assignments must not be resurrected
     const admins = await database.collection("app_admins").find({
       isActive: { $ne: false },
       active: { $ne: false },
@@ -703,8 +731,10 @@ export async function selfHealAppAdmins(database: Db): Promise<void> {
       revoked: { $ne: true },
       status: { $nin: ["inactive", "revoked", "suspended", "disabled"] },
     }).toArray();
+
     for (const a of admins) {
-      if (!a.email || !a.clientId) continue;
+      if (!a.clientId) continue;
+
       const isRecordActive =
         a.isActive !== false &&
         a.active !== false &&
@@ -713,10 +743,61 @@ export async function selfHealAppAdmins(database: Db): Promise<void> {
         !["inactive", "revoked", "suspended", "disabled"].includes(a.status);
       if (!isRecordActive) continue;
 
-      await syncAppAdminIdentity(database, {
-        email: a.email,
+      // STABLE IDENTITY REQUIREMENT:
+      // 1. If an app_admins record lacks a stable userId, it is a legacy email-only record.
+      //    Quarantine it! Never auto-promote or bind by email alone during background self-heal.
+      const rawUserId = a.userId ? String(a.userId).trim() : "";
+      if (!rawUserId) {
+        continue;
+      }
+
+      // 2. Query user by the immutable userId
+      const userConditions = [
+        { id: rawUserId },
+        ...(ObjectId.isValid(rawUserId) ? [{ _id: new ObjectId(rawUserId) }] : [{ _id: rawUserId }]),
+      ];
+      const targetUser = await database.collection("user").findOne({ $or: userConditions });
+
+      // If user does not exist with this exact immutable ID (e.g. deleted account),
+      // do NOT create or grant an assignment to a different user solely because their email matches!
+      if (!targetUser) {
+        continue;
+      }
+
+      // 3. Super Admin identity check: cannot be consumer app admin
+      const isSuperAdmin = Boolean(
+        targetUser.role === "super-admin" || (targetUser.role === "admin" && targetUser.scopedClientId === null)
+      );
+      if (isSuperAdmin) {
+        continue;
+      }
+
+      // 4. Verify explicit active assignment in user_app_registrations hasn't been revoked
+      const existingReg = await database.collection("user_app_registrations").findOne({
         clientId: a.clientId,
-        name: a.name,
+        $or: [
+          { userId: rawUserId },
+          ...(ObjectId.isValid(rawUserId) ? [{ userId: new ObjectId(rawUserId) }] : []),
+        ],
+      });
+      const isRegRevoked =
+        existingReg &&
+        (existingReg.isActive === false ||
+          existingReg.active === false ||
+          existingReg.disabled === true ||
+          existingReg.revoked === true ||
+          ["inactive", "revoked", "suspended", "disabled"].includes(existingReg.status));
+
+      if (isRegRevoked) {
+        // Never reactivate an explicitly revoked assignment!
+        continue;
+      }
+
+      await syncAppAdminIdentity(database, {
+        userId: rawUserId,
+        email: targetUser.email || a.email,
+        clientId: a.clientId,
+        name: a.name || targetUser.name,
         hashedPassword: a.password,
         isActive: true,
         createdAt: a.createdAt,

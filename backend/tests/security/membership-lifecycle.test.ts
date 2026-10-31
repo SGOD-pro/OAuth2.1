@@ -38,6 +38,7 @@ const { migrateLegacyAppAdmins, selfHealAppAdmins } = await import("../../src/ut
 const {
   isolateTestEnvironment,
   validateDisposableMongoUri,
+  parseMongoEndpoint,
   assertNoExternalInfrastructure,
   MONGO_ALIAS_ENV_VARS,
   REDIS_ALIAS_ENV_VARS,
@@ -1233,28 +1234,77 @@ await runTest("MEM-20: selfHealAppAdmins does not auto-migrate legacy records", 
 });
 
 // =============================================================================
-// TEST 21: assertIsMemoryServerUri rejects non-matching loopback URIs
+// TEST 21: assertIsMemoryServerUri rejects non-matching loopback URIs and parses endpoints accurately
 // =============================================================================
-await runTest("MEM-21: assertIsMemoryServerUri blocks non-matching loopback URIs", async () => {
-  // Must pass: mongoUri is the actual memory server URI (already set in process.env.MONGO_URI)
-  assert.doesNotThrow(() => assertIsMemoryServerUri(mongoUri), "Must not throw for matching URI");
-
-  // Must throw: a different loopback URI is not this disposable server
-  let threw = false;
-  try {
-    // Temporarily set MONGO_URI to a different loopback port so the assertion can fire
+await runTest("MEM-21: assertIsMemoryServerUri parses endpoints and blocks non-matching ports without leakage", async () => {
+  // 1. Must pass: matching port with and without database path and trailing slashes
+  const parsedMongod = parseMongoEndpoint(mongoUri);
+  const matchingVariants = [
+    mongoUri,
+    `mongodb://127.0.0.1:${parsedMongod.port}`,
+    `mongodb://127.0.0.1:${parsedMongod.port}/`,
+    `mongodb://127.0.0.1:${parsedMongod.port}/test_database`,
+    `mongodb://127.0.0.1:${parsedMongod.port}/test_database?directConnection=true`,
+    `mongodb://localhost:${parsedMongod.port}/`,
+  ];
+  for (const variant of matchingVariants) {
     const saved = process.env.MONGO_URI;
-    process.env.MONGO_URI = "mongodb://127.0.0.1:27017/some_other_db";
     try {
-      assertIsMemoryServerUri(mongoUri);
+      process.env.MONGO_URI = variant;
+      assert.doesNotThrow(() => assertIsMemoryServerUri(mongoUri), `Variant ${variant} should match expected memory server`);
     } finally {
       process.env.MONGO_URI = saved;
     }
-  } catch (err: any) {
-    threw = true;
-    assert.ok(err.message.includes("SECURITY_VIOLATION"), "Must include SECURITY_VIOLATION");
   }
-  assert.ok(threw, "assertIsMemoryServerUri must throw when active URI differs from disposable server URI");
+
+  // 2. Must throw: different ports (e.g. 27017 vs 44000)
+  const differentPortVariants = [
+    `mongodb://127.0.0.1:${parsedMongod.port === 27017 ? 44000 : 27017}/`,
+    `mongodb://127.0.0.1:${parsedMongod.port + 1}/`,
+    `mongodb://localhost:${parsedMongod.port + 100}/test`,
+  ];
+  for (const variant of differentPortVariants) {
+    const saved = process.env.MONGO_URI;
+    let threw = false;
+    let errorMsg = "";
+    try {
+      process.env.MONGO_URI = variant;
+      assertIsMemoryServerUri(mongoUri);
+    } catch (err: any) {
+      threw = true;
+      errorMsg = err.message;
+    } finally {
+      process.env.MONGO_URI = saved;
+    }
+    assert.ok(threw, `Different port variant ${variant} must throw`);
+    assert.ok(errorMsg.includes("SECURITY_VIOLATION"), "Error must contain SECURITY_VIOLATION");
+    // Verify no raw connection string is leaked in error message
+    assert.ok(!errorMsg.includes(variant), "Error message must NEVER leak the raw connection string");
+  }
+
+  // 3. Must throw: multi-host URIs and remote schemes
+  const disallowedVariants = [
+    `mongodb://127.0.0.1:${parsedMongod.port},127.0.0.1:${parsedMongod.port + 1}/db`,
+    "mongodb+srv://admin:pass@remote.cluster.mongodb.net/prod",
+    "mongodb://secret_user:secret_pass@127.0.0.1:27017/prod",
+  ];
+  for (const variant of disallowedVariants) {
+    const saved = process.env.MONGO_URI;
+    let threw = false;
+    let errorMsg = "";
+    try {
+      process.env.MONGO_URI = variant;
+      assertIsMemoryServerUri(mongoUri);
+    } catch (err: any) {
+      threw = true;
+      errorMsg = err.message;
+    } finally {
+      process.env.MONGO_URI = saved;
+    }
+    assert.ok(threw, `Disallowed variant ${variant} must throw`);
+    assert.ok(!errorMsg.includes("secret_user"), "Must never leak username in error");
+    assert.ok(!errorMsg.includes("secret_pass"), "Must never leak password in error");
+  }
 });
 
 // =============================================================================
@@ -1294,6 +1344,127 @@ await runTest("MEM-22: Isolation guard verifies all Mongo and Redis aliases and 
     assert.ok(thrownError.message.includes("SECURITY_VIOLATION"), "Must include SECURITY_VIOLATION");
     assert.ok(!thrownError.message.includes("sensitive-secret-token"), "Must NEVER leak token in error");
   }
+});
+
+// =============================================================================
+// TEST 23: Stable identity in app-admin self-healing
+// =============================================================================
+await runTest("MEM-23: selfHealAppAdmins binds strictly to immutable userId and prevents email-reuse escalation", async () => {
+  const stableClientId = "test_stable_heal_" + crypto.randomBytes(4).toString("hex");
+  const reusedEmail = `reuse_heal_${Date.now()}@example.com`;
+
+  // 1. User Alice registers and is established as app admin
+  const userASignUp = await authProvider.api.signUpEmail({
+    body: { email: reusedEmail, password: "Password123!Aa", name: "Original Alice" },
+  });
+  const userAId = String(userASignUp.user.id);
+  const userADoc = await db.collection("user").findOne({ email: reusedEmail });
+
+  const adminDoc = {
+    _id: new ObjectId(),
+    clientId: stableClientId,
+    userId: userAId,
+    email: reusedEmail,
+    name: "Alice Admin",
+    status: "active",
+    isActive: true,
+    createdAt: new Date(),
+  };
+  await db.collection("app_admins").insertOne(adminDoc);
+
+  // Sync Alice
+  await selfHealAppAdmins(db);
+  assert.equal(await checkUserIsClientAdmin(db, userADoc, userAId, stableClientId), true, "Alice must be client admin");
+  assert.equal(await checkUserHasAppAccess(db, userADoc, stableClientId), true, "Alice must have private app access");
+
+  // 2. Alice deletes her account (user document is removed)
+  await db.collection("user").deleteOne({ _id: userADoc._id });
+  await db.collection("user_app_registrations").deleteMany({ userId: userAId });
+
+  // 3. Attacker Eve registers with the exact same email address (gets a NEW userId)
+  const userBSignUp = await authProvider.api.signUpEmail({
+    body: { email: reusedEmail, password: "Password123!Aa", name: "Attacker Eve" },
+  });
+  const userBId = String(userBSignUp.user.id);
+  const userBDoc = await db.collection("user").findOne({ email: reusedEmail });
+  assert.notEqual(userAId, userBId, "New user account must have a different userId");
+
+  // 4. Background self-heal sweep runs
+  await selfHealAppAdmins(db);
+
+  // CRITICAL VERIFICATION:
+  // Eve MUST NOT inherit Alice's app admin privileges solely because the email matched!
+  assert.equal(
+    await checkUserIsClientAdmin(db, userBDoc, userBId, stableClientId),
+    false,
+    "New user with reused email MUST NOT gain app admin rights from deleted user's record"
+  );
+  assert.equal(
+    await checkUserHasAppAccess(db, userBDoc, stableClientId),
+    false,
+    "New user with reused email MUST NOT gain private-app access from deleted user's record"
+  );
+
+  // 5. Legacy email-only record (missing userId): quarantined and skipped by self-heal
+  const legacyEmailOnly = `legacy_email_${Date.now()}@example.com`;
+  const legacySignUp = await authProvider.api.signUpEmail({
+    body: { email: legacyEmailOnly, password: "Password123!Aa", name: "Legacy User" },
+  });
+  const legacyUserDoc = await db.collection("user").findOne({ email: legacyEmailOnly });
+  const legacyDoc = {
+    _id: new ObjectId(),
+    clientId: stableClientId,
+    email: legacyEmailOnly,
+    status: "active",
+    isActive: true,
+    createdAt: new Date(),
+    // userId intentionally omitted
+  };
+  await db.collection("app_admins").insertOne(legacyDoc);
+
+  await selfHealAppAdmins(db);
+  assert.equal(
+    await checkUserIsClientAdmin(db, legacyUserDoc, String(legacySignUp.user.id), stableClientId),
+    false,
+    "Legacy email-only record without userId must be quarantined and skipped by self-heal"
+  );
+
+  // 6. Explicitly revoked assignment in user_app_registrations is NEVER reactivated by self-heal
+  const revokedUserId = new ObjectId().toString();
+  const revokedEmail = `rev_preserve_${Date.now()}@example.com`;
+  const revUserSignUp = await authProvider.api.signUpEmail({
+    body: { email: revokedEmail, password: "Password123!Aa", name: "Revoked User" },
+  });
+  const revUserDoc = await db.collection("user").findOne({ email: revokedEmail });
+  const revAdminDoc = {
+    _id: new ObjectId(),
+    clientId: stableClientId,
+    userId: String(revUserSignUp.user.id),
+    email: revokedEmail,
+    status: "active", // active in app_admins
+    isActive: true,
+    createdAt: new Date(),
+  };
+  await db.collection("app_admins").insertOne(revAdminDoc);
+  // But explicitly revoked in user_app_registrations
+  await db.collection("user_app_registrations").insertOne({
+    clientId: stableClientId,
+    userId: String(revUserSignUp.user.id),
+    status: "revoked",
+    isActive: false,
+    revoked: true,
+  });
+
+  await selfHealAppAdmins(db);
+  assert.equal(
+    await checkUserIsClientAdmin(db, revUserDoc, String(revUserSignUp.user.id), stableClientId),
+    false,
+    "Explicit revocation in user_app_registrations must NEVER be reactivated by selfHealAppAdmins"
+  );
+
+  // Cleanup
+  await db.collection("app_admins").deleteMany({ clientId: stableClientId });
+  await db.collection("user_app_registrations").deleteMany({ clientId: stableClientId });
 });
 
 await closeDb();
