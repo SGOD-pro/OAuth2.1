@@ -69,13 +69,33 @@ const MAX_INVALIDATION_MAP_SIZE = 1000;
 const INVALIDATION_RETENTION_MS = 60000;
 
 function pruneInvalidatedAt(now: number): void {
-  if (lastInvalidatedAt.size <= MAX_INVALIDATION_MAP_SIZE) return;
+  // 1. Time-based pruning: remove entries older than retention window
   const cutoff = now - INVALIDATION_RETENTION_MS;
   for (const [originKey, ts] of lastInvalidatedAt.entries()) {
     if (ts < cutoff) {
       lastInvalidatedAt.delete(originKey);
     }
   }
+
+  // 2. Strict hard bounded cap: evict oldest insertion-order entries when map exceeds MAX_INVALIDATION_MAP_SIZE
+  if (lastInvalidatedAt.size > MAX_INVALIDATION_MAP_SIZE) {
+    const excess = lastInvalidatedAt.size - MAX_INVALIDATION_MAP_SIZE;
+    let count = 0;
+    for (const key of lastInvalidatedAt.keys()) {
+      lastInvalidatedAt.delete(key);
+      count++;
+      if (count >= excess) break;
+    }
+  }
+}
+
+export function getInvalidationMapSizeForTesting(): number {
+  return lastInvalidatedAt.size;
+}
+
+export function clearInvalidationMapForTesting(): void {
+  lastInvalidatedAt.clear();
+  globalLastInvalidatedAt = 0;
 }
 
 let globalLastInvalidatedAt = 0;

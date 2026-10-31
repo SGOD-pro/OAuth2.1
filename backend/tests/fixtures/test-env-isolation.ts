@@ -6,6 +6,13 @@
  * Must be executed before any application or configuration modules load.
  */
 
+export const MONGO_ALIAS_ENV_VARS = [
+  "MONGO_URI",
+  "MONGODB_URI",
+  "DATABASE_URL",
+  "MONGO_URL",
+];
+
 export const REDIS_ALIAS_ENV_VARS = [
   "UPSTASH_REDIS_REST_URL",
   "UPSTASH_REDIS_REST_TOKEN",
@@ -31,13 +38,15 @@ export function isolateTestEnvironment(): void {
     }
   }
 
-  // Validate MONGO_URI if already set in environment: must never be a remote production database
-  if (process.env.MONGO_URI) {
-    validateDisposableMongoUri(process.env.MONGO_URI);
+  // Validate all Mongo environment variable aliases: must never be a remote production database
+  for (const envVar of MONGO_ALIAS_ENV_VARS) {
+    if (process.env[envVar]) {
+      validateDisposableMongoUri(process.env[envVar]!, envVar);
+    }
   }
 }
 
-export function validateDisposableMongoUri(uri: string): void {
+export function validateDisposableMongoUri(uri: string, varName: string = "MONGO_URI"): void {
   if (!uri || typeof uri !== "string") return;
   const lower = uri.toLowerCase();
 
@@ -55,7 +64,7 @@ export function validateDisposableMongoUri(uri: string): void {
 
   if (isRemote || !isLoopback) {
     throw new Error(
-      `[SECURITY_VIOLATION] Inherited non-disposable Mongo URI detected in test environment: "${uri}". ` +
+      `[SECURITY_VIOLATION] Inherited non-disposable Mongo URI detected in test environment (variable: ${varName}). ` +
       "Tests and benchmarks must strictly run against a local disposable MongoMemoryServer."
     );
   }
@@ -65,13 +74,16 @@ export function assertNoExternalInfrastructure(): void {
   for (const envVar of REDIS_ALIAS_ENV_VARS) {
     if (process.env[envVar]) {
       throw new Error(
-        `[SECURITY_VIOLATION] Disallowed Redis environment variable active in test environment: ${envVar}=${process.env[envVar]}`
+        `[SECURITY_VIOLATION] Disallowed Redis environment variable active in test environment (variable: ${envVar}). ` +
+        "Tests and benchmarks must strictly run against a local disposable mock Redis server."
       );
     }
   }
 
-  if (process.env.MONGO_URI) {
-    validateDisposableMongoUri(process.env.MONGO_URI);
+  for (const envVar of MONGO_ALIAS_ENV_VARS) {
+    if (process.env[envVar]) {
+      validateDisposableMongoUri(process.env[envVar]!, envVar);
+    }
   }
 }
 

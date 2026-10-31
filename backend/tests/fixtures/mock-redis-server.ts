@@ -83,10 +83,26 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
 
             if (lower === "eval") {
               const [_script, numKeysRaw, ...rest] = args;
+              const scriptStr = String(_script);
               const numKeys = Number(numKeysRaw) || 0;
               const keys = rest.slice(0, numKeys);
               const scriptArgs = rest.slice(numKeys);
 
+              // 1. Atomic Lua Invalidation Script
+              if (scriptStr.includes("LUA_INVALIDATE_ORIGIN_CACHE") || scriptStr.includes("swyra:origin:inv:\" .. origin")) {
+                const now = scriptArgs[0];
+                const ttlSeconds = Number(scriptArgs[1]) || 60;
+                for (const origin of keys) {
+                  store.set(`swyra:origin:inv:${origin}`, {
+                    value: now,
+                    expiresAt: Date.now() + ttlSeconds * 1000,
+                  });
+                  store.delete(`swyra:origin:${origin}`);
+                }
+                return { result: 1 };
+              }
+
+              // 2. Conditional Cache Write Script
               const originKey = keys[0];
               const invKey = keys[1];
               const globalInvKey = keys[2];

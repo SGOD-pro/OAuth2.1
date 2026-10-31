@@ -42,9 +42,11 @@ const {
   startOriginCheck,
   getRedisOutageDetected,
   setRedisOutageDetectedForTesting,
+  getInvalidationMapSizeForTesting,
+  clearInvalidationMapForTesting,
 } = await import("../../src/cache/origin-cache");
 const { setRedisClientForTesting } = await import("../../src/cache/redis");
-const { getSharedRedisOutage } = await import("../../src/db/state");
+const { getSharedRedisOutage, markSharedRedisOutage } = await import("../../src/db/state");
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
 
@@ -551,6 +553,8 @@ await runTest("CORS-10: Disposable Redis mock verifies outage fallback, invalida
   } finally {
     setRedisClientForTesting(null);
     await mockRedis.close();
+    await markSharedRedisOutage(db, false);
+    setRedisOutageDetectedForTesting(false);
   }
 });
 
@@ -684,6 +688,82 @@ await runTest("CORS-11: Cross-process race condition: in-flight worker read reje
     } catch {}
     setRedisClientForTesting(null);
     await mockRedis.close();
+    await markSharedRedisOutage(db, false);
+    setRedisOutageDetectedForTesting(false);
+  }
+});
+
+// =============================================================================
+// TEST 12: Invalidation map strict hard bounded cap of 1,000 entries
+// =============================================================================
+await runTest("CORS-12: Strict hard bounded cap of 1,000 entries on lastInvalidatedAt map", async () => {
+  clearInvalidationMapForTesting();
+  assert.equal(getInvalidationMapSizeForTesting(), 0);
+
+  // Invalidate 1,200 unique origins in batches
+  const batchSize = 100;
+  for (let b = 0; b < 12; b++) {
+    const origins: string[] = [];
+    for (let i = 0; i < batchSize; i++) {
+      origins.push(`https://bounded-test-${b}-${i}.example.com`);
+    }
+    await invalidateOrigins(origins);
+  }
+
+  // Map size must strictly be capped at 1,000
+  const finalSize = getInvalidationMapSizeForTesting();
+  assert.ok(finalSize <= 1000, `Map size must not exceed 1000 (actual: ${finalSize})`);
+  assert.equal(finalSize, 1000, `Map size must be exactly 1000 when 1200 items inserted`);
+
+  clearInvalidationMapForTesting();
+});
+
+// =============================================================================
+// TEST 13: Atomic Lua invalidation combining key deletion and marker write
+// =============================================================================
+await runTest("CORS-13: Atomic Redis Lua invalidation script prevents stale repopulation during concurrent write", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  try {
+    const atomicOrigin = "https://atomic-lua-race.example.com";
+
+    // 1. Initial cached write
+    await setCachedOrigin(atomicOrigin, true);
+    assert.equal(await getCachedOrigin(atomicOrigin), true);
+    assert.equal(mockRedis.has(`swyra:origin:${atomicOrigin}`), true);
+
+    // 2. Start a read context at t1
+    const ctx = startOriginCheck(atomicOrigin);
+    const t1 = ctx.startTime;
+
+    // Small delay to ensure timestamp difference
+    await new Promise((r) => setTimeout(r, 10));
+
+    // 3. Invalidate via atomic Lua script
+    await invalidateOrigins([atomicOrigin]);
+
+    // Verify atomic state in mock Redis: origin key deleted, invalidation marker set
+    assert.equal(mockRedis.has(`swyra:origin:${atomicOrigin}`), false, "Origin cache key must be deleted atomically");
+    assert.equal(mockRedis.has(`swyra:origin:inv:${atomicOrigin}`), true, "Invalidation marker must be set atomically");
+
+    // 4. Stale write attempt with context from t1
+    await setCachedOrigin(atomicOrigin, true, ctx);
+
+    // Stale write must be rejected by Lua script!
+    assert.equal(mockRedis.has(`swyra:origin:${atomicOrigin}`), false, "Stale origin must NOT be written to Redis");
+    assert.equal(await getCachedOrigin(atomicOrigin), null, "Origin lookup must return null after invalidation");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await markSharedRedisOutage(db, false);
+    setRedisOutageDetectedForTesting(false);
   }
 });
 

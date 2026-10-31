@@ -162,6 +162,18 @@ redis.call('set', originKey, allowed, 'EX', ttl)
 return 1
 `;
 
+export const INVALIDATE_ORIGIN_CACHE_LUA = `
+-- LUA_INVALIDATE_ORIGIN_CACHE
+local now = ARGV[1]
+local ttl = tonumber(ARGV[2]) or 60
+for i = 1, #KEYS do
+    local origin = KEYS[i]
+    redis.call("set", "swyra:origin:inv:" .. origin, now, "EX", ttl)
+    redis.call("del", "swyra:origin:" .. origin)
+end
+return 1
+`;
+
 /**
  * Origin allow-list cache. Failure behavior is "cache miss", never
  * "allowed" — a Redis error must fall through to the authoritative
@@ -211,13 +223,17 @@ export async function invalidateCachedOriginRedis(origins?: string[]): Promise<v
   if (!redis) return;
   const now = Date.now();
   if (origins && origins.length > 0) {
-    const delKeys = origins.map((o) => `swyra:origin:${o}`);
-    await redis.del(...delKeys);
-    for (const o of origins) {
-      await redis.set(`swyra:origin:inv:${o}`, now, { ex: 60 }).catch(() => {});
-    }
+    await redis.eval(
+      INVALIDATE_ORIGIN_CACHE_LUA,
+      origins,
+      [String(now), "60"],
+    );
     return;
   }
+
+  // Global invalidation: write global tombstone marker first!
+  await redis.set("swyra:origin:global_inv", now, { ex: 60 });
+
   let cursor: string | number = 0;
   do {
     const result: [string, string[]] = await redis.scan(cursor, {
@@ -228,6 +244,4 @@ export async function invalidateCachedOriginRedis(origins?: string[]): Promise<v
     if (keys.length > 0) await redis.del(...keys);
     cursor = nextCursor;
   } while (String(cursor) !== "0");
-
-  await redis.set("swyra:origin:global_inv", now, { ex: 60 }).catch(() => {});
 }

@@ -126,11 +126,22 @@ export async function checkUserIsClientAdmin(
   const cleanClientId = clientId.trim();
   if (!cleanClientId || cleanClientId.startsWith("$")) return false;
 
-  // USER-REQUIRED POLICY: Super admins must never receive consumer app-admin privileges
-  if (isSuperAdmin(userDoc)) return false;
-
   const resolvedUserId = (typeof userIdStr === "string" ? userIdStr : (userDoc?.id || userDoc?._id)?.toString()) || "";
   if (!resolvedUserId || resolvedUserId.startsWith("$")) return false;
+
+  let user = userDoc;
+  if (!user && database) {
+    const userQueries: any[] = [{ id: resolvedUserId }];
+    if (ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24) {
+      try {
+        userQueries.push({ _id: new ObjectId(resolvedUserId) });
+      } catch {}
+    }
+    user = await database.collection("user").findOne({ $or: userQueries });
+  }
+
+  // USER-REQUIRED POLICY: Super admins must never receive consumer app-admin privileges
+  if (user && isSuperAdmin(user)) return false;
 
   const userConditions: any[] = [{ userId: resolvedUserId }];
   if (ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24) {
@@ -139,102 +150,63 @@ export async function checkUserIsClientAdmin(
     } catch {}
   }
 
-  // 1. Authoritative check in app_admins strictly by immutable userId
-  // When duplicate records exist, any inactive or revoked record strictly takes precedence and denies access.
-  const adminRecords = await database.collection("app_admins").find({
-    clientId: cleanClientId,
-    $or: userConditions,
-  }).toArray();
-
-  if (adminRecords.length > 0) {
-    const hasInactive = adminRecords.some((a: any) =>
-      a.isActive === false ||
-      a.active === false ||
-      a.disabled === true ||
-      a.revoked === true ||
-      ["inactive", "revoked", "suspended", "disabled"].includes(a.status)
-    );
-    if (hasInactive) return false;
-
-    const hasActive = adminRecords.some((a: any) =>
-      a.isActive !== false &&
-      a.active !== false &&
-      !a.disabled &&
-      !a.revoked &&
-      !["inactive", "revoked", "suspended", "disabled"].includes(a.status)
-    );
-    if (hasActive) return true;
-  }
-
-  // 2. Authoritative check in user_app_registrations keyed strictly by immutable userId and clientId
-  const regRecords = await database.collection("user_app_registrations").find({
-    clientId: cleanClientId,
-    $or: userConditions,
-  }).toArray();
-
-  if (regRecords.length > 0) {
-    const hasInactiveReg = regRecords.some((r: any) =>
-      r.isActive === false ||
-      r.active === false ||
-      r.disabled === true ||
-      r.revoked === true ||
-      ["inactive", "revoked", "suspended", "disabled"].includes(r.status) ||
-      (r.appRole && r.appRole !== "admin")
-    );
-    if (hasInactiveReg) return false;
-
-    const hasActiveReg = regRecords.some((r: any) =>
-      r.appRole === "admin" &&
-      r.isActive !== false &&
-      r.active !== false &&
-      !r.disabled &&
-      !r.revoked &&
-      !["inactive", "revoked", "suspended", "disabled"].includes(r.status)
-    );
-    if (hasActiveReg) return true;
-  }
-
-  // 4. Safe on-demand resolution for legacy email-only records:
-  // If no record matched by userId, check if an unmigrated legacy record exists with matching email
-  // and NO userId. Migrate only if completely unambiguous (exactly one user matches).
-  if (userDoc?.email && typeof userDoc.email === "string") {
-    const normalizedEmail = userDoc.email.toLowerCase().trim();
-    const legacyAdmin = await database.collection("app_admins").findOne({
+  // Concurrent authoritative check across both app_admins and user_app_registrations
+  const [adminRecords, regRecords] = await Promise.all([
+    database.collection("app_admins").find({
       clientId: cleanClientId,
-      email: normalizedEmail,
-      $or: [{ userId: { $exists: false } }, { userId: null }, { userId: "" }],
-    });
+      $or: userConditions,
+    }).toArray(),
+    database.collection("user_app_registrations").find({
+      clientId: cleanClientId,
+      $or: userConditions,
+    }).toArray(),
+  ]);
 
-    if (legacyAdmin) {
-      const matchingUsers = await database.collection("user").find({ email: normalizedEmail }).toArray();
-      if (matchingUsers.length === 1 && (matchingUsers[0].id || matchingUsers[0]._id).toString() === resolvedUserId) {
-        // Unambiguous: migrate stable userId to app_admins record
-        await database.collection("app_admins").updateOne(
-          { _id: legacyAdmin._id },
-          { $set: { userId: resolvedUserId, updatedAt: new Date() } }
-        );
-        const isLegacyInactive =
-          legacyAdmin.isActive === false ||
-          legacyAdmin.active === false ||
-          legacyAdmin.disabled === true ||
-          legacyAdmin.revoked === true ||
-          ["inactive", "revoked", "suspended", "disabled"].includes(legacyAdmin.status);
-        if (isLegacyInactive) return false;
+  // Explicit revocation, suspension, or disabling in either source strictly takes precedence
+  const hasRevokedAdmin = adminRecords.some((a: any) =>
+    a.isActive === false ||
+    a.active === false ||
+    a.disabled === true ||
+    a.revoked === true ||
+    ["inactive", "revoked", "suspended", "disabled"].includes(a.status)
+  );
 
-        // Ensure user_app_registrations has stable userId and appRole: admin
-        await database.collection("user_app_registrations").updateOne(
-          { clientId: cleanClientId, $or: userConditions },
-          { $set: { userId: resolvedUserId, clientId: cleanClientId, appRole: "admin", status: "active", registeredAt: new Date() } },
-          { upsert: true }
-        );
-        return true;
-      }
-      // Ambiguous or conflicting: reject silently
-      return false;
-    }
+  const hasRevokedReg = regRecords.some((r: any) =>
+    r.isActive === false ||
+    r.active === false ||
+    r.disabled === true ||
+    r.revoked === true ||
+    ["inactive", "revoked", "suspended", "disabled"].includes(r.status) ||
+    (r.appRole && r.appRole !== "admin")
+  );
+
+  if (hasRevokedAdmin || hasRevokedReg) {
+    return false;
   }
 
-  // 5. Fail closed: scopedClientId alone, legacy roles without assignment records,
+  const hasActiveAdmin = adminRecords.some((a: any) =>
+    a.isActive !== false &&
+    a.active !== false &&
+    !a.disabled &&
+    !a.revoked &&
+    !["inactive", "revoked", "suspended", "disabled"].includes(a.status)
+  );
+
+  const hasActiveReg = regRecords.some((r: any) =>
+    r.appRole === "admin" &&
+    r.isActive !== false &&
+    r.active !== false &&
+    !r.disabled &&
+    !r.revoked &&
+    !["inactive", "revoked", "suspended", "disabled"].includes(r.status)
+  );
+
+  if (hasActiveAdmin || hasActiveReg) {
+    return true;
+  }
+
+  // Fail closed: runtime email matching without migration is strictly removed.
+  // scopedClientId alone, legacy roles without assignment records,
   // or email matching a different user ID can NEVER grant admin privileges
   return false;
 }

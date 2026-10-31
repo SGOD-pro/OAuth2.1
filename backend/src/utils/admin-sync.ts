@@ -184,6 +184,24 @@ export async function syncAppAdminIdentity(
       $or: [{ userId: userIdStr }, { userId: userId }],
     });
   } else {
+    // Check if an explicit revocation exists in user_app_registrations
+    const existingReg = await database.collection("user_app_registrations").findOne({
+      clientId: clientId,
+      $or: [{ userId: userIdStr }, { userId: userId }],
+    });
+    const isExistingRevoked =
+      existingReg &&
+      (existingReg.isActive === false ||
+        existingReg.active === false ||
+        existingReg.disabled === true ||
+        existingReg.revoked === true ||
+        ["inactive", "revoked", "suspended", "disabled"].includes(existingReg.status));
+
+    if (isExistingRevoked) {
+      console.warn(`[ADMIN_SYNC] Explicit revocation in user_app_registrations for user ${userIdStr} and client ${clientId} preserved; skipping reactivation.`);
+      return;
+    }
+
     await database.collection("user_app_registrations").updateOne(
       {
         clientId: clientId,
@@ -332,6 +350,33 @@ export async function removeAppAdminIdentity(
   }
 }
 
+export interface MigrateLegacyAppAdminsOptions {
+  dryRun?: boolean;
+}
+
+export interface MigrationConflict {
+  adminDocId: string;
+  clientId: string;
+  email: string;
+  reason: string;
+}
+
+export interface MigratedRecord {
+  adminDocId: string;
+  clientId: string;
+  email: string;
+  userId: string;
+  status: string;
+}
+
+export interface MigrationResult {
+  migratedCount: number;
+  conflictCount: number;
+  skippedCount: number;
+  conflicts: MigrationConflict[];
+  migrated: MigratedRecord[];
+}
+
 /**
  * Explicit migration for legacy app_admins records lacking a stable userId.
  *
@@ -339,12 +384,21 @@ export async function removeAppAdminIdentity(
  * 1. An email-only record is migrated ONLY if exactly one user matches that email.
  * 2. If zero or multiple users match that email, or the user is a super-admin, reject as conflict.
  * 3. Never grant privileges to a different userId just because the email matches.
+ * 4. Never reactivate, overwrite, or delete an explicit revocation automatically.
+ * 5. Do not infer account continuity solely from an email that could be reused (check creation timestamps).
+ * 6. Supports dry-run and comprehensive conflict reporting.
  */
 export async function migrateLegacyAppAdmins(
   database: Db,
-): Promise<{ migratedCount: number; conflictCount: number }> {
+  options: MigrateLegacyAppAdminsOptions = {},
+): Promise<MigrationResult> {
+  const dryRun = Boolean(options.dryRun);
   let migratedCount = 0;
   let conflictCount = 0;
+  let skippedCount = 0;
+  const conflicts: MigrationConflict[] = [];
+  const migrated: MigratedRecord[] = [];
+
   try {
     const legacyRecords = await database.collection("app_admins").find({
       $or: [
@@ -357,6 +411,12 @@ export async function migrateLegacyAppAdmins(
     for (const record of legacyRecords) {
       if (!record.email || !record.clientId) {
         conflictCount++;
+        conflicts.push({
+          adminDocId: record._id?.toString() || "unknown",
+          clientId: record.clientId || "unknown",
+          email: record.email || "unknown",
+          reason: "Missing email or clientId",
+        });
         continue;
       }
       const normalizedEmail = record.email.toLowerCase().trim();
@@ -364,6 +424,13 @@ export async function migrateLegacyAppAdmins(
 
       if (users.length !== 1) {
         conflictCount++;
+        const reason = users.length === 0 ? "No user document found" : "Multiple ambiguous users found for email";
+        conflicts.push({
+          adminDocId: record._id?.toString() || "unknown",
+          clientId: record.clientId,
+          email: normalizedEmail,
+          reason,
+        });
         await recordSyncAudit(database, {
           action: "legacy_admin_migration_conflict",
           targetClientId: record.clientId,
@@ -372,7 +439,7 @@ export async function migrateLegacyAppAdmins(
             adminDocId: record._id?.toString() || "unknown",
             email: normalizedEmail,
             matchingUserCount: users.length,
-            reason: users.length === 0 ? "No user document found" : "Multiple ambiguous users found for email",
+            reason,
           },
           timestamp: new Date(),
         });
@@ -387,6 +454,12 @@ export async function migrateLegacyAppAdmins(
 
       if (isSuperAdmin) {
         conflictCount++;
+        conflicts.push({
+          adminDocId: record._id?.toString() || "unknown",
+          clientId: record.clientId,
+          email: normalizedEmail,
+          reason: "Cannot migrate super-admin identity to consumer app admin",
+        });
         await recordSyncAudit(database, {
           action: "legacy_admin_migration_conflict",
           targetClientId: record.clientId,
@@ -404,27 +477,139 @@ export async function migrateLegacyAppAdmins(
       const stableUserId = (targetUser.id || targetUser._id)?.toString() || "";
       if (!stableUserId) {
         conflictCount++;
+        conflicts.push({
+          adminDocId: record._id?.toString() || "unknown",
+          clientId: record.clientId,
+          email: normalizedEmail,
+          reason: "User document missing valid id",
+        });
         continue;
       }
+
+      // Check for potential email reuse: if user was created after the legacy record was established
+      if (record.createdAt && targetUser.createdAt) {
+        const recTime = new Date(record.createdAt).getTime();
+        const userTime = new Date(targetUser.createdAt).getTime();
+        if (!isNaN(recTime) && !isNaN(userTime) && userTime > recTime + 60_000) {
+          conflictCount++;
+          conflicts.push({
+            adminDocId: record._id?.toString() || "unknown",
+            clientId: record.clientId,
+            email: normalizedEmail,
+            reason: "Potential email reuse: user account created after legacy admin assignment",
+          });
+          await recordSyncAudit(database, {
+            action: "legacy_admin_migration_conflict",
+            targetClientId: record.clientId,
+            targetUserId: stableUserId,
+            details: {
+              adminDocId: record._id?.toString() || "unknown",
+              email: normalizedEmail,
+              reason: "Potential email reuse: user account created after legacy admin assignment",
+              assignmentCreatedAt: record.createdAt,
+              userCreatedAt: targetUser.createdAt,
+            },
+            timestamp: new Date(),
+          });
+          continue;
+        }
+      }
+
+      const isRecordRevoked =
+        record.isActive === false ||
+        record.active === false ||
+        record.disabled === true ||
+        record.revoked === true ||
+        ["inactive", "revoked", "suspended", "disabled"].includes(record.status);
+
+      const userConditions = [
+        { userId: stableUserId },
+        ...(ObjectId.isValid(stableUserId) ? [{ userId: new ObjectId(stableUserId) }] : []),
+      ];
 
       // Check for duplicate record for the same client and userId
       const existingUserAdmin = await database.collection("app_admins").findOne({
         _id: { $ne: record._id },
         clientId: record.clientId,
-        $or: [{ userId: stableUserId }, ...(ObjectId.isValid(stableUserId) ? [{ userId: new ObjectId(stableUserId) }] : [])],
+        $or: userConditions,
       });
 
       if (existingUserAdmin) {
-        if (record._id) {
-          if (typeof database.collection("app_admins").deleteOne === "function") {
-            await database.collection("app_admins").deleteOne({ _id: record._id });
-          } else {
-            await database.collection("app_admins").deleteMany({ _id: record._id });
+        const isExistingRevoked =
+          existingUserAdmin.isActive === false ||
+          existingUserAdmin.active === false ||
+          existingUserAdmin.disabled === true ||
+          existingUserAdmin.revoked === true ||
+          ["inactive", "revoked", "suspended", "disabled"].includes(existingUserAdmin.status);
+
+        if (!dryRun) {
+          // Explicit revocation in either duplicate strictly wins
+          if (isRecordRevoked || isExistingRevoked) {
+            await database.collection("app_admins").updateOne(
+              { _id: existingUserAdmin._id },
+              { $set: { isActive: false, revoked: true, status: "revoked", updatedAt: new Date() } }
+            );
+          }
+          if (record._id) {
+            if (typeof database.collection("app_admins").deleteOne === "function") {
+              await database.collection("app_admins").deleteOne({ _id: record._id });
+            } else {
+              await database.collection("app_admins").deleteMany({ _id: record._id });
+            }
           }
         }
+        skippedCount++;
         continue;
       }
 
+      // Check whether an explicit revocation exists in user_app_registrations
+      const existingReg = await database.collection("user_app_registrations").findOne({
+        clientId: record.clientId,
+        $or: userConditions,
+      });
+      const isExistingRegRevoked =
+        existingReg &&
+        (existingReg.isActive === false ||
+          existingReg.active === false ||
+          existingReg.disabled === true ||
+          existingReg.revoked === true ||
+          ["inactive", "revoked", "suspended", "disabled"].includes(existingReg.status));
+
+      if (isExistingRegRevoked && !isRecordRevoked) {
+        conflictCount++;
+        conflicts.push({
+          adminDocId: record._id?.toString() || "unknown",
+          clientId: record.clientId,
+          email: normalizedEmail,
+          reason: "Explicit revocation in user_app_registrations prevents automatic privilege elevation",
+        });
+        await recordSyncAudit(database, {
+          action: "legacy_admin_migration_conflict",
+          targetClientId: record.clientId,
+          targetUserId: stableUserId,
+          details: {
+            adminDocId: record._id?.toString() || "unknown",
+            email: normalizedEmail,
+            reason: "Explicit revocation in user_app_registrations prevents automatic privilege elevation",
+          },
+          timestamp: new Date(),
+        });
+        continue;
+      }
+
+      if (dryRun) {
+        migratedCount++;
+        migrated.push({
+          adminDocId: record._id?.toString() || "unknown",
+          clientId: record.clientId,
+          email: normalizedEmail,
+          userId: stableUserId,
+          status: isRecordRevoked ? "revoked" : "active",
+        });
+        continue;
+      }
+
+      // Apply migration
       if (record._id) {
         await database.collection("app_admins").updateOne(
           { _id: record._id },
@@ -432,16 +617,22 @@ export async function migrateLegacyAppAdmins(
             $set: {
               userId: stableUserId,
               updatedAt: new Date(),
+              ...(isRecordRevoked ? { isActive: false, revoked: true, status: record.status || "revoked" } : {}),
             },
           }
         );
       }
 
-      if (record.isActive !== false && !["inactive", "revoked", "suspended", "disabled"].includes(record.status)) {
+      if (isRecordRevoked) {
+        await database.collection("user_app_registrations").deleteMany({
+          clientId: record.clientId,
+          $or: userConditions,
+        });
+      } else {
         await database.collection("user_app_registrations").updateOne(
           {
             clientId: record.clientId,
-            $or: [{ userId: stableUserId }, ...(ObjectId.isValid(stableUserId) ? [{ userId: new ObjectId(stableUserId) }] : [])],
+            $or: userConditions,
           },
           {
             $set: {
@@ -457,6 +648,13 @@ export async function migrateLegacyAppAdmins(
       }
 
       migratedCount++;
+      migrated.push({
+        adminDocId: record._id?.toString() || "unknown",
+        clientId: record.clientId,
+        email: normalizedEmail,
+        userId: stableUserId,
+        status: isRecordRevoked ? "revoked" : "active",
+      });
       await recordSyncAudit(database, {
         action: "legacy_admin_migrated_to_user_id",
         targetClientId: record.clientId,
@@ -464,6 +662,7 @@ export async function migrateLegacyAppAdmins(
         details: {
           adminDocId: record._id?.toString() || "unknown",
           email: normalizedEmail,
+          status: isRecordRevoked ? "revoked" : "active",
         },
         timestamp: new Date(),
       });
@@ -472,7 +671,7 @@ export async function migrateLegacyAppAdmins(
     console.warn("[LEGACY_ADMIN_MIGRATION] Error during migration:", err?.message || err);
   }
 
-  return { migratedCount, conflictCount };
+  return { migratedCount, conflictCount, skippedCount, conflicts, migrated };
 }
 
 /**

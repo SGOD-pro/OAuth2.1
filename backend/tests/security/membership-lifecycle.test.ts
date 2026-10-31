@@ -30,10 +30,13 @@ const { checkUserIsClientAdmin } = await import("../../src/middleware/admin-auth
 const { isOriginAllowed } = await import("../../src/middleware/cors");
 const { config } = await import("../../src/config");
 const { registerTokenFamily } = await import("../../src/db/state");
+const { migrateLegacyAppAdmins } = await import("../../src/utils/admin-sync");
 const {
   isolateTestEnvironment,
   validateDisposableMongoUri,
   assertNoExternalInfrastructure,
+  MONGO_ALIAS_ENV_VARS,
+  REDIS_ALIAS_ENV_VARS,
 } = await import("../fixtures/test-env-isolation");
 
 console.log("================================================================");
@@ -952,6 +955,229 @@ await runTest("MEM-16: Test infrastructure isolation guard blocks non-disposable
   assert.equal(process.env.UPSTASH_REDIS_REST_URL, undefined, "UPSTASH_REDIS_REST_URL must be stripped");
   assert.equal(process.env.REDIS_URL, undefined, "REDIS_URL must be stripped");
   assert.doesNotThrow(() => assertNoExternalInfrastructure());
+});
+
+// =============================================================================
+// TEST 17: Cross-source conflicts: revocation in either source strictly denies access
+// =============================================================================
+await runTest("MEM-17: Cross-source conflict: explicit revocation in either app_admins or user_app_registrations denies access", async () => {
+  const conflictClientId = "test_conflict_client_" + crypto.randomBytes(4).toString("hex");
+  const conflictOrigin = "https://conflict-client.example.com";
+  await db.collection("oauthClient").insertOne({
+    _id: conflictClientId as any,
+    id: conflictClientId,
+    clientId: conflictClientId,
+    client_id: conflictClientId,
+    name: "Conflict Test Client",
+    isPublic: false,
+    isDev: false,
+    disabled: false,
+    redirectUris: [`${conflictOrigin}/callback`],
+    allowedOrigins: [conflictOrigin],
+  });
+
+  // User 1: Active in app_admins, but REVOKED in user_app_registrations
+  const user1Pass = "PassConflict1!Aa";
+  const user1SignUp = await authProvider.api.signUpEmail({
+    body: { email: `conflict1_${Date.now()}@example.com`, password: user1Pass, name: "Conflict User 1" },
+  });
+  const user1Id = String(user1SignUp.user.id);
+  const user1Doc = await db.collection("user").findOne({ _id: new ObjectId(user1Id) });
+
+  await db.collection("app_admins").insertOne({
+    userId: user1Id,
+    clientId: conflictClientId,
+    status: "active",
+    isActive: true,
+  });
+  await db.collection("user_app_registrations").insertOne({
+    userId: user1Id,
+    clientId: conflictClientId,
+    status: "revoked",
+    isActive: false,
+    revoked: true,
+    registeredAt: new Date(),
+  });
+
+  assert.equal(await checkUserIsClientAdmin(db, user1Doc, user1Id, conflictClientId), false, "User 1 must be denied admin privileges");
+  assert.equal(await checkUserHasAppAccess(db, user1Doc, conflictClientId), false, "User 1 must be denied private app access");
+
+  // User 2: Active in user_app_registrations, but REVOKED in app_admins
+  const user2Pass = "PassConflict2!Aa";
+  const user2SignUp = await authProvider.api.signUpEmail({
+    body: { email: `conflict2_${Date.now()}@example.com`, password: user2Pass, name: "Conflict User 2" },
+  });
+  const user2Id = String(user2SignUp.user.id);
+  const user2Doc = await db.collection("user").findOne({ _id: new ObjectId(user2Id) });
+
+  await db.collection("user_app_registrations").insertOne({
+    userId: user2Id,
+    clientId: conflictClientId,
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
+  });
+  await db.collection("app_admins").insertOne({
+    userId: user2Id,
+    clientId: conflictClientId,
+    status: "suspended",
+    isActive: false,
+    revoked: true,
+  });
+
+  assert.equal(await checkUserIsClientAdmin(db, user2Doc, user2Id, conflictClientId), false, "User 2 must be denied admin privileges");
+  assert.equal(await checkUserHasAppAccess(db, user2Doc, conflictClientId), false, "User 2 must be denied private app access");
+
+  // Test real route behavior: login User 2 and request authorize
+  const user2LoginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: user2Doc.email, password: user2Pass }),
+  });
+  assert.equal(user2LoginRes.status, 200);
+  const user2Cookie = (user2LoginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  const authRes = await app.request(
+    `/api/auth/oauth2/authorize?client_id=${conflictClientId}&redirect_uri=${encodeURIComponent(`${conflictOrigin}/callback`)}&response_type=code&scope=openid&state=state_c1&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256`,
+    {
+      method: "GET",
+      headers: getTestHeaders({ cookie: user2Cookie }),
+    }
+  );
+  assert.equal(authRes.status, 302, "Must redirect unassigned/revoked user");
+  const redirectLocation = authRes.headers.get("location") || "";
+  assert.ok(redirectLocation.includes("error=access_denied"), "Redirect must contain error=access_denied");
+});
+
+// =============================================================================
+// TEST 18: Safe legacy migration with dry-run, audit, and email reuse detection
+// =============================================================================
+await runTest("MEM-18: Safe legacy migration handles dry-run, email reuse, and explicit revocation preservation", async () => {
+  const migClientId = "test_mig_client_" + crypto.randomBytes(4).toString("hex");
+
+  // 1. Dry run: audits but does NOT mutate database
+  const migEmail1 = `legacy1_${Date.now()}@example.com`;
+  const user1SignUp = await authProvider.api.signUpEmail({
+    body: { email: migEmail1, password: "Password123!Aa", name: "Legacy User 1" },
+  });
+  const user1Id = String(user1SignUp.user.id);
+  const legacyDoc1 = {
+    _id: new ObjectId(),
+    clientId: migClientId,
+    email: migEmail1,
+    status: "active",
+    createdAt: new Date(),
+  };
+  await db.collection("app_admins").insertOne(legacyDoc1);
+
+  const dryRunRes = await migrateLegacyAppAdmins(db, { dryRun: true });
+  assert.equal(dryRunRes.migratedCount, 1, "Dry run must report 1 record eligible for migration");
+
+  // Verify doc was NOT mutated in DB
+  const unmutated = await db.collection("app_admins").findOne({ _id: legacyDoc1._id });
+  assert.equal(unmutated.userId, undefined, "Dry run must NOT set userId in DB");
+
+  // 2. Apply mode: persists migration
+  const applyRes = await migrateLegacyAppAdmins(db, { dryRun: false });
+  assert.equal(applyRes.migratedCount, 1, "Apply mode must report 1 migrated record");
+  const mutated = await db.collection("app_admins").findOne({ _id: legacyDoc1._id });
+  assert.equal(mutated.userId, user1Id, "Apply mode must persist resolved userId");
+
+  // 3. Repeated migration run: idempotent, reports 0 newly migrated
+  const repeatRes = await migrateLegacyAppAdmins(db, { dryRun: false });
+  assert.equal(repeatRes.migratedCount, 0, "Repeated migration run must find 0 unmigrated records");
+
+  // 4. Email reuse detection: user created significantly after admin assignment
+  const reuseEmail = `reuse_${Date.now()}@example.com`;
+  const oldAssignmentDate = new Date(Date.now() - 365 * 24 * 3600 * 1000); // 1 year ago
+  const legacyReuseDoc = {
+    _id: new ObjectId(),
+    clientId: migClientId,
+    email: reuseEmail,
+    status: "active",
+    createdAt: oldAssignmentDate,
+  };
+  await db.collection("app_admins").insertOne(legacyReuseDoc);
+
+  // New user signs up today
+  await authProvider.api.signUpEmail({
+    body: { email: reuseEmail, password: "Password123!Aa", name: "New User Reused Email" },
+  });
+
+  const reuseRes = await migrateLegacyAppAdmins(db, { dryRun: false });
+  assert.equal(reuseRes.conflictCount, 1, "Email reuse must be flagged as a migration conflict");
+  assert.ok(reuseRes.conflicts[0].reason.includes("Potential email reuse"), "Conflict reason must cite potential email reuse");
+
+  // Verify reuse doc was NOT migrated
+  const reuseDocAfter = await db.collection("app_admins").findOne({ _id: legacyReuseDoc._id });
+  assert.equal(reuseDocAfter.userId, undefined, "Email reuse record must NOT be assigned to new user");
+
+  // 5. Explicit revocation preservation: revoked legacy record remains revoked
+  const revokedEmail = `revoked_legacy_${Date.now()}@example.com`;
+  const revSignUp = await authProvider.api.signUpEmail({
+    body: { email: revokedEmail, password: "Password123!Aa", name: "Revoked Legacy Admin" },
+  });
+  const revUserId = String(revSignUp.user.id);
+  const revUserDoc = await db.collection("user").findOne({ _id: new ObjectId(revUserId) });
+
+  const legacyRevDoc = {
+    _id: new ObjectId(),
+    clientId: migClientId,
+    email: revokedEmail,
+    status: "revoked",
+    isActive: false,
+    createdAt: new Date(),
+  };
+  await db.collection("app_admins").insertOne(legacyRevDoc);
+
+  const revMigRes = await migrateLegacyAppAdmins(db, { dryRun: false });
+  assert.equal(revMigRes.migratedCount, 1);
+  const revMigDoc = await db.collection("app_admins").findOne({ _id: legacyRevDoc._id });
+  assert.equal(revMigDoc.userId, revUserId);
+  assert.equal(revMigDoc.isActive, false, "Revocation state must be preserved");
+  assert.equal(revMigDoc.status, "revoked", "Revocation status must be preserved");
+
+  assert.equal(await checkUserIsClientAdmin(db, revUserDoc, revUserId, migClientId), false, "Migrated revoked admin must remain denied");
+  assert.equal(await checkUserHasAppAccess(db, revUserDoc, migClientId), false, "Migrated revoked admin must not have app access");
+});
+
+// =============================================================================
+// TEST 19: Comprehensive isolation guard alias validation without credential leakage
+// =============================================================================
+await runTest("MEM-19: Isolation guard verifies all Mongo and Redis aliases and redacts sensitive data", async () => {
+  // 1. Verify all Mongo aliases are caught
+  for (const alias of MONGO_ALIAS_ENV_VARS) {
+    process.env[alias] = "mongodb+srv://secret_user:super_secret_password@prod.cluster.mongodb.net/db";
+    let thrownError: any = null;
+    try {
+      validateDisposableMongoUri(process.env[alias]!, alias);
+    } catch (err: any) {
+      thrownError = err;
+    }
+    delete process.env[alias];
+
+    assert.ok(thrownError, `Must throw for non-disposable Mongo alias ${alias}`);
+    assert.ok(thrownError.message.includes("SECURITY_VIOLATION"), "Must include SECURITY_VIOLATION");
+    assert.ok(!thrownError.message.includes("secret_user"), "Must NEVER leak username in error");
+    assert.ok(!thrownError.message.includes("super_secret_password"), "Must NEVER leak password in error");
+    assert.ok(!thrownError.message.includes("prod.cluster.mongodb.net"), "Must NEVER leak remote host in error");
+  }
+
+  // 2. Verify all Redis aliases are stripped and rejected
+  for (const alias of REDIS_ALIAS_ENV_VARS) {
+    process.env[alias] = "sensitive-secret-token-xyz-123";
+    let thrownError: any = null;
+    try {
+      assertNoExternalInfrastructure();
+    } catch (err: any) {
+      thrownError = err;
+    }
+    delete process.env[alias];
+
+    assert.ok(thrownError, `Must throw for active Redis alias ${alias}`);
+    assert.ok(thrownError.message.includes("SECURITY_VIOLATION"), "Must include SECURITY_VIOLATION");
+    assert.ok(!thrownError.message.includes("sensitive-secret-token"), "Must NEVER leak token in error");
+  }
 });
 
 await closeDb();
