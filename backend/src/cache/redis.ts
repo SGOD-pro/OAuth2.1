@@ -138,6 +138,30 @@ export async function checkRateLimit(
 
 const ORIGIN_CACHE_TTL_SECONDS = 300;
 
+const SET_ORIGIN_CACHE_LUA = `
+local originKey = KEYS[1]
+local invKey = KEYS[2]
+local globalInvKey = KEYS[3]
+local allowed = ARGV[1]
+local startTime = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+
+if startTime and startTime > 0 then
+    local invTime = redis.call('get', invKey)
+    if invTime and tonumber(invTime) >= startTime then
+        return 0
+    end
+
+    local globalInv = redis.call('get', globalInvKey)
+    if globalInv and tonumber(globalInv) >= startTime then
+        return 0
+    end
+end
+
+redis.call('set', originKey, allowed, 'EX', ttl)
+return 1
+`;
+
 /**
  * Origin allow-list cache. Failure behavior is "cache miss", never
  * "allowed" — a Redis error must fall through to the authoritative
@@ -148,8 +172,11 @@ const ORIGIN_CACHE_TTL_SECONDS = 300;
 export async function getCachedOriginRedis(origin: string): Promise<boolean | null> {
   if (!redis) return null;
   try {
-    const value = await redis.get<boolean>(`swyra:origin:${origin}`);
-    return value ?? null;
+    const value = await redis.get<boolean | string | number>(`swyra:origin:${origin}`);
+    if (value === null || value === undefined) return null;
+    if (value === true || value === "1" || value === 1 || value === "true") return true;
+    if (value === false || value === "0" || value === 0 || value === "false") return false;
+    return null;
   } catch (error) {
     console.error({ event: "redis_origin_cache_read_failed", origin, error: String(error) });
     return null;
@@ -163,14 +190,17 @@ export async function setCachedOriginRedis(
 ): Promise<boolean> {
   if (!redis) return false;
   try {
-    if (typeof startTime === "number") {
-      const invTime = await redis.get<number>(`swyra:origin:inv:${origin}`);
-      if (invTime && Number(invTime) >= startTime) {
-        return false;
-      }
-    }
-    await redis.set(`swyra:origin:${origin}`, allowed, { ex: ORIGIN_CACHE_TTL_SECONDS });
-    return true;
+    const originKey = `swyra:origin:${origin}`;
+    const invKey = `swyra:origin:inv:${origin}`;
+    const globalInvKey = "swyra:origin:global_inv";
+
+    const res = await redis.eval(
+      SET_ORIGIN_CACHE_LUA,
+      [originKey, invKey, globalInvKey],
+      [allowed ? "1" : "0", typeof startTime === "number" ? startTime : 0, ORIGIN_CACHE_TTL_SECONDS],
+    );
+
+    return res === 1 || res === "1" || res === true;
   } catch (error) {
     console.error({ event: "redis_origin_cache_write_failed", origin, error: String(error) });
     return false;
@@ -184,7 +214,7 @@ export async function invalidateCachedOriginRedis(origins?: string[]): Promise<v
     const delKeys = origins.map((o) => `swyra:origin:${o}`);
     await redis.del(...delKeys);
     for (const o of origins) {
-      await redis.set(`swyra:origin:inv:${o}`, now, { ex: 30 }).catch(() => {});
+      await redis.set(`swyra:origin:inv:${o}`, now, { ex: 60 }).catch(() => {});
     }
     return;
   }
@@ -198,4 +228,6 @@ export async function invalidateCachedOriginRedis(origins?: string[]): Promise<v
     if (keys.length > 0) await redis.del(...keys);
     cursor = nextCursor;
   } while (String(cursor) !== "0");
+
+  await redis.set("swyra:origin:global_inv", now, { ex: 60 }).catch(() => {});
 }

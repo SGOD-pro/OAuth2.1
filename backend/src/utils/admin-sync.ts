@@ -333,11 +333,157 @@ export async function removeAppAdminIdentity(
 }
 
 /**
+ * Explicit migration for legacy app_admins records lacking a stable userId.
+ *
+ * Rules:
+ * 1. An email-only record is migrated ONLY if exactly one user matches that email.
+ * 2. If zero or multiple users match that email, or the user is a super-admin, reject as conflict.
+ * 3. Never grant privileges to a different userId just because the email matches.
+ */
+export async function migrateLegacyAppAdmins(
+  database: Db,
+): Promise<{ migratedCount: number; conflictCount: number }> {
+  let migratedCount = 0;
+  let conflictCount = 0;
+  try {
+    const legacyRecords = await database.collection("app_admins").find({
+      $or: [
+        { userId: { $exists: false } },
+        { userId: null },
+        { userId: "" },
+      ],
+    }).toArray();
+
+    for (const record of legacyRecords) {
+      if (!record.email || !record.clientId) {
+        conflictCount++;
+        continue;
+      }
+      const normalizedEmail = record.email.toLowerCase().trim();
+      const users = await database.collection("user").find({ email: normalizedEmail }).toArray();
+
+      if (users.length !== 1) {
+        conflictCount++;
+        await recordSyncAudit(database, {
+          action: "legacy_admin_migration_conflict",
+          targetClientId: record.clientId,
+          targetUserId: "unresolved",
+          details: {
+            adminDocId: record._id?.toString() || "unknown",
+            email: normalizedEmail,
+            matchingUserCount: users.length,
+            reason: users.length === 0 ? "No user document found" : "Multiple ambiguous users found for email",
+          },
+          timestamp: new Date(),
+        });
+        continue;
+      }
+
+      const targetUser = users[0];
+      const isSuperAdmin = Boolean(
+        targetUser.role === "super-admin" ||
+        (targetUser.role === "admin" && targetUser.scopedClientId === null)
+      );
+
+      if (isSuperAdmin) {
+        conflictCount++;
+        await recordSyncAudit(database, {
+          action: "legacy_admin_migration_conflict",
+          targetClientId: record.clientId,
+          targetUserId: (targetUser.id || targetUser._id)?.toString() || "unknown",
+          details: {
+            adminDocId: record._id?.toString() || "unknown",
+            email: normalizedEmail,
+            reason: "Cannot migrate super-admin identity to consumer app admin",
+          },
+          timestamp: new Date(),
+        });
+        continue;
+      }
+
+      const stableUserId = (targetUser.id || targetUser._id)?.toString() || "";
+      if (!stableUserId) {
+        conflictCount++;
+        continue;
+      }
+
+      // Check for duplicate record for the same client and userId
+      const existingUserAdmin = await database.collection("app_admins").findOne({
+        _id: { $ne: record._id },
+        clientId: record.clientId,
+        $or: [{ userId: stableUserId }, ...(ObjectId.isValid(stableUserId) ? [{ userId: new ObjectId(stableUserId) }] : [])],
+      });
+
+      if (existingUserAdmin) {
+        if (record._id) {
+          if (typeof database.collection("app_admins").deleteOne === "function") {
+            await database.collection("app_admins").deleteOne({ _id: record._id });
+          } else {
+            await database.collection("app_admins").deleteMany({ _id: record._id });
+          }
+        }
+        continue;
+      }
+
+      if (record._id) {
+        await database.collection("app_admins").updateOne(
+          { _id: record._id },
+          {
+            $set: {
+              userId: stableUserId,
+              updatedAt: new Date(),
+            },
+          }
+        );
+      }
+
+      if (record.isActive !== false && !["inactive", "revoked", "suspended", "disabled"].includes(record.status)) {
+        await database.collection("user_app_registrations").updateOne(
+          {
+            clientId: record.clientId,
+            $or: [{ userId: stableUserId }, ...(ObjectId.isValid(stableUserId) ? [{ userId: new ObjectId(stableUserId) }] : [])],
+          },
+          {
+            $set: {
+              userId: stableUserId,
+              clientId: record.clientId,
+              appRole: "admin",
+              status: "active",
+              registeredAt: record.createdAt || new Date(),
+            },
+          },
+          { upsert: true }
+        );
+      }
+
+      migratedCount++;
+      await recordSyncAudit(database, {
+        action: "legacy_admin_migrated_to_user_id",
+        targetClientId: record.clientId,
+        targetUserId: stableUserId,
+        details: {
+          adminDocId: record._id?.toString() || "unknown",
+          email: normalizedEmail,
+        },
+        timestamp: new Date(),
+      });
+    }
+  } catch (err: any) {
+    console.warn("[LEGACY_ADMIN_MIGRATION] Error during migration:", err?.message || err);
+  }
+
+  return { migratedCount, conflictCount };
+}
+
+/**
  * Self-healing sweep: scan all app_admins and ensure they are synced to user and account.
  */
 export async function selfHealAppAdmins(database: Db): Promise<void> {
   try {
-    // Only self-heal active app_admins records; deactivated or deleted assignments must not be resurrected
+    // 1. Explicitly migrate any legacy email-only records to stable user IDs
+    await migrateLegacyAppAdmins(database);
+
+    // 2. Only self-heal active app_admins records; deactivated or deleted assignments must not be resurrected
     const admins = await database.collection("app_admins").find({
       isActive: { $ne: false },
       active: { $ne: false },

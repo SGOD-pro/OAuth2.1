@@ -20,10 +20,27 @@ export const config = {
 
     redis: {
         get url() {
-            return process.env.UPSTASH_REDIS_REST_URL || process.env.REDIS_URL || parsedEnv.UPSTASH_REDIS_REST_URL || parsedEnv.REDIS_URL
+            if (process.env.NODE_ENV === "test" && !process.env.ALLOW_TEST_REDIS) {
+                return process.env.TEST_REDIS_URL || undefined;
+            }
+            return (
+                process.env.UPSTASH_REDIS_REST_URL ||
+                process.env.REDIS_URL ||
+                (process.env.NODE_ENV !== "test" ? parsedEnv.UPSTASH_REDIS_REST_URL || parsedEnv.REDIS_URL : undefined)
+            );
         },
         get token() {
-            return process.env.UPSTASH_REDIS_REST_TOKEN || process.env.UPSTASH_REDIS_API_KEY || process.env.REDIS_TOKEN || parsedEnv.UPSTASH_REDIS_REST_TOKEN || (parsedEnv as any).UPSTASH_REDIS_API_KEY || parsedEnv.REDIS_TOKEN
+            if (process.env.NODE_ENV === "test" && !process.env.ALLOW_TEST_REDIS) {
+                return process.env.TEST_REDIS_TOKEN || undefined;
+            }
+            return (
+                process.env.UPSTASH_REDIS_REST_TOKEN ||
+                process.env.UPSTASH_REDIS_API_KEY ||
+                process.env.REDIS_TOKEN ||
+                (process.env.NODE_ENV !== "test"
+                    ? parsedEnv.UPSTASH_REDIS_REST_TOKEN || (parsedEnv as any).UPSTASH_REDIS_API_KEY || parsedEnv.REDIS_TOKEN
+                    : undefined)
+            );
         },
         get enabled(): boolean {
             return Boolean(this.url && this.token)

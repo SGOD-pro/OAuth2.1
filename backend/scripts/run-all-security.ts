@@ -1,3 +1,6 @@
+import { isolateTestEnvironment, REDIS_ALIAS_ENV_VARS } from "../tests/fixtures/test-env-isolation";
+isolateTestEnvironment();
+
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -46,6 +49,16 @@ for (const testFile of securityTestFiles) {
   console.log(`\n>>> RUNNING: ${testFile}`);
   const startTime = Date.now();
 
+  const childEnv = { ...process.env };
+  for (const v of REDIS_ALIAS_ENV_VARS) {
+    delete childEnv[v];
+  }
+  for (const k of Object.keys(childEnv)) {
+    if (k.includes("REDIS") && !k.startsWith("TEST_REDIS")) {
+      delete childEnv[k];
+    }
+  }
+
   const exitCode = await new Promise<number>((resolve) => {
     const child = spawn(
       process.execPath,
@@ -53,7 +66,7 @@ for (const testFile of securityTestFiles) {
       {
         cwd: backendDir,
         env: {
-          ...process.env,
+          ...childEnv,
           NODE_ENV: "test",
           MONGO_URI: mongoUri,
           BETTER_AUTH_SECRET: "a".repeat(32),

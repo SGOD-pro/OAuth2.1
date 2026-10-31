@@ -227,6 +227,7 @@ async function runTests() {
 
     const mockDb = createMockDb({
       user_app_registrations: [
+        { userId: multiAdmin._id.toString(), clientId: "client-alpha", appRole: "admin" },
         { userId: multiAdmin._id.toString(), clientId: "client-beta", appRole: "admin" },
         { userId: standardUser._id.toString(), clientId: "client-gamma", appRole: "user" },
       ],
@@ -383,8 +384,10 @@ async function runTests() {
       ],
     });
 
+    // Without an explicit assignment record in app_admins or user_app_registrations,
+    // scopedClientId alone strictly fails closed (no unsafe legacy fallback)
     assert.equal(await checkUserIsClientAdmin(mockDb, superAdmin, superAdmin._id.toString(), "client-any"), false);
-    assert.equal(await checkUserIsClientAdmin(mockDb, multiAdmin, multiAdminId.toString(), "client-x"), true);
+    assert.equal(await checkUserIsClientAdmin(mockDb, multiAdmin, multiAdminId.toString(), "client-x"), false);
     assert.equal(await checkUserIsClientAdmin(mockDb, multiAdmin, multiAdminId.toString(), "client-y"), true);
     assert.equal(await checkUserIsClientAdmin(mockDb, multiAdmin, multiAdminId.toString(), "client-z"), true);
     assert.equal(await checkUserIsClientAdmin(mockDb, multiAdmin, multiAdminId.toString(), "client-unknown"), false);

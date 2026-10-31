@@ -1,6 +1,5 @@
-// Guaranteed clean environment: never inherit external Redis credentials
-delete process.env.UPSTASH_REDIS_REST_URL;
-delete process.env.UPSTASH_REDIS_REST_TOKEN;
+import { isolateTestEnvironment, assertNoExternalInfrastructure } from "../tests/fixtures/test-env-isolation";
+isolateTestEnvironment();
 
 import crypto from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";

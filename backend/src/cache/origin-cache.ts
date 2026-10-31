@@ -2,7 +2,10 @@ import {
   getOriginCache,
   putOriginCache,
   invalidateOriginCache,
+  markSharedRedisOutage,
+  getSharedRedisOutage,
 } from "../db/state";
+import { getDb } from "../db/mongo";
 import {
   getCachedOriginRedis,
   setCachedOriginRedis,
@@ -97,19 +100,28 @@ export async function getCachedOrigin(
   const normalized = normalizeOrigin(origin);
   if (!normalized) return false;
 
+  let db: any = null;
+  try {
+    db = await getDb();
+  } catch {}
+
+  const sharedOutage = db ? await getSharedRedisOutage(db) : false;
+  const isOutage = redisOutageDetected || sharedOutage;
+
   // If a previous Redis outage occurred, Redis may hold stale keys from missed invalidations.
-  // Attempt recovery flush before trusting any Redis cache hit.
-  if (redisOutageDetected) {
+  // Attempt recovery flush across instances before trusting any Redis cache hit.
+  if (isOutage) {
     try {
       await invalidateCachedOriginRedis();
       redisOutageDetected = false;
+      if (db) await markSharedRedisOutage(db, false);
     } catch {
       // Redis is still unavailable, skip Redis and fall back to Mongo
     }
   }
 
   // 1. Check Redis first (fast REST / memory)
-  if (!redisOutageDetected) {
+  if (!redisOutageDetected && !(db && await getSharedRedisOutage(db))) {
     try {
       const redisVal = await getCachedOriginRedis(normalized);
       if (redisVal !== null) {
@@ -211,6 +223,10 @@ export async function invalidateOrigins(
 
   if (redisFailed) {
     redisOutageDetected = true;
+    try {
+      const db = await getDb();
+      await markSharedRedisOutage(db, true);
+    } catch {}
   }
 }
 

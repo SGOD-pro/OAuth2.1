@@ -81,6 +81,37 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               return { result: deletedCount };
             }
 
+            if (lower === "eval") {
+              const [_script, numKeysRaw, ...rest] = args;
+              const numKeys = Number(numKeysRaw) || 0;
+              const keys = rest.slice(0, numKeys);
+              const scriptArgs = rest.slice(numKeys);
+
+              const originKey = keys[0];
+              const invKey = keys[1];
+              const globalInvKey = keys[2];
+              const allowed = scriptArgs[0];
+              const startTime = Number(scriptArgs[1]) || 0;
+              const ttlSeconds = Number(scriptArgs[2]) || 300;
+
+              if (startTime > 0) {
+                const invEntry = store.get(invKey);
+                if (invEntry && !isExpired(invEntry) && Number(invEntry.value) >= startTime) {
+                  return { result: 0 };
+                }
+                const globalInvEntry = store.get(globalInvKey);
+                if (globalInvEntry && !isExpired(globalInvEntry) && Number(globalInvEntry.value) >= startTime) {
+                  return { result: 0 };
+                }
+              }
+
+              store.set(originKey, {
+                value: allowed === "1" || allowed === 1 || allowed === true,
+                expiresAt: Date.now() + ttlSeconds * 1000,
+              });
+              return { result: 1 };
+            }
+
             if (lower === "scan") {
               const now = Date.now();
               const validKeys: string[] = [];
@@ -147,6 +178,9 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
         clear: () => store.clear(),
         close: () =>
           new Promise<void>((res) => {
+            if (typeof (server as any).closeAllConnections === "function") {
+              (server as any).closeAllConnections();
+            }
             server.close(() => res());
           }),
       });

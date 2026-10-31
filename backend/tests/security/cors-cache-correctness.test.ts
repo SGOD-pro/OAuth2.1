@@ -4,8 +4,14 @@ delete process.env.UPSTASH_REDIS_REST_TOKEN;
 
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { fork } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { ObjectId } from "mongodb";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // 1. Guaranteed disposable in-memory database
 const mongod = await MongoMemoryServer.create();
@@ -38,6 +44,7 @@ const {
   setRedisOutageDetectedForTesting,
 } = await import("../../src/cache/origin-cache");
 const { setRedisClientForTesting } = await import("../../src/cache/redis");
+const { getSharedRedisOutage } = await import("../../src/db/state");
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
 
@@ -542,6 +549,139 @@ await runTest("CORS-10: Disposable Redis mock verifies outage fallback, invalida
     assert.equal(mockRedis.has(`swyra:origin:${redisOrigin}`), false, "Stale key must be purged from Redis during recovery");
     assert.equal(getRedisOutageDetected(), false, "Redis outage state must be cleared after recovery flush");
   } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+  }
+});
+
+// =============================================================================
+// TEST 11: Deterministic cross-process race test with disposable services
+// =============================================================================
+await runTest("CORS-11: Cross-process race condition: in-flight worker read rejected after parent client mutation", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const workerPath = path.resolve(__dirname, "../fixtures/cors-multi-process-worker.ts");
+  const child = fork(workerPath, [], {
+    execPath: process.execPath,
+    execArgv: process.execArgv,
+    env: {
+      ...process.env,
+      MONGO_URI: mongoUri,
+      NODE_ENV: "test",
+    },
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+  });
+
+  const sendToChild = (msg: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      const handler = (res: any) => {
+        if (res.type === "ERROR") {
+          child.off("message", handler);
+          reject(new Error(res.error));
+        } else {
+          child.off("message", handler);
+          resolve(res);
+        }
+      };
+      child.on("message", handler);
+      child.send(msg);
+    });
+  };
+
+  try {
+    // 1. Initialize worker with disposable Mongo and Redis
+    const initRes = await sendToChild({
+      type: "INIT",
+      redisUrl: mockRedis.url,
+      redisToken: mockRedis.token,
+    });
+    assert.equal(initRes.type, "INIT_OK");
+
+    const multiProcessOrigin = "https://multi-process-race.example.com";
+
+    // 2. Parent creates client with multiProcessOrigin
+    const createRes = await app.request("/api/admin/clients", {
+      method: "POST",
+      headers: getAdminHeaders(),
+      body: JSON.stringify({
+        client_name: "Multi Process Client",
+        redirect_uris: [`${multiProcessOrigin}/callback`],
+        allowed_origins: [multiProcessOrigin],
+        is_public: false,
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const created = await createRes.json();
+    const clientId = created.client_id || created.clientId || created.id;
+
+    // 3. Child Process A initiates check at t1 (reading state before mutation)
+    const startRes = await sendToChild({
+      type: "START_CHECK",
+      origin: multiProcessOrigin,
+    });
+    assert.equal(startRes.type, "CHECK_STARTED");
+    const t1 = startRes.startTime;
+    assert.ok(t1 > 0);
+
+    // 4. Parent Process B mutates client at t2 (disables client and invalidates origin)
+    const disableRes = await app.request(`/api/admin/clients/${clientId}`, {
+      method: "PATCH",
+      headers: getAdminHeaders(),
+      body: JSON.stringify({ disabled: true }),
+    });
+    assert.equal(disableRes.status, 200);
+
+    // 5. Child Process A completes stale write at t3 with context { startTime: t1 }
+    const writeRes = await sendToChild({
+      type: "COMPLETE_WRITE",
+      origin: multiProcessOrigin,
+      allowed: true,
+      startTime: t1,
+    });
+    assert.equal(writeRes.type, "WRITE_COMPLETED");
+
+    // 6. Parent checks cache: must NOT be repopulated with true
+    const parentCached = await getCachedOrigin(multiProcessOrigin);
+    assert.equal(parentCached, null, "Parent cache must not have stale true from worker process");
+
+    // 7. Child checks cache: must NOT return true
+    const childCacheRes = await sendToChild({
+      type: "CHECK_CACHE",
+      origin: multiProcessOrigin,
+    });
+    assert.equal(childCacheRes.value, null, "Child cache lookup must not return stale true");
+
+    // 8. Shared Redis Outage propagation across processes
+    // Child triggers Redis outage in shared MongoDB state
+    const outageRes = await sendToChild({
+      type: "TRIGGER_OUTAGE",
+    });
+    assert.equal(outageRes.type, "OUTAGE_TRIGGERED");
+
+    // Parent verifies that it detects the shared Redis outage via MongoDB state
+    const sharedOutage = await getSharedRedisOutage(db);
+    assert.equal(sharedOutage, true, "Parent process must detect Redis outage marked by worker process");
+  } finally {
+    try {
+      child.send({ type: "EXIT" });
+      await new Promise<void>((r) => {
+        const timer = setTimeout(() => {
+          child.kill();
+          r();
+        }, 1000);
+        child.on("exit", () => {
+          clearTimeout(timer);
+          r();
+        });
+      });
+    } catch {}
     setRedisClientForTesting(null);
     await mockRedis.close();
   }

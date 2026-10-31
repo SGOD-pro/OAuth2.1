@@ -30,6 +30,11 @@ const { checkUserIsClientAdmin } = await import("../../src/middleware/admin-auth
 const { isOriginAllowed } = await import("../../src/middleware/cors");
 const { config } = await import("../../src/config");
 const { registerTokenFamily } = await import("../../src/db/state");
+const {
+  isolateTestEnvironment,
+  validateDisposableMongoUri,
+  assertNoExternalInfrastructure,
+} = await import("../fixtures/test-env-isolation");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- MEMBERSHIP LIFECYCLE & ORIGIN RESTRICTION SUITE");
@@ -690,6 +695,263 @@ await runTest("MEM-11: Production-mode integration validates trustedOrigins, COR
       process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION = savedAllowDev;
     }
   }
+});
+
+// =============================================================================
+// TEST 12: Bind app-admin authorization strictly to stable user IDs
+// An app_admins record with matching email must NEVER grant privileges if userId differs
+// =============================================================================
+await runTest("MEM-12: App admin authorization strictly requires matching immutable userId, never email alone", async () => {
+  const stableClientId = "test_stable_id_client_" + crypto.randomBytes(4).toString("hex");
+  await db.collection("oauthClient").insertOne({
+    _id: stableClientId as any,
+    id: stableClientId,
+    clientId: stableClientId,
+    client_id: stableClientId,
+    clientSecret: "secret_" + crypto.randomBytes(16).toString("hex"),
+    name: "Stable ID App",
+    isPublic: false,
+    isDev: false,
+    allowedOrigins: ["https://stable-app.example.com"],
+    redirectUris: ["https://stable-app.example.com/callback"],
+    status: "active",
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const legitimateEmail = `legit_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const attackerEmail = `attacker_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const password = "Password123!Aa";
+
+  // Create Legitimate User A
+  const signUpA = await authProvider.api.signUpEmail({
+    body: { email: legitimateEmail, password, name: "Legitimate Admin" },
+  });
+  const userAId = String(signUpA.user.id);
+  await db.collection("user").updateOne(
+    { _id: new ObjectId(userAId) },
+    { $set: { role: "admin", scopedClientId: stableClientId, emailVerified: true } }
+  );
+
+  // Create Attacker User B
+  const signUpB = await authProvider.api.signUpEmail({
+    body: { email: attackerEmail, password, name: "Attacker User" },
+  });
+  const userBId = String(signUpB.user.id);
+  await db.collection("user").updateOne(
+    { _id: new ObjectId(userBId) },
+    { $set: { role: "admin", scopedClientId: stableClientId, emailVerified: true } }
+  );
+
+  // Provision app_admins assignment strictly for User A's userId, but with attacker's email to test email spoofing
+  await db.collection("app_admins").insertOne({
+    userId: userAId,
+    clientId: stableClientId,
+    email: attackerEmail,
+    role: "admin",
+    status: "active",
+    isActive: true,
+    createdAt: new Date(),
+  });
+  await db.collection("user_app_registrations").insertOne({
+    userId: userAId,
+    clientId: stableClientId,
+    appRole: "admin",
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
+  });
+
+  // Check checkUserIsClientAdmin directly for User B: must be FALSE because userId does not match even though email matches
+  const userBDoc = await db.collection("user").findOne({ _id: new ObjectId(userBId) });
+  const isBAdmin = await checkUserIsClientAdmin(db, userBDoc, userBId, stableClientId);
+  assert.equal(isBAdmin, false, "User B with matching email but differing userId must NOT receive admin rights");
+
+  // Login as User B and attempt real admin route: must be rejected with 403
+  const loginBRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: attackerEmail, password }),
+  });
+  assert.equal(loginBRes.status, 200);
+  const cookieB = (loginBRes.headers.get("set-cookie") || "").split(";")[0];
+  const bRouteRes = await app.request(`/api/admin/app/${stableClientId}/config`, {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: cookieB }),
+  });
+  assert.equal(bRouteRes.status, 403, "User B must receive 403 Forbidden on client admin route despite matching email");
+
+  // Verify User A with matching userId gets 200 OK
+  const userADoc = await db.collection("user").findOne({ _id: new ObjectId(userAId) });
+  const isAAdmin = await checkUserIsClientAdmin(db, userADoc, userAId, stableClientId);
+  assert.equal(isAAdmin, true, "User A with matching userId must receive admin rights");
+
+  const loginARes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: legitimateEmail, password }),
+  });
+  assert.equal(loginARes.status, 200);
+  const cookieA = (loginARes.headers.get("set-cookie") || "").split(";")[0];
+  const aRouteRes = await app.request(`/api/admin/app/${stableClientId}/config`, {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: cookieA }),
+  });
+  assert.equal(aRouteRes.status, 200, "User A must receive 200 OK on client admin route");
+});
+
+// =============================================================================
+// TEST 13: Email change preserves access; deleted and recreated user denied
+// =============================================================================
+await runTest("MEM-13: Email change preserves access; deleted and recreated user denied", async () => {
+  const lifecycleClientId = "test_lifecycle_id_client_" + crypto.randomBytes(4).toString("hex");
+  await db.collection("oauthClient").insertOne({
+    _id: lifecycleClientId as any,
+    id: lifecycleClientId,
+    clientId: lifecycleClientId,
+    client_id: lifecycleClientId,
+    clientSecret: "secret_" + crypto.randomBytes(16).toString("hex"),
+    name: "Lifecycle Client",
+    isPublic: false,
+    isDev: false,
+    allowedOrigins: ["https://lifecycle-app.example.com"],
+    redirectUris: ["https://lifecycle-app.example.com/callback"],
+    status: "active",
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const originalEmail = `original_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const updatedEmail = `updated_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const password = "Password123!Aa";
+
+  // Create User
+  const signUp = await authProvider.api.signUpEmail({
+    body: { email: originalEmail, password, name: "Original Admin" },
+  });
+  const originalUserId = String(signUp.user.id);
+  await db.collection("user").updateOne({ _id: new ObjectId(originalUserId) }, { $set: { emailVerified: true } });
+
+  await db.collection("app_admins").insertOne({
+    userId: originalUserId,
+    clientId: lifecycleClientId,
+    email: originalEmail,
+    role: "admin",
+    status: "active",
+    isActive: true,
+    createdAt: new Date(),
+  });
+  await db.collection("user_app_registrations").insertOne({
+    userId: originalUserId,
+    clientId: lifecycleClientId,
+    appRole: "admin",
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
+  });
+
+  // 1. Email change: user doc updates email to updatedEmail
+  await db.collection("user").updateOne({ _id: new ObjectId(originalUserId) }, { $set: { email: updatedEmail } });
+  const updatedUserDoc = await db.collection("user").findOne({ _id: new ObjectId(originalUserId) });
+
+  const isStillAdmin = await checkUserIsClientAdmin(db, updatedUserDoc, originalUserId, lifecycleClientId);
+  assert.equal(isStillAdmin, true, "User must preserve admin access after email change because userId matches");
+
+  // 2. User is deleted and a new user signs up with the original email
+  await db.collection("user").deleteOne({ _id: new ObjectId(originalUserId) });
+
+  const recreatedSignUp = await authProvider.api.signUpEmail({
+    body: { email: originalEmail, password, name: "Recreated User" },
+  });
+  const recreatedUserId = String(recreatedSignUp.user.id);
+  assert.notEqual(recreatedUserId, originalUserId, "Recreated user must have a new distinct userId");
+
+  const recreatedUserDoc = await db.collection("user").findOne({ _id: new ObjectId(recreatedUserId) });
+  const isRecreatedAdmin = await checkUserIsClientAdmin(db, recreatedUserDoc, recreatedUserId, lifecycleClientId);
+  assert.equal(isRecreatedAdmin, false, "Recreated user with same email must NOT inherit previous user's admin access");
+});
+
+// =============================================================================
+// TEST 14: Duplicate app_admins records: revoked status takes precedence
+// =============================================================================
+await runTest("MEM-14: Duplicate app_admins records: revoked or inactive status strictly denies admin rights", async () => {
+  const dupClientId = "test_dup_id_client_" + crypto.randomBytes(4).toString("hex");
+  const testUserId = new ObjectId().toString();
+  const testUserDoc = { _id: new ObjectId(testUserId), id: testUserId, email: "dup@example.com", role: "user" };
+
+  // Insert two records for same user and client: one active, one revoked
+  await db.collection("app_admins").insertMany([
+    {
+      userId: testUserId,
+      clientId: dupClientId,
+      status: "active",
+      isActive: true,
+      createdAt: new Date(Date.now() - 5000),
+    },
+    {
+      userId: testUserId,
+      clientId: dupClientId,
+      status: "revoked",
+      isActive: false,
+      createdAt: new Date(),
+    },
+  ]);
+
+  // checkUserIsClientAdmin must evaluate both and fail closed on any inactive/revoked record
+  const isAdmin = await checkUserIsClientAdmin(db, testUserDoc, testUserId, dupClientId);
+  assert.equal(isAdmin, false, "Revoked duplicate record must cause admin authorization to fail closed");
+});
+
+// =============================================================================
+// TEST 15: Unsafe legacy fallback removed: role 'admin' and scopedClientId without assignment record is strictly denied
+// =============================================================================
+await runTest("MEM-15: Removal of unsafe legacy fallback: role 'admin' with scopedClientId without assignment record is denied", async () => {
+  const unassignedClientId = "test_unassigned_client_" + crypto.randomBytes(4).toString("hex");
+  const legacyUserId = new ObjectId().toString();
+  const legacyUserDoc = {
+    _id: new ObjectId(legacyUserId),
+    id: legacyUserId,
+    email: "legacy_unassigned@example.com",
+    role: "admin",
+    scopedClientId: unassignedClientId,
+  };
+
+  // Ensure NO record exists in app_admins or user_app_registrations
+  const hasAppAdmin = await db.collection("app_admins").findOne({ userId: legacyUserId, clientId: unassignedClientId });
+  assert.equal(hasAppAdmin, null);
+
+  const isAdmin = await checkUserIsClientAdmin(db, legacyUserDoc, legacyUserId, unassignedClientId);
+  assert.equal(isAdmin, false, "Unassigned user must NOT be granted admin rights merely by scopedClientId without assignment record");
+});
+
+// =============================================================================
+// TEST 16: Safe test and benchmark infrastructure isolation guard
+// =============================================================================
+await runTest("MEM-16: Test infrastructure isolation guard blocks non-disposable Mongo and remote Redis", async () => {
+  // 1. validateDisposableMongoUri rejects remote / production Mongo URIs
+  assert.throws(
+    () => validateDisposableMongoUri("mongodb+srv://admin:pass@cluster0.abc.mongodb.net/prod"),
+    /SECURITY_VIOLATION/,
+    "Remote Atlas mongodb+srv URI must be rejected"
+  );
+  assert.throws(
+    () => validateDisposableMongoUri("mongodb://prod-db.internal.swyra.com:27017/prod"),
+    /SECURITY_VIOLATION/,
+    "Non-loopback remote Mongo URI must be rejected"
+  );
+
+  // 2. validateDisposableMongoUri permits loopback / local disposable URIs
+  assert.doesNotThrow(() => validateDisposableMongoUri("mongodb://127.0.0.1:27017/disposable_test"));
+  assert.doesNotThrow(() => validateDisposableMongoUri("mongodb://localhost:27017/disposable_test"));
+
+  // 3. Redis alias stripping
+  process.env.UPSTASH_REDIS_REST_URL = "https://stray-external-redis.upstash.io";
+  process.env.REDIS_URL = "redis://stray-redis:6379";
+  isolateTestEnvironment();
+
+  assert.equal(process.env.UPSTASH_REDIS_REST_URL, undefined, "UPSTASH_REDIS_REST_URL must be stripped");
+  assert.equal(process.env.REDIS_URL, undefined, "REDIS_URL must be stripped");
+  assert.doesNotThrow(() => assertNoExternalInfrastructure());
 });
 
 await closeDb();

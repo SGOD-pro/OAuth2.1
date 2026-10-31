@@ -192,6 +192,34 @@ export async function getOriginCache(
   return entry.allowed;
 }
 
+export async function markSharedRedisOutage(db: any, isOutage: boolean): Promise<void> {
+  if (!db) return;
+  try {
+    const collection = db.collection("origin_cache");
+    await collection.updateOne(
+      { _id: "ORIGIN#__SHARED_REDIS_OUTAGE__" },
+      {
+        $set: {
+          outage: isOutage,
+          updatedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+  } catch {}
+}
+
+export async function getSharedRedisOutage(db: any): Promise<boolean> {
+  if (!db) return false;
+  try {
+    const collection = db.collection("origin_cache");
+    const doc = await collection.findOne({ _id: "ORIGIN#__SHARED_REDIS_OUTAGE__" });
+    return Boolean(doc && doc.outage === true);
+  } catch {
+    return false;
+  }
+}
+
 export async function putOriginCache(
   origin: string,
   allowed: boolean,
@@ -202,13 +230,64 @@ export async function putOriginCache(
   const db = await getDb();
   const collection = db.collection<OriginCacheDoc>("origin_cache");
   const id = `ORIGIN#${origin}`;
+  const now = new Date();
 
+  // 1. Check global tombstone if startTime is provided
   if (typeof startTime === "number") {
-    const existing = await collection.findOne({ _id: id });
-    if (existing?.invalidatedAt && existing.invalidatedAt.getTime() >= startTime) {
-      // Concurrent invalidation occurred while origin check was in flight.
-      // Refuse to write to prevent stale cache repopulation.
+    const globalTombstone = await collection.findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
+    if (globalTombstone?.invalidatedAt && globalTombstone.invalidatedAt.getTime() >= startTime) {
+      // Global invalidation occurred while check was in flight. Refuse to write.
       return false;
+    }
+  }
+
+  // 2. Atomic write with conditional filter:
+  // If document does not exist, insert it.
+  // If document exists, update ONLY IF it has NOT been invalidated since startTime.
+  if (typeof startTime === "number") {
+    const filter = {
+      _id: id,
+      $or: [
+        { invalidatedAt: { $exists: false } },
+        { invalidatedAt: { $lt: new Date(startTime) } },
+      ],
+    };
+    const update = {
+      $set: {
+        allowed,
+        cachedAt: now,
+      },
+      $unset: { invalidatedAt: "" },
+    };
+
+    // Try update first (when document already exists)
+    const updateResult = await collection.updateOne(filter, update);
+    if (updateResult.matchedCount > 0) {
+      return true;
+    }
+
+    // Check if document exists with an invalidation newer than startTime
+    const existing = await collection.findOne({ _id: id });
+    if (existing) {
+      // Document exists and had invalidatedAt >= startTime (or filter didn't match)
+      return false;
+    }
+
+    // Document didn't exist: attempt atomic insertOne
+    try {
+      await collection.insertOne({
+        _id: id,
+        allowed,
+        cachedAt: now,
+      });
+      return true;
+    } catch (insertErr: any) {
+      if (insertErr?.code === 11000) {
+        // Document was created concurrently (e.g. invalidation happened). Re-check conditionally.
+        const retryResult = await collection.updateOne(filter, update);
+        return retryResult.matchedCount > 0;
+      }
+      throw insertErr;
     }
   }
 
@@ -217,7 +296,7 @@ export async function putOriginCache(
     {
       $set: {
         allowed,
-        cachedAt: new Date(),
+        cachedAt: now,
       },
       $unset: { invalidatedAt: "" },
     },
