@@ -160,7 +160,7 @@ export const TwoFactor: React.FC = () => {
                   {mode === 'totp' ? 'Verification Code' : 'Recovery Code'}
                 </label>
                 <Input
-                  type="text"
+                  type="number"
                   inputMode={mode === 'totp' ? 'numeric' : 'text'}
                   autoComplete={mode === 'totp' ? 'one-time-code' : 'off'}
                   autoFocus
