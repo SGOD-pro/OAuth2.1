@@ -323,20 +323,38 @@ async function extractClientId(c: any, body?: any): Promise<string | null> {
         } catch {}
     }
 
-    // Authoritative server-side transaction lookup by state or cookie
+    // Authoritative server-side transaction lookup by state parameter
     if (state) {
         const tx = await getOAuthTransaction({ state });
         if (tx?.clientId) return tx.clientId;
     }
 
-    const txIdCookie = getCookie(c, "oauth_transaction_id");
-    if (txIdCookie) {
-        const tx = await getOAuthTransaction({ transactionId: txIdCookie });
-        if (tx?.clientId) return tx.clientId;
-    }
+    // Detect platform (MAuth) sign-in context.
+    // A platform sign-in has a callbackURL pointing to /admin or /api/admin,
+    // or no callbackURL at all (direct credential endpoint call).
+    // Stale oauth_transaction_id / current_client_id cookies from a prior
+    // private-app OAuth flow must NEVER contaminate platform sign-in.
+    const rawCallback = body?.callbackURL ?? c.req.query("callbackURL") ?? "";
+    const callbackPath = typeof rawCallback === "string" ? rawCallback : "";
+    const isPlatformSignIn =
+        callbackPath === "" ||
+        callbackPath === "/" ||
+        callbackPath.startsWith("/admin") ||
+        callbackPath.startsWith("/api/admin");
 
-    const cookieVal = getCookie(c, "current_client_id");
-    if (cookieVal) return cookieVal;
+    if (!isPlatformSignIn) {
+        // Only inherit cookie-based client context for ongoing OAuth flows,
+        // never for platform sign-in. Cookie fallback requires no explicit
+        // client_id or state to be present in the request.
+        const txIdCookie = getCookie(c, "oauth_transaction_id");
+        if (txIdCookie) {
+            const tx = await getOAuthTransaction({ transactionId: txIdCookie });
+            if (tx?.clientId) return tx.clientId;
+        }
+
+        const cookieVal = getCookie(c, "current_client_id");
+        if (cookieVal) return cookieVal;
+    }
 
     return null;
 }
