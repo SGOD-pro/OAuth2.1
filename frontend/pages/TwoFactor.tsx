@@ -117,9 +117,7 @@ export const TwoFactor: React.FC = () => {
   };
 
   const handleBackToSignIn = async () => {
-    try {
-      await authClient.signOut({});
-    } catch {}
+    await authClient.signOut({}).catch(() => {});
     navigate(`/auth?${searchParams.toString()}`);
   };
 
