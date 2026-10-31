@@ -25,23 +25,46 @@ export const AdminTwoFactor: React.FC = () => {
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!code) return;
+    const trimmedCode = code.trim();
+    if (!trimmedCode) return;
     setLoading(true);
     setError(null);
 
     try {
       let verifiedUser: UserWithRole | null | undefined = null;
       if (mode === 'totp') {
-        const verifyRes = await authClient.twoFactor.verifyTotp({ code });
+        const verifyRes = await authClient.twoFactor.verifyTotp({ code: trimmedCode });
         if (verifyRes.error) {
-          const errMsg = verifyRes.error.message || 'Invalid 6-digit code. Check your authenticator app.';
-          setError(errMsg);
-          toast.error(errMsg);
+          const errCode = (verifyRes.error as { code?: string })?.code;
+          const errMsg = verifyRes.error.message || 'Invalid 6 digit code. Check your authenticator app.';
+          const isExpired = errCode === 'INVALID_TWO_FACTOR_COOKIE' ||
+                            errMsg.toLowerCase().includes('cookie') ||
+                            errMsg.toLowerCase().includes('session') ||
+                            errMsg.toLowerCase().includes('expired');
+          const isRateLimited = verifyRes.error.status === 429 || errCode === 'ACCOUNT_TEMPORARILY_LOCKED';
+
+          if (isRateLimited) {
+            setError('Too many verification attempts. Please wait before trying again.');
+            toast.error('Too many attempts. Account temporarily locked.');
+            return;
+          }
+
+          if (isExpired) {
+            setError('Verification session expired. Please sign in again.');
+            toast.error('Verification session expired. Please sign in again.');
+            setTimeout(() => {
+              navigate('/admin/login?error=mfa_expired', { replace: true });
+            }, 1200);
+            return;
+          }
+
           const nextFail = failedAttempts + 1;
           setFailedAttempts(nextFail);
-          
-          if (nextFail >= 3 || verifyRes.error.status === 401 || verifyRes.error.status === 403 || errMsg.toLowerCase().includes('session')) {
-            toast.error('Session expired. Please sign in again.');
+          setError(errMsg);
+          toast.error(errMsg);
+
+          if (nextFail >= 3 || errCode === 'TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE') {
+            toast.error('Too many failed attempts. Please sign in again.');
             setTimeout(() => {
               navigate('/admin/login?error=mfa_failed', { replace: true });
             }, 1200);
@@ -50,16 +73,38 @@ export const AdminTwoFactor: React.FC = () => {
         }
         verifiedUser = (verifyRes.data as unknown as { user?: UserWithRole })?.user;
       } else {
-        const verifyRes = await authClient.twoFactor.verifyBackupCode({ code });
+        const verifyRes = await authClient.twoFactor.verifyBackupCode({ code: trimmedCode });
         if (verifyRes.error) {
+          const errCode = (verifyRes.error as { code?: string })?.code;
           const errMsg = verifyRes.error.message || 'Invalid backup code.';
-          setError(errMsg);
-          toast.error(errMsg);
+          const isExpired = errCode === 'INVALID_TWO_FACTOR_COOKIE' ||
+                            errMsg.toLowerCase().includes('cookie') ||
+                            errMsg.toLowerCase().includes('session') ||
+                            errMsg.toLowerCase().includes('expired');
+          const isRateLimited = verifyRes.error.status === 429 || errCode === 'ACCOUNT_TEMPORARILY_LOCKED';
+
+          if (isRateLimited) {
+            setError('Too many verification attempts. Please wait before trying again.');
+            toast.error('Too many attempts. Account temporarily locked.');
+            return;
+          }
+
+          if (isExpired) {
+            setError('Verification session expired. Please sign in again.');
+            toast.error('Verification session expired. Please sign in again.');
+            setTimeout(() => {
+              navigate('/admin/login?error=mfa_expired', { replace: true });
+            }, 1200);
+            return;
+          }
+
           const nextFail = failedAttempts + 1;
           setFailedAttempts(nextFail);
-          
-          if (nextFail >= 3 || verifyRes.error.status === 401 || verifyRes.error.status === 403 || errMsg.toLowerCase().includes('session')) {
-            toast.error('Session expired. Please sign in again.');
+          setError(errMsg);
+          toast.error(errMsg);
+
+          if (nextFail >= 3 || errCode === 'TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE') {
+            toast.error('Too many failed attempts. Please sign in again.');
             setTimeout(() => {
               navigate('/admin/login?error=mfa_failed', { replace: true });
             }, 1200);

@@ -23,6 +23,12 @@ export const TwoFactor: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
+  const getAuthRedirect = (errorVal: string) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('error', errorVal);
+    return `/auth?${params.toString()}`;
+  };
+
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedCode = code.trim();
@@ -34,16 +40,38 @@ export const TwoFactor: React.FC = () => {
       if (mode === 'totp') {
         const { error: err } = await authClient.twoFactor.verifyTotp({ code: trimmedCode });
         if (err) {
+          const errCode = (err as { code?: string })?.code;
           const errMsg = err.message || 'Invalid 6 digit code. Check your authenticator app.';
-          setError(errMsg);
-          toast.error(errMsg);
+          const isExpired = errCode === 'INVALID_TWO_FACTOR_COOKIE' ||
+                            errMsg.toLowerCase().includes('cookie') ||
+                            errMsg.toLowerCase().includes('session') ||
+                            errMsg.toLowerCase().includes('expired');
+          const isRateLimited = err.status === 429 || errCode === 'ACCOUNT_TEMPORARILY_LOCKED';
+
+          if (isRateLimited) {
+            setError('Too many verification attempts. Please wait before trying again.');
+            toast.error('Too many attempts. Account temporarily locked.');
+            return;
+          }
+
+          if (isExpired) {
+            setError('Verification challenge expired. Please sign in again.');
+            toast.error('Verification challenge expired. Please sign in again.');
+            setTimeout(() => {
+              navigate(getAuthRedirect('mfa_expired'), { replace: true });
+            }, 1200);
+            return;
+          }
+
           const nextFail = failedAttempts + 1;
           setFailedAttempts(nextFail);
+          setError(errMsg);
+          toast.error(errMsg);
 
-          if (nextFail >= 3 || err.status === 401 || err.status === 403 || errMsg.toLowerCase().includes('session')) {
-            toast.error('Verification session expired. Please sign in again.');
+          if (nextFail >= 3 || errCode === 'TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE') {
+            toast.error('Too many failed attempts. Please sign in again.');
             setTimeout(() => {
-              navigate(`/auth?${searchParams.toString()}&error=mfa_failed`, { replace: true });
+              navigate(getAuthRedirect('mfa_failed'), { replace: true });
             }, 1200);
           }
           return;
@@ -51,16 +79,38 @@ export const TwoFactor: React.FC = () => {
       } else {
         const { error: err } = await authClient.twoFactor.verifyBackupCode({ code: trimmedCode });
         if (err) {
+          const errCode = (err as { code?: string })?.code;
           const errMsg = err.message || 'Invalid recovery code.';
-          setError(errMsg);
-          toast.error(errMsg);
+          const isExpired = errCode === 'INVALID_TWO_FACTOR_COOKIE' ||
+                            errMsg.toLowerCase().includes('cookie') ||
+                            errMsg.toLowerCase().includes('session') ||
+                            errMsg.toLowerCase().includes('expired');
+          const isRateLimited = err.status === 429 || errCode === 'ACCOUNT_TEMPORARILY_LOCKED';
+
+          if (isRateLimited) {
+            setError('Too many verification attempts. Please wait before trying again.');
+            toast.error('Too many attempts. Account temporarily locked.');
+            return;
+          }
+
+          if (isExpired) {
+            setError('Verification challenge expired. Please sign in again.');
+            toast.error('Verification challenge expired. Please sign in again.');
+            setTimeout(() => {
+              navigate(getAuthRedirect('mfa_expired'), { replace: true });
+            }, 1200);
+            return;
+          }
+
           const nextFail = failedAttempts + 1;
           setFailedAttempts(nextFail);
+          setError(errMsg);
+          toast.error(errMsg);
 
-          if (nextFail >= 3 || err.status === 401 || err.status === 403 || errMsg.toLowerCase().includes('session')) {
-            toast.error('Verification session expired. Please sign in again.');
+          if (nextFail >= 3 || errCode === 'TOO_MANY_ATTEMPTS_REQUEST_NEW_CODE') {
+            toast.error('Too many failed attempts. Please sign in again.');
             setTimeout(() => {
-              navigate(`/auth?${searchParams.toString()}&error=mfa_failed`, { replace: true });
+              navigate(getAuthRedirect('mfa_failed'), { replace: true });
             }, 1200);
           }
           return;

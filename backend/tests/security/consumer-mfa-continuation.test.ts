@@ -6,11 +6,8 @@ console.log("================================================================");
 console.log("  SWYRA AUTH -- CONSUMER OAUTH MFA CONTINUATION SECURITY SUITE");
 console.log("================================================================\n");
 
-let mongod: any = null;
-if (!process.env.MONGO_URI || process.env.MONGO_URI.includes("mongodb.net") || process.env.MONGO_URI.includes("cluster0")) {
-  mongod = await MongoMemoryServer.create();
-  process.env.MONGO_URI = mongod.getUri();
-}
+const mongod = await MongoMemoryServer.create();
+process.env.MONGO_URI = mongod.getUri();
 process.env.NODE_ENV = "test";
 process.env.BETTER_AUTH_SECRET = "m".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
@@ -588,6 +585,57 @@ await runTest("MFA-8: Account switching does not lose or mix OAuth transaction s
   assert.ok(locB.startsWith(clientACallback));
   assert.ok(locB.includes("error=access_denied"), "Switched unauthorized account must be denied for Client A");
   assert.ok(locB.includes(`state=${state}`), "State must be preserved in access_denied redirect");
+});
+
+// =============================================================================
+// TEST 9: MFA retry resilience and error code discrimination
+// =============================================================================
+await runTest("MFA-9: MFA retry resilience allows retry on incorrect code and rejects invalid cookie", async () => {
+  // 1. Initial sign in to acquire MFA challenge cookie
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: appAdminEmail, password: appAdminPass }),
+  });
+  assert.equal(loginRes.status, 200);
+  const mfaCookie = extractMfaCookie(loginRes);
+
+  // 2. Attempt 1 with invalid TOTP code returns 401 with INVALID_CODE
+  const attempt1 = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: mfaCookie }),
+    body: JSON.stringify({ code: "111111" }),
+  });
+  assert.equal(attempt1.status, 401, "First invalid TOTP attempt must return 401");
+  const err1 = await attempt1.json();
+  assert.ok(
+    err1.code === "INVALID_CODE" || (err1.message && err1.message.toLowerCase().includes("invalid")),
+    "Error code or message must indicate invalid code, not expired session"
+  );
+
+  // 3. Attempt 2 with correct TOTP code succeeds on the same challenge (not expired)
+  const freshTotp = await createOTP(adminRawSecret, { digits: 6, period: 30 }).totp();
+  const attempt2 = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: mfaCookie }),
+    body: JSON.stringify({ code: freshTotp }),
+  });
+  assert.equal(attempt2.status, 200, "Second valid TOTP attempt must succeed after retry");
+  const data2 = await attempt2.json();
+  assert.ok(data2.token, "Successful retry must return session token");
+
+  // 4. Verification with a missing/tampered cookie returns INVALID_TWO_FACTOR_COOKIE
+  const invalidCookieRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: "better-auth.two_factor=invalid_token_xyz" }),
+    body: JSON.stringify({ code: freshTotp }),
+  });
+  assert.equal(invalidCookieRes.status, 401, "Tampered cookie must return 401");
+  const errCookie = await invalidCookieRes.json();
+  assert.ok(
+    errCookie.code === "INVALID_TWO_FACTOR_COOKIE" || (errCookie.message && errCookie.message.toLowerCase().includes("cookie")),
+    "Missing/tampered challenge cookie must return INVALID_TWO_FACTOR_COOKIE"
+  );
 });
 
 // -----------------------------------------------------------------------------

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "generated_at": "2026-10-02T00:00:00Z",
   "master_command": "npm run test:all-security",
-  "total_blocking_suites": 14,
+  "total_blocking_suites": 19,
   "suites": [
     {
       "name": "test-client-mode-transition",
@@ -116,6 +116,46 @@
       "purpose": "Verifies OpenID Connect discovery, RS256 token signing, JWKS publication, and standards compliance for downstream consumers.",
       "blocking": true,
       "classification": "oidc_interoperability"
+    },
+    {
+      "name": "adversarial-role-tampering",
+      "file": "tests/security/adversarial-role-tampering.test.ts",
+      "command": "npm run test:role-tampering",
+      "purpose": "Verifies role tampering defense, preventing privilege escalation between user, app-admin, and super-admin identities.",
+      "blocking": true,
+      "classification": "role_isolation_and_tampering"
+    },
+    {
+      "name": "account-switch-e2e",
+      "file": "tests/security/account-switch-e2e.test.ts",
+      "command": "npm run test:account-switch",
+      "purpose": "Verifies seamless account switching between app-admin and super-admin sessions without privilege mixing or token leakage.",
+      "blocking": true,
+      "classification": "account_switch_integrity"
+    },
+    {
+      "name": "consumer-mfa-continuation",
+      "file": "tests/security/consumer-mfa-continuation.test.ts",
+      "command": "npm run test:consumer-mfa",
+      "purpose": "Verifies consumer OAuth MFA continuation restores validated client transaction and preserves portal isolation.",
+      "blocking": true,
+      "classification": "mfa_continuation"
+    },
+    {
+      "name": "private-app-login-isolation",
+      "file": "tests/security/private-app-login-isolation.test.ts",
+      "command": "npm run test:private-app-isolation",
+      "purpose": "Verifies private app login state cannot contaminate platform login or bypass membership authorization checks.",
+      "blocking": true,
+      "classification": "private_app_isolation"
+    },
+    {
+      "name": "nosql-injection-boundary",
+      "file": "tests/security/nosql-injection-boundary.test.ts",
+      "command": "npm run test:nosql-boundary",
+      "purpose": "Verifies input sanitization and NoSQL injection defense across authentication and client management endpoints.",
+      "blocking": true,
+      "classification": "nosql_injection_defense"
     },
     {
       "name": "load-and-performance",

@@ -5,11 +5,15 @@ import assert from "node:assert/strict";
 import crypto from "crypto";
 import { ObjectId } from "mongodb";
 
-// Configure test environment before any application imports
+import { MongoMemoryServer } from "mongodb-memory-server";
+let mongod: any = null;
+if (!process.env.MONGO_URI || process.env.MONGO_URI.includes("mongodb.net") || process.env.MONGO_URI.includes("cluster0") || process.env.MONGO_URI.includes("27017")) {
+  mongod = await MongoMemoryServer.create();
+  process.env.MONGO_URI = mongod.getUri();
+}
 process.env.NODE_ENV = "test";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
-process.env.MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/test_security";
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "http://localhost:3000";
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
@@ -1753,6 +1757,12 @@ await runTest(30, "App Admin deletion lifecycle: deleted admin document is remov
 console.log("================================================================");
 console.log(`  FINAL ADVERSARIAL GATE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
+
+const { closeDb } = await import("../../src/db/mongo");
+await closeDb();
+if (mongod) {
+  await mongod.stop();
+}
 
 if (failed > 0) {
   console.error("❌ ADVERSARIAL SECURITY GATE: FAIL");

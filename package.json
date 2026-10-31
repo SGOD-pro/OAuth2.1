@@ -17,6 +17,8 @@
     "test:cross-process-refresh": "npm --prefix backend run test:cross-process-refresh",
     "test:all-security": "npm --prefix backend run test:all-security",
     "test:all-security:local": "npm --prefix backend run test:all-security:local",
+    "test:consumer-mfa": "npm --prefix backend run test:consumer-mfa",
+    "test:private-app-isolation": "npm --prefix backend run test:private-app-isolation",
     "test:browser-e2e": "npm --prefix backend run test:browser-e2e"
   }
 }

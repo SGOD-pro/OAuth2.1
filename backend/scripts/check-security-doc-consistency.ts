@@ -62,9 +62,15 @@ check("Security suite manifest matches package.json test scripts", () => {
   const testAllSecurity = pkg.scripts["test:all-security"];
   assert.ok(testAllSecurity, "package.json must contain 'test:all-security' script");
 
+  // Read authoritative runner source to verify executed test files when delegating
+  const runnerPath = path.join(backendRoot, "scripts/run-all-security.ts");
+  const runnerSrc = fs.existsSync(runnerPath) ? fs.readFileSync(runnerPath, "utf-8") : "";
+
   for (const suite of blockingSuites) {
+    const executedInPkg = testAllSecurity.includes(suite.file);
+    const executedInRunner = testAllSecurity.includes("run-all-security.ts") && runnerSrc.includes(suite.file);
     assert.ok(
-      testAllSecurity.includes(suite.file),
+      executedInPkg || executedInRunner,
       `test:all-security must execute blocking suite: ${suite.file}`
     );
   }

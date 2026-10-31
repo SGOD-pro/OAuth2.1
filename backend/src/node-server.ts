@@ -6,10 +6,11 @@ const initMs = Date.now() - appBootTime;
 console.log(`Node server init in ${initMs}ms`);
 
 const port = config.port || 3000;
-console.log(`Starting server on port ${port}`);
+const host = process.env.HOST || "0.0.0.0";
+console.log(`Starting server on ${host}:${port}`);
 
 serve({
   fetch: app.fetch,
   port,
-  hostname: process.env.HOST || "127.0.0.1",
+  hostname: host,
 });
