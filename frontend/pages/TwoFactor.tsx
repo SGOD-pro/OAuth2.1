@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
 import { safeCallbackURL } from '@/lib/security';
@@ -22,20 +22,6 @@ export const TwoFactor: React.FC = () => {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-
-  // If already authenticated with an active session, automatically resume continuation
-  useEffect(() => {
-    const getSessionFn = authClient.getSession as unknown as () => Promise<{
-      data?: { user?: Record<string, unknown> } | null;
-    }>;
-    getSessionFn().then((res) => {
-      if (res?.data?.user) {
-        if (searchParams.get('client_id') && searchParams.get('redirect_uri')) {
-          window.location.assign(`/api/auth/oauth2/authorize?${searchParams.toString()}`);
-        }
-      }
-    }).catch(() => {});
-  }, [searchParams]);
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,7 +71,9 @@ export const TwoFactor: React.FC = () => {
 
       // 1. Authoritative OAuth continuation takes strict precedence
       if (searchParams.get('client_id') && searchParams.get('redirect_uri')) {
-        window.location.assign(`/api/auth/oauth2/authorize?${searchParams.toString()}`);
+        const oauthParams = new URLSearchParams(searchParams);
+        oauthParams.delete('prompt');
+        window.location.assign(`/api/auth/oauth2/authorize?${oauthParams.toString()}`);
         return;
       }
 

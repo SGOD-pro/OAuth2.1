@@ -57,7 +57,9 @@ export const SignIn: React.FC = () => {
   const callbackURL = useMemo(() => {
     // 1. Authoritative OAuth continuation takes strict precedence
     if (searchParams.get('client_id') && searchParams.get('redirect_uri')) {
-      return `/api/auth/oauth2/authorize?${searchParams.toString()}`;
+      const oauthParams = new URLSearchParams(searchParams);
+      oauthParams.delete('prompt');
+      return `/api/auth/oauth2/authorize?${oauthParams.toString()}`;
     }
 
     // 2. Otherwise inspect explicit callbackURL, strictly rejecting platform administrator routes
@@ -139,7 +141,9 @@ export const SignIn: React.FC = () => {
         setRedirecting(true);
         const data = res?.data as { url?: string; redirect?: boolean } | undefined;
         const isOAuth = Boolean(searchParams.get('client_id') && searchParams.get('redirect_uri'));
-        const safeDest = isOAuth ? `/api/auth/oauth2/authorize?${searchParams.toString()}` : callbackURL;
+        const oauthParams = new URLSearchParams(searchParams);
+        oauthParams.delete('prompt');
+        const safeDest = isOAuth ? `/api/auth/oauth2/authorize?${oauthParams.toString()}` : callbackURL;
         if (data?.redirect && data?.url && !data.url.includes('/admin') && !isOAuth) {
           // Better Auth client redirectPlugin has already initiated navigation to data.url
           return;
@@ -201,7 +205,9 @@ export const SignIn: React.FC = () => {
         setRedirecting(true);
         const data = signInRes?.data as { url?: string; redirect?: boolean } | undefined;
         const isOAuth = Boolean(searchParams.get('client_id') && searchParams.get('redirect_uri'));
-        const safeDest = isOAuth ? `/api/auth/oauth2/authorize?${searchParams.toString()}` : callbackURL;
+        const oauthParams = new URLSearchParams(searchParams);
+        oauthParams.delete('prompt');
+        const safeDest = isOAuth ? `/api/auth/oauth2/authorize?${oauthParams.toString()}` : callbackURL;
         if (data?.redirect && data?.url && !data.url.includes('/admin') && !isOAuth) {
           // Better Auth client redirectPlugin has already initiated navigation to data.url
           return;

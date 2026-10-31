@@ -6,16 +6,12 @@ console.log("================================================================");
 console.log("  SWYRA AUTH -- PRIVATE APP LOGIN ISOLATION SECURITY SUITE");
 console.log("================================================================\n");
 
-let mongod: any = null;
-if (
-  !process.env.MONGO_URI ||
-  process.env.MONGO_URI.includes("mongodb.net") ||
-  process.env.MONGO_URI.includes("cluster0")
-) {
-  mongod = await MongoMemoryServer.create();
-  process.env.MONGO_URI = mongod.getUri();
-}
+// Guaranteed disposable in-memory database
+const mongod = await MongoMemoryServer.create();
+const mongoUri = mongod.getUri();
+
 process.env.NODE_ENV = "test";
+process.env.MONGO_URI = mongoUri;
 process.env.BETTER_AUTH_SECRET = "i".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -664,6 +660,6 @@ console.log(`  ISOLATION SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 
 await closeDb();
-if (mongod) await mongod.stop();
+await mongod.stop();
 
 if (failed > 0) process.exit(1);

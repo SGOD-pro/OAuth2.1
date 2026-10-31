@@ -22,6 +22,8 @@ const securityTestFiles = [
   "tests/security/test-app-management-auth.ts",
   "tests/security/adversarial-role-tampering.test.ts",
   "tests/security/account-switch-e2e.test.ts",
+  "tests/security/consumer-mfa-continuation.test.ts",
+  "tests/security/private-app-login-isolation.test.ts",
   "tests/security/nosql-injection-boundary.test.ts",
   "tests/security/e2e-oidc-interop.test.ts",
 ];

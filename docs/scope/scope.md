@@ -162,7 +162,7 @@ Implement explicit mutually exclusive administrator identities and enforce MAuth
    - [x] Align frontend admin console guards and session handling
 - [ ] Verify it: `/check verify explicit administrator identities and portal isolation`
 - [ ] Test it: `/test explicit administrator identities and portal isolation`
-- [ ] Review it (fresh model): `/check review explicit administrator identities and portal isolation`
+- [x] Review it (fresh model): `/check review explicit administrator identities and portal isolation`
 - [ ] Document it: `/document explicit administrator identities and portal isolation`
 [0007](../specs/0007-explicit-administrator-identities-and-portal-isolation/index.md) · code in `backend/src/middleware/admin-auth.ts`, `backend/src/routes/auth.ts`, `backend/src/utils/admin-sync.ts`, `backend/scripts/migrate-identity-roles.ts`, `frontend/components/AdminRoute.tsx`, `frontend/pages/admin/AdminLogin.tsx`
 

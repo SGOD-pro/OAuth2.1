@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
-import { isSuperAdminUser, isAppAdminUser } from '@/lib/role-predicates';
+import { isSuperAdminUser, isAppAdminUser, type UserWithRole } from '@/lib/role-predicates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
@@ -30,16 +30,17 @@ export const AdminTwoFactor: React.FC = () => {
     setError(null);
 
     try {
+      let verifiedUser: UserWithRole | null | undefined = null;
       if (mode === 'totp') {
-        const { error: err } = await authClient.twoFactor.verifyTotp({ code });
-        if (err) {
-          const errMsg = err.message || 'Invalid 6-digit code. Check your authenticator app.';
+        const verifyRes = await authClient.twoFactor.verifyTotp({ code });
+        if (verifyRes.error) {
+          const errMsg = verifyRes.error.message || 'Invalid 6-digit code. Check your authenticator app.';
           setError(errMsg);
           toast.error(errMsg);
           const nextFail = failedAttempts + 1;
           setFailedAttempts(nextFail);
           
-          if (nextFail >= 3 || err.status === 401 || err.status === 403 || errMsg.toLowerCase().includes('session')) {
+          if (nextFail >= 3 || verifyRes.error.status === 401 || verifyRes.error.status === 403 || errMsg.toLowerCase().includes('session')) {
             toast.error('Session expired. Please sign in again.');
             setTimeout(() => {
               navigate('/admin/login?error=mfa_failed', { replace: true });
@@ -47,16 +48,17 @@ export const AdminTwoFactor: React.FC = () => {
           }
           return;
         }
+        verifiedUser = (verifyRes.data as unknown as { user?: UserWithRole })?.user;
       } else {
-        const { error: err } = await authClient.twoFactor.verifyBackupCode({ code });
-        if (err) {
-          const errMsg = err.message || 'Invalid backup code.';
+        const verifyRes = await authClient.twoFactor.verifyBackupCode({ code });
+        if (verifyRes.error) {
+          const errMsg = verifyRes.error.message || 'Invalid backup code.';
           setError(errMsg);
           toast.error(errMsg);
           const nextFail = failedAttempts + 1;
           setFailedAttempts(nextFail);
           
-          if (nextFail >= 3 || err.status === 401 || err.status === 403 || errMsg.toLowerCase().includes('session')) {
+          if (nextFail >= 3 || verifyRes.error.status === 401 || verifyRes.error.status === 403 || errMsg.toLowerCase().includes('session')) {
             toast.error('Session expired. Please sign in again.');
             setTimeout(() => {
               navigate('/admin/login?error=mfa_failed', { replace: true });
@@ -64,15 +66,19 @@ export const AdminTwoFactor: React.FC = () => {
           }
           return;
         }
+        verifiedUser = (verifyRes.data as unknown as { user?: UserWithRole })?.user;
       }
 
-      const getSessionFn = authClient.getSession as unknown as () => Promise<{
-        data?: { user?: { role?: string; scopedClientId?: string | null } };
-      }>;
-      const userRes = await getSessionFn();
-      const currentUser = userRes?.data?.user;
-      const isSuperAdmin = isSuperAdminUser(currentUser);
-      const isAppAdmin = isAppAdminUser(currentUser);
+      if (!verifiedUser) {
+        const getSessionFn = authClient.getSession as unknown as () => Promise<{
+          data?: { user?: UserWithRole };
+        }>;
+        const userRes = await getSessionFn();
+        verifiedUser = userRes?.data?.user;
+      }
+
+      const isSuperAdmin = isSuperAdminUser(verifiedUser);
+      const isAppAdmin = isAppAdminUser(verifiedUser);
 
       if (isAppAdmin) {
         await authClient.signOut({});

@@ -134,6 +134,10 @@ jobs:
       - name: Run Live Browser E2E Test Suite (Playwright)
         run: npm run test:browser-e2e
 
+      - name: Run Private App Login Isolation Test Suite
+        working-directory: backend
+        run: npm run test:private-app-isolation
+
       - name: Run Automated Security Test Suite
         working-directory: backend
         env:
