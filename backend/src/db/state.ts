@@ -316,18 +316,35 @@ export async function invalidateOriginCache(
 
   if (origins && origins.length > 0) {
     const ids = origins.map((origin) => `ORIGIN#${origin}`);
-    for (const id of ids) {
-      await collection.updateOne(
-        { _id: id },
-        {
-          $set: {
-            allowed: null,
-            invalidatedAt: now,
-            cachedAt: now,
+    if (typeof collection.bulkWrite === "function") {
+      const operations = ids.map((id) => ({
+        updateOne: {
+          filter: { _id: id },
+          update: {
+            $set: {
+              allowed: null,
+              invalidatedAt: now,
+              cachedAt: now,
+            },
           },
+          upsert: true,
         },
-        { upsert: true },
-      );
+      }));
+      await collection.bulkWrite(operations as any, { ordered: false });
+    } else {
+      for (const id of ids) {
+        await collection.updateOne(
+          { _id: id },
+          {
+            $set: {
+              allowed: null,
+              invalidatedAt: now,
+              cachedAt: now,
+            },
+          },
+          { upsert: true },
+        );
+      }
     }
     return;
   }

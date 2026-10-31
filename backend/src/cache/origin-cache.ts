@@ -65,6 +65,19 @@ export interface OriginCheckContext {
 }
 
 const lastInvalidatedAt = new Map<string, number>();
+const MAX_INVALIDATION_MAP_SIZE = 1000;
+const INVALIDATION_RETENTION_MS = 60000;
+
+function pruneInvalidatedAt(now: number): void {
+  if (lastInvalidatedAt.size <= MAX_INVALIDATION_MAP_SIZE) return;
+  const cutoff = now - INVALIDATION_RETENTION_MS;
+  for (const [originKey, ts] of lastInvalidatedAt.entries()) {
+    if (ts < cutoff) {
+      lastInvalidatedAt.delete(originKey);
+    }
+  }
+}
+
 let globalLastInvalidatedAt = 0;
 let redisOutageDetected = false;
 
@@ -203,6 +216,7 @@ export async function invalidateOrigins(
     for (const norm of normalizedOrigins) {
       lastInvalidatedAt.set(norm, now);
     }
+    pruneInvalidatedAt(now);
   } else {
     globalLastInvalidatedAt = now;
     lastInvalidatedAt.clear();

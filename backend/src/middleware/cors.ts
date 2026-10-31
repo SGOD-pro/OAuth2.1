@@ -33,6 +33,8 @@ export async function isOriginAllowed(origin: string): Promise<boolean> {
   const database = await getDb();
   // Anchored prefix regex with literal trailing slash and NO case-insensitive flag
   // ensures MongoDB can establish tight B-Tree index bounds: [ "https://example.com/", "https://example.com0" )
+  // Note: OAuth 2.1 redirect URIs standardly require absolute URIs with a path component (such as /callback).
+  // The query matches exact origins or anchored origin prefixes with a trailing slash to prevent subdomain and host confusion attacks.
   const originSlashPattern = new RegExp(`^${escapeRegex(normalizedOrigin)}/`);
 
   // Query using targeted $or filter matching allowedOrigins, allowed_origins, and redirect URIs
