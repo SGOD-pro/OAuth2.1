@@ -850,6 +850,11 @@ export async function checkUserAppRegistration(
   const reg = await db.collection("user_app_registrations").findOne({
     clientId: cleanClientId,
     $or: userConditions,
+    status: { $nin: ["inactive", "revoked", "suspended", "disabled"] },
+    revoked: { $ne: true },
+    disabled: { $ne: true },
+    isActive: { $ne: false },
+    active: { $ne: false },
   });
 
   return Boolean(reg);

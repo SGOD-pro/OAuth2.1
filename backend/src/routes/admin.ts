@@ -14,7 +14,8 @@ import {
   hasDangerousMongoKeys,
   validateSafePrimitiveString,
 } from "../utils/security";
-import { invalidateOriginCache, recordAdminAudit } from "../db/state";
+import { recordAdminAudit } from "../db/state";
+import { invalidateClientOrigins, invalidateOrigins } from "../cache/origin-cache";
 import { requireAdmin, requireSuperAdmin, requireScopedAdmin, requireConsumerAppAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
@@ -225,9 +226,10 @@ admin.post("/clients", requireSuperAdmin, async (c) => {
     { $set: { createdAt: now } }
   );
 
-  if (effectiveOrigins.length > 0) {
-    await invalidateOriginCache(effectiveOrigins);
-  }
+  await invalidateClientOrigins(null, {
+    allowedOrigins: effectiveOrigins,
+    redirectUris,
+  });
 
   await recordAdminAudit({
     actorUserId: sessionUser?.id,
@@ -408,24 +410,6 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
   const canonicalClientId = existingClient.clientId;
   const clientMongoId = existingClient._id;
 
-  // Invalidate origin cache
-  const allowedOrigins = existingClient.allowedOrigins || existingClient.allowed_origins || [];
-  if (Array.isArray(allowedOrigins) && allowedOrigins.length > 0) {
-    await invalidateOriginCache(allowedOrigins as string[]);
-  }
-
-  // Attempt Better Auth delete if user ownership matches, but catch if it throws 401 UNAUTHORIZED
-  try {
-    await authApi.deleteOAuthClient({
-      headers: getHeaders(c),
-      body: { client_id: canonicalClientId },
-    });
-  } catch (err: any) {
-    console.warn(
-      `[ADMIN_DELETE_CLIENT] Better Auth deleteOAuthClient skipped (${err?.body?.error || err?.message || err?.status}), proceeding with Super-Admin database deletion.`
-    );
-  }
-
   // Delete exact client by MongoDB _id, and all dependent resources by canonicalClientId
   await Promise.all([
     database.collection("oauthClient").deleteOne({ _id: clientMongoId }),
@@ -437,6 +421,9 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
     database.collection("oauth_token_families").deleteMany({ clientId: canonicalClientId }),
     database.collection("app_admins").deleteMany({ clientId: canonicalClientId }),
   ]);
+
+  // Invalidate origin cache across Redis and MongoDB after database deletion (prevents races)
+  await invalidateClientOrigins(existingClient, null);
 
   await recordAdminAudit({
     actorUserId: sessionUser?.id,
@@ -837,17 +824,8 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
 
   if (!result && !updatedDoc) return c.json({ error: "Client not found" }, 404);
 
-  // Invalidate CORS origin cache for updated origins
-  const originsToInvalidate = new Set<string>();
-  if (oldClient && Array.isArray(oldClient.allowed_origins)) {
-    oldClient.allowed_origins.forEach((o: string) => originsToInvalidate.add(o));
-  }
-  if (hasNewAllowedOrigins || (hasNewRedirectUris && targetAllowedOrigins.length > 0)) {
-    targetAllowedOrigins.forEach((o: string) => originsToInvalidate.add(o));
-  }
-  if (originsToInvalidate.size > 0) {
-    await invalidateOriginCache(Array.from(originsToInvalidate));
-  }
+  // Invalidate CORS origin cache across Redis and MongoDB after database update (prevents races)
+  await invalidateClientOrigins(oldClient, updatedDoc || { ...oldClient, ...safeUpdate, ...dbUpdates, ...body });
 
   // Token revocation on client disable
   if (body.disabled === true || body.is_active === false) {
@@ -1066,6 +1044,9 @@ admin.patch("/app/:clientId/config", requireConsumerAppAdmin, async (c) => {
   }
 
   if (!result) return c.json({ error: "Application not found" }, 404);
+
+  // Invalidate CORS origin cache across Redis and MongoDB after database update
+  await invalidateClientOrigins(oldClient, result || { ...oldClient, ...safeUpdate, ...body });
 
   await recordAdminAudit({
     actorUserId: sessionUser?.id,

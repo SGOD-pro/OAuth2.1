@@ -5,12 +5,14 @@ import assert from "node:assert/strict";
 import crypto from "crypto";
 import { ObjectId } from "mongodb";
 
+// CRITICAL SAFEGUARD: Regardless of inherited environment variables or .env contents,
+// final-adversarial-gate must ALWAYS use an isolated disposable in-memory database.
+// Never connect to production, Atlas, or unvetted external instances.
+const inheritedMongoUri = process.env.MONGO_URI;
 import { MongoMemoryServer } from "mongodb-memory-server";
-let mongod: any = null;
-if (!process.env.MONGO_URI || process.env.MONGO_URI.includes("mongodb.net") || process.env.MONGO_URI.includes("cluster0") || process.env.MONGO_URI.includes("27017")) {
-  mongod = await MongoMemoryServer.create();
-  process.env.MONGO_URI = mongod.getUri();
-}
+const mongod = await MongoMemoryServer.create();
+const disposableUri = mongod.getUri();
+process.env.MONGO_URI = disposableUri;
 process.env.NODE_ENV = "test";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -286,6 +288,21 @@ async function getAuthCode(clientId: string, redirectUri: string, userCookie: st
   if (!code) throw new Error(`Authorize redirected without code: ${loc}`);
   return code;
 }
+
+// --------------------------------------------------------------------------
+// CASE 0: Guaranteed Disposable Database Isolation
+// --------------------------------------------------------------------------
+await runTest(0, "Disposable database isolation: non-test Mongo URI is never used", async () => {
+  assert.equal(process.env.MONGO_URI, disposableUri, "Active MONGO_URI must strictly equal disposable in-memory URI");
+  assert.ok(disposableUri.startsWith("mongodb://127.0.0.1:"), "Disposable URI must be local loopback");
+
+  const commandResult = await db.command({ isMaster: 1 });
+  assert.ok(commandResult.ismaster || commandResult.isWritablePrimary, "Must be connected to active local mongod");
+
+  if (inheritedMongoUri && inheritedMongoUri !== disposableUri) {
+    assert.notEqual(process.env.MONGO_URI, inheritedMongoUri, "Inherited non-test URI must never be used");
+  }
+});
 
 // --------------------------------------------------------------------------
 // CASE 1: Cross-Client Authorization-Code Redemption

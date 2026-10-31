@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -22,15 +23,32 @@ const frontendDir = path.resolve(repoRoot, "frontend");
 const nextAppDir = path.resolve(repoRoot, "test/next-app");
 const expressAppDir = path.resolve(repoRoot, "test/react-express-app/backend");
 
+const usedPorts = new Set<number>();
 async function getAvailablePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, "127.0.0.1", () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate = 32000 + Math.floor(Math.random() * 25000);
+    if (usedPorts.has(candidate)) continue;
+    const isFree = await new Promise<boolean>((resolve) => {
+      const client = net.createConnection({ port: candidate, host: "127.0.0.1" }, () => {
+        client.destroy();
+        resolve(false);
+      });
+      client.on("error", () => {
+        resolve(true);
+      });
+      client.setTimeout(150, () => {
+        client.destroy();
+        resolve(true);
+      });
     });
-    srv.on("error", reject);
-  });
+    if (isFree) {
+      usedPorts.add(candidate);
+      return candidate;
+    }
+  }
+  const fallback = 35000 + Math.floor(Math.random() * 10000);
+  usedPorts.add(fallback);
+  return fallback;
 }
 
 const IDP_PORT = await getAvailablePort();
@@ -50,7 +68,9 @@ console.log(`  Next.js:      ${NEXT_PORT}`);
 console.log(`  Express:      ${EXPRESS_PORT}\n`);
 
 const spawnedChildren: ChildProcess[] = [];
-function trackChild(child: ChildProcess): ChildProcess {
+function trackChild(name: string, child: ChildProcess): ChildProcess {
+  child.stdout?.on("data", (d) => process.stdout.write(`[${name}] ${d}`));
+  child.stderr?.on("data", (d) => process.stderr.write(`[${name} ERR] ${d}`));
   spawnedChildren.push(child);
   return child;
 }
@@ -145,11 +165,12 @@ async function waitForHttp(url: string, timeoutMs = 25000): Promise<void> {
 }
 
 let browser: Browser | null = null;
+let frontendServer: http.Server | null = null;
 
 try {
   // 3. Spawn IdP Backend
   console.log("Spawning IdP backend process...");
-  const idpChild = trackChild(spawn(
+  const idpChild = trackChild("IdP", spawn(
     process.execPath,
     [path.join(backendDir, "node_modules/tsx/dist/cli.mjs"), "src/node-server.ts"],
     {
@@ -159,6 +180,7 @@ try {
         ...process.env,
         NODE_ENV: "test",
         PORT: String(IDP_PORT),
+        HOST: "127.0.0.1",
         MONGO_URI: mongoUri,
         BETTER_AUTH_SECRET: "a".repeat(32),
         BETTER_AUTH_URL: IDP_URL,
@@ -175,34 +197,87 @@ try {
   await waitForHttp(`${IDP_URL}/health`);
   console.log("[PASS] IdP backend ready at " + IDP_URL);
 
-  // 4. Ensure Frontend UI is built & spawn IdP Frontend (Vite Preview)
+  // 4. Ensure Frontend UI is built & start IdP Frontend static proxy server
   if (!fs.existsSync(path.join(frontendDir, "dist/index.html"))) {
     console.log("Building frontend production bundle for testing...");
     const { execSync } = await import("node:child_process");
     execSync("npm run build:ui", { cwd: frontendDir, stdio: "pipe" });
   }
 
-  console.log("Spawning IdP frontend Vite preview process...");
-  const frontendChild = trackChild(spawn(
-    path.join(frontendDir, "node_modules/.bin/vite"),
-    ["preview", "--port", String(FRONTEND_PORT), "--host", "127.0.0.1"],
-    {
-      cwd: frontendDir,
-      detached: true,
-      env: {
-        ...process.env,
-        BACKEND_URL: IDP_URL,
-        INTERNAL_GATEWAY_SECRET: "g".repeat(32),
-      },
-      stdio: "pipe",
-    }
-  ));
+  console.log("Starting IdP frontend static server...");
+  await new Promise<void>((resolve, reject) => {
+    const srv = http.createServer(async (req, res) => {
+      try {
+        const reqPath = req.url?.split("?")[0] || "/";
+        if (reqPath.startsWith("/api") || reqPath.startsWith("/.well-known")) {
+          const upstreamUrl = `${IDP_URL}${req.url}`;
+          const headers = new Headers();
+          for (const [k, v] of Object.entries(req.headers)) {
+            if (v && k.toLowerCase() !== "host") {
+              headers.set(k, Array.isArray(v) ? v.join(", ") : v);
+            }
+          }
+          headers.set("x-gateway-secret", "g".repeat(32));
+          let bodyBuf: Buffer | undefined;
+          if (req.method !== "GET" && req.method !== "HEAD") {
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) chunks.push(Buffer.from(chunk));
+            bodyBuf = Buffer.concat(chunks);
+          }
+          const upRes = await fetch(upstreamUrl, {
+            method: req.method,
+            headers,
+            body: bodyBuf,
+            redirect: "manual",
+          });
+          res.statusCode = upRes.status;
+          for (const [k, v] of upRes.headers) {
+            if (k.toLowerCase() === "set-cookie") {
+              const setCookies = typeof (upRes.headers as any).getSetCookie === "function"
+                ? (upRes.headers as any).getSetCookie()
+                : [v];
+              res.setHeader("set-cookie", setCookies);
+            } else {
+              res.setHeader(k, v);
+            }
+          }
+          const buf = Buffer.from(await upRes.arrayBuffer());
+          res.end(buf);
+          return;
+        }
+
+        let filePath = path.join(frontendDir, "dist", reqPath);
+        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+          filePath = path.join(frontendDir, "dist", "index.html");
+        }
+        const ext = path.extname(filePath);
+        const mimeTypes: Record<string, string> = {
+          ".html": "text/html; charset=utf-8",
+          ".js": "application/javascript; charset=utf-8",
+          ".css": "text/css; charset=utf-8",
+          ".json": "application/json; charset=utf-8",
+          ".svg": "image/svg+xml",
+          ".png": "image/png",
+        };
+        res.setHeader("Content-Type", mimeTypes[ext] || "application/octet-stream");
+        fs.createReadStream(filePath).pipe(res);
+      } catch (err: any) {
+        res.statusCode = 500;
+        res.end(err?.message || "Internal error");
+      }
+    });
+    srv.listen(FRONTEND_PORT, "127.0.0.1", () => {
+      frontendServer = srv;
+      resolve();
+    });
+    srv.on("error", reject);
+  });
   await waitForHttp(`${FRONTEND_URL}/auth`);
   console.log("[PASS] IdP frontend ready at " + FRONTEND_URL);
 
   // 5. Spawn Next.js Consumer
   console.log("Spawning Next.js consumer process...");
-  const nextChild = trackChild(spawn(
+  const nextChild = trackChild("Next", spawn(
     process.execPath,
     [path.join(nextAppDir, "node_modules/next/dist/bin/next"), "start", "-p", String(NEXT_PORT)],
     {
@@ -225,7 +300,7 @@ try {
 
   // 6. Spawn Express Consumer
   console.log("Spawning Express consumer process...");
-  const expressChild = trackChild(spawn(
+  const expressChild = trackChild("Express", spawn(
     process.execPath,
     [path.join(expressAppDir, "dist/index.js")],
     {
@@ -531,6 +606,11 @@ try {
   // Test Phase 5: Express Consumer Verification in Same Browser Session
   // ============================================================================
   console.log("\nPhase 5: Verifying Express consumer in the same browser session...");
+  // Clear rate limits before Phase 5 to avoid IP rate limit collisions across sequential test phases
+  await Promise.all([
+    db.collection("rate_limits").deleteMany({}),
+    db.collection("rateLimit").deleteMany({}),
+  ]);
   await page.goto(`${EXPRESS_URL}/auth/login`, { waitUntil: "networkidle" });
 
   // Since Express consumer sets prompt=login, verify re-authentication UI appears
@@ -560,6 +640,7 @@ try {
   console.log("================================================================\n");
 
   await browser.close();
+  if (frontendServer) { try { (frontendServer as any).close(); } catch {} }
   killAllChildren();
   await mongoClient.close();
   await mongod.stop();
@@ -569,6 +650,7 @@ try {
   if (browser) {
     try { await browser.close(); } catch {}
   }
+  if (frontendServer) { try { (frontendServer as any).close(); } catch {} }
   killAllChildren();
   await mongoClient.close();
   await mongod.stop();

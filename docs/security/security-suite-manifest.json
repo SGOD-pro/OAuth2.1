@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "generated_at": "2026-10-02T00:00:00Z",
   "master_command": "npm run test:all-security",
-  "total_blocking_suites": 19,
+  "total_blocking_suites": 21,
   "suites": [
     {
       "name": "test-client-mode-transition",
@@ -156,6 +156,22 @@
       "purpose": "Verifies input sanitization and NoSQL injection defense across authentication and client management endpoints.",
       "blocking": true,
       "classification": "nosql_injection_defense"
+    },
+    {
+      "name": "cors-cache-correctness",
+      "file": "tests/security/cors-cache-correctness.test.ts",
+      "command": "npm run test:cors-cache",
+      "purpose": "Verifies cross-layer Redis and MongoDB CORS origin cache invalidation across client creation, update, disable, deletion, and scoped app config patch.",
+      "blocking": true,
+      "classification": "cors_cache_and_invalidation"
+    },
+    {
+      "name": "membership-lifecycle",
+      "file": "tests/security/membership-lifecycle.test.ts",
+      "command": "npm run test:membership-lifecycle",
+      "purpose": "Verifies private application user and app-admin registration and revocation lifecycle, inactive record access denial, and production localhost origin restriction.",
+      "blocking": true,
+      "classification": "membership_and_origin_lifecycle"
     },
     {
       "name": "load-and-performance",

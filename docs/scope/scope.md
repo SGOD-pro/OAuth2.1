@@ -160,7 +160,7 @@ Implement explicit mutually exclusive administrator identities and enforce MAuth
    - [x] Reconcile identity lifecycle paths and reject assigning super admins as app admins
    - [x] Implement read only audit and apply migration for legacy identities
    - [x] Align frontend admin console guards and session handling
-- [ ] Verify it: `/check verify explicit administrator identities and portal isolation`
+- [x] Verify it: `/check verify explicit administrator identities and portal isolation`
 - [ ] Test it: `/test explicit administrator identities and portal isolation`
 - [x] Review it (fresh model): `/check review explicit administrator identities and portal isolation`
 - [ ] Document it: `/document explicit administrator identities and portal isolation`

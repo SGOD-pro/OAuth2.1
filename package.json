@@ -19,6 +19,8 @@
     "test:all-security:local": "npm --prefix backend run test:all-security:local",
     "test:consumer-mfa": "npm --prefix backend run test:consumer-mfa",
     "test:private-app-isolation": "npm --prefix backend run test:private-app-isolation",
+    "test:cors-cache": "npm --prefix backend run test:cors-cache",
+    "test:membership-lifecycle": "npm --prefix backend run test:membership-lifecycle",
     "test:browser-e2e": "npm --prefix backend run test:browser-e2e"
   }
 }

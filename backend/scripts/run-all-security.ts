@@ -26,6 +26,8 @@ const securityTestFiles = [
   "tests/security/private-app-login-isolation.test.ts",
   "tests/security/nosql-injection-boundary.test.ts",
   "tests/security/e2e-oidc-interop.test.ts",
+  "tests/security/cors-cache-correctness.test.ts",
+  "tests/security/membership-lifecycle.test.ts",
 ];
 
 console.log("================================================================");

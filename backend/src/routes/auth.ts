@@ -837,7 +837,21 @@ auth.get("/oauth2/authorize", async (c) => {
         headers.append("set-cookie", `oauth_transaction_id=${transactionId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
         headers.append("set-cookie", `current_client_id=${canonicalClientId}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}; Max-Age=600`);
 
-        const location = headers.get("location");
+        let location = headers.get("location");
+
+        // If Better Auth returned a JSON object with { redirect: true, url }, convert it into a standard
+        // OAuth 302 Found redirect so browser user-agents seamlessly follow authorization to the callback URL
+        if (!location && res.status === 200) {
+            try {
+                const resClone = res.clone();
+                const json = await resClone.json();
+                if (json && json.redirect === true && typeof json.url === "string") {
+                    location = json.url;
+                    headers.set("location", location);
+                }
+            } catch {}
+        }
+
         if (location) {
             try {
                 const locUrl = new URL(location, config.auth.baseURL);
@@ -846,9 +860,15 @@ auth.get("/oauth2/authorize", async (c) => {
                     if (!client.isPublic) {
                         locUrl.searchParams.set("is_public", "false");
                     }
-                    headers.set("location", locUrl.toString());
+                    location = locUrl.toString();
+                    headers.set("location", location);
                 }
             } catch {}
+            return new Response(null, {
+                status: 302,
+                statusText: "Found",
+                headers,
+            });
         }
 
         return new Response(res.body, {

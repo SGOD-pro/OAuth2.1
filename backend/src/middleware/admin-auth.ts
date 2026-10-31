@@ -132,12 +132,6 @@ export async function checkUserIsClientAdmin(
   const resolvedUserId = (typeof userIdStr === "string" ? userIdStr : (userDoc?.id || userDoc?._id)?.toString()) || "";
   if (!resolvedUserId || resolvedUserId.startsWith("$")) return false;
 
-  // 1. Primary scopedClientId match if role is app-admin or legacy admin
-  if (isAppAdmin(userDoc) && userDoc.scopedClientId === cleanClientId) {
-    return true;
-  }
-
-  // 2. Authoritative check in user_app_registrations keyed by stable userId and clientId
   const userConditions: any[] = [{ userId: resolvedUserId }];
   if (ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24) {
     try {
@@ -145,20 +139,43 @@ export async function checkUserIsClientAdmin(
     } catch {}
   }
 
-  const reg = await database.collection("user_app_registrations").findOne({
-    clientId: cleanClientId,
-    $or: userConditions,
-    appRole: "admin",
-  });
-  if (reg) return true;
-
-  // 3. Authoritative check in app_admins by stable userId (email alone never grants privileges)
+  // 1. Authoritative check in app_admins by stable userId
+  // An inactive, revoked, suspended, or disabled record MUST strictly deny administration
   const appAdmin = await database.collection("app_admins").findOne({
     clientId: cleanClientId,
     $or: userConditions,
-    isActive: { $ne: false },
   });
-  if (appAdmin) return true;
+  if (appAdmin) {
+    const isInactive =
+      appAdmin.isActive === false ||
+      appAdmin.active === false ||
+      appAdmin.disabled === true ||
+      appAdmin.revoked === true ||
+      ["inactive", "revoked", "suspended", "disabled"].includes(appAdmin.status);
+    if (isInactive) return false;
+    return true;
+  }
+
+  // 2. Authoritative check in user_app_registrations keyed by stable userId and clientId
+  const reg = await database.collection("user_app_registrations").findOne({
+    clientId: cleanClientId,
+    $or: userConditions,
+  });
+  if (reg) {
+    const isRegInactive =
+      reg.isActive === false ||
+      reg.active === false ||
+      reg.disabled === true ||
+      reg.revoked === true ||
+      ["inactive", "revoked", "suspended", "disabled"].includes(reg.status);
+    if (isRegInactive || reg.appRole !== "admin") return false;
+    return true;
+  }
+
+  // 3. Fallback scopedClientId match if role is app-admin or legacy admin and user is not banned
+  if (isAppAdmin(userDoc) && userDoc.scopedClientId === cleanClientId && !userDoc.banned && userDoc.disabled !== true) {
+    return true;
+  }
 
   return false;
 }

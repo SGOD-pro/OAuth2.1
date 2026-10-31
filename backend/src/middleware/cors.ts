@@ -11,6 +11,18 @@ import { isLoopbackHost, normalizeOrigin, originMatchesRedirectUri, getTrustedCl
 const CORS_ALLOW_HEADERS =
   "Content-Type,Authorization,X-CSRF-Token,x-csrf-token";
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isOriginLoopback(originUrl: string): boolean {
+  try {
+    return isLoopbackHost(new URL(originUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export async function isOriginAllowed(origin: string): Promise<boolean> {
   const normalizedOrigin = normalizeOrigin(origin);
   if (!normalizedOrigin) {
@@ -18,15 +30,45 @@ export async function isOriginAllowed(origin: string): Promise<boolean> {
   }
 
   const database = await getDb();
+  // Anchored prefix regex with literal trailing slash and NO case-insensitive flag
+  // ensures MongoDB can establish tight B-Tree index bounds: [ "https://example.com/", "https://example.com0" )
+  const originSlashPattern = new RegExp(`^${escapeRegex(normalizedOrigin)}/`);
+
+  // Query using targeted $or filter matching allowedOrigins, allowed_origins, and redirect URIs
+  // so MongoDB leverages compound indexes with tight B-tree index bounds
   const clients = await database
     .collection("oauthClient")
     .find(
-      {},
-      { projection: { redirectUris: 1, redirect_uris: 1, allowedOrigins: 1, allowed_origins: 1 } },
+      {
+        disabled: { $ne: true },
+        is_active: { $ne: false },
+        isActive: { $ne: false },
+        $or: [
+          { allowedOrigins: normalizedOrigin },
+          { allowed_origins: normalizedOrigin },
+          { allowedOrigins: originSlashPattern },
+          { allowed_origins: originSlashPattern },
+          { redirectUris: normalizedOrigin },
+          { redirect_uris: normalizedOrigin },
+          { redirectUris: originSlashPattern },
+          { redirect_uris: originSlashPattern },
+        ],
+      },
+      { projection: { redirectUris: 1, redirect_uris: 1, allowedOrigins: 1, allowed_origins: 1, isDev: 1, is_dev: 1 } },
     )
     .toArray();
 
+  const isProduction = config.env === "production";
+  const allowDevInProd = config.allowDevClientsInProduction;
+  const isLoopback = isOriginLoopback(normalizedOrigin);
+
   for (const client of clients) {
+    // If running in production and origin is loopback, client MUST have isDev: true and allowDevInProd must be true
+    const isDev = Boolean(client["isDev"] || client["is_dev"]);
+    if (isProduction && isLoopback && (!isDev || !allowDevInProd)) {
+      continue;
+    }
+
     const redirectUris =
       (client["redirectUris"] as string[] | undefined) ??
       (client["redirect_uris"] as string[] | undefined) ??
@@ -93,17 +135,10 @@ export async function dynamicCors(c: Context, next: Next) {
   const normalizedOrigin = origin ? normalizeOrigin(origin) : null;
 
   // Allow internal frontend (and same-origin / non-browser requests without Origin)
-  // In development (or when server is accessed locally), also permit local loopback origins (localhost / 127.0.0.1)
-  const hostHeader = c.req.header("host");
-  const hostName = hostHeader ? hostHeader.split(":")[0].replace(/^\[|\]$/g, "") : "";
-  const isServerLoopback = isLoopbackHost(hostName);
+  // In development, also permit local loopback origins (localhost / 127.0.0.1)
   let isDevLoopback = false;
-  if (normalizedOrigin && (config.env !== "production" || isServerLoopback)) {
-    try {
-      isDevLoopback = isLoopbackHost(new URL(normalizedOrigin).hostname);
-    } catch {
-      isDevLoopback = false;
-    }
+  if (normalizedOrigin && config.env !== "production") {
+    isDevLoopback = isOriginLoopback(normalizedOrigin);
   }
   if (!normalizedOrigin || normalizedOrigin === ownFrontend || isDevLoopback) {
     applyCorsHeaders(c, normalizedOrigin || ownFrontend);
