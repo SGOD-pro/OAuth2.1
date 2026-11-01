@@ -142,11 +142,17 @@ const SET_ORIGIN_CACHE_LUA = `
 local originKey = KEYS[1]
 local invKey = KEYS[2]
 local globalInvKey = KEYS[3]
+local verKey = KEYS[4]
 local allowed = ARGV[1]
 local checkVersion = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 
 if checkVersion and checkVersion > 0 then
+    local currentVersion = redis.call('get', verKey)
+    if currentVersion and tonumber(currentVersion) >= checkVersion then
+        return 0
+    end
+
     local invVersion = redis.call('get', invKey)
     if invVersion and tonumber(invVersion) >= checkVersion then
         return 0
@@ -159,6 +165,9 @@ if checkVersion and checkVersion > 0 then
 end
 
 redis.call('set', originKey, allowed, 'EX', ttl)
+if checkVersion and checkVersion > 0 then
+    redis.call('set', verKey, checkVersion, 'EX', ttl)
+end
 return 1
 `;
 
@@ -170,6 +179,7 @@ for i = 1, #KEYS do
     local origin = KEYS[i]
     redis.call("set", "swyra:origin:inv:" .. origin, invalidationVersion, "EX", ttl)
     redis.call("del", "swyra:origin:" .. origin)
+    redis.call("del", "swyra:origin:ver:" .. origin)
 end
 return 1
 `;
@@ -184,8 +194,19 @@ return 1
 export async function getCachedOriginRedis(origin: string): Promise<boolean | null> {
   if (!redis) return null;
   try {
-    const value = await redis.get<boolean | string | number>(`swyra:origin:${origin}`);
+    const [value, verStr, globalInvStr] = await Promise.all([
+      redis.get<boolean | string | number>(`swyra:origin:${origin}`),
+      redis.get<string | number>(`swyra:origin:ver:${origin}`),
+      redis.get<string | number>("swyra:inv:global"),
+    ]);
     if (value === null || value === undefined) return null;
+
+    const ver = typeof verStr === "number" ? verStr : Number(verStr) || 0;
+    const globalInv = typeof globalInvStr === "number" ? globalInvStr : Number(globalInvStr) || 0;
+    if (globalInv > 0 && ver <= globalInv) {
+      return null;
+    }
+
     if (value === true || value === "1" || value === 1 || value === "true") return true;
     if (value === false || value === "0" || value === 0 || value === "false") return false;
     return null;
@@ -205,10 +226,11 @@ export async function setCachedOriginRedis(
     const originKey = `swyra:origin:${origin}`;
     const invKey = `swyra:origin:inv:${origin}`;
     const globalInvKey = "swyra:inv:global";
+    const verKey = `swyra:origin:ver:${origin}`;
 
     const res = await redis.eval(
       SET_ORIGIN_CACHE_LUA,
-      [originKey, invKey, globalInvKey],
+      [originKey, invKey, globalInvKey, verKey],
       [allowed ? "1" : "0", typeof startTime === "number" ? startTime : 0, ORIGIN_CACHE_TTL_SECONDS],
     );
 

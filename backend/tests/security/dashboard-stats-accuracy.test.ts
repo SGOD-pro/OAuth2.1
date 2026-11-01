@@ -497,6 +497,29 @@ await runTest(8, "UI helper logic correctly formats zero and unknown values", as
   assert.equal(renderIpDisplay("203.0.113.1"), "203.0.113.1", "Real external IP renders '203.0.113.1'");
 });
 
+// --------------------------------------------------------------------------
+// TEST 9: UI Label Verification for New sessions (24h)
+// --------------------------------------------------------------------------
+await runTest(9, "Dashboard card is labeled 'New sessions (24h)' reflecting real session creation data", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const dashboardPath = path.resolve(process.cwd(), "../frontend/pages/admin/AdminDashboard.tsx");
+  const dashboardSrc = await fs.readFile(dashboardPath, "utf-8");
+
+  assert.ok(
+    dashboardSrc.includes('label="New sessions (24h)"'),
+    "AdminDashboard must label the 24h metric card as 'New sessions (24h)'"
+  );
+  assert.ok(
+    !dashboardSrc.includes('label="Logins (24h)"'),
+    "AdminDashboard must NOT label the card as 'Logins (24h)' when counting created session records"
+  );
+  assert.ok(
+    dashboardSrc.includes('helperText="Created in last 24h"'),
+    "AdminDashboard must provide honest helper text describing session creation"
+  );
+});
+
 // Teardown
 await closeDb();
 await mongod.stop();

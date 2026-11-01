@@ -187,9 +187,15 @@ export async function setCachedOrigin(
   const normalized = normalizeOrigin(origin);
   if (!normalized) return;
 
-  const startVersion = typeof checkContext === "number"
+  let startVersion = typeof checkContext === "number"
     ? checkContext
     : checkContext?.startVersion ?? checkContext?.startTime;
+
+  if (startVersion === undefined || startVersion <= 0) {
+    try {
+      startVersion = await getNextAuthoritativeVersion();
+    } catch {}
+  }
 
   if (typeof startVersion === "number" && startVersion > 0) {
     const originInvVersion = lastInvalidatedVersion.get(normalized) || 0;

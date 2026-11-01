@@ -50,7 +50,7 @@ const {
   clearInvalidationMapForTesting,
 } = await import("../../src/cache/origin-cache");
 const { setRedisClientForTesting } = await import("../../src/cache/redis");
-const { getSharedRedisOutage, markSharedRedisOutage } = await import("../../src/db/state");
+const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCache: getOriginCacheMongo } = await import("../../src/db/state");
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
 
@@ -968,6 +968,184 @@ await runTest("CORS-17: Shared origin used by multiple clients preserved when on
   // Cleanup
   await db.collection("oauthClient").deleteMany({ clientId: { $in: [client1Id, client2Id] } });
   await invalidateOrigins([sharedOrigin]);
+});
+
+// =============================================================================
+// TEST 18: Old lookup -> invalidation -> fresh write -> delayed old write
+// Proves an older lookup cannot overwrite a newer cache decision even after
+// a fresh write has completed.
+// =============================================================================
+await runTest("CORS-18: Old lookup -> invalidation -> fresh write -> delayed old write", async () => {
+  const origin = "https://cors18-ordering.example.com";
+  await invalidateOrigins([origin]);
+
+  // 1. Old lookup begins at sequence v1
+  const check1 = await startOriginCheck(origin);
+  const v1 = check1.startVersion;
+  assert.ok(v1 > 0);
+
+  // 2. Client is modified / invalidated at sequence v2
+  await invalidateOrigins([origin]);
+  assert.equal(await getCachedOrigin(origin), null, "Invalidated origin is cache miss");
+
+  // 3. Fresh lookup begins at sequence v3
+  const check2 = await startOriginCheck(origin);
+  const v3 = check2.startVersion;
+  assert.ok(v3 > v1);
+
+  // Fresh lookup determines origin is disallowed and caches 'false'
+  await setCachedOrigin(origin, false, check2);
+  assert.equal(await getCachedOrigin(origin), false, "Fresh write caches decision false");
+
+  // 4. Delayed old write from lookup 1 arrives now with stale allowed=true and version v1
+  await setCachedOrigin(origin, true, check1);
+
+  // 5. Verification: Cache MUST NOT be overwritten with true!
+  assert.equal(await getCachedOrigin(origin), false, "Delayed old write must NOT overwrite newer fresh decision");
+
+  // Verify MongoDB document state directly
+  const doc = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+  assert.ok(doc, "Origin document must exist");
+  assert.equal(doc.allowed, false, "Origin document must remain allowed: false");
+  assert.equal(doc.cachedVersion, v3, "Origin document cachedVersion must reflect fresh write v3");
+
+  // Verify direct putOriginCache with v1 is explicitly rejected
+  const putResult = await putOriginCache(origin, true, v1);
+  assert.equal(putResult, false, "putOriginCache must reject write with version < cachedVersion");
+
+  // Cleanup
+  await invalidateOrigins([origin]);
+});
+
+// =============================================================================
+// TEST 19: Old lookup -> global invalidation interleaved with cache write
+// Proves global invalidation tombstone prevents in-flight reads from repopulating
+// stale data, and interleaved writes are rejected/invalidated.
+// =============================================================================
+await runTest("CORS-19: Old lookup -> global invalidation interleaved with cache write", async () => {
+  const origin = "https://cors19-global-interleave.example.com";
+
+  // 1. Old lookup begins before global invalidation
+  const check1 = await startOriginCheck(origin);
+  const v1 = check1.startVersion;
+
+  // 2. Global invalidation occurs (e.g. system-wide client re-sync / flush)
+  await clearOriginCache();
+
+  // 3. Delayed write arrives with check1 context (v1)
+  await setCachedOrigin(origin, true, check1);
+
+  // 4. Verification: origin must be a cache miss (null), not true
+  assert.equal(await getCachedOrigin(origin), null, "Lookup after global invalidation must return null");
+
+  // 5. Direct test: putOriginCache with v1 must be rejected by global tombstone
+  const putResult = await putOriginCache(origin, true, v1);
+  assert.equal(putResult, false, "putOriginCache must return false when version <= global tombstone");
+
+  // 6. Test interleaved race: even if a stale document was inserted with v1,
+  // getOriginCache verifies against global tombstone and returns null
+  await db.collection("origin_cache").insertOne({
+    _id: `ORIGIN#${origin}` as any,
+    allowed: true,
+    cachedAt: new Date(),
+    cachedVersion: v1,
+  });
+  assert.equal(await getCachedOrigin(origin), null, "getOriginCache must return null because cachedVersion <= global tombstone");
+
+  // Cleanup
+  await invalidateOrigins([origin]);
+});
+
+// =============================================================================
+// TEST 20: Two processes performing concurrent lookups and client changes
+// Stress test verifying that concurrent multi-process lookups, client mutations,
+// and delayed writes never produce a stale cache state.
+// =============================================================================
+await runTest("CORS-20: Two processes performing lookups and client changes concurrently", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const workerPath = path.resolve(__dirname, "../fixtures/cors-multi-process-worker.ts");
+  const child = fork(workerPath, [], {
+    execPath: process.execPath,
+    execArgv: process.execArgv,
+    env: {
+      ...process.env,
+      MONGO_URI: mongoUri,
+      NODE_ENV: "test",
+    },
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+  });
+
+  const sendToChild = (msg: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      const handler = (res: any) => {
+        if (res.type === "ERROR") {
+          child.off("message", handler);
+          reject(new Error(res.error));
+        } else {
+          child.off("message", handler);
+          resolve(res);
+        }
+      };
+      child.on("message", handler);
+      child.send(msg);
+    });
+  };
+
+  try {
+    await sendToChild({
+      type: "INIT",
+      redisUrl: mockRedis.url,
+      redisToken: mockRedis.token,
+    });
+
+    const testOrigin = "https://two-process-concurrent.example.com";
+
+    // 1. Worker initiates lookup at v1 (reading active state)
+    const check1 = await sendToChild({ type: "START_CHECK", origin: testOrigin });
+    assert.equal(check1.type, "CHECK_STARTED");
+
+    // 2. Parent performs client mutation and invalidation
+    await invalidateOrigins([testOrigin]);
+
+    // 3. Parent performs fresh lookup at v2 and caches allowed=false
+    const check2 = await startOriginCheck(testOrigin);
+    await setCachedOrigin(testOrigin, false, check2);
+    assert.equal(await getCachedOrigin(testOrigin), false);
+
+    // 4. Worker finishes its delayed old write with v1 (trying to set allowed=true)
+    const writeRes = await sendToChild({
+      type: "COMPLETE_WRITE",
+      origin: testOrigin,
+      allowed: true,
+      startTime: check1.startTime,
+    });
+    assert.equal(writeRes.type, "WRITE_COMPLETED");
+
+    // 5. Parent verifies cache: must still be false, never overwritten by worker's stale write
+    assert.equal(await getCachedOrigin(testOrigin), false, "Parent cache must preserve false decision");
+
+    // 6. Worker verifies cache: must also see false (or null), never stale true
+    const workerCacheRes = await sendToChild({ type: "CHECK_CACHE", origin: testOrigin });
+    assert.notEqual(workerCacheRes.value, true, "Worker cache must not return stale true");
+  } finally {
+    try {
+      child.send({ type: "EXIT" });
+      await new Promise<void>((r) => {
+        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
+        child.on("exit", () => { clearTimeout(timer); r(); });
+      });
+    } catch {}
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+  }
 });
 
 await closeDb();

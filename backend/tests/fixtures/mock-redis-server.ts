@@ -98,6 +98,7 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                     expiresAt: Date.now() + ttlSeconds * 1000,
                   });
                   store.delete(`swyra:origin:${origin}`);
+                  store.delete(`swyra:origin:ver:${origin}`);
                 }
                 return { result: 1 };
               }
@@ -106,11 +107,18 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               const originKey = keys[0];
               const invKey = keys[1];
               const globalInvKey = keys[2];
+              const verKey = keys[3];
               const allowed = scriptArgs[0];
               const startTime = Number(scriptArgs[1]) || 0;
               const ttlSeconds = Number(scriptArgs[2]) || 300;
 
               if (startTime > 0) {
+                if (verKey) {
+                  const verEntry = store.get(verKey);
+                  if (verEntry && !isExpired(verEntry) && Number(verEntry.value) >= startTime) {
+                    return { result: 0 };
+                  }
+                }
                 const invEntry = store.get(invKey);
                 if (invEntry && !isExpired(invEntry) && Number(invEntry.value) >= startTime) {
                   return { result: 0 };
@@ -125,6 +133,12 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                 value: allowed === "1" || allowed === 1 || allowed === true,
                 expiresAt: Date.now() + ttlSeconds * 1000,
               });
+              if (verKey && startTime > 0) {
+                store.set(verKey, {
+                  value: startTime,
+                  expiresAt: Date.now() + ttlSeconds * 1000,
+                });
+              }
               return { result: 1 };
             }
 

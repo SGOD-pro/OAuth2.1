@@ -18,6 +18,7 @@ interface OriginCacheDoc {
   cachedAt: Date;
   invalidatedAt?: Date;
   invalidatedVersion?: number;
+  cachedVersion?: number;
 }
 
 export interface TokenFamilyDoc {
@@ -182,11 +183,32 @@ export async function getOriginCache(
   await ensureTtlIndexes();
 
   const db = await getDb();
-  const entry = await db
+  const docs = await db
     .collection<OriginCacheDoc>("origin_cache")
-    .findOne({ _id: `ORIGIN#${origin}` });
+    .find({ _id: { $in: [`ORIGIN#${origin}`, "ORIGIN#__GLOBAL_TOMBSTONE__"] } })
+    .toArray();
+
+  const entry = docs.find((d) => d._id === `ORIGIN#${origin}`);
+  const globalTombstone = docs.find((d) => d._id === "ORIGIN#__GLOBAL_TOMBSTONE__");
 
   if (!entry || entry.allowed === null || entry.allowed === undefined) {
+    return null;
+  }
+
+  // If specific entry was invalidated at or after its cached version, entry is stale
+  if (
+    typeof entry.invalidatedVersion === "number" &&
+    (typeof entry.cachedVersion !== "number" || entry.cachedVersion <= entry.invalidatedVersion)
+  ) {
+    return null;
+  }
+
+  // If global invalidation occurred at or after this entry's cached version, entry is stale
+  if (
+    globalTombstone &&
+    typeof globalTombstone.invalidatedVersion === "number" &&
+    (typeof entry.cachedVersion !== "number" || entry.cachedVersion <= globalTombstone.invalidatedVersion)
+  ) {
     return null;
   }
 
@@ -260,86 +282,98 @@ export async function putOriginCache(
   const id = `ORIGIN#${origin}`;
   const now = new Date();
 
-  // 1. Check global tombstone if version is provided
-  if (typeof version === "number" && version > 0) {
-    const globalTombstone = await collection.findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
+  const effectiveVersion =
+    typeof version === "number" && version > 0
+      ? version
+      : await getNextAuthoritativeVersion(db);
+
+  // 1. Check global tombstone
+  const globalTombstone = await collection.findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
+  if (
+    globalTombstone &&
+    typeof globalTombstone.invalidatedVersion === "number" &&
+    globalTombstone.invalidatedVersion >= effectiveVersion
+  ) {
+    // Global invalidation occurred at or after this check began. Refuse to write.
+    return false;
+  }
+
+  // 2. Atomic write with conditional filter:
+  // An older lookup must NEVER overwrite a newer cache decision or an invalidation.
+  // Both cachedVersion and invalidatedVersion must be strictly less than effectiveVersion.
+  const filter = {
+    _id: id,
+    $and: [
+      {
+        $or: [
+          { cachedVersion: { $exists: false } },
+          { cachedVersion: { $lt: effectiveVersion } },
+        ],
+      },
+      {
+        $or: [
+          { invalidatedVersion: { $exists: false } },
+          { invalidatedVersion: { $lt: effectiveVersion } },
+        ],
+      },
+    ],
+  };
+
+  const update = {
+    $set: {
+      allowed,
+      cachedAt: now,
+      cachedVersion: effectiveVersion,
+    },
+  };
+
+  // Try update first (when document already exists)
+  const updateResult = await collection.updateOne(filter, update);
+  if (updateResult.matchedCount > 0) {
+    return true;
+  }
+
+  // Check if document exists with a newer cache write or invalidation
+  const existing = await collection.findOne({ _id: id });
+  if (existing) {
     if (
-      globalTombstone &&
-      typeof globalTombstone.invalidatedVersion === "number" &&
-      globalTombstone.invalidatedVersion >= version
+      (typeof existing.cachedVersion === "number" && existing.cachedVersion >= effectiveVersion) ||
+      (typeof existing.invalidatedVersion === "number" && existing.invalidatedVersion >= effectiveVersion)
     ) {
-      // Global invalidation occurred at or after this check began. Refuse to write.
       return false;
     }
   }
 
-  // 2. Atomic write with conditional filter:
-  // If document does not exist, insert it.
-  // If document exists, update ONLY IF it has NOT been invalidated at or after version.
-  if (typeof version === "number" && version > 0) {
-    const filter = {
+  // Document didn't exist: attempt atomic insertOne
+  try {
+    await collection.insertOne({
       _id: id,
-      $or: [
-        { invalidatedVersion: { $exists: false } },
-        { invalidatedVersion: { $lt: version } },
-      ],
-    };
+      allowed,
+      cachedAt: now,
+      cachedVersion: effectiveVersion,
+    });
 
-    const update = {
-      $set: {
-        allowed,
-        cachedAt: now,
-      },
-      $unset: { invalidatedAt: "", invalidatedVersion: "" },
-    };
-
-    // Try update first (when document already exists)
-    const updateResult = await collection.updateOne(filter, update);
-    if (updateResult.matchedCount > 0) {
-      return true;
+    // Post-insert verification against global tombstone to eliminate interleaved race windows
+    const finalGlobalCheck = await collection.findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
+    if (
+      finalGlobalCheck &&
+      typeof finalGlobalCheck.invalidatedVersion === "number" &&
+      finalGlobalCheck.invalidatedVersion >= effectiveVersion
+    ) {
+      // A global invalidation occurred while this insert was in flight. Delete our entry and reject.
+      await collection.deleteOne({ _id: id, cachedVersion: effectiveVersion });
+      return false;
     }
 
-    // Check if document exists with an invalidation newer than or equal to version
-    const existing = await collection.findOne({ _id: id });
-    if (existing) {
-      if (
-        typeof existing.invalidatedVersion === "number" &&
-        existing.invalidatedVersion >= version
-      ) {
-        return false;
-      }
+    return true;
+  } catch (insertErr: any) {
+    if (insertErr?.code === 11000) {
+      // Document was created concurrently. Re-check conditionally.
+      const retryResult = await collection.updateOne(filter, update);
+      return retryResult.matchedCount > 0;
     }
-
-    // Document didn't exist: attempt atomic insertOne
-    try {
-      await collection.insertOne({
-        _id: id,
-        allowed,
-        cachedAt: now,
-      });
-      return true;
-    } catch (insertErr: any) {
-      if (insertErr?.code === 11000) {
-        // Document was created concurrently. Re-check conditionally.
-        const retryResult = await collection.updateOne(filter, update);
-        return retryResult.matchedCount > 0;
-      }
-      throw insertErr;
-    }
+    throw insertErr;
   }
-
-  await collection.updateOne(
-    { _id: id },
-    {
-      $set: {
-        allowed,
-        cachedAt: now,
-      },
-      $unset: { invalidatedAt: "", invalidatedVersion: "" },
-    },
-    { upsert: true },
-  );
-  return true;
 }
 
 export async function invalidateOriginCache(
@@ -354,18 +388,19 @@ export async function invalidateOriginCache(
 
   if (origins && origins.length > 0) {
     const ids = origins.map((origin) => `ORIGIN#${origin}`);
-    const updateFields: any = {
-      allowed: null,
-      cachedAt: now,
-    };
-    if (typeof version === "number" && version > 0) {
-      updateFields.invalidatedVersion = version;
-    }
     if (typeof collection.bulkWrite === "function") {
       const operations = ids.map((id) => ({
         updateOne: {
           filter: { _id: id },
-          update: { $set: updateFields },
+          update: {
+            $set: {
+              allowed: null,
+              cachedAt: now,
+            },
+            ...(typeof version === "number" && version > 0
+              ? { $max: { invalidatedVersion: version } }
+              : {}),
+          },
           upsert: true,
         },
       }));
@@ -374,7 +409,15 @@ export async function invalidateOriginCache(
       for (const id of ids) {
         await collection.updateOne(
           { _id: id },
-          { $set: updateFields },
+          {
+            $set: {
+              allowed: null,
+              cachedAt: now,
+            },
+            ...(typeof version === "number" && version > 0
+              ? { $max: { invalidatedVersion: version } }
+              : {}),
+          },
           { upsert: true },
         );
       }
@@ -382,19 +425,25 @@ export async function invalidateOriginCache(
     return;
   }
 
-  await collection.deleteMany({ _id: /^ORIGIN#https?:\/\// });
-  const globalFields: any = {
+  // Global invalidation:
+  // Step 1: Update global tombstone FIRST with atomic $max
+  const globalSet: any = {
     allowed: null,
     cachedAt: now,
   };
-  if (typeof version === "number" && version > 0) {
-    globalFields.invalidatedVersion = version;
-  }
   await collection.updateOne(
     { _id: "ORIGIN#__GLOBAL_TOMBSTONE__" },
-    { $set: globalFields },
+    {
+      $set: globalSet,
+      ...(typeof version === "number" && version > 0
+        ? { $max: { invalidatedVersion: version } }
+        : {}),
+    },
     { upsert: true },
   );
+
+  // Step 2: Delete existing origin entries
+  await collection.deleteMany({ _id: /^ORIGIN#https?:\/\// });
 }
 
 // -------------------------------------------------------------

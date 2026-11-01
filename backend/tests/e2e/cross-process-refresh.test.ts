@@ -133,8 +133,8 @@ async function waitForHttpReady(url: string, maxWaitMs = 15000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
-      if (res.ok || res.status === 401 || res.status === 404) return;
+      const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(1000) });
+      if (res.ok || res.status === 302 || res.status === 401 || res.status === 404) return;
     } catch {}
     await new Promise((r) => setTimeout(r, 200));
   }
