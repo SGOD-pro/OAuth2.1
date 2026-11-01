@@ -233,16 +233,27 @@ return 1
 export async function getCachedOriginRedis(origin: string): Promise<boolean | null> {
   if (!redis) return null;
   try {
-    const [value, verStr, globalInvStr] = await Promise.all([
-      redis.get<boolean | string | number>(`swyra:origin:${origin}`),
-      redis.get<string | number>(`swyra:origin:ver:${origin}`),
-      redis.get<string | number>("swyra:inv:global"),
+    const originKey = `swyra:origin:${origin}`;
+    const verKey = `swyra:origin:ver:${origin}`;
+    const invKey = `swyra:origin:inv:${origin}`;
+    const globalInvKey = "swyra:inv:global";
+
+    const [value, verStr, invStr, globalInvStr] = await Promise.all([
+      redis.get<boolean | string | number>(originKey),
+      redis.get<string | number>(verKey),
+      redis.get<string | number>(invKey),
+      redis.get<string | number>(globalInvKey),
     ]);
     if (value === null || value === undefined) return null;
 
     const ver = typeof verStr === "number" ? verStr : Number(verStr) || 0;
+    const inv = typeof invStr === "number" ? invStr : Number(invStr) || 0;
     const globalInv = typeof globalInvStr === "number" ? globalInvStr : Number(globalInvStr) || 0;
+
     if (globalInv > 0 && ver <= globalInv) {
+      return null;
+    }
+    if (inv > 0 && ver <= inv) {
       return null;
     }
 

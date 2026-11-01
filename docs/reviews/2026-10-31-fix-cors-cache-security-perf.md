@@ -13,30 +13,22 @@ This review validates the complete resolution of all findings identified in the 
 1. Cross Source Assignment Conflict Resolution: Both `checkUserIsClientAdmin` and `checkUserHasAppAccess` evaluate all relevant records across `app_admins` and `user_app_registrations` concurrently using `Promise.all`. Early returns prior to evaluating both collections have been eliminated. Explicit revocation, suspension, or disabling in either source strictly takes precedence over an active record in the other source. Authorization time privilege grants based only on matching email have been completely removed.
 2. Safe Explicit Legacy Migration: The `migrateLegacyAppAdmins` utility supports dry run mode (`--dry-run` default versus `--apply`) and detailed conflict reporting. The background `selfHealAppAdmins` sweep does not call `migrateLegacyAppAdmins`, preserving explicit operator review as the sole path for legacy migration. Dry run mode strictly skips all database writes, including audit record generation. The migration strictly preserves explicit revocations and never reactivates or deletes them. Account continuity is not inferred solely from an email that could be reused; assignments created before user accounts are detected and quarantined as potential email reuse conflicts. Duplicate records are reconciled cleanly, and repeated migration runs are proven idempotent.
 3. Stable Identity in App Admin Self Healing: The `selfHealAppAdmins` sweep queries active records and verifies immutable `userId` existence, looking up accounts strictly by `userId`. Deleted users, mismatched identifiers, and legacy email only records are quarantined and skipped, preventing a newly created account with a recycled email from inheriting administrative rights. Explicit revocations in `user_app_registrations` are honored and never reactivated.
-4. Single Authoritative Monotonic Version Sequencing, Durable Gating, and Cache Ordering:
+4. Single Authoritative Monotonic Version Sequencing, Durable Invalidation Isolation, and Cache Ordering:
    Invalidation ordering does not rely on comparing wall clock timestamps across disparate process clocks or comparing values between independent Redis and MongoDB counters. Origin checks and invalidations acquire shared monotonic integer sequence numbers exclusively from MongoDB (`__ORIGIN_AUTHORITATIVE_VERSION__`).
    In Redis (`backend/src/cache/redis.ts`):
    - Monotonic Invalidation Markers: Invalidation scripts inspect existing markers and only update them if the incoming version is strictly greater (`invalidationVersion > curNum`). An older delayed invalidation cannot overwrite or reduce a newer marker, preventing out of order invalidation races. Markers are written without premature expiry (`ttl = 0`).
    - Per origin invalidation (`INVALIDATE_ORIGIN_CACHE_LUA`) atomically verifies `swyra:origin:inv:${origin}`, setting it only if monotonic. If equal, it extends TTL if shorter.
    - Global invalidation (`INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA`) atomically updates `swyra:inv:global` monotonically.
    - Cache decision keys (`swyra:origin:${origin}`) and version keys (`swyra:origin:ver:${origin}`) are purged on every invalidation attempt. Global pattern deletion skips `swyra:origin:inv:*` keys to retain per origin markers.
+   - Read path validation: `getCachedOriginRedis` checks both `swyra:origin:inv:${origin}` and `swyra:inv:global`, rejecting reads where cached version is less than or equal to either invalidation marker.
    - `SET_ORIGIN_CACHE_LUA` tracks `swyra:origin:ver:${origin}` and rejects any write where `currentVersion >= checkVersion`, `invVersion >= checkVersion`, or `globalInvVersion >= checkVersion`.
-   - Delayed write rejection conditions:
-     1. Version key check: Existing cached version is greater than or equal to the lookup check version.
-     2. Specific marker check: Invalidation marker version is greater than or equal to the lookup check version.
-     3. Global marker check: Global invalidation marker version is greater than or equal to the lookup check version.
-     4. MongoDB atomic filter: Cache document updates require both `cachedVersion < effectiveVersion` and `invalidatedVersion < effectiveVersion`.
    In MongoDB (`backend/src/db/state.ts`):
-   - Cache documents store `cachedVersion`.
-   - `getOriginCache` checks a 300 second software expiration window on `cachedAt` while retaining document version metadata.
-   - In `putOriginCache`, update filters require both `cachedVersion < version` and `invalidatedVersion < version`.
-   - `invalidatedVersion` is preserved on the document rather than deleted, so delayed older lookups cannot overwrite newer decisions after invalidation.
-   - In `invalidateOriginCache`, specific origin updates and global invalidations unset `cachedAt` (`$unset: { cachedAt: "" }`), removing the TTL field so invalidation records and `ORIGIN#__GLOBAL_TOMBSTONE__` are never deleted by MongoDB TTL.
-   - Global invalidation marks all existing origin documents invalidated without deleting their documents, preserving version history.
-   - `getOriginCache` checks both specific entry invalidation and the global tombstone in a single query, rejecting stale entries.
+   - Isolation of Invalidation History: Durable tombstones (`ORIGIN_INV#${origin}` and `ORIGIN#__GLOBAL_TOMBSTONE__`) are stored without `cachedAt`. The MongoDB TTL index on `{ cachedAt: 1 }` never purges these tombstones. Even when a fresh cache write restores `cachedAt` to `ORIGIN#${origin}` and TTL removes that document after 300 seconds, the durable tombstone persists indefinitely.
+   - `getOriginCache` verifies both `ORIGIN_INV#${origin}` and `ORIGIN#__GLOBAL_TOMBSTONE__` tombstones, returning null if the cached version is less than or equal to either invalidation version.
+   - In `putOriginCache`, writes verify both durable tombstones before updating or inserting, and execute post write confirmation to close interleaved race windows.
    In Origin Cache Coordinator (`backend/src/cache/origin-cache.ts`):
    - Durable Authoritative Gating: `setCachedOrigin` writes to MongoDB first. If MongoDB rejects the write or fails, `setCachedOrigin` returns immediately and never writes to Redis.
-   - Redis is populated only after MongoDB confirms the write is fresh and uninvalidated.
+   - Pre Redis Write Guard: Right before writing to Redis, `setCachedOrigin` reverifies MongoDB tombstones. If an invalidation occurred during a pause between MongoDB acceptance and Redis write, the Redis write is aborted.
    - Process local maps update invalidation markers monotonically (`invalidationVersion > prev`).
    - Global invalidation prunes local entries where cached versions are less than or equal to the invalidation version.
 5. Disposable MongoDB Verification and Endpoint Parsing: The test isolation helper `parseMongoEndpoint` accurately parses loopback host and port using URL parsing. Ambiguous forms, different local ports, multi host strings, and remote endpoints are rejected without leakage of credentials or connection strings in error messages.
@@ -90,18 +82,19 @@ In `backend/src/utils/admin-sync.ts` and `backend/src/routes/admin.ts`:
 ### 4. Authoritative Monotonic Versioning, Cache Ordering, and Redis Fallback
 In `backend/src/db/state.ts`, `backend/src/cache/origin-cache.ts`, and `backend/src/cache/redis.ts`:
 - Authoritative Counter: The sequence counter in MongoDB (`__ORIGIN_AUTHORITATIVE_VERSION__`) is the sole source of version truth across all running processes. Redis does not increment an independent counter.
+- Durable Invalidation Isolation: Invalidation records (`ORIGIN_INV#${origin}` and `ORIGIN#__GLOBAL_TOMBSTONE__`) are maintained independently from expiring cache entries (`ORIGIN#${origin}`). Invalidation records do not include `cachedAt`, preventing MongoDB TTL deletion. When a fresh cache write restores `cachedAt` and the decision entry eventually expires, the invalidation version remains durable.
 - Durable Authoritative Gating: `setCachedOrigin` writes to MongoDB first via `putOriginCache`. If MongoDB rejects the write as superseded or throws an error, `setCachedOrigin` immediately returns and never writes to Redis, preventing stale data propagation.
-- Durable MongoDB Cache Ordering: `putOriginCache` verifies both `cachedVersion < version` and `invalidatedVersion < version`. `invalidatedVersion` is kept on the document, ensuring older lookups cannot overwrite newer decisions even after fresh writes complete.
-- Persistent Invalidation Tombstones: In MongoDB `invalidateOriginCache`, `cachedAt` is unset on specific origin records and on `ORIGIN#__GLOBAL_TOMBSTONE__`. MongoDB TTL index purges only documents containing `cachedAt`. Invalidation version markers are durable and never purged by TTL. Global invalidation updates existing origin entries without deleting documents, preserving version history.
-- Global Tombstone Ordering: Global invalidation writes `ORIGIN#__GLOBAL_TOMBSTONE__` with `$max`. `getOriginCache` verifies entries against the global tombstone in a single query.
+- Pre Redis Write Guard: To handle arbitrary pauses between MongoDB write acceptance and Redis dispatch, `setCachedOrigin` reverifies MongoDB tombstones immediately before writing to Redis, aborting if an invalidation occurred during the pause.
+- Durable MongoDB Cache Ordering: `putOriginCache` verifies both `cachedVersion < version` and `invalidatedVersion < version`. `invalidatedVersion` is kept on the document and on the durable tombstone, ensuring older lookups cannot overwrite newer decisions even after fresh writes complete and expire.
 - Monotonic Invalidation Markers: Redis Lua invalidation scripts inspect existing markers and update them only if the incoming version is strictly greater. Out of order invalidations cannot reduce markers.
 - Persistent Markers in Redis: Lua invalidation scripts accept `ttl = 0`, allowing persistent markers. Global pattern deletion skips `swyra:origin:inv:*` keys.
-- Unconditional Deletion of Cached Values: Every invalidation attempt purges cached decisions and version keys. Deletion causes safe cache misses without allowing stale data.
+- Read Path Redis Invalidation Check: `getCachedOriginRedis` validates both `swyra:origin:inv:${origin}` and `swyra:inv:global`, rejecting cache hits if invalidated.
 - Delayed Write Rejection Conditions:
   1. Version key check: Existing cached version is greater than or equal to the lookup check version.
   2. Specific marker check: Invalidation marker version is greater than or equal to the lookup check version.
   3. Global marker check: Global invalidation marker version is greater than or equal to the lookup check version.
   4. MongoDB atomic filter: Update requires `cachedVersion < effectiveVersion` and `invalidatedVersion < effectiveVersion`.
+  5. Pre Redis Write Guard check: MongoDB tombstones confirm no invalidation occurred during any pause before Redis dispatch.
 - Safe Outage and Recovery Behavior: If Redis becomes unreachable, operations fall back safely to MongoDB. MongoDB invalidations use atomic `$max`. Upon Redis recovery, invalidation purges potentially stale keys before cache hits are trusted. If MongoDB is unavailable, the system fails closed, preventing unverified origin caching.
 - Multi Client Shared Origins: Origin invalidation preserves access for origins shared with other active clients.
 - Selective Deletion: Global invalidation updates only origin cache entries (`_id: /^ORIGIN#https?:\/\//`), preserving internal sequence counters and shared outage state.
@@ -129,7 +122,7 @@ In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pag
 All test suites gate successfully with zero failures:
 
 1. CORS Cache Correctness Suite (`npm run test:cors-cache`):
-   - 29 of 29 tests passed, including:
+   - 34 of 34 tests passed, including:
      - CORS-18: Old lookup -> invalidation -> fresh write -> delayed old write proving delayed writes cannot overwrite fresh decisions.
      - CORS-19: Old lookup -> global invalidation interleaved with cache write proving global tombstones block stale repopulation.
      - CORS-20: Two processes performing concurrent lookups and client changes with delayed stale writes.
@@ -142,7 +135,12 @@ All test suites gate successfully with zero failures:
      - CORS-27: Concurrent writers with expired or removed markers rejected.
      - CORS-28: Out of order invalidations with expired or removed markers prevent stale allow.
      - CORS-29: Multi process child worker lookup with marker removed prevents stale allow across processes.
-     - Note on test infrastructure: Tests CORS-10, CORS-13, CORS-16, CORS-23, and CORS-25 through CORS-29 use disposable mock Redis HTTP server fixtures simulating real Upstash REST calls, Lua evaluation, network outages, and recovery. Tests CORS-11, CORS-20, and CORS-29 use child worker processes to verify cross process race prevention against MongoDB Memory Server. Real system `redis-server` binary is not installed in this environment (`which redis-server` confirmed absent); tests execute against the isolated mock HTTP server to preserve hermetic test isolation.
+     - CORS-30: Per origin durable tombstone blocks stale write after fresh write, TTL eviction, and marker loss.
+     - CORS-31: Global durable tombstone blocks stale write after fresh write, TTL eviction, and marker loss.
+     - CORS-32: Pause between MongoDB acceptance and Redis write rejected on per origin invalidation.
+     - CORS-33: Pause between MongoDB acceptance and Redis write rejected on global invalidation.
+     - CORS-34: Multi process stale write prevention with TTL removal and marker loss.
+     - Note on test infrastructure: Tests CORS-10, CORS-13, CORS-16, CORS-23, and CORS-25 through CORS-34 use disposable mock Redis HTTP server fixtures simulating real Upstash REST calls, Lua evaluation, network outages, and recovery. Tests CORS-11, CORS-20, CORS-29, and CORS-34 use child worker processes to verify cross process race prevention against MongoDB Memory Server. Real system `redis-server` binary is not installed in this environment (`which redis-server` confirmed absent); tests execute against the isolated mock HTTP server to preserve hermetic test isolation.
 
 2. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
    - 9 of 9 tests passed, validating real zero counts, disabled client exclusions, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, UI value formatting, and explicit UI source verification of the "New sessions (24h)" card label.
@@ -172,6 +170,6 @@ All test suites gate successfully with zero failures:
 
 ## Conclusion and Final Verdict
 
-**Verdict**: Approve (Clean).
+**Verdict**: Ready for Independent Review.
 
-The implementation is verified, secure, and production ready. All cross source conflict requirements, legacy migration safeguards, stable identity self healing rules, authoritative version sequencing, and test environment isolation protections are met. The branch remains isolated on `fix/cors-cache-security-perf` without merging to `main` or deploying.
+The implementation is verified and secure against distributed race conditions, TTL eviction gaps, and inter process delays. All cross source conflict requirements, legacy migration safeguards, stable identity self healing rules, authoritative version sequencing, durable invalidation isolation, and test environment isolation protections are met. External system Redis binary was not available in this local test environment; while the Upstash HTTP mock server thoroughly covers the protocol and failure modes, validation against live managed Redis infrastructure is recommended prior to production deployment. The branch remains isolated on `fix/cors-cache-security-perf` without merging to `main` or deploying.

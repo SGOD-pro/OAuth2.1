@@ -179,6 +179,14 @@ export async function getCachedOrigin(
   }
 }
 
+let preRedisWriteHook: ((origin: string, allowed: boolean, version?: number) => Promise<void>) | null = null;
+
+export function setPreRedisWriteHookForTesting(
+  hook: ((origin: string, allowed: boolean, version?: number) => Promise<void>) | null,
+): void {
+  preRedisWriteHook = hook;
+}
+
 export async function setCachedOrigin(
   origin: string,
   allowed: boolean,
@@ -234,7 +242,48 @@ export async function setCachedOrigin(
     return;
   }
 
-  // MongoDB accepted the write: populate Redis with the verified decision.
+  // Testing hook to simulate an interleaved pause right after MongoDB accepts
+  // but before Redis receives the write
+  if (preRedisWriteHook) {
+    try {
+      await preRedisWriteHook(normalized, allowed, startVersion);
+    } catch (hookErr) {
+      console.error({ event: "pre_redis_write_hook_error", origin: normalized, error: String(hookErr) });
+    }
+  }
+
+  // Pre-Redis Write Guard:
+  // Re-verify that MongoDB has NOT recorded an invalidation (global or origin-specific)
+  // while this process was paused or waiting between MongoDB acceptance and Redis write.
+  if (typeof startVersion === "number" && startVersion > 0) {
+    try {
+      const db = await getDb();
+      const coll = db.collection("origin_cache");
+      const tombstones = await coll
+        .find({
+          _id: { $in: ["ORIGIN#__GLOBAL_TOMBSTONE__", `ORIGIN_INV#${normalized}`, `ORIGIN#${normalized}`] },
+        })
+        .toArray();
+
+      const globalTombstone = tombstones.find((d: any) => d._id === "ORIGIN#__GLOBAL_TOMBSTONE__");
+      const originTombstone = tombstones.find((d: any) => d._id === `ORIGIN_INV#${normalized}`);
+      const originDoc = tombstones.find((d: any) => d._id === `ORIGIN#${normalized}`);
+
+      if (
+        (globalTombstone && typeof globalTombstone.invalidatedVersion === "number" && globalTombstone.invalidatedVersion >= startVersion) ||
+        (originTombstone && typeof originTombstone.invalidatedVersion === "number" && originTombstone.invalidatedVersion >= startVersion) ||
+        (originDoc && (originDoc.allowed === null || (typeof originDoc.invalidatedVersion === "number" && originDoc.invalidatedVersion >= startVersion)))
+      ) {
+        // An invalidation occurred between MongoDB write and Redis write. Abort Redis write.
+        return;
+      }
+    } catch {
+      // Fail secure: if verification fails, do NOT write to Redis
+      return;
+    }
+  }
+
+  // MongoDB accepted the write and remains uninvalidated: populate Redis with the verified decision.
   try {
     await setCachedOriginRedis(normalized, allowed, startVersion);
   } catch (err) {

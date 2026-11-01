@@ -48,6 +48,7 @@ const {
   setRedisOutageDetectedForTesting,
   getInvalidationMapSizeForTesting,
   clearInvalidationMapForTesting,
+  setPreRedisWriteHookForTesting,
 } = await import("../../src/cache/origin-cache");
 const { setRedisClientForTesting, invalidateCachedOriginRedis } = await import("../../src/cache/redis");
 const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCache: getOriginCacheMongo, getNextAuthoritativeVersion, invalidateOriginCache } = await import("../../src/db/state");
@@ -1755,6 +1756,360 @@ await runTest("CORS-29: Multi process stale write prevention with expired or rem
     assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis must not hold stale key");
 
     // 6. Worker verifies cache: must NOT be true
+    const workerCacheRes = await sendToChild({ type: "CHECK_CACHE", origin });
+    assert.notEqual(workerCacheRes.value, true, "Worker cache must not return stale true");
+  } finally {
+    try {
+      child.send({ type: "EXIT" });
+      await new Promise<void>((r) => {
+        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
+        child.on("exit", () => { clearTimeout(timer); r(); });
+      });
+    } catch {}
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 30: Per-origin invalidation: durable tombstone prevents stale allow
+// after fresh write, TTL eviction, and Redis marker loss
+// =============================================================================
+await runTest("CORS-30: Per origin durable tombstone blocks stale write after fresh write, TTL eviction, and marker loss", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://durable-tombstone-ttl.example.com";
+  const clientId = "client_ttl_tombstone_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client TTL Tombstone Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    // 1. Initial lookup starts at v0 while origin is allowed
+    const lookupCheck = await startOriginCheck(origin);
+    assert.ok(lookupCheck.startVersion > 0, "Lookup has valid sequence version");
+
+    // 2. Old lookup pauses here!
+
+    // 3. Client is disabled and origin is invalidated at v1
+    await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+    await invalidateOrigins([origin]);
+
+    // Verify durable tombstone was recorded in MongoDB
+    const tombstoneDoc = await db.collection("origin_cache").findOne({ _id: `ORIGIN_INV#${origin}` });
+    assert.ok(tombstoneDoc, "Durable origin tombstone exists in MongoDB");
+    assert.ok(
+      typeof tombstoneDoc.invalidatedVersion === "number" && tombstoneDoc.invalidatedVersion >= lookupCheck.startVersion,
+      "Durable tombstone records higher invalidation version",
+    );
+    assert.equal(tombstoneDoc.cachedAt, undefined, "Durable tombstone has no cachedAt field");
+
+    // 4. A fresh cache decision is written at v2 (e.g. temporary re-enabling or shared client write)
+    const freshVersion = await getNextAuthoritativeVersion();
+    const freshAccepted = await putOriginCache(origin, true, freshVersion);
+    assert.equal(freshAccepted, true, "Fresh write with higher version accepted");
+
+    const freshDoc = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.ok(freshDoc?.cachedAt, "Fresh cache decision has cachedAt for TTL");
+
+    // 5. MongoDB TTL mechanism removes the expiring cache entry
+    await db.collection("origin_cache").deleteOne({ _id: `ORIGIN#${origin}` });
+    assert.equal(await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` }), null, "Cache doc deleted by TTL");
+
+    // 6. Redis loses its invalidation marker (e.g. restart or eviction)
+    mockRedis.delete(`swyra:origin:inv:${origin}`);
+    assert.equal(mockRedis.has(`swyra:origin:inv:${origin}`), false, "Redis marker removed");
+
+    // 7. Old lookup resumes and attempts to write with startVersion
+    await setCachedOrigin(origin, true, lookupCheck);
+
+    // 8. Verification: stale write strictly rejected
+    assert.notEqual(await getCachedOrigin(origin), true, "Old lookup cannot write stale allow after TTL eviction");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis does not hold stale key");
+
+    const mongoDocAfter = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.notEqual(mongoDocAfter?.allowed, true, "MongoDB does not hold stale allow");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 31: Global invalidation: durable global tombstone blocks stale write
+// after fresh write, TTL eviction, and Redis global marker loss
+// =============================================================================
+await runTest("CORS-31: Global durable tombstone blocks stale write after fresh write, TTL eviction, and marker loss", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://global-durable-ttl.example.com";
+
+  try {
+    // 1. Old lookup starts at v0
+    const lookupCheck = await startOriginCheck(origin);
+
+    // 2. Global invalidation occurs at v1
+    await clearOriginCache();
+
+    // Verify global tombstone in MongoDB has no cachedAt
+    const globalTombstone = await db.collection("origin_cache").findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
+    assert.ok(globalTombstone, "Global tombstone exists");
+    assert.equal(globalTombstone.cachedAt, undefined, "Global tombstone has no cachedAt");
+
+    // 3. Fresh cache decision written at v2
+    const freshVersion = await getNextAuthoritativeVersion();
+    await putOriginCache(origin, true, freshVersion);
+
+    // 4. MongoDB TTL removes expiring cache entry
+    await db.collection("origin_cache").deleteOne({ _id: `ORIGIN#${origin}` });
+
+    // 5. Redis loses global invalidation marker
+    mockRedis.delete("swyra:inv:global");
+    assert.equal(mockRedis.has("swyra:inv:global"), false, "Redis global marker removed");
+
+    // 6. Old lookup resumes and attempts to write
+    await setCachedOrigin(origin, true, lookupCheck);
+
+    // 7. Verification: stale write rejected
+    assert.notEqual(await getCachedOrigin(origin), true, "Old lookup cannot write stale allow after global TTL eviction");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis does not hold stale key");
+
+    const mongoDocAfter = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.notEqual(mongoDocAfter?.allowed, true, "MongoDB does not hold stale allow");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 32: Pause after MongoDB acceptance before Redis write: per-origin
+// invalidation and Redis marker loss
+// =============================================================================
+await runTest("CORS-32: Pause between MongoDB acceptance and Redis write rejected on per-origin invalidation", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://pause-mongo-redis-origin.example.com";
+  const clientId = "client_pause_origin_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Pause Origin Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    // 1. Old lookup starts at v0
+    const lookupCheck = await startOriginCheck(origin);
+
+    // 2. Set hook to simulate pause right after MongoDB accepts, but before Redis write
+    let hookFired = false;
+    setPreRedisWriteHookForTesting(async (hookOrigin) => {
+      if (hookOrigin === origin) {
+        hookFired = true;
+        // While paused between MongoDB acceptance and Redis write:
+        // Invalidation occurs! Client is disabled.
+        await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+        await invalidateOrigins([origin]);
+
+        // Redis loses its invalidation marker (simulating eviction or restart)
+        mockRedis.delete(`swyra:origin:inv:${origin}`);
+      }
+    });
+
+    // 3. Old lookup executes setCachedOrigin
+    await setCachedOrigin(origin, true, lookupCheck);
+    assert.equal(hookFired, true, "Pre-Redis write hook fired");
+
+    // 4. Verification: Pre-Redis Write Guard aborted write to Redis
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis does not hold stale key");
+    assert.notEqual(await getCachedOrigin(origin), true, "Cache does not return stale allow");
+  } finally {
+    setPreRedisWriteHookForTesting(null);
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 33: Pause after MongoDB acceptance before Redis write: global invalidation
+// and Redis marker loss
+// =============================================================================
+await runTest("CORS-33: Pause between MongoDB acceptance and Redis write rejected on global invalidation", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://pause-mongo-redis-global.example.com";
+
+  try {
+    // 1. Old lookup starts at v0
+    const lookupCheck = await startOriginCheck(origin);
+
+    // 2. Set hook to simulate pause right after MongoDB accepts, but before Redis write
+    let hookFired = false;
+    setPreRedisWriteHookForTesting(async (hookOrigin) => {
+      if (hookOrigin === origin) {
+        hookFired = true;
+        // Global invalidation occurs while paused
+        await clearOriginCache();
+
+        // Redis loses global marker
+        mockRedis.delete("swyra:inv:global");
+      }
+    });
+
+    // 3. Old lookup executes setCachedOrigin
+    await setCachedOrigin(origin, true, lookupCheck);
+    assert.equal(hookFired, true, "Pre-Redis write hook fired");
+
+    // 4. Verification: Pre-Redis Write Guard aborted write to Redis
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis does not hold stale key");
+    assert.notEqual(await getCachedOrigin(origin), true, "Cache does not return stale allow");
+  } finally {
+    setPreRedisWriteHookForTesting(null);
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 34: Multi-process stale write prevention with TTL removal and marker loss
+// =============================================================================
+await runTest("CORS-34: Multi process stale write prevention with TTL removal and marker loss", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const workerPath = path.resolve(__dirname, "../fixtures/cors-multi-process-worker.ts");
+  const child = fork(workerPath, [], {
+    execPath: process.execPath,
+    execArgv: process.execArgv,
+    env: {
+      ...process.env,
+      MONGO_URI: mongoUri,
+      NODE_ENV: "test",
+    },
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+  });
+
+  const sendToChild = (msg: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      const handler = (res: any) => {
+        if (res.type === "ERROR") {
+          child.off("message", handler);
+          reject(new Error(res.error));
+        } else {
+          child.off("message", handler);
+          resolve(res);
+        }
+      };
+      child.on("message", handler);
+      child.send(msg);
+    });
+  };
+
+  const origin = "https://multi-proc-ttl-marker-loss.example.com";
+  const clientId = "client_proc_ttl_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Process TTL Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    await sendToChild({
+      type: "INIT",
+      redisUrl: mockRedis.url,
+      redisToken: mockRedis.token,
+    });
+
+    // 1. Worker process initiates lookup reading active client state
+    const check1 = await sendToChild({ type: "START_CHECK", origin });
+    assert.equal(check1.type, "CHECK_STARTED");
+
+    // 2. Parent disables client and performs invalidation
+    await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+    await invalidateOrigins([origin]);
+
+    // 3. Parent writes a fresh decision at higher version with cachedAt
+    const freshVersion = await getNextAuthoritativeVersion();
+    await putOriginCache(origin, true, freshVersion);
+
+    // 4. Parent simulates MongoDB TTL removal of expiring document
+    await db.collection("origin_cache").deleteOne({ _id: `ORIGIN#${origin}` });
+
+    // 5. Parent explicitly clears the Redis invalidation marker
+    mockRedis.delete(`swyra:origin:inv:${origin}`);
+    assert.equal(mockRedis.has(`swyra:origin:inv:${origin}`), false, "Redis marker cleared");
+
+    // 6. Worker process resumes and executes delayed old write with startVersion
+    const writeRes = await sendToChild({
+      type: "COMPLETE_WRITE",
+      origin,
+      allowed: true,
+      startTime: check1.startTime,
+    });
+    assert.equal(writeRes.type, "WRITE_COMPLETED");
+
+    // 7. Parent verifies cache: must NOT be true
+    const parentCache = await getCachedOrigin(origin);
+    assert.notEqual(parentCache, true, "Parent cache must not return stale true");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis must not hold stale key");
+
+    // 8. Worker verifies cache: must NOT be true
     const workerCacheRes = await sendToChild({ type: "CHECK_CACHE", origin });
     assert.notEqual(workerCacheRes.value, true, "Worker cache must not return stale true");
   } finally {
