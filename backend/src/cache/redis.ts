@@ -172,14 +172,23 @@ local invKey = KEYS[2]
 local globalInvKey = KEYS[3]
 local verKey = KEYS[4]
 local leaseKey = KEYS[5]
+local leasesKey = KEYS[6]
 local allowed = ARGV[1]
 local checkVersion = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
+local origin = ARGV[4]
 
 if checkVersion and checkVersion > 0 then
     if leaseKey then
         local activeLease = redis.call('get', leaseKey)
         if not activeLease or tonumber(activeLease) ~= checkVersion then
+            return 0
+        end
+    end
+
+    if leasesKey and origin then
+        local activeGlobalLease = redis.call('hget', leasesKey, origin)
+        if not activeGlobalLease or tonumber(activeGlobalLease) ~= checkVersion then
             return 0
         end
     end
@@ -205,6 +214,9 @@ if checkVersion and checkVersion > 0 then
     redis.call('set', verKey, checkVersion, 'EX', ttl)
     if leaseKey then
         redis.call('del', leaseKey)
+    end
+    if leasesKey and origin then
+        redis.call('hdel', leasesKey, origin)
     end
 end
 return 1
@@ -236,6 +248,7 @@ for i = 1, #KEYS do
     redis.call("del", "swyra:origin:" .. origin)
     redis.call("del", "swyra:origin:ver:" .. origin)
     redis.call("del", leaseKey)
+    redis.call("hdel", "swyra:origin:leases", origin)
 end
 return 1
 `;
@@ -243,6 +256,7 @@ return 1
 export const INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA = `
 -- LUA_INVALIDATE_GLOBAL_ORIGIN_CACHE
 local globalInvKey = KEYS[1]
+local leasesKey = KEYS[2]
 local invalidationVersion = tonumber(ARGV[1]) or 0
 local ttl = tonumber(ARGV[2]) or 0
 
@@ -259,6 +273,10 @@ elseif invalidationVersion == curNum and ttl > 0 then
     if currentTtl and currentTtl > 0 and currentTtl < ttl then
         redis.call("expire", globalInvKey, ttl)
     end
+end
+
+if leasesKey then
+    redis.call("del", leasesKey)
 end
 return 1
 `;
@@ -302,7 +320,11 @@ export async function setOriginLeaseRedis(
   if (!redis || !version || version <= 0) return false;
   try {
     const leaseKey = `swyra:origin:lease:${origin}`;
-    await redis.set(leaseKey, version, { ex: ttlSeconds });
+    const leasesKey = "swyra:origin:leases";
+    await Promise.all([
+      redis.set(leaseKey, version, { ex: ttlSeconds }),
+      redis.hset(leasesKey, { [origin]: version }),
+    ]);
     return true;
   } catch (err) {
     console.error({ event: "redis_origin_lease_set_failed", origin, error: String(err) });
@@ -322,11 +344,17 @@ export async function setCachedOriginRedis(
     const globalInvKey = "swyra:inv:global";
     const verKey = `swyra:origin:ver:${origin}`;
     const leaseKey = `swyra:origin:lease:${origin}`;
+    const leasesKey = "swyra:origin:leases";
 
     const res = await redis.eval(
       SET_ORIGIN_CACHE_LUA,
-      [originKey, invKey, globalInvKey, verKey, leaseKey],
-      [allowed ? "1" : "0", typeof startTime === "number" ? startTime : 0, ORIGIN_CACHE_TTL_SECONDS],
+      [originKey, invKey, globalInvKey, verKey, leaseKey, leasesKey],
+      [
+        allowed ? "1" : "0",
+        typeof startTime === "number" ? startTime : 0,
+        ORIGIN_CACHE_TTL_SECONDS,
+        origin,
+      ],
     );
 
     return res === 1 || res === "1" || res === true;
@@ -351,12 +379,12 @@ export async function invalidateCachedOriginRedis(
     return;
   }
 
-  // Global invalidation: write global tombstone marker first monotonically.
+  // Global invalidation: write global tombstone marker and atomically delete active leases container.
   // The marker key uses a DIFFERENT prefix (swyra:inv:global) so it cannot be
   // matched and deleted by the swyra:origin:* scan below.
   await redis.eval(
     INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA,
-    ["swyra:inv:global"],
+    ["swyra:inv:global", "swyra:origin:leases"],
     [String(marker), "0"],
   );
 
@@ -367,14 +395,15 @@ export async function invalidateCachedOriginRedis(
       count: 100,
     });
     const [nextCursor, keys] = result;
-    // Delete only cached origin decisions, version keys, and lease keys.
+    // Delete only cached origin decisions, version keys, and individual lease keys.
     // Preserve swyra:origin:inv:* so per-origin invalidation markers remain intact!
     const originKeys = keys.filter(
       (k) =>
         (k.startsWith("swyra:origin:") ||
           k.startsWith("swyra:origin:ver:") ||
           k.startsWith("swyra:origin:lease:")) &&
-        !k.startsWith("swyra:origin:inv:")
+        !k.startsWith("swyra:origin:inv:") &&
+        k !== "swyra:origin:leases"
     );
     if (originKeys.length > 0) await redis.del(...originKeys);
     cursor = nextCursor;

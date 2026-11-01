@@ -82,6 +82,52 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               return { result: deletedCount };
             }
 
+            if (lower === "hset") {
+              const [key, ...rest] = args;
+              let entry = store.get(key);
+              if (!entry || isExpired(entry) || !(entry.value instanceof Map)) {
+                entry = { value: new Map<string, any>() };
+                store.set(key, entry);
+              }
+              const map = entry.value as Map<string, any>;
+              if (rest.length === 1 && typeof rest[0] === "object" && rest[0] !== null) {
+                for (const [f, v] of Object.entries(rest[0])) {
+                  map.set(f, v);
+                }
+              } else {
+                for (let i = 0; i < rest.length; i += 2) {
+                  if (rest[i] !== undefined && rest[i + 1] !== undefined) {
+                    map.set(String(rest[i]), rest[i + 1]);
+                  }
+                }
+              }
+              return { result: 1 };
+            }
+
+            if (lower === "hget") {
+              const [key, field] = args;
+              const entry = store.get(key);
+              if (!entry || isExpired(entry) || !(entry.value instanceof Map)) {
+                return { result: null };
+              }
+              const val = (entry.value as Map<string, any>).get(field);
+              return { result: val !== undefined ? String(val) : null };
+            }
+
+            if (lower === "hdel") {
+              const [key, ...fields] = args;
+              const entry = store.get(key);
+              if (!entry || isExpired(entry) || !(entry.value instanceof Map)) {
+                return { result: 0 };
+              }
+              const map = entry.value as Map<string, any>;
+              let deletedCount = 0;
+              for (const f of fields) {
+                if (map.delete(f)) deletedCount++;
+              }
+              return { result: deletedCount };
+            }
+
             if (lower === "eval") {
               const [_script, numKeysRaw, ...rest] = args;
               const scriptStr = String(_script);
@@ -151,6 +197,10 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                   store.delete(`swyra:origin:${origin}`);
                   store.delete(`swyra:origin:ver:${origin}`);
                   store.delete(`swyra:origin:lease:${origin}`);
+                  const leasesEntry = store.get("swyra:origin:leases");
+                  if (leasesEntry && leasesEntry.value instanceof Map) {
+                    leasesEntry.value.delete(origin);
+                  }
                 }
                 return { result: 1 };
               }
@@ -158,6 +208,7 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               // 1b. Atomic Lua Global Invalidation Script
               if (scriptStr.includes("LUA_INVALIDATE_GLOBAL_ORIGIN_CACHE")) {
                 const globalKey = keys[0] || "swyra:inv:global";
+                const leasesKey = keys[1] || "swyra:origin:leases";
                 const newVersion = Number(scriptArgs[0]) || 0;
                 const ttlSeconds = Number(scriptArgs[1]) || 0;
                 const currentGlobal = store.get(globalKey);
@@ -174,11 +225,7 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                     currentGlobal.expiresAt = newExpires;
                   }
                 }
-                for (const key of store.keys()) {
-                  if (key.startsWith("swyra:origin:lease:")) {
-                    store.delete(key);
-                  }
-                }
+                store.delete(leasesKey);
                 return { result: 1 };
               }
 
@@ -188,14 +235,26 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               const globalInvKey = keys[2];
               const verKey = keys[3];
               const leaseKey = keys[4];
+              const leasesKey = keys[5];
               const allowed = scriptArgs[0];
               const startTime = Number(scriptArgs[1]) || 0;
               const ttlSeconds = Number(scriptArgs[2]) || 300;
+              const origin = scriptArgs[3];
 
               if (startTime > 0) {
                 if (leaseKey) {
                   const leaseEntry = store.get(leaseKey);
                   if (!leaseEntry || isExpired(leaseEntry) || Number(leaseEntry.value) !== startTime) {
+                    return { result: 0 };
+                  }
+                }
+                if (leasesKey && origin) {
+                  const leasesEntry = store.get(leasesKey);
+                  if (!leasesEntry || isExpired(leasesEntry) || !(leasesEntry.value instanceof Map)) {
+                    return { result: 0 };
+                  }
+                  const val = leasesEntry.value.get(origin);
+                  if (val === undefined || Number(val) !== startTime) {
                     return { result: 0 };
                   }
                 }
@@ -228,7 +287,12 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               if (leaseKey) {
                 store.delete(leaseKey);
               }
-              return { result: 1 };
+              if (leasesKey && origin) {
+                const leasesEntry = store.get(leasesKey);
+                if (leasesEntry && leasesEntry.value instanceof Map) {
+                  leasesEntry.value.delete(origin);
+                }
+              }
               return { result: 1 };
             }
 

@@ -51,7 +51,7 @@ const {
   setPreRedisWriteHookForTesting,
   setPostMongoCheckHookForTesting,
 } = await import("../../src/cache/origin-cache");
-const { setRedisClientForTesting, invalidateCachedOriginRedis, getCachedOriginRedis, setCachedOriginRedis } = await import("../../src/cache/redis");
+const { setRedisClientForTesting, invalidateCachedOriginRedis, getCachedOriginRedis, setCachedOriginRedis, setOriginLeaseRedis, INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA } = await import("../../src/cache/redis");
 const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCache: getOriginCacheMongo, getNextAuthoritativeVersion, invalidateOriginCache } = await import("../../src/db/state");
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
@@ -2273,7 +2273,7 @@ await runTest("CORS-37: Atomic Redis Lua read prevents pairing old cached value 
     await invalidateCachedOriginRedis([origin], 20);
 
     // Fresh write occurs for different decision: allowed = false at v30
-    mockRedis.set(`swyra:origin:lease:${origin}`, 30);
+    await setOriginLeaseRedis(origin, 30);
     await setCachedOriginRedis(origin, false, 30);
 
     // Under non-atomic read, reader would fetch verKey (30), see 30 > 20, and pair with old true!
@@ -2470,6 +2470,87 @@ await runTest("CORS-39: Outage recovery and Redis restart with lease loss strict
     assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis does not have origin cached after restart");
     assert.equal(await getCachedOriginRedis(origin), null, "Redis getCachedOriginRedis returns null");
   } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 40: Global invalidation pauses before lease scan: global marker eviction
+// with intact individual lease strictly blocks stale write
+// =============================================================================
+await runTest("CORS-40: Global invalidation pauses before lease scan; marker loss with intact lease strictly blocks stale write", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://global-interleaved-lease.example.com";
+
+  try {
+    // 1. Old lookup begins and registers active leases (individual + global container)
+    const lookupCheck = await startOriginCheck(origin);
+
+    // 2. Configure post-MongoDB-check hook to simulate interleaving:
+    // Lookup has passed MongoDB check, but pauses right before Redis write
+    let hookFired = false;
+    setPostMongoCheckHookForTesting(async (hookOrigin) => {
+      if (hookOrigin === origin) {
+        hookFired = true;
+
+        // Global invalidation occurs across MongoDB and Redis:
+        const globalInvVersion = await getNextAuthoritativeVersion();
+        await invalidateOriginCache(undefined, globalInvVersion);
+        await testRedis.eval(
+          INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA,
+          ["swyra:inv:global", "swyra:origin:leases"],
+          [String(globalInvVersion), "0"],
+        );
+
+        // Verify that the individual lease key STILL EXISTS in Redis
+        // (because the background scan loop was paused or delayed)
+        assert.equal(
+          mockRedis.has(`swyra:origin:lease:${origin}`),
+          true,
+          "Individual lease key remains present before scan loop",
+        );
+
+        // Now, Redis selectively evicts or loses the global invalidation marker swyra:inv:global
+        mockRedis.delete("swyra:inv:global");
+        assert.equal(mockRedis.has("swyra:inv:global"), false, "Global invalidation marker evicted");
+      }
+    });
+
+    // 3. Old lookup resumes and attempts to write allowed = true to Redis
+    await setCachedOrigin(origin, true, lookupCheck);
+    assert.equal(hookFired, true, "Post-Mongo check hook fired");
+
+    // 4. Verification: The stale write MUST be strictly rejected:
+    // Even though swyra:origin:lease:origin was present and swyra:inv:global was absent,
+    // the atomic container swyra:origin:leases was purged during global invalidation,
+    // causing SET_ORIGIN_CACHE_LUA to fail-closed and reject the stale write.
+    assert.equal(
+      mockRedis.has(`swyra:origin:${origin}`),
+      false,
+      "Redis must not store stale allow decision",
+    );
+    assert.equal(
+      await getCachedOriginRedis(origin),
+      null,
+      "Redis getCachedOriginRedis must return null",
+    );
+    assert.notEqual(
+      await getCachedOrigin(origin),
+      true,
+      "Overall cache must not return stale true",
+    );
+  } finally {
+    setPostMongoCheckHookForTesting(null);
     setRedisClientForTesting(null);
     await mockRedis.close();
     await invalidateOrigins([origin]);

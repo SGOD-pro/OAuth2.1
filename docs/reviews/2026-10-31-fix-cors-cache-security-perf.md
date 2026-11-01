@@ -88,20 +88,40 @@ In `backend/src/db/state.ts`, `backend/src/cache/origin-cache.ts`, and `backend/
 - Durable MongoDB Cache Ordering: `putOriginCache` verifies both `cachedVersion < version` and `invalidatedVersion < version`. `invalidatedVersion` is kept on the document and on the durable tombstone, ensuring older lookups cannot overwrite newer decisions even after fresh writes complete and expire.
 - Monotonic Invalidation Markers: Redis Lua invalidation scripts inspect existing markers and update them only if the incoming version is strictly greater. Out of order invalidations cannot reduce markers.
 - Persistent Markers in Redis: Lua invalidation scripts accept `ttl = 0`, allowing persistent markers. Global pattern deletion skips `swyra:origin:inv:*` keys.
-- Active Lease Verification in Redis: During `startOriginCheck`, an active lease `swyra:origin:lease:${origin}` is registered in Redis matching the authoritative version sequence. Invalidation explicitly deletes active leases, and Redis restart, key eviction, or outage wipes them. The atomic write script `SET_ORIGIN_CACHE_LUA` checks the active lease key. If the lease does not exist or does not match `checkVersion`, the write is rejected immediately. This guarantees that an old lookup paused after the final MongoDB check cannot write a stale decision to Redis even if Redis loses its invalidation marker.
+- Active Lease Verification and Containerized Global Purge in Redis: During `startOriginCheck`, an active lease is registered both as an individual key `swyra:origin:lease:${origin}` and inside a global leases container `swyra:origin:leases`. In per origin invalidation, both keys are removed. In global invalidation, `INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA` deletes `swyra:origin:leases` atomically in the exact same Lua invocation as updating `swyra:inv:global`. The atomic write script `SET_ORIGIN_CACHE_LUA` checks both the individual lease key and the container `swyra:origin:leases`. If either does not exist or does not match `checkVersion`, the write is rejected immediately. This guarantees that if global invalidation executes and pauses before its background scan loop deletes individual lease keys, and Redis selectively evicts `swyra:inv:global`, an old lookup cannot write a stale allow decision to Redis.
 - Atomic Snapshot Read in Redis: `getCachedOriginRedis` evaluates `GET_ORIGIN_CACHE_LUA` in a single atomic Redis script. All four keys (`originKey`, `verKey`, `invKey`, `globalInvKey`) are retrieved and compared atomically, preventing non atomic read interleaving where an old allow decision could be paired with a newer version.
 - Delayed Write Rejection Conditions:
-  1. Active lease check: Active lease key in Redis matches the check version.
-  2. Version key check: Existing cached version is greater than or equal to the lookup check version.
-  3. Specific marker check: Invalidation marker version is greater than or equal to the lookup check version.
-  4. Global marker check: Global invalidation marker version is greater than or equal to the lookup check version.
-  5. MongoDB atomic filter: Update requires `cachedVersion < effectiveVersion` and `invalidatedVersion < effectiveVersion`.
-  6. Pre Redis Write Guard check: MongoDB tombstones confirm no invalidation occurred during any pause before Redis dispatch.
+  1. Active individual lease check: Active individual lease key in Redis matches the check version.
+  2. Active global lease container check: Origin entry in `swyra:origin:leases` matches the check version.
+  3. Version key check: Existing cached version is greater than or equal to the lookup check version.
+  4. Specific marker check: Invalidation marker version is greater than or equal to the lookup check version.
+  5. Global marker check: Global invalidation marker version is greater than or equal to the lookup check version.
+  6. MongoDB atomic filter: Update requires `cachedVersion < effectiveVersion` and `invalidatedVersion < effectiveVersion`.
+  7. Pre Redis Write Guard check: MongoDB tombstones confirm no invalidation occurred during any pause before Redis dispatch.
 - Safe Outage and Recovery Behavior: If Redis becomes unreachable, operations fall back safely to MongoDB. MongoDB invalidations use atomic `$max`. Upon Redis recovery, invalidation purges potentially stale keys before cache hits are trusted. If MongoDB is unavailable, the system fails closed, preventing unverified origin caching.
 - Multi Client Shared Origins: Origin invalidation preserves access for origins shared with other active clients.
 - Selective Deletion: Global invalidation updates only origin cache entries (`_id: /^ORIGIN#https?:\/\//`), preserving internal sequence counters and shared outage state.
 
-### 5. Hermetic Test Isolation Guard and Endpoint Verification
+### 5. Consistency Guarantee and Architectural Trade-off Analysis
+
+#### System Guarantee
+The system provides linearizable durable consistency in MongoDB and fail closed ephemeral acceleration in Redis:
+- MongoDB is the single authoritative source of truth. Monotonic sequence versions (`__ORIGIN_AUTHORITATIVE_VERSION__`) govern all checks and mutations. Durable tombstones (`ORIGIN_INV#${origin}` and `ORIGIN#__GLOBAL_TOMBSTONE__`) lack `cachedAt`, so MongoDB TTL indexes never delete them. Every MongoDB write uses atomic conditional filters and post write checks.
+- Redis operates as an ephemeral cache protected by atomic Lua validation. Every cache write requires an active lease registered in both an individual key and a container key `swyra:origin:leases`. Invalidation deletes active leases atomically. Under selective key eviction, marker loss, Redis outage, or restart, the absence of active leases forces writes to fail closed (rejected with return code 0). Reads evaluate an atomic Lua snapshot across value, version, origin marker, and global marker, preventing torn reads.
+
+#### Trade-off Analysis: Dual Layer versus Simpler Safe Architecture
+- Design A (Current Dual Layer: Upstash Redis REST + MongoDB):
+  - Latency: Warm cache hits over Upstash REST take 5 to 25 ms.
+  - Availability: Offloads preflight traffic from MongoDB during spikes. Falls back to MongoDB when Redis is unavailable.
+  - Complexity: High. Requires distributed coordination across two distinct databases: monotonic sequence generation, atomic Lua snapshot reads, containerized active lease tracking, pre Redis write verification guards, multi round trip scan deletions, and shared outage markers.
+- Design B (Simpler Safe Architecture: MongoDB Indexed Cache, Redis as Rate Limiter Only):
+  - Latency: An indexed query against MongoDB `origin_cache` takes 1 to 5 ms when running in the same region. This is often faster than an HTTPS REST call to Upstash.
+  - Availability: Eliminates external network hops to a second database service for CORS preflights.
+  - Correctness: Native ACID guarantees in MongoDB. Eliminates distributed consensus races, lease tracking, tombstone mirroring, and selective eviction vulnerabilities entirely.
+- Architectural Recommendation:
+  For standard deployments where the backend connects directly to MongoDB, Design B is strongly recommended. It provides ironclad correctness with substantially lower operational complexity. Design A is maintained here for deployments where edge runtimes lack direct database connections and require external REST caching.
+
+### 6. Hermetic Test Isolation Guard and Endpoint Verification
 In `backend/tests/fixtures/test-env-isolation.ts`:
 - Endpoint Parsing: `parseMongoEndpoint` breaks down connection strings into parsed protocol, host, and port components.
 - Port Discrimination: URIs on different ports (such as 27017 versus 44000) are cleanly rejected even when targeting localhost.
@@ -109,7 +129,7 @@ In `backend/tests/fixtures/test-env-isolation.ts`:
 - Safe URI Validation: Loopback addresses are permitted while remote and cloud URIs throw security violations.
 - Credential Redaction: Error strings omit raw URIs, passwords, and tokens to prevent accidental log leakage.
 
-### 6. Dashboard Data Accuracy and Honest IP/Timestamp Reporting
+### 7. Dashboard Data Accuracy and Honest IP/Timestamp Reporting
 In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pages/admin/AdminDashboard.tsx`, and `frontend/pages/admin/AdminLogs.tsx`:
 - Real Zero Counts: In `/api/admin/stats`, fallbacks from `activeClients` to `totalClients` and from `recentLogins` to `activeSessions` or 1 have been eliminated. Real zero counts are strictly preserved.
 - Disabled Client Discrimination: Queries for active clients filter out records with `disabled: true`, `is_active: false`, `isActive: false`, or status in `["disabled", "inactive", "revoked", "suspended"]`.
@@ -124,7 +144,7 @@ In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pag
 All test suites gate successfully with zero failures:
 
 1. CORS Cache Correctness Suite (`npm run test:cors-cache`):
-   - 39 of 39 tests passed, including:
+   - 40 of 40 tests passed, including:
      - CORS-18: Old lookup -> invalidation -> fresh write -> delayed old write proving delayed writes cannot overwrite fresh decisions.
      - CORS-19: Old lookup -> global invalidation interleaved with cache write proving global tombstones block stale repopulation.
      - CORS-20: Two processes performing concurrent lookups and client changes with delayed stale writes.
@@ -147,7 +167,8 @@ All test suites gate successfully with zero failures:
      - CORS-37: Atomic Redis Lua read prevents pairing old cached value with new version.
      - CORS-38: Multi process race where worker pauses after final MongoDB check, parent invalidates and flushes Redis marker, and worker cannot write stale allow.
      - CORS-39: Outage recovery and Redis restart with lease loss strictly blocks delayed write.
-     - Note on test infrastructure: Tests CORS-10, CORS-13, CORS-16, CORS-23, CORS-25 through CORS-33, CORS-35 through CORS-37, and CORS-39 use disposable mock Redis HTTP server fixtures simulating real Upstash REST calls, Lua evaluation, network outages, and recovery. Tests CORS-11, CORS-20, CORS-29, CORS-34, and CORS-38 use child worker processes to verify cross process race prevention against MongoDB Memory Server. Real system `redis-server` binary is not installed in this environment (`which redis-server` confirmed absent); tests execute against the isolated mock HTTP server to preserve hermetic test isolation.
+     - CORS-40: Global invalidation pauses before lease scan; marker loss with intact lease strictly blocks stale write.
+     - Note on test infrastructure: Tests CORS-10, CORS-13, CORS-16, CORS-23, CORS-25 through CORS-33, CORS-35 through CORS-37, CORS-39, and CORS-40 use disposable mock Redis HTTP server fixtures simulating real Upstash REST calls, Lua evaluation, network outages, selective key loss, and recovery. Tests CORS-11, CORS-20, CORS-29, CORS-34, and CORS-38 use child worker processes to verify cross process race prevention against MongoDB Memory Server. Real system `redis-server` binary is not installed in this environment (`which redis-server` confirmed absent); tests execute against the isolated mock HTTP server to preserve hermetic test isolation.
 
 2. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
    - 9 of 9 tests passed, validating real zero counts, disabled client exclusions, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, UI value formatting, and explicit UI source verification of the "New sessions (24h)" card label.
