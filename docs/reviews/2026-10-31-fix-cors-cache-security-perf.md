@@ -2,13 +2,13 @@
 
 **Reviewer**: Senior Security and Architecture Reviewer  
 **Branch**: `fix/cors-cache-security-perf`  
-**Verdict**: Approve (Clean)  
+**Verdict**: Ready for Independent Review (Pending External Real Redis and Browser Verification)  
 
 ---
 
 ## Summary
 
-This review validates the complete resolution of all findings identified in the distributed CORS cache consistency, cross source assignment conflict resolution, safe legacy migration, stable identity binding, and test environment isolation review:
+This review evaluates the resolution of distributed CORS cache consistency, bounded lease cleanup, cross source assignment conflict resolution, safe legacy migration, stable identity binding, dashboard data honesty, and test environment isolation:
 
 1. Cross Source Assignment Conflict Resolution: Both `checkUserIsClientAdmin` and `checkUserHasAppAccess` evaluate all relevant records across `app_admins` and `user_app_registrations` concurrently using `Promise.all`. Early returns prior to evaluating both collections have been eliminated. Explicit revocation, suspension, or disabling in either source strictly takes precedence over an active record in the other source. Authorization time privilege grants based only on matching email have been completely removed.
 2. Safe Explicit Legacy Migration: The `migrateLegacyAppAdmins` utility supports dry run mode (`--dry-run` default versus `--apply`) and detailed conflict reporting. The background `selfHealAppAdmins` sweep does not call `migrateLegacyAppAdmins`, preserving explicit operator review as the sole path for legacy migration. Dry run mode strictly skips all database writes, including audit record generation. The migration strictly preserves explicit revocations and never reactivates or deletes them. Account continuity is not inferred solely from an email that could be reused; assignments created before user accounts are detected and quarantined as potential email reuse conflicts. Duplicate records are reconciled cleanly, and repeated migration runs are proven idempotent.
@@ -31,10 +31,15 @@ This review validates the complete resolution of all findings identified in the 
    - Pre Redis Write Guard: Right before writing to Redis, `setCachedOrigin` reverifies MongoDB tombstones. If an invalidation occurred during a pause between MongoDB acceptance and Redis write, the Redis write is aborted.
    - Process local maps update invalidation markers monotonically (`invalidationVersion > prev`).
    - Global invalidation prunes local entries where cached versions are less than or equal to the invalidation version.
-5. Disposable MongoDB Verification and Endpoint Parsing: The test isolation helper `parseMongoEndpoint` accurately parses loopback host and port using URL parsing. Ambiguous forms, different local ports, multi host strings, and remote endpoints are rejected without leakage of credentials or connection strings in error messages.
-6. Dashboard Data Accuracy and Honest Reporting: In `/api/admin/stats`, fallbacks that masked real zero values (such as `activeClients || totalClients` and `recentLogins || activeSessions || 1`) have been completely removed. Real zero counts are preserved. Disabled and inactive clients are comprehensively excluded from operational counts. The 24 hour session count reflects actual session creations and is labeled transparently as "New sessions (24h)" with helper text "Created in last 24h". Missing IP addresses return null rather than fabricating loopback 127.0.0.1. Missing historical timestamps return null rather than fabricating current timestamps. In `getTrustedClientIp`, missing forwarding headers evaluate to "unknown" rather than loopback 127.0.0.1, preserving secure rate limiting and trusted proxy chain evaluation.
+5. Bounded Redis Lease Cleanup and Atomic Registration:
+   In `backend/src/cache/redis.ts`:
+   - Atomic Registration: `SET_ORIGIN_LEASE_LUA` writes both the individual lease key `swyra:origin:lease:${origin}` with short TTL and the global hash entry `swyra:origin:leases[origin]` in a single Redis tick, setting container fallback expiry to prevent unbounded accumulation.
+   - Bounded Batch Cleanup: `CLEANUP_ABANDONED_LEASES_LUA` scans the lease hash with bounded cursor batching (`HSCAN` count 50). It detects entries whose individual lease keys expired, verifies that the hash still holds that exact version to avoid racing concurrent fresh updates, and removes only confirmed abandoned entries using `HDEL`.
+   - Preservation Guarantees: Cleanup never removes newer active leases. Because cleanup only removes entries and never inserts or updates them, it cannot enable a stale write after invalidation; missing hash entries cause `SET_ORIGIN_CACHE_LUA` to fail closed.
+6. Disposable MongoDB Verification and Endpoint Parsing: The test isolation helper `parseMongoEndpoint` accurately parses loopback host and port using URL parsing. Ambiguous forms, different local ports, multi host strings, and remote endpoints are rejected without leakage of credentials or connection strings in error messages.
+7. Dashboard Data Accuracy and Honest Reporting: In `/api/admin/stats`, fallbacks that masked real zero values (such as `activeClients || totalClients` and `recentLogins || activeSessions || 1`) have been completely removed. Real zero counts are preserved. Disabled and inactive clients are comprehensively excluded from operational counts. The 24 hour session count reflects actual session creations and is labeled transparently as "New sessions (24h)" with helper text "Created in last 24h". Missing IP addresses return null rather than fabricating loopback 127.0.0.1. Missing historical timestamps return null rather than fabricating current timestamps. In `getTrustedClientIp`, missing forwarding headers evaluate to "unknown" rather than loopback 127.0.0.1, preserving secure rate limiting and trusted proxy chain evaluation.
 
-All security test suites, unit test suites, multi process tests, and live browser tests pass cleanly with zero failures.
+All local security suites, unit suites, multi process tests, linters, and application builds passed cleanly. Real Redis server and browser test suites require external environment execution due to environment dependencies (missing system `redis-server` binary and Chromium `libglib-2.0.so.0` library).
 
 ---
 
@@ -50,10 +55,12 @@ None observed.
 None observed.
 
 ### Low
-None observed. All observations regarding cache version ordering, global tombstone sequencing, stale write rejection, honest dashboard metric labeling, and endpoint parsing have been fully resolved.
+Environment Dependencies Recorded:
+- System `redis-server` binary is absent in this container environment (`which redis-server` exited with code 1). Concurrency, outage, and lease cleanup suites executed against the isolated mock Redis HTTP server fixture. Verification against live managed Redis infrastructure is recommended before production deployment.
+- Live browser test suite (`npm run test:browser-e2e`) exited with error due to missing Linux library `libglib-2.0.so.0` required by the Chromium headless shell in this container.
 
 ### Nits
-None remaining. All observations regarding root package script forwarding and test fixture port candidate probing with non binding socket verification have been fully resolved.
+None remaining. All observations regarding root package script forwarding, test fixture port candidate probing, and bounded lease cleanup have been resolved.
 
 ---
 
@@ -89,6 +96,7 @@ In `backend/src/db/state.ts`, `backend/src/cache/origin-cache.ts`, and `backend/
 - Monotonic Invalidation Markers: Redis Lua invalidation scripts inspect existing markers and update them only if the incoming version is strictly greater. Out of order invalidations cannot reduce markers.
 - Persistent Markers in Redis: Lua invalidation scripts accept `ttl = 0`, allowing persistent markers. Global pattern deletion skips `swyra:origin:inv:*` keys.
 - Active Lease Verification and Containerized Global Purge in Redis: During `startOriginCheck`, an active lease is registered both as an individual key `swyra:origin:lease:${origin}` and inside a global leases container `swyra:origin:leases`. In per origin invalidation, both keys are removed. In global invalidation, `INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA` deletes `swyra:origin:leases` atomically in the exact same Lua invocation as updating `swyra:inv:global`. The atomic write script `SET_ORIGIN_CACHE_LUA` checks both the individual lease key and the container `swyra:origin:leases`. If either does not exist or does not match `checkVersion`, the write is rejected immediately. This guarantees that if global invalidation executes and pauses before its background scan loop deletes individual lease keys, and Redis selectively evicts `swyra:inv:global`, an old lookup cannot write a stale allow decision to Redis.
+- Bounded Lease Cleanup: `cleanupAbandonedOriginLeasesRedis` provides bounded `HSCAN` batch cleanup of orphaned hash entries when individual lease keys expire. A Lua check guarantees that cleanup only deletes hash fields whose stored version still matches the expired lease version, preventing removal of concurrent fresh leases. Because cleanup only removes entries, missing entries force `SET_ORIGIN_CACHE_LUA` to fail closed.
 - Atomic Snapshot Read in Redis: `getCachedOriginRedis` evaluates `GET_ORIGIN_CACHE_LUA` in a single atomic Redis script. All four keys (`originKey`, `verKey`, `invKey`, `globalInvKey`) are retrieved and compared atomically, preventing non atomic read interleaving where an old allow decision could be paired with a newer version.
 - Delayed Write Rejection Conditions:
   1. Active individual lease check: Active individual lease key in Redis matches the check version.
@@ -102,18 +110,18 @@ In `backend/src/db/state.ts`, `backend/src/cache/origin-cache.ts`, and `backend/
 - Multi Client Shared Origins: Origin invalidation preserves access for origins shared with other active clients.
 - Selective Deletion: Global invalidation updates only origin cache entries (`_id: /^ORIGIN#https?:\/\//`), preserving internal sequence counters and shared outage state.
 
-### 5. Consistency Guarantee and Architectural Trade-off Analysis
+### 5. Consistency Guarantee and Architectural Trade Off Analysis
 
 #### System Guarantee
 The system provides linearizable durable consistency in MongoDB and fail closed ephemeral acceleration in Redis:
 - MongoDB is the single authoritative source of truth. Monotonic sequence versions (`__ORIGIN_AUTHORITATIVE_VERSION__`) govern all checks and mutations. Durable tombstones (`ORIGIN_INV#${origin}` and `ORIGIN#__GLOBAL_TOMBSTONE__`) lack `cachedAt`, so MongoDB TTL indexes never delete them. Every MongoDB write uses atomic conditional filters and post write checks.
 - Redis operates as an ephemeral cache protected by atomic Lua validation. Every cache write requires an active lease registered in both an individual key and a container key `swyra:origin:leases`. Invalidation deletes active leases atomically. Under selective key eviction, marker loss, Redis outage, or restart, the absence of active leases forces writes to fail closed (rejected with return code 0). Reads evaluate an atomic Lua snapshot across value, version, origin marker, and global marker, preventing torn reads.
 
-#### Trade-off Analysis: Dual Layer versus Simpler Safe Architecture
+#### Trade Off Analysis: Dual Layer versus Simpler Safe Architecture
 - Design A (Current Dual Layer: Upstash Redis REST + MongoDB):
   - Latency: Warm cache hits over Upstash REST take 5 to 25 ms.
   - Availability: Offloads preflight traffic from MongoDB during spikes. Falls back to MongoDB when Redis is unavailable.
-  - Complexity: High. Requires distributed coordination across two distinct databases: monotonic sequence generation, atomic Lua snapshot reads, containerized active lease tracking, pre Redis write verification guards, multi round trip scan deletions, and shared outage markers.
+  - Complexity: High. Requires distributed coordination across two distinct databases: monotonic sequence generation, atomic Lua snapshot reads, containerized active lease tracking, bounded lease cleanup, pre Redis write verification guards, multi round trip scan deletions, and shared outage markers.
 - Design B (Simpler Safe Architecture: MongoDB Indexed Cache, Redis as Rate Limiter Only):
   - Latency: An indexed query against MongoDB `origin_cache` takes 1 to 5 ms when running in the same region. This is often faster than an HTTPS REST call to Upstash.
   - Availability: Eliminates external network hops to a second database service for CORS preflights.
@@ -129,7 +137,7 @@ In `backend/tests/fixtures/test-env-isolation.ts`:
 - Safe URI Validation: Loopback addresses are permitted while remote and cloud URIs throw security violations.
 - Credential Redaction: Error strings omit raw URIs, passwords, and tokens to prevent accidental log leakage.
 
-### 7. Dashboard Data Accuracy and Honest IP/Timestamp Reporting
+### 7. Dashboard Data Accuracy and Honest IP and Timestamp Reporting
 In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pages/admin/AdminDashboard.tsx`, and `frontend/pages/admin/AdminLogs.tsx`:
 - Real Zero Counts: In `/api/admin/stats`, fallbacks from `activeClients` to `totalClients` and from `recentLogins` to `activeSessions` or 1 have been eliminated. Real zero counts are strictly preserved.
 - Disabled Client Discrimination: Queries for active clients filter out records with `disabled: true`, `is_active: false`, `isActive: false`, or status in `["disabled", "inactive", "revoked", "suspended"]`.
@@ -139,12 +147,13 @@ In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pag
 
 ---
 
-## Verification Evidence
+## Verification Evidence and Command Status
 
-All test suites gate successfully with zero failures:
+Execution results across test suites and operational checks:
 
 1. CORS Cache Correctness Suite (`npm run test:cors-cache`):
-   - 40 of 40 tests passed, including:
+   - Status: PASSED (41 of 41 tests passed).
+   - Validated:
      - CORS-18: Old lookup -> invalidation -> fresh write -> delayed old write proving delayed writes cannot overwrite fresh decisions.
      - CORS-19: Old lookup -> global invalidation interleaved with cache write proving global tombstones block stale repopulation.
      - CORS-20: Two processes performing concurrent lookups and client changes with delayed stale writes.
@@ -168,36 +177,72 @@ All test suites gate successfully with zero failures:
      - CORS-38: Multi process race where worker pauses after final MongoDB check, parent invalidates and flushes Redis marker, and worker cannot write stale allow.
      - CORS-39: Outage recovery and Redis restart with lease loss strictly blocks delayed write.
      - CORS-40: Global invalidation pauses before lease scan; marker loss with intact lease strictly blocks stale write.
-     - Note on test infrastructure: Tests CORS-10, CORS-13, CORS-16, CORS-23, CORS-25 through CORS-33, CORS-35 through CORS-37, CORS-39, and CORS-40 use disposable mock Redis HTTP server fixtures simulating real Upstash REST calls, Lua evaluation, network outages, selective key loss, and recovery. Tests CORS-11, CORS-20, CORS-29, CORS-34, and CORS-38 use child worker processes to verify cross process race prevention against MongoDB Memory Server. Real system `redis-server` binary is not installed in this environment (`which redis-server` confirmed absent); tests execute against the isolated mock HTTP server to preserve hermetic test isolation.
+     - CORS-41: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes.
+   - Test Infrastructure Execution Details:
+     - Real MongoDB 8.2.6 ran via `mongodb-memory-server` spawning local `mongod` on loopback.
+     - Redis tests ran against disposable mock Redis HTTP server fixture simulating Upstash REST, Lua evaluation, outages, selective key loss, and recovery.
+     - System binary `redis-server` is not installed in this environment (`which redis-server` returned empty with exit code 1).
+     - To run CORS concurrency tests against an external real Redis server:
+       ```bash
+       redis-server --port 6379 &
+       TEST_REDIS_URL="redis://127.0.0.1:6379" npm run test:cors-cache
+       ```
 
-2. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
-   - 9 of 9 tests passed, validating real zero counts, disabled client exclusions, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, UI value formatting, and explicit UI source verification of the "New sessions (24h)" card label.
+2. Private App Isolation Security Suite (`npm run test:private-app-isolation`):
+   - Status: PASSED (10 of 10 tests passed).
+   - Validated: Cookie isolation, super admin sign in continuity, app admin platform API denial, TOTP leading zero support, alphanumeric recovery codes, tampered session rejection, and role based authorization.
 
-3. Membership Lifecycle Suite (`npm run test:membership-lifecycle`):
-   - 23 of 23 tests passed, including cross source conflict precedence, zero write dry run migration, background self heal isolation, memory server URI verification, email reuse detection, revocation preservation, endpoint port discrimination, and stable user ID self healing.
+3. Consumer OAuth MFA Continuation Suite (`npm run test:consumer-mfa`):
+   - Status: PASSED (9 of 9 tests passed).
+   - Validated: Private app TOTP continuation, recovery code flow, super admin MFA authorization, app admin platform denial, non MFA login, isolated multi tab states, forged challenge rejection, account switching continuity, and retry resilience.
 
-4. Unit Test Suite (`npm run test:unit`):
-   - All unit test suites passed cleanly across admin scoping, runtime resilience, gateway pipeline, dev isolation, and operator identity audits.
+4. Local Consumer Protocol E2E Suite (`npm run test:local-consumer-e2e`):
+   - Status: PASSED (11 of 11 flows passed).
+   - Validated: In process protocol flows against disposable MongoDB, including platform metrics, dual app admin isolation, private app membership enforcement, account switching, access token refresh, concurrent refresh deduplication, refresh replay revocation, process restart continuity, and production mode guard enforcement.
 
-5. Multi Process Coordination Suites:
-   - `npm run test:cross-process-refresh`: Passed, verifying multi process single winner refresh token rotation and session recovery.
-   - `npm run test:process-restart`: Passed, verifying process restart retaining database continuity.
+5. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
+   - Status: PASSED (9 of 9 tests passed).
+   - Validated: Real zero preservation, disabled client exclusion, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, UI value formatting, and explicit UI source verification of the "New sessions (24h)" card label.
 
-6. Live Browser Testing:
-   - `npm run test:browser-e2e`: Passed all 5 phases with zero failures across real headless Chromium, IdP frontend, Next.js, and Express consumers.
+6. Membership Lifecycle Suite (`npm run test:membership-lifecycle`):
+   - Status: PASSED (23 of 23 tests passed).
+   - Validated: Cross source conflict precedence, zero write dry run migration, background self heal isolation, memory server URI verification, email reuse detection, revocation preservation, endpoint port discrimination, and stable user ID self healing.
 
-7. Contract and Documentation Verification:
-   - `npm run security:integration-check`: Passed with 0 contract violations.
-   - `npm run security:docs-check`: Passed with 0 documentation inconsistencies.
+7. Multi Process Coordination Suites:
+   - `npm run test:cross-process-refresh`: PASSED (verified multi process single winner refresh token rotation and session recovery across separate consumer processes).
+   - `npm run test:process-restart`: PASSED (verified process lifecycle restart retaining database continuity).
 
-8. Application Builds:
-   - Backend esbuild bundle generated cleanly (`dist/index.cjs`).
-   - Frontend Vite production build completed with zero errors.
+8. Unit Test Suite (`npm run test:unit`):
+   - Status: PASSED (all 7 unit test subsuites passed cleanly across admin scoping, runtime resilience, gateway pipeline, dev isolation, config simplification, isolation policy, and audit identities).
+
+9. Contract Linters and Documentation Consistency:
+   - `npm run security:integration-check`: PASSED (0 contract violations).
+   - `npm run security:docs-check`: PASSED (0 documentation errors).
+
+10. Application Builds and Frontend Lint:
+    - Backend build (`npm --prefix backend run build`): PASSED (generated `dist/index.cjs` bundle in 225ms).
+    - Frontend build (`npm --prefix frontend run build`): PASSED (Vite client production build completed in 3.55s).
+    - Frontend lint (`npm --prefix frontend run lint`): PASSED (ESLint completed with zero errors).
+
+11. Live Browser E2E Suite (`npm run test:browser-e2e`):
+    - Status: FAILED (skipped execution in container due to missing system dependency).
+    - Root cause: Headless Chromium shell exited with `error while loading shared libraries: libglib-2.0.so.0: cannot open shared object file: No such file or directory`.
+    - Exact command to execute in an environment with desktop Linux libraries or CI container:
+      ```bash
+      npx playwright install-deps
+      npm run test:browser-e2e
+      ```
 
 ---
 
 ## Conclusion and Final Verdict
 
-**Verdict**: Ready for Independent Review.
+**Verdict**: Ready for Independent Review (Pending External Real Redis and Browser Verification)
 
-The implementation is verified and secure against distributed race conditions, TTL eviction gaps, and inter process delays. All cross source conflict requirements, legacy migration safeguards, stable identity self healing rules, authoritative version sequencing, durable invalidation isolation, and test environment isolation protections are met. External system Redis binary was not available in this local test environment; while the Upstash HTTP mock server thoroughly covers the protocol and failure modes, validation against live managed Redis infrastructure is recommended prior to production deployment. The branch remains isolated on `fix/cors-cache-security-perf` without merging to `main` or deploying.
+The implementation is verified and secure against distributed race conditions, TTL eviction gaps, inter process delays, and abandoned lease accumulation. All cross source conflict requirements, legacy migration safeguards, stable identity self healing rules, authoritative version sequencing, durable invalidation isolation, bounded lease cleanup, and test environment isolation protections are met.
+
+Unresolved risks to be verified in external environments prior to production merge:
+1. Concurrency verification against live managed Redis infrastructure (simulated via mock HTTP server in container due to missing `redis-server` binary).
+2. Live browser testing via Playwright (blocked in container by missing system `libglib-2.0.so.0` library).
+
+The branch remains isolated on `fix/cors-cache-security-perf` without merging to `main` or deploying.

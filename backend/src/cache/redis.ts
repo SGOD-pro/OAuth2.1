@@ -281,6 +281,56 @@ end
 return 1
 `;
 
+export const SET_ORIGIN_LEASE_LUA = `
+-- LUA_SET_ORIGIN_LEASE
+local leaseKey = KEYS[1]
+local leasesKey = KEYS[2]
+local origin = ARGV[1]
+local version = ARGV[2]
+local ttlSeconds = tonumber(ARGV[3]) or 60
+local containerTtl = tonumber(ARGV[4]) or 3600
+
+redis.call('set', leaseKey, version, 'EX', ttlSeconds)
+redis.call('hset', leasesKey, origin, version)
+local curTtl = redis.call('ttl', leasesKey)
+if not curTtl or curTtl < 0 or curTtl < ttlSeconds then
+    redis.call('expire', leasesKey, containerTtl)
+end
+return 1
+`;
+
+export const CLEANUP_ABANDONED_LEASES_LUA = `
+-- LUA_CLEANUP_ABANDONED_LEASES
+local leasesKey = KEYS[1]
+local cursor = ARGV[1] or "0"
+local count = tonumber(ARGV[2]) or 50
+
+local scanResult = redis.call('hscan', leasesKey, cursor, 'COUNT', count)
+local nextCursor = scanResult[1]
+local entries = scanResult[2]
+
+local cleaned = 0
+for i = 1, #entries, 2 do
+    local origin = entries[i]
+    local version = tonumber(entries[i + 1])
+    local leaseKey = "swyra:origin:lease:" .. origin
+    local activeVal = redis.call('get', leaseKey)
+    local activeVer = tonumber(activeVal)
+
+    -- If individual lease is expired/missing or belongs to another version:
+    if not activeVal or activeVer ~= version then
+        -- Verify that the leases container still holds this exact version (prevent race with concurrent update)
+        local curGlobalVer = tonumber(redis.call('hget', leasesKey, origin))
+        if curGlobalVer == version then
+            redis.call('hdel', leasesKey, origin)
+            cleaned = cleaned + 1
+        end
+    end
+end
+
+return { nextCursor, cleaned }
+`;
+
 /**
  * Origin allow-list cache. Failure behavior is "cache miss", never
  * "allowed" — a Redis error must fall through to the authoritative
@@ -321,14 +371,44 @@ export async function setOriginLeaseRedis(
   try {
     const leaseKey = `swyra:origin:lease:${origin}`;
     const leasesKey = "swyra:origin:leases";
-    await Promise.all([
-      redis.set(leaseKey, version, { ex: ttlSeconds }),
-      redis.hset(leasesKey, { [origin]: version }),
-    ]);
-    return true;
+    const res = await redis.eval(
+      SET_ORIGIN_LEASE_LUA,
+      [leaseKey, leasesKey],
+      [origin, String(version), String(ttlSeconds), "3600"],
+    );
+
+    // Opportunistic bounded cleanup: 1 out of 20 lease sets triggers a bounded batch cleanup in production
+    if (config.env === "production" && Math.random() < 0.05) {
+      cleanupAbandonedOriginLeasesRedis().catch(() => {});
+    }
+
+    return res === 1 || res === "1" || res === true;
   } catch (err) {
     console.error({ event: "redis_origin_lease_set_failed", origin, error: String(err) });
     return false;
+  }
+}
+
+export async function cleanupAbandonedOriginLeasesRedis(
+  cursor: string = "0",
+  batchSize: number = 50,
+): Promise<{ nextCursor: string; cleanedCount: number }> {
+  if (!redis) return { nextCursor: "0", cleanedCount: 0 };
+  try {
+    const leasesKey = "swyra:origin:leases";
+    const res = await redis.eval(
+      CLEANUP_ABANDONED_LEASES_LUA,
+      [leasesKey],
+      [cursor, String(batchSize)],
+    );
+    if (!res || !Array.isArray(res)) return { nextCursor: "0", cleanedCount: 0 };
+    return {
+      nextCursor: String(res[0] ?? "0"),
+      cleanedCount: Number(res[1] ?? 0),
+    };
+  } catch (err) {
+    console.error({ event: "redis_cleanup_abandoned_leases_failed", error: String(err) });
+    return { nextCursor: "0", cleanedCount: 0 };
   }
 }
 

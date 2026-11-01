@@ -51,7 +51,7 @@ const {
   setPreRedisWriteHookForTesting,
   setPostMongoCheckHookForTesting,
 } = await import("../../src/cache/origin-cache");
-const { setRedisClientForTesting, invalidateCachedOriginRedis, getCachedOriginRedis, setCachedOriginRedis, setOriginLeaseRedis, INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA } = await import("../../src/cache/redis");
+const { setRedisClientForTesting, invalidateCachedOriginRedis, getCachedOriginRedis, setCachedOriginRedis, setOriginLeaseRedis, cleanupAbandonedOriginLeasesRedis, INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA } = await import("../../src/cache/redis");
 const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCache: getOriginCacheMongo, getNextAuthoritativeVersion, invalidateOriginCache } = await import("../../src/db/state");
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
@@ -2554,6 +2554,72 @@ await runTest("CORS-40: Global invalidation pauses before lease scan; marker los
     setRedisClientForTesting(null);
     await mockRedis.close();
     await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 41: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes
+// =============================================================================
+await runTest("CORS-41: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const originAbandoned = "https://lease-cleanup-abandoned.example.com";
+  const originActive = "https://lease-cleanup-active.example.com";
+  const originOverwritten = "https://lease-cleanup-overwritten.example.com";
+  const originInvalidated = "https://lease-cleanup-invalidated.example.com";
+
+  try {
+    // 1. Setup abandoned lease: individual key expires (deleted), hash entry remains
+    await setOriginLeaseRedis(originAbandoned, 10);
+    mockRedis.delete(`swyra:origin:lease:${originAbandoned}`);
+    assert.equal(mockRedis.has(`swyra:origin:lease:${originAbandoned}`), false, "Individual lease expired");
+
+    // 2. Setup active lease: individual key remains active
+    await setOriginLeaseRedis(originActive, 20);
+    assert.equal(mockRedis.has(`swyra:origin:lease:${originActive}`), true, "Active lease present");
+
+    // 3. Setup concurrent overwrite race: Origin had v30, but fresh lookup registered v40
+    await setOriginLeaseRedis(originOverwritten, 40);
+
+    // 4. Run bounded cleanup
+    const cleanupResult = await cleanupAbandonedOriginLeasesRedis("0", 50);
+    assert.ok(cleanupResult.cleanedCount >= 1, "At least one abandoned lease was cleaned up");
+
+    // 5. Verify abandoned lease was purged from swyra:origin:leases
+    const leasesEntry = mockRedis.get("swyra:origin:leases");
+    assert.ok(leasesEntry instanceof Map, "Leases container exists");
+    assert.equal(leasesEntry.has(originAbandoned), false, "Abandoned lease removed from container");
+
+    // 6. Verify active lease was preserved
+    assert.equal(leasesEntry.has(originActive), true, "Active lease preserved in container");
+    assert.equal(Number(leasesEntry.get(originActive)), 20, "Active lease version preserved");
+
+    // 7. Verify overwritten lease was preserved
+    assert.equal(leasesEntry.has(originOverwritten), true, "Overwritten lease preserved");
+    assert.equal(Number(leasesEntry.get(originOverwritten)), 40, "Overwritten lease holds latest version");
+
+    // 8. Verify cleanup cannot enable stale write after invalidation:
+    await setOriginLeaseRedis(originInvalidated, 50);
+    await invalidateCachedOriginRedis([originInvalidated], 60);
+
+    // Run cleanup again
+    await cleanupAbandonedOriginLeasesRedis("0", 50);
+
+    // Delayed old lookup attempts to write at v50
+    const writeResult = await setCachedOriginRedis(originInvalidated, true, 50);
+    assert.equal(writeResult, false, "Delayed write rejected after invalidation regardless of cleanup");
+    assert.equal(await getCachedOriginRedis(originInvalidated), null, "Origin is not cached");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await invalidateOrigins([originAbandoned, originActive, originOverwritten, originInvalidated]);
   }
 });
 

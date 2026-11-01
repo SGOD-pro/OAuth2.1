@@ -174,6 +174,62 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                 return { result: resultVal };
               }
 
+              // 0a. Atomic Lua Set Lease Script
+              if (scriptStr.includes("LUA_SET_ORIGIN_LEASE")) {
+                const leaseKey = keys[0];
+                const leasesKey = keys[1] || "swyra:origin:leases";
+                const origin = scriptArgs[0];
+                const version = Number(scriptArgs[1]);
+                const ttlSeconds = Number(scriptArgs[2]) || 60;
+                const containerTtl = Number(scriptArgs[3]) || 3600;
+
+                store.set(leaseKey, {
+                  value: version,
+                  expiresAt: Date.now() + ttlSeconds * 1000,
+                });
+
+                let entry = store.get(leasesKey);
+                if (!entry || isExpired(entry) || !(entry.value instanceof Map)) {
+                  entry = { value: new Map<string, any>() };
+                  store.set(leasesKey, entry);
+                }
+                (entry.value as Map<string, any>).set(origin, version);
+                entry.expiresAt = Date.now() + containerTtl * 1000;
+                return { result: 1 };
+              }
+
+              // 0b. Atomic Lua Cleanup Abandoned Leases Script
+              if (scriptStr.includes("LUA_CLEANUP_ABANDONED_LEASES")) {
+                const leasesKey = keys[0] || "swyra:origin:leases";
+                const count = Number(scriptArgs[1]) || 50;
+
+                const entry = store.get(leasesKey);
+                if (!entry || isExpired(entry) || !(entry.value instanceof Map)) {
+                  return { result: ["0", 0] };
+                }
+
+                const map = entry.value as Map<string, any>;
+                let cleaned = 0;
+                let checked = 0;
+                for (const [origin, version] of Array.from(map.entries())) {
+                  if (checked >= count) break;
+                  checked++;
+
+                  const leaseKey = `swyra:origin:lease:${origin}`;
+                  const leaseEntry = store.get(leaseKey);
+                  const active = leaseEntry && !isExpired(leaseEntry);
+                  const activeVer = active ? Number(leaseEntry.value) : undefined;
+
+                  if (!active || activeVer !== Number(version)) {
+                    if (map.get(origin) === version) {
+                      map.delete(origin);
+                      cleaned++;
+                    }
+                  }
+                }
+                return { result: ["0", cleaned] };
+              }
+
               // 1. Atomic Lua Invalidation Script (Per-Origin)
               if (scriptStr.includes("LUA_INVALIDATE_ORIGIN_CACHE") || scriptStr.includes("swyra:origin:inv:\" .. origin")) {
                 const newVersion = Number(scriptArgs[0]) || 0;
