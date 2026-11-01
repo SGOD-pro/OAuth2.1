@@ -12,15 +12,32 @@ console.log("================================================================\n"
 
 import net from "node:net";
 
+const usedPorts = new Set<number>();
 async function getAvailablePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, "127.0.0.1", () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate = 32000 + Math.floor(Math.random() * 25000);
+    if (usedPorts.has(candidate)) continue;
+    const isFree = await new Promise<boolean>((resolve) => {
+      const client = net.createConnection({ port: candidate, host: "127.0.0.1" }, () => {
+        client.destroy();
+        resolve(false);
+      });
+      client.on("error", () => {
+        resolve(true);
+      });
+      client.setTimeout(150, () => {
+        client.destroy();
+        resolve(true);
+      });
     });
-    srv.on("error", reject);
-  });
+    if (isFree) {
+      usedPorts.add(candidate);
+      return candidate;
+    }
+  }
+  const fallback = 35000 + Math.floor(Math.random() * 10000);
+  usedPorts.add(fallback);
+  return fallback;
 }
 
 const PORT = await getAvailablePort();
@@ -75,7 +92,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(__dirname, "../../");
 
 // Helper to spawn IdP process
-function spawnIdpProcess(): ChildProcess {
+function spawnIdpProcess(targetPort: number = PORT): ChildProcess {
+  const targetUrl = `http://127.0.0.1:${targetPort}`;
   const child = spawn(
     process.execPath,
     [path.join(backendDir, "node_modules/tsx/dist/cli.mjs"), "src/node-server.ts"],
@@ -86,10 +104,10 @@ function spawnIdpProcess(): ChildProcess {
         ...process.env,
         NODE_ENV: "test",
         HOST: "127.0.0.1",
-        PORT: String(PORT),
+        PORT: String(targetPort),
         MONGO_URI: mongoUri,
         BETTER_AUTH_SECRET: BETTER_AUTH_SECRET,
-        BETTER_AUTH_URL: IDP_URL,
+        BETTER_AUTH_URL: targetUrl,
         FRONTEND_URL: "http://127.0.0.1:5174",
         AUTH_PUBLIC_SIGNUP_ENABLED: "true",
         GOOGLE_CLIENT_ID: "test-google-id",
@@ -101,20 +119,23 @@ function spawnIdpProcess(): ChildProcess {
     }
   );
 
+  child.stdout?.on("data", (d) => process.stdout.write(`[IdP] ${d}`));
+  child.stderr?.on("data", (d) => process.stderr.write(`[IdP ERR] ${d}`));
+
   activeIdpChild = child;
   return child;
 }
 
-async function waitForIdpReady(maxWaitMs = 15000): Promise<void> {
+async function waitForIdpReady(targetUrl: string = IDP_URL, maxWaitMs = 15000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     try {
-      const res = await fetch(`${IDP_URL}/health`);
+      const res = await fetch(`${targetUrl}/health`);
       if (res.ok) return;
     } catch {}
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Error(`IdP process on ${IDP_URL} failed to become ready within ${maxWaitMs}ms`);
+  throw new Error(`IdP process on ${targetUrl} failed to become ready within ${maxWaitMs}ms`);
 }
 
 async function terminateProcess(child: ChildProcess): Promise<void> {
@@ -268,16 +289,18 @@ try {
   assert.ok(portClosed, "IdP port must be closed after termination");
 
   // Step 3: START a Fresh IdP Process against the same MongoDB
-  console.log("\nPhase 3: Restarting fresh IdP process against retained MongoDB...");
-  idpProcess = spawnIdpProcess();
-  await waitForIdpReady();
-  console.log("Restarted IdP process is healthy and listening on port " + PORT);
+  const RESTART_PORT = await getAvailablePort();
+  const restartedIdpUrl = `http://127.0.0.1:${RESTART_PORT}`;
+  console.log(`\nPhase 3: Restarting fresh IdP process against retained MongoDB on port ${RESTART_PORT}...`);
+  idpProcess = spawnIdpProcess(RESTART_PORT);
+  await waitForIdpReady(restartedIdpUrl);
+  console.log("Restarted IdP process is healthy and listening on port " + RESTART_PORT);
 
   // Step 4: Verify post-restart invariants
   console.log("\nPhase 4: Verifying session, JWKS, and refresh continuity across restart...");
 
   // 1. Existing access token verifies against restarted IdP's JWKS
-  const restartedJwksRes = await fetch(`${IDP_URL}/.well-known/jwks.json`);
+  const restartedJwksRes = await fetch(`${restartedIdpUrl}/.well-known/jwks.json`);
   const restartedJwksData = await restartedJwksRes.json();
   const restartedJwks = jose.createLocalJWKSet(restartedJwksData);
   const verify2 = await jose.jwtVerify(preAccessToken, restartedJwks);
@@ -285,7 +308,7 @@ try {
   console.log("[PASS] Pre-restart RS256 JWT verifies against restarted IdP JWKS");
 
   // 2. Pre-restart refresh token successfully rotates on restarted IdP
-  const refreshRes = await fetch(`${IDP_URL}/api/auth/oauth2/token`, {
+  const refreshRes = await fetch(`${restartedIdpUrl}/api/auth/oauth2/token`, {
     method: "POST",
     headers: {
       Authorization: `Basic ${basicAuth}`,
@@ -308,7 +331,7 @@ try {
   console.log("[PASS] Pre-restart refresh token rotated into authentic RS256 JWT on restarted IdP");
 
   // 3. User info request with newly minted token
-  const userinfoRes = await fetch(`${IDP_URL}/api/auth/oauth2/userinfo`, {
+  const userinfoRes = await fetch(`${restartedIdpUrl}/api/auth/oauth2/userinfo`, {
     headers: {
       Authorization: `Bearer ${postTokens.access_token}`,
     },

@@ -17,15 +17,32 @@ console.log("  SWYRA AUTH -- CROSS-PROCESS REFRESH RACE & RECOVERY TEST");
 console.log("  Testing Multi-Process Single-Winner Semantics & Reauthentication Recovery");
 console.log("================================================================\n");
 
+const usedPorts = new Set<number>();
 async function getAvailablePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, "127.0.0.1", () => {
-      const port = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(port));
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate = 32000 + Math.floor(Math.random() * 25000);
+    if (usedPorts.has(candidate)) continue;
+    const isFree = await new Promise<boolean>((resolve) => {
+      const client = net.createConnection({ port: candidate, host: "127.0.0.1" }, () => {
+        client.destroy();
+        resolve(false);
+      });
+      client.on("error", () => {
+        resolve(true);
+      });
+      client.setTimeout(150, () => {
+        client.destroy();
+        resolve(true);
+      });
     });
-    srv.on("error", reject);
-  });
+    if (isFree) {
+      usedPorts.add(candidate);
+      return candidate;
+    }
+  }
+  const fallback = 35000 + Math.floor(Math.random() * 10000);
+  usedPorts.add(fallback);
+  return fallback;
 }
 
 const IDP_PORT = await getAvailablePort();
@@ -37,7 +54,9 @@ const GATEWAY_SECRET = "g".repeat(32);
 const BETTER_AUTH_SECRET = "a".repeat(32);
 
 const spawnedChildren: ChildProcess[] = [];
-function trackChild(child: ChildProcess): ChildProcess {
+function trackChild(name: string, child: ChildProcess): ChildProcess {
+  child.stdout?.on("data", (d) => process.stdout.write(`[${name}] ${d}`));
+  child.stderr?.on("data", (d) => process.stderr.write(`[${name} ERR] ${d}`));
   spawnedChildren.push(child);
   return child;
 }
@@ -81,7 +100,7 @@ await db.collection("oauthClient").insertOne({
 
 // 3. Helper to spawn IdP Process
 function spawnIdpProcess(): ChildProcess {
-  return trackChild(spawn(
+  return trackChild("IdP", spawn(
     process.execPath,
     [path.join(backendDir, "node_modules/tsx/dist/cli.mjs"), "src/node-server.ts"],
     {
@@ -109,7 +128,7 @@ function spawnIdpProcess(): ChildProcess {
 
 // 4. Helper to spawn Express Consumer Process
 function spawnConsumerProcess(port: number, callbackUrl: string): ChildProcess {
-  return trackChild(spawn(
+  return trackChild(`Consumer-${port}`, spawn(
     process.execPath,
     [path.join(expressDir, "dist/index.js")],
     {

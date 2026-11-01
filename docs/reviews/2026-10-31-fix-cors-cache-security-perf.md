@@ -57,8 +57,7 @@ None observed.
 None observed. All observations regarding cache version ordering, global tombstone sequencing, stale write rejection, honest dashboard metric labeling, and endpoint parsing have been fully resolved.
 
 ### Nits
-1. Root package script forwarding: Adding `"test:dashboard-stats": "npm --prefix backend run test:dashboard-stats"` to root `package.json` provides parity with `test:cors-cache` and `test:membership-lifecycle`.
-2. Ephemeral port allocation in test fixtures: `getAvailablePort` in `backend/tests/e2e/cross-process-refresh.test.ts` and `backend/tests/e2e/idp-process-restart.test.ts` closes a temporary listening socket, leaving the port in TIME WAIT on Linux while the child server binds wildcard 0.0.0.0. Adopting the non binding connection probe pattern from `browser-e2e.test.ts` or passing `HOST: "127.0.0.1"` ensures reliable process startup across all environments.
+None remaining. All observations regarding root package script forwarding and test fixture port candidate probing with non binding socket verification have been fully resolved.
 
 ---
 
