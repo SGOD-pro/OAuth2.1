@@ -139,6 +139,7 @@ export async function checkRateLimit(
 const ORIGIN_CACHE_TTL_SECONDS = 300;
 
 const SET_ORIGIN_CACHE_LUA = `
+-- LUA_SET_ORIGIN_CACHE
 local originKey = KEYS[1]
 local invKey = KEYS[2]
 local globalInvKey = KEYS[3]
@@ -173,13 +174,43 @@ return 1
 
 export const INVALIDATE_ORIGIN_CACHE_LUA = `
 -- LUA_INVALIDATE_ORIGIN_CACHE
-local invalidationVersion = ARGV[1]
+local invalidationVersion = tonumber(ARGV[1]) or 0
 local ttl = tonumber(ARGV[2]) or 60
 for i = 1, #KEYS do
     local origin = KEYS[i]
-    redis.call("set", "swyra:origin:inv:" .. origin, invalidationVersion, "EX", ttl)
+    local invKey = "swyra:origin:inv:" .. origin
+    local currentInv = redis.call("get", invKey)
+    local curNum = tonumber(currentInv)
+
+    if not curNum or invalidationVersion > curNum then
+        redis.call("set", invKey, invalidationVersion, "EX", ttl)
+    elseif invalidationVersion == curNum then
+        local currentTtl = redis.call("ttl", invKey)
+        if currentTtl and currentTtl < ttl then
+            redis.call("expire", invKey, ttl)
+        end
+    end
     redis.call("del", "swyra:origin:" .. origin)
     redis.call("del", "swyra:origin:ver:" .. origin)
+end
+return 1
+`;
+
+export const INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA = `
+-- LUA_INVALIDATE_GLOBAL_ORIGIN_CACHE
+local globalInvKey = KEYS[1]
+local invalidationVersion = tonumber(ARGV[1]) or 0
+local ttl = tonumber(ARGV[2]) or 60
+
+local currentGlobal = redis.call("get", globalInvKey)
+local curNum = tonumber(currentGlobal)
+if not curNum or invalidationVersion > curNum then
+    redis.call("set", globalInvKey, invalidationVersion, "EX", ttl)
+elseif invalidationVersion == curNum then
+    local currentTtl = redis.call("ttl", globalInvKey)
+    if currentTtl and currentTtl < ttl then
+        redis.call("expire", globalInvKey, ttl)
+    end
 end
 return 1
 `;
@@ -256,10 +287,14 @@ export async function invalidateCachedOriginRedis(
     return;
   }
 
-  // Global invalidation: write global tombstone marker first.
+  // Global invalidation: write global tombstone marker first monotonically.
   // The marker key uses a DIFFERENT prefix (swyra:inv:global) so it cannot be
   // matched and deleted by the swyra:origin:* scan below.
-  await redis.set("swyra:inv:global", marker, { ex: 60 });
+  await redis.eval(
+    INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA,
+    ["swyra:inv:global"],
+    [String(marker), "60"],
+  );
 
   let cursor: string | number = 0;
   do {

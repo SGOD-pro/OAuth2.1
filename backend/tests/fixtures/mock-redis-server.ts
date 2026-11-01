@@ -88,17 +88,50 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               const keys = rest.slice(0, numKeys);
               const scriptArgs = rest.slice(numKeys);
 
-              // 1. Atomic Lua Invalidation Script
+              // 1. Atomic Lua Invalidation Script (Per-Origin)
               if (scriptStr.includes("LUA_INVALIDATE_ORIGIN_CACHE") || scriptStr.includes("swyra:origin:inv:\" .. origin")) {
-                const now = scriptArgs[0];
+                const newVersion = Number(scriptArgs[0]) || 0;
                 const ttlSeconds = Number(scriptArgs[1]) || 60;
                 for (const origin of keys) {
-                  store.set(`swyra:origin:inv:${origin}`, {
-                    value: now,
-                    expiresAt: Date.now() + ttlSeconds * 1000,
-                  });
+                  const invKey = `swyra:origin:inv:${origin}`;
+                  const currentInv = store.get(invKey);
+                  const curNum = currentInv && !isExpired(currentInv) ? Number(currentInv.value) : 0;
+                  if (newVersion > curNum || !currentInv || isExpired(currentInv)) {
+                    store.set(invKey, {
+                      value: newVersion,
+                      expiresAt: Date.now() + ttlSeconds * 1000,
+                    });
+                  } else if (newVersion === curNum && currentInv) {
+                    const currentExpires = currentInv.expiresAt || 0;
+                    const newExpires = Date.now() + ttlSeconds * 1000;
+                    if (newExpires > currentExpires) {
+                      currentInv.expiresAt = newExpires;
+                    }
+                  }
                   store.delete(`swyra:origin:${origin}`);
                   store.delete(`swyra:origin:ver:${origin}`);
+                }
+                return { result: 1 };
+              }
+
+              // 1b. Atomic Lua Global Invalidation Script
+              if (scriptStr.includes("LUA_INVALIDATE_GLOBAL_ORIGIN_CACHE")) {
+                const globalKey = keys[0] || "swyra:inv:global";
+                const newVersion = Number(scriptArgs[0]) || 0;
+                const ttlSeconds = Number(scriptArgs[1]) || 60;
+                const currentGlobal = store.get(globalKey);
+                const curNum = currentGlobal && !isExpired(currentGlobal) ? Number(currentGlobal.value) : 0;
+                if (newVersion > curNum || !currentGlobal || isExpired(currentGlobal)) {
+                  store.set(globalKey, {
+                    value: newVersion,
+                    expiresAt: Date.now() + ttlSeconds * 1000,
+                  });
+                } else if (newVersion === curNum && currentGlobal) {
+                  const currentExpires = currentGlobal.expiresAt || 0;
+                  const newExpires = Date.now() + ttlSeconds * 1000;
+                  if (newExpires > currentExpires) {
+                    currentGlobal.expiresAt = newExpires;
+                  }
                 }
                 return { result: 1 };
               }

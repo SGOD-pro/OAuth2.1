@@ -49,8 +49,8 @@ const {
   getInvalidationMapSizeForTesting,
   clearInvalidationMapForTesting,
 } = await import("../../src/cache/origin-cache");
-const { setRedisClientForTesting } = await import("../../src/cache/redis");
-const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCache: getOriginCacheMongo } = await import("../../src/db/state");
+const { setRedisClientForTesting, invalidateCachedOriginRedis } = await import("../../src/cache/redis");
+const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCache: getOriginCacheMongo, getNextAuthoritativeVersion, invalidateOriginCache } = await import("../../src/db/state");
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
 
@@ -1145,6 +1145,272 @@ await runTest("CORS-20: Two processes performing lookups and client changes conc
     } catch {}
     setRedisClientForTesting(null);
     await mockRedis.close();
+  }
+});
+
+// =============================================================================
+// TEST 21: Out of order per origin invalidations: delayed older v1 cannot reduce marker after v2
+// Deterministic test proving:
+// 1. A lookup starts between invalidation versions v1 and v2.
+// 2. Invalidation v2 completes before delayed invalidation v1.
+// 3. The older v1 operation cannot reduce the marker in Redis or MongoDB.
+// 4. The delayed lookup cannot restore stale data.
+// =============================================================================
+await runTest("CORS-21: Out of order per origin invalidations: delayed older v1 cannot reduce marker after v2", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://out-of-order-origin.example.com";
+
+  try {
+    // 1. Invalidation v1 sequence is acquired (e.g. from an in-flight operation that gets delayed)
+    const v1 = await getNextAuthoritativeVersion();
+    assert.ok(v1 > 0);
+
+    // 2. An in flight lookup begins between v1 and v2, getting v_lookup
+    const lookupCheck = await startOriginCheck(origin);
+    const vLookup = lookupCheck.startVersion;
+    assert.ok(vLookup > v1, "Lookup sequence must be strictly greater than v1");
+
+    // 3. Invalidation v2 starts and completes first
+    const v2 = await getNextAuthoritativeVersion();
+    assert.ok(v2 > vLookup, "v2 sequence must be strictly greater than lookup sequence");
+
+    // Execute invalidation v2 across Redis and MongoDB
+    await invalidateCachedOriginRedis([origin], v2);
+    await invalidateOriginCache([origin], v2);
+
+    // Verify initial marker state at v2
+    const redisInvV2 = Number(mockRedis.get(`swyra:origin:inv:${origin}`));
+    assert.equal(redisInvV2, v2, "Redis invalidation marker must initially be set to v2");
+
+    const mongoDocV2 = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.equal(mongoDocV2?.invalidatedVersion, v2, "MongoDB invalidation version must be v2");
+
+    // 4. Delayed invalidation v1 arrives late and attempts to run
+    await invalidateCachedOriginRedis([origin], v1);
+    await invalidateOriginCache([origin], v1);
+
+    // 5. Verification: Older v1 operation CANNOT reduce the marker in Redis or MongoDB
+    const redisInvAfterV1 = Number(mockRedis.get(`swyra:origin:inv:${origin}`));
+    assert.equal(redisInvAfterV1, v2, "Older invalidation v1 must NOT reduce Redis marker; must remain v2");
+
+    const mongoDocAfterV1 = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.equal(mongoDocAfterV1?.invalidatedVersion, v2, "Older invalidation v1 must NOT reduce MongoDB marker; must remain v2");
+
+    // 6. Verification: Delayed in flight lookup (vLookup < v2) attempts to write stale data
+    await setCachedOrigin(origin, true, lookupCheck);
+
+    // Write must be rejected across both layers
+    assert.equal(await getCachedOrigin(origin), null, "Delayed lookup must be rejected as cache miss, never allowed");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Stale origin key must not exist in Redis");
+
+    const finalMongoDoc = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.notEqual(finalMongoDoc?.allowed, true, "Delayed write must not set allowed: true in MongoDB");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 22: Out of order global invalidations: delayed older v1 cannot reduce global marker
+// Deterministic test proving:
+// 1. A lookup starts between global invalidation versions v1 and v2.
+// 2. Global invalidation v2 completes before delayed global invalidation v1.
+// 3. The older v1 operation cannot reduce the global marker in Redis or MongoDB.
+// 4. The delayed lookup cannot restore stale data.
+// =============================================================================
+await runTest("CORS-22: Out of order global invalidations: delayed older v1 cannot reduce global marker", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://out-of-order-global.example.com";
+
+  try {
+    // 1. Global invalidation v1 sequence is acquired
+    const v1 = await getNextAuthoritativeVersion();
+    assert.ok(v1 > 0);
+
+    // 2. An in flight lookup begins between v1 and v2
+    const lookupCheck = await startOriginCheck(origin);
+    const vLookup = lookupCheck.startVersion;
+    assert.ok(vLookup > v1, "Lookup sequence must be strictly greater than v1");
+
+    // 3. Global invalidation v2 starts and completes first
+    const v2 = await getNextAuthoritativeVersion();
+    assert.ok(v2 > vLookup, "v2 sequence must be strictly greater than lookup sequence");
+
+    await invalidateCachedOriginRedis(undefined, v2);
+    await invalidateOriginCache(undefined, v2);
+
+    const redisGlobalV2 = Number(mockRedis.get("swyra:inv:global"));
+    assert.equal(redisGlobalV2, v2, "Redis global marker must initially be set to v2");
+
+    const mongoGlobalV2 = await db.collection("origin_cache").findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
+    assert.equal(mongoGlobalV2?.invalidatedVersion, v2, "MongoDB global tombstone must be v2");
+
+    // 4. Delayed global invalidation v1 arrives late
+    await invalidateCachedOriginRedis(undefined, v1);
+    await invalidateOriginCache(undefined, v1);
+
+    // 5. Verification: Older v1 operation CANNOT reduce the global marker
+    const redisGlobalAfterV1 = Number(mockRedis.get("swyra:inv:global"));
+    assert.equal(redisGlobalAfterV1, v2, "Older global invalidation v1 must NOT reduce Redis marker; must remain v2");
+
+    const mongoGlobalAfterV1 = await db.collection("origin_cache").findOne({ _id: "ORIGIN#__GLOBAL_TOMBSTONE__" });
+    assert.equal(mongoGlobalAfterV1?.invalidatedVersion, v2, "Older global invalidation v1 must NOT reduce MongoDB tombstone; must remain v2");
+
+    // 6. Verification: Delayed in flight lookup attempts to write stale data
+    await setCachedOrigin(origin, true, lookupCheck);
+
+    assert.equal(await getCachedOrigin(origin), null, "Delayed lookup must be rejected by global marker");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Stale origin key must not exist in Redis");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await clearOriginCache();
+  }
+});
+
+// =============================================================================
+// TEST 23: Marker expiry, Redis outage, recovery, and valid fresh lookup
+// Verifies:
+// 1. Invalidation sets monotonic markers.
+// 2. Redis outage falls back safely to MongoDB.
+// 3. Redis recovery purges stale keys and resets outage state.
+// 4. Marker expiry or newer sequence allows a valid fresh lookup to populate cache.
+// =============================================================================
+await runTest("CORS-23: Marker expiry, Redis outage, recovery, and valid fresh lookup", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://marker-expiry-fresh.example.com";
+
+  try {
+    // 1. Invalidation runs for origin
+    await invalidateOrigins([origin]);
+    assert.equal(await getCachedOrigin(origin), null, "Origin is a cache miss after invalidation");
+
+    // 2. Outage occurs
+    mockRedis.simulateOutage();
+
+    // Outage read safely falls through to MongoDB (cache miss)
+    const outageRead = await getCachedOrigin(origin);
+    assert.equal(outageRead, null, "Read during Redis outage falls back safely to MongoDB");
+
+    // Write during outage succeeds in MongoDB
+    const checkDuringOutage = await startOriginCheck(origin);
+    await setCachedOrigin(origin, true, checkDuringOutage);
+    assert.equal(await getCachedOrigin(origin), true, "Write during outage succeeds in MongoDB cache");
+
+    // 3. Redis recovery
+    mockRedis.simulateRecovery();
+
+    // Recovery lookup triggers recovery flush
+    await getCachedOrigin(origin);
+    assert.equal(getRedisOutageDetected(), false, "Redis outage flag cleared after recovery");
+
+    // 4. Marker expiry simulation: clear Redis invalidation marker
+    mockRedis.set(`swyra:origin:inv:${origin}`, null, 0);
+
+    // 5. Valid fresh lookup with sequence strictly greater than invalidation
+    const freshCheck = await startOriginCheck(origin);
+    await setCachedOrigin(origin, true, freshCheck);
+
+    assert.equal(await getCachedOrigin(origin), true, "Fresh lookup succeeds after recovery and marker expiry");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), true, "Redis is successfully repopulated by fresh lookup");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await markSharedRedisOutage(db, false);
+    setRedisOutageDetectedForTesting(false);
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 24: Shared origin used by another active client remains allowed
+// Verifies that multi client shared origins remain accessible when one client
+// is updated or disabled out of order.
+// =============================================================================
+await runTest("CORS-24: Shared origin used by another active client remains allowed across mutations", async () => {
+  const sharedOrigin = "https://shared-resilient.example.com";
+  const clientAId = "client_a_" + crypto.randomBytes(4).toString("hex");
+  const clientBId = "client_b_" + crypto.randomBytes(4).toString("hex");
+
+  // Create Client A and Client B with shared origin
+  await db.collection("oauthClient").insertMany([
+    {
+      clientId: clientAId,
+      name: "Client A",
+      allowedOrigins: [sharedOrigin],
+      redirectUris: [`${sharedOrigin}/callback-a`],
+      disabled: false,
+      createdAt: new Date(),
+    },
+    {
+      clientId: clientBId,
+      name: "Client B",
+      allowedOrigins: [sharedOrigin],
+      redirectUris: [`${sharedOrigin}/callback-b`],
+      disabled: false,
+      createdAt: new Date(),
+    },
+  ]);
+
+  try {
+    // Both active: origin is allowed
+    assert.equal(await isOriginAllowed(sharedOrigin), true, "Shared origin allowed with both clients active");
+
+    const check1 = await startOriginCheck(sharedOrigin);
+    await setCachedOrigin(sharedOrigin, true, check1);
+    assert.equal(await getCachedOrigin(sharedOrigin), true, "Shared origin cached as allowed");
+
+    // Disable Client A
+    await db.collection("oauthClient").updateOne({ clientId: clientAId }, { $set: { disabled: true } });
+    await invalidateOrigins([sharedOrigin]);
+
+    // Origin MUST STILL BE ALLOWED because Client B is active
+    assert.equal(await isOriginAllowed(sharedOrigin), true, "Shared origin remains allowed because Client B is active");
+
+    // Fresh write caches allowed: true
+    const check2 = await startOriginCheck(sharedOrigin);
+    await setCachedOrigin(sharedOrigin, true, check2);
+    assert.equal(await getCachedOrigin(sharedOrigin), true, "Shared origin re-cached as allowed");
+
+    // Disable Client B
+    await db.collection("oauthClient").updateOne({ clientId: clientBId }, { $set: { disabled: true } });
+    await invalidateOrigins([sharedOrigin]);
+
+    // Now origin must be disallowed
+    assert.equal(await isOriginAllowed(sharedOrigin), false, "Shared origin disallowed when all clients are disabled");
+
+    const check3 = await startOriginCheck(sharedOrigin);
+    await setCachedOrigin(sharedOrigin, false, check3);
+    assert.equal(await getCachedOrigin(sharedOrigin), false, "Negative cache entry preserved");
+  } finally {
+    await db.collection("oauthClient").deleteMany({ clientId: { $in: [clientAId, clientBId] } });
+    await invalidateOrigins([sharedOrigin]);
   }
 });
 

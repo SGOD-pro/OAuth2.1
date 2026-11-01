@@ -251,12 +251,21 @@ export async function invalidateOrigins(
     if (normalizedOrigins.length === 0) return;
 
     for (const norm of normalizedOrigins) {
-      lastInvalidatedVersion.set(norm, invalidationVersion);
+      const prev = lastInvalidatedVersion.get(norm) || 0;
+      if (invalidationVersion > prev) {
+        lastInvalidatedVersion.set(norm, invalidationVersion);
+      }
     }
     pruneInvalidatedVersion();
   } else {
-    globalLastInvalidatedVersion = invalidationVersion;
-    lastInvalidatedVersion.clear();
+    if (invalidationVersion > globalLastInvalidatedVersion) {
+      globalLastInvalidatedVersion = invalidationVersion;
+    }
+    for (const [norm, ver] of lastInvalidatedVersion.entries()) {
+      if (ver <= invalidationVersion) {
+        lastInvalidatedVersion.delete(norm);
+      }
+    }
   }
 
   let redisFailed = false;

@@ -15,16 +15,26 @@ This review validates the complete resolution of all findings identified in the 
 3. Stable Identity in App Admin Self Healing: The `selfHealAppAdmins` sweep queries active records and verifies immutable `userId` existence, looking up accounts strictly by `userId`. Deleted users, mismatched identifiers, and legacy email only records are quarantined and skipped, preventing a newly created account with a recycled email from inheriting administrative rights. Explicit revocations in `user_app_registrations` are honored and never reactivated.
 4. Single Authoritative Monotonic Version Sequencing and Cache Ordering:
    Invalidation ordering does not rely on comparing wall clock timestamps across disparate process clocks or comparing values between independent Redis and MongoDB counters. Origin checks and invalidations acquire shared monotonic integer sequence numbers exclusively from MongoDB (`__ORIGIN_AUTHORITATIVE_VERSION__`).
+   In Redis (`backend/src/cache/redis.ts`):
+   - Monotonic Invalidation Markers: Invalidation scripts inspect existing markers and only update them if the incoming version is strictly greater (`invalidationVersion > curNum`). An older delayed invalidation cannot overwrite or reduce a newer marker, preventing out of order invalidation races.
+   - Per origin invalidation (`INVALIDATE_ORIGIN_CACHE_LUA`) atomically verifies `swyra:origin:inv:${origin}`, setting it only if monotonic. If equal, it extends TTL if shorter.
+   - Global invalidation (`INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA`) atomically updates `swyra:inv:global` monotonically.
+   - Cache decision keys (`swyra:origin:${origin}`) and version keys (`swyra:origin:ver:${origin}`) are purged on every invalidation attempt.
+   - `SET_ORIGIN_CACHE_LUA` tracks `swyra:origin:ver:${origin}` and rejects any write where `currentVersion >= checkVersion`, `invVersion >= checkVersion`, or `globalInvVersion >= checkVersion`.
+   - Delayed write rejection conditions:
+     1. Version key check: Existing cached version is greater than or equal to the lookup check version.
+     2. Specific marker check: Invalidation marker version is greater than or equal to the lookup check version.
+     3. Global marker check: Global invalidation marker version is greater than or equal to the lookup check version.
+     4. MongoDB atomic filter: Cache document updates require both `cachedVersion < effectiveVersion` and `invalidatedVersion < effectiveVersion`.
    In MongoDB (`backend/src/db/state.ts`):
    - Cache documents store `cachedVersion`.
    - In `putOriginCache`, update filters require both `cachedVersion < version` and `invalidatedVersion < version`.
    - `invalidatedVersion` is preserved on the document rather than deleted, so delayed older lookups cannot overwrite newer decisions after invalidation.
    - Global invalidation updates `ORIGIN#__GLOBAL_TOMBSTONE__` with `$max` before deleting origin entries.
    - `getOriginCache` checks both specific entry invalidation and the global tombstone in a single query, rejecting stale entries.
-   In Redis (`backend/src/cache/redis.ts`):
-   - `SET_ORIGIN_CACHE_LUA` tracks `swyra:origin:ver:${origin}` and rejects any write where `currentVersion >= checkVersion`, `invVersion >= checkVersion`, or `globalInvVersion >= checkVersion`.
-   - `INVALIDATE_ORIGIN_CACHE_LUA` purges both the origin key and version key while recording invalidation state.
-   - `getCachedOriginRedis` validates entries against global invalidation markers.
+   In Memory Origin Cache (`backend/src/cache/origin-cache.ts`):
+   - Process local maps update invalidation markers monotonically (`invalidationVersion > prev`).
+   - Global invalidation prunes local entries where cached versions are less than or equal to the invalidation version.
 5. Disposable MongoDB Verification and Endpoint Parsing: The test isolation helper `parseMongoEndpoint` accurately parses loopback host and port using URL parsing. Ambiguous forms, different local ports, multi host strings, and remote endpoints are rejected without leakage of credentials or connection strings in error messages.
 6. Dashboard Data Accuracy and Honest Reporting: In `/api/admin/stats`, fallbacks that masked real zero values (such as `activeClients || totalClients` and `recentLogins || activeSessions || 1`) have been completely removed. Real zero counts are preserved. Disabled and inactive clients are comprehensively excluded from operational counts. The 24 hour session count reflects actual session creations and is labeled transparently as "New sessions (24h)" with helper text "Created in last 24h". Missing IP addresses return null rather than fabricating loopback 127.0.0.1. Missing historical timestamps return null rather than fabricating current timestamps. In `getTrustedClientIp`, missing forwarding headers evaluate to "unknown" rather than loopback 127.0.0.1, preserving secure rate limiting and trusted proxy chain evaluation.
 
@@ -79,8 +89,14 @@ In `backend/src/db/state.ts`, `backend/src/cache/origin-cache.ts`, and `backend/
 - Authoritative Counter: The sequence counter in MongoDB (`__ORIGIN_AUTHORITATIVE_VERSION__`) is the sole source of version truth across all running processes. Redis does not increment an independent counter.
 - Atomic MongoDB Cache Ordering: `putOriginCache` verifies both `cachedVersion < version` and `invalidatedVersion < version`. `invalidatedVersion` is kept on the document, ensuring older lookups cannot overwrite newer decisions even after fresh writes complete.
 - Global Tombstone Ordering: Global invalidation writes `ORIGIN#__GLOBAL_TOMBSTONE__` with `$max` before deleting entries. `getOriginCache` verifies entries against the global tombstone in a single query.
-- Atomic Redis Lua Verification: Redis Lua scripts check `verKey`, `invKey`, and `globalInvKey` before saving entries, preventing stale repopulation during concurrent client changes.
-- Safe Outage Fallback: If Redis becomes unreachable, operations fall back to MongoDB. Upon Redis recovery, invalidation purges potentially stale keys before cache hits are trusted.
+- Monotonic Invalidation Markers: Redis Lua invalidation scripts inspect existing markers and update them only if the incoming version is strictly greater. Out of order invalidations cannot reduce markers.
+- Unconditional Deletion of Cached Values: Every invalidation attempt purges cached decisions and version keys. Deletion causes safe cache misses without allowing stale data.
+- Delayed Write Rejection Conditions:
+  1. Version key check: Existing cached version is greater than or equal to the lookup check version.
+  2. Specific marker check: Invalidation marker version is greater than or equal to the lookup check version.
+  3. Global marker check: Global invalidation marker version is greater than or equal to the lookup check version.
+  4. MongoDB atomic filter: Update requires `cachedVersion < effectiveVersion` and `invalidatedVersion < effectiveVersion`.
+- Safe Outage and Recovery Behavior: If Redis becomes unreachable, operations fall back safely to MongoDB. MongoDB invalidations use atomic `$max`. Upon Redis recovery, invalidation purges potentially stale keys before cache hits are trusted. If MongoDB is unavailable, the system fails closed (throws), preventing unverified origin caching.
 - Multi Client Shared Origins: Origin invalidation preserves access for origins shared with other active clients.
 - Selective Deletion: Global invalidation deletes only origin cache entries (`_id: /^ORIGIN#https?:\/\//`), preserving internal sequence counters and shared outage state.
 
@@ -107,11 +123,15 @@ In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pag
 All test suites gate successfully with zero failures:
 
 1. CORS Cache Correctness Suite (`npm run test:cors-cache`):
-   - 20 of 20 tests passed, including:
+   - 24 of 24 tests passed, including:
      - CORS-18: Old lookup -> invalidation -> fresh write -> delayed old write proving delayed writes cannot overwrite fresh decisions.
      - CORS-19: Old lookup -> global invalidation interleaved with cache write proving global tombstones block stale repopulation.
      - CORS-20: Two processes performing concurrent lookups and client changes with delayed stale writes.
-     - Atomic Lua invalidation, hard bounded map capacity, Redis outage recovery, cross process race rejection, scan marker preservation, monotonic version sequencing, and shared origin retention.
+     - CORS-21: Out of order per origin invalidations: delayed older v1 cannot reduce marker after v2, and delayed lookup cannot restore stale data.
+     - CORS-22: Out of order global invalidations: delayed older v1 cannot reduce global marker, and delayed lookup cannot restore stale data.
+     - CORS-23: Marker expiry, Redis outage, recovery, and valid fresh lookup.
+     - CORS-24: Shared origin used by another active client remains allowed across mutations.
+     - Note on test infrastructure: Tests CORS-10, CORS-13, CORS-16, and CORS-23 use disposable mock Redis HTTP server fixtures simulating real Upstash REST calls, Lua evaluation, network outages, and recovery. Tests CORS-11 and CORS-20 use child worker processes to verify cross process race prevention against MongoDB Memory Server. Real external Redis services were not accessed, preserving test isolation.
 
 2. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
    - 9 of 9 tests passed, validating real zero counts, disabled client exclusions, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, UI value formatting, and explicit UI source verification of the "New sessions (24h)" card label.
