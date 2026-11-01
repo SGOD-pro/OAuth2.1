@@ -55,10 +55,21 @@ const { setRedisClientForTesting, invalidateCachedOriginRedis, getCachedOriginRe
 const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCache: getOriginCacheMongo, getNextAuthoritativeVersion, invalidateOriginCache } = await import("../../src/db/state");
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
+const { createRealRedisServer } = await import("../fixtures/real-redis-server");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- CORS CACHE & INVALIDATION CORRECTNESS SUITE");
 console.log("================================================================\n");
+
+// Prove real Redis is available on localhost and verify version
+try {
+  const probe = await createRealRedisServer();
+  console.log(`  [REAL REDIS PROVED] Connected to Real Redis v${probe.redisVersion} on port ${probe.port}\n`);
+  await probe.close();
+} catch (err: any) {
+  console.error(`  [FATAL REDIS ERROR] ${err?.message || String(err)}`);
+  process.exit(1);
+}
 
 let passed = 0;
 let failed = 0;
@@ -2558,13 +2569,16 @@ await runTest("CORS-40: Global invalidation pauses before lease scan; marker los
 });
 
 // =============================================================================
-// TEST 41: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes
+// TEST 41: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes [Real Redis]
 // =============================================================================
-await runTest("CORS-41: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes", async () => {
-  const mockRedis = await createMockRedisServer();
+await runTest("CORS-41 [Real Redis 8.8.3]: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
   const testRedis = new Redis({
-    url: mockRedis.url,
-    token: mockRedis.token,
+    url: realRedis.url,
+    token: realRedis.token,
     retry: false,
     signal: () => AbortSignal.timeout(2000),
   });
@@ -2578,22 +2592,22 @@ await runTest("CORS-41: Bounded lease cleanup purges expired leases without remo
   try {
     // 1. Setup abandoned lease: individual key expires (deleted), hash entry remains
     await setOriginLeaseRedis(originAbandoned, 10);
-    mockRedis.delete(`swyra:origin:lease:${originAbandoned}`);
-    assert.equal(mockRedis.has(`swyra:origin:lease:${originAbandoned}`), false, "Individual lease expired");
+    await realRedis.delete(`swyra:origin:lease:${originAbandoned}`);
+    assert.equal(await realRedis.has(`swyra:origin:lease:${originAbandoned}`), false, "Individual lease expired");
 
     // 2. Setup active lease: individual key remains active
     await setOriginLeaseRedis(originActive, 20);
-    assert.equal(mockRedis.has(`swyra:origin:lease:${originActive}`), true, "Active lease present");
+    assert.equal(await realRedis.has(`swyra:origin:lease:${originActive}`), true, "Active lease present");
 
     // 3. Setup concurrent overwrite race: Origin had v30, but fresh lookup registered v40
     await setOriginLeaseRedis(originOverwritten, 40);
 
     // 4. Run bounded cleanup
-    const cleanupResult = await cleanupAbandonedOriginLeasesRedis("0", 50);
+    const cleanupResult = await cleanupAbandonedOriginLeasesRedis("auto", 50, 50);
     assert.ok(cleanupResult.cleanedCount >= 1, "At least one abandoned lease was cleaned up");
 
     // 5. Verify abandoned lease was purged from swyra:origin:leases
-    const leasesEntry = mockRedis.get("swyra:origin:leases");
+    const leasesEntry = await realRedis.get("swyra:origin:leases");
     assert.ok(leasesEntry instanceof Map, "Leases container exists");
     assert.equal(leasesEntry.has(originAbandoned), false, "Abandoned lease removed from container");
 
@@ -2610,7 +2624,7 @@ await runTest("CORS-41: Bounded lease cleanup purges expired leases without remo
     await invalidateCachedOriginRedis([originInvalidated], 60);
 
     // Run cleanup again
-    await cleanupAbandonedOriginLeasesRedis("0", 50);
+    await cleanupAbandonedOriginLeasesRedis("auto", 50, 50);
 
     // Delayed old lookup attempts to write at v50
     const writeResult = await setCachedOriginRedis(originInvalidated, true, 50);
@@ -2618,8 +2632,405 @@ await runTest("CORS-41: Bounded lease cleanup purges expired leases without remo
     assert.equal(await getCachedOriginRedis(originInvalidated), null, "Origin is not cached");
   } finally {
     setRedisClientForTesting(null);
-    await mockRedis.close();
+    await realRedis.clear();
+    await realRedis.close();
     await invalidateOrigins([originAbandoned, originActive, originOverwritten, originInvalidated]);
+  }
+});
+
+// =============================================================================
+// TEST 42: Large lease hash requiring multiple HSCAN calls and cursor progress across repeated calls [Real Redis]
+// =============================================================================
+await runTest("CORS-42 [Real Redis 8.8.3]: Large lease hash requiring multiple HSCAN calls and cursor progress across repeated calls", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
+  const testRedis = new Redis({
+    url: realRedis.url,
+    token: realRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const totalEntries = 600;
+  const expiredCount = 300;
+  const activeCount = 300;
+
+  try {
+    for (let i = 0; i < totalEntries; i++) {
+      const origin = `https://hash-scale-${i}.example.com`;
+      const version = 100 + i;
+      await setOriginLeaseRedis(origin, version);
+
+      if (i < expiredCount) {
+        await realRedis.delete(`swyra:origin:lease:${origin}`);
+      }
+    }
+
+    let leasesEntry = await realRedis.get("swyra:origin:leases");
+    assert.ok(leasesEntry instanceof Map);
+    assert.equal(leasesEntry.size, totalEntries, "All 600 entries registered initially");
+
+    let totalCleaned = 0;
+    let calls = 0;
+    const countHint = 50;
+
+    // Run cycles until hash size reaches activeCount
+    while (leasesEntry.size > activeCount && calls < 30) {
+      calls++;
+      const res = await cleanupAbandonedOriginLeasesRedis("auto", countHint);
+      totalCleaned += res.cleanedCount;
+      leasesEntry = await realRedis.get("swyra:origin:leases");
+    }
+
+    assert.ok(calls > 1, "Large hash requires multiple HSCAN calls (monotonic cursor progress proven)");
+    assert.equal(totalCleaned, expiredCount, "All expired entries eventually cleaned up");
+    assert.equal(leasesEntry.size, activeCount, "Only active entries remain in container");
+
+    // Verify all active leases remain with exact versions
+    for (let i = expiredCount; i < totalEntries; i++) {
+      const origin = `https://hash-scale-${i}.example.com`;
+      assert.equal(leasesEntry.has(origin), true);
+      assert.equal(Number(leasesEntry.get(origin)), 100 + i);
+    }
+  } finally {
+    setRedisClientForTesting(null);
+    await realRedis.clear();
+    await realRedis.close();
+  }
+});
+
+// =============================================================================
+// TEST 43: Cleanup overlapping a newer lease registration [Real Redis]
+// =============================================================================
+await runTest("CORS-43 [Real Redis 8.8.3]: Cleanup overlapping a newer lease registration", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
+  const testRedis = new Redis({
+    url: realRedis.url,
+    token: realRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://overlap-registration.example.com";
+
+  try {
+    // 1. Initial lease at v10
+    await setOriginLeaseRedis(origin, 10);
+    // Individual key expires
+    await realRedis.delete(`swyra:origin:lease:${origin}`);
+    assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), false);
+
+    // 2. Fresh lookup registers v20 before cleanup evaluates this origin
+    await setOriginLeaseRedis(origin, 20);
+
+    // 3. Cleanup runs
+    await cleanupAbandonedOriginLeasesRedis("auto", 50, 50);
+
+    // 4. Container entry must be preserved with v20
+    const leasesEntry = await realRedis.get("swyra:origin:leases");
+    assert.ok(leasesEntry instanceof Map);
+    assert.equal(leasesEntry.has(origin), true, "Newer lease was preserved");
+    assert.equal(Number(leasesEntry.get(origin)), 20, "Newer version preserved in container");
+
+    // 5. Fresh lookup writes to cache: write accepted
+    const writeOk = await setCachedOriginRedis(origin, true, 20);
+    assert.equal(writeOk, true, "Fresh lookup succeeds");
+    assert.equal(await getCachedOriginRedis(origin), true, "Cached allow active in Redis");
+  } finally {
+    setRedisClientForTesting(null);
+    await realRedis.clear();
+    await realRedis.close();
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 44: Per-origin and global invalidation with delayed writers and real Lua execution [Real Redis]
+// =============================================================================
+await runTest("CORS-44 [Real Redis 8.8.3]: Per-origin and global invalidation with delayed writers and real Lua execution", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
+  const testRedis = new Redis({
+    url: realRedis.url,
+    token: realRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const originPer = "https://real-per-origin-inval.example.com";
+  const originGlob = "https://real-global-inval.example.com";
+
+  try {
+    // Part A: Per-origin invalidation
+    await setOriginLeaseRedis(originPer, 10);
+    // Invalidate per-origin at v20
+    await invalidateCachedOriginRedis([originPer], 20);
+    // Delayed writer at v10 rejected on real Redis
+    const resA = await setCachedOriginRedis(originPer, true, 10);
+    assert.equal(resA, false, "Delayed writer rejected by real Redis Lua script on per-origin invalidation");
+    assert.equal(await getCachedOriginRedis(originPer), null, "Origin not cached");
+
+    // Part B: Global invalidation
+    await setOriginLeaseRedis(originGlob, 30);
+    // Global invalidation at v40
+    await invalidateCachedOriginRedis(undefined, 40);
+    // Delayed writer at v30 rejected on real Redis
+    const resB = await setCachedOriginRedis(originGlob, true, 30);
+    assert.equal(resB, false, "Delayed writer rejected by real Redis Lua script on global invalidation");
+    assert.equal(await getCachedOriginRedis(originGlob), null, "Origin not cached");
+  } finally {
+    setRedisClientForTesting(null);
+    await realRedis.clear();
+    await realRedis.close();
+    await invalidateOrigins([originPer, originGlob]);
+  }
+});
+
+// =============================================================================
+// TEST 45: Global marker loss before subsequent lease scan strictly blocks delayed write [Real Redis]
+// =============================================================================
+await runTest("CORS-45 [Real Redis 8.8.3]: Global marker loss before subsequent lease scan strictly blocks delayed write", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
+  const testRedis = new Redis({
+    url: realRedis.url,
+    token: realRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://real-global-marker-loss.example.com";
+
+  try {
+    // 1. Lookup starts, registers lease
+    await setOriginLeaseRedis(origin, 50);
+
+    // 2. Global invalidation runs: deletes swyra:origin:leases and sets swyra:inv:global = 60
+    await invalidateCachedOriginRedis(undefined, 60);
+
+    // 3. Simulate selective key loss: Redis evicts or drops swyra:inv:global
+    await realRedis.delete("swyra:inv:global");
+    assert.equal(await realRedis.has("swyra:inv:global"), false, "Global marker evicted");
+
+    // Note: swyra:origin:leases was deleted by global invalidation
+    assert.equal(await realRedis.has("swyra:origin:leases"), false, "Container was dropped by global invalidation");
+
+    // 4. Delayed writer at v50 attempts write
+    const writeResult = await setCachedOriginRedis(origin, true, 50);
+    assert.equal(writeResult, false, "Delayed write rejected by SET_ORIGIN_CACHE_LUA because container lease is missing");
+    assert.equal(await getCachedOriginRedis(origin), null, "Origin not cached");
+  } finally {
+    setRedisClientForTesting(null);
+    await realRedis.clear();
+    await realRedis.close();
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 46: Redis restart simulation and selective key loss with MongoDB cache expiry [Real Redis]
+// =============================================================================
+await runTest("CORS-46 [Real Redis 8.8.3]: Redis restart simulation and selective key loss with MongoDB cache expiry", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
+  const testRedis = new Redis({
+    url: realRedis.url,
+    token: realRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://real-restart-expiry.example.com";
+  const clientId = "client_restart_exp_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Restart Expiry Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    // 1. Start check at v10
+    await setOriginLeaseRedis(origin, 10);
+
+    // 2. Simulate Redis restart (FLUSHDB)
+    await realRedis.clear();
+    assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), false, "All leases wiped by restart");
+
+    // 3. Delayed write rejected
+    const writeResult = await setCachedOriginRedis(origin, true, 10);
+    assert.equal(writeResult, false, "Write after restart fails closed");
+
+    // 4. MongoDB cache expiry simulation: set cachedAt older than 300s TTL
+    const oldDate = new Date(Date.now() - 400_000);
+    await db.collection("origin_cache").updateOne(
+      { _id: `ORIGIN#${origin}` },
+      { $set: { cachedAt: oldDate, allowed: true, cachedVersion: 5 } },
+      { upsert: true },
+    );
+    const mongoCached = await getOriginCacheMongo(origin);
+    assert.equal(mongoCached, null, "MongoDB treats old timestamp as expired");
+
+    // 5. Subsequent isOriginAllowed evaluates client and caches fresh
+    assert.equal(await isOriginAllowed(origin), true, "Authoritative lookup succeeds and repopulates");
+  } finally {
+    setRedisClientForTesting(null);
+    await realRedis.clear();
+    await realRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 47: Atomic Redis reads and separate-process concurrency against Real Redis [Real Redis + Child Process]
+// =============================================================================
+await runTest("CORS-47 [Real Redis 8.8.3 + Multi-process Worker]: Atomic Redis reads and separate-process concurrency", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
+  const testRedis = new Redis({
+    url: realRedis.url,
+    token: realRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const workerPath = path.resolve(__dirname, "../fixtures/cors-multi-process-worker.ts");
+  const child = fork(workerPath, [], {
+    execPath: process.execPath,
+    execArgv: process.execArgv,
+    env: {
+      ...process.env,
+      MONGO_URI: mongoUri,
+      NODE_ENV: "test",
+    },
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+  });
+
+  const sendToChild = (msg: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      const handler = (res: any) => {
+        if (res.type === "ERROR") {
+          child.off("message", handler);
+          reject(new Error(res.error));
+        } else {
+          child.off("message", handler);
+          resolve(res);
+        }
+      };
+      child.on("message", handler);
+      child.send(msg);
+    });
+  };
+
+  const origin = "https://real-multiprocess-concurrency.example.com";
+  const clientId = "client_real_proc_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Real Process Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    // 1. Initialize worker with disposable MongoDB and real Redis bridge
+    await sendToChild({
+      type: "INIT",
+      redisUrl: realRedis.url,
+      redisToken: realRedis.token,
+    });
+
+    // 2. Set hook so worker pauses after MongoDB check
+    await sendToChild({ type: "SET_POST_MONGO_CHECK_HOOK" });
+
+    // 3. Worker starts check
+    const check1 = await sendToChild({ type: "START_CHECK", origin });
+    assert.equal(check1.type, "CHECK_STARTED");
+
+    const pausedPromise = new Promise<void>((resolve) => {
+      const handler = (msg: any) => {
+        if (msg?.type === "POST_MONGO_CHECK_PAUSED") {
+          child.off("message", handler);
+          resolve();
+        }
+      };
+      child.on("message", handler);
+    });
+
+    const writePromise = new Promise<void>((resolve) => {
+      const handler = (msg: any) => {
+        if (msg?.type === "WRITE_COMPLETED") {
+          child.off("message", handler);
+          resolve();
+        }
+      };
+      child.on("message", handler);
+    });
+
+    child.send({
+      type: "COMPLETE_WRITE",
+      origin,
+      allowed: true,
+      startTime: check1.startTime,
+    });
+
+    await pausedPromise;
+
+    // While worker is paused, parent disables client and invalidates on real Redis
+    await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+    await invalidateOrigins([origin]);
+
+    // Delete Redis marker on real Redis
+    await realRedis.delete(`swyra:origin:inv:${origin}`);
+
+    // Resume worker
+    child.send({ type: "RESUME_POST_MONGO_CHECK" });
+    await writePromise;
+
+    // Verification: Stale allow MUST NOT be in real Redis
+    assert.equal(await realRedis.has(`swyra:origin:${origin}`), false, "Real Redis must not contain stale key from worker");
+    assert.equal(await getCachedOriginRedis(origin), null, "Parent getCachedOriginRedis returns null on real Redis");
+
+    const workerCheck = await sendToChild({ type: "CHECK_CACHE", origin });
+    assert.notEqual(workerCheck.value, true, "Worker cache check returns null");
+  } finally {
+    try {
+      child.send({ type: "EXIT" });
+      await new Promise<void>((r) => {
+        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
+        child.on("exit", () => { clearTimeout(timer); r(); });
+      });
+    } catch {}
+    setRedisClientForTesting(null);
+    await realRedis.clear();
+    await realRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
   }
 });
 

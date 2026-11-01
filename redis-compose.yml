@@ -1,0 +1,22 @@
+services:
+  redis:
+    image: redis:8.8.3-alpine
+    container_name: redis
+    restart: unless-stopped
+
+    command: redis-server --appendonly yes --requirepass redis_password
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      - redis_data:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_password", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  redis_data:

@@ -2,7 +2,7 @@
 
 **Reviewer**: Senior Security and Architecture Reviewer  
 **Branch**: `fix/cors-cache-security-perf`  
-**Verdict**: Ready for Independent Review (Pending External Real Redis and Browser Verification)  
+**Verdict**: Ready for Independent Review (Real Redis v8.8.3 Verified; Browser E2E Pending libglib System Dependency)  
 
 ---
 
@@ -31,15 +31,17 @@ This review evaluates the resolution of distributed CORS cache consistency, boun
    - Pre Redis Write Guard: Right before writing to Redis, `setCachedOrigin` reverifies MongoDB tombstones. If an invalidation occurred during a pause between MongoDB acceptance and Redis write, the Redis write is aborted.
    - Process local maps update invalidation markers monotonically (`invalidationVersion > prev`).
    - Global invalidation prunes local entries where cached versions are less than or equal to the invalidation version.
-5. Bounded Redis Lease Cleanup and Atomic Registration:
+5. Bounded Redis Lease Cleanup, Shared Cursor Monotonic Progress, and Atomic Registration:
    In `backend/src/cache/redis.ts`:
    - Atomic Registration: `SET_ORIGIN_LEASE_LUA` writes both the individual lease key `swyra:origin:lease:${origin}` with short TTL and the global hash entry `swyra:origin:leases[origin]` in a single Redis tick, setting container fallback expiry to prevent unbounded accumulation.
-   - Bounded Batch Cleanup: `CLEANUP_ABANDONED_LEASES_LUA` scans the lease hash with bounded cursor batching (`HSCAN` count 50). It detects entries whose individual lease keys expired, verifies that the hash still holds that exact version to avoid racing concurrent fresh updates, and removes only confirmed abandoned entries using `HDEL`.
-   - Preservation Guarantees: Cleanup never removes newer active leases. Because cleanup only removes entries and never inserts or updates them, it cannot enable a stale write after invalidation; missing hash entries cause `SET_ORIGIN_CACHE_LUA` to fail closed.
+   - Bounded Batch Cleanup: `CLEANUP_ABANDONED_LEASES_LUA` scans the lease hash with bounded cursor batching (`HSCAN` count hint 50 and explicit `maxEntries` processing cap). Callers pass cursor auto, which automatically reads and stores the shared cursor in Redis at `swyra:origin:leases:cursor` (TTL 86400 seconds), guaranteeing monotonic forward progress through large hashes across calls and multiple worker processes.
+   - Advisory Hint Semantics: Redis `HSCAN COUNT` is recognized as an advisory hint rather than a strict limit. To guarantee strict processing bounds, Lua enforces an explicit `maxEntries` loop threshold.
+   - Preservation Guarantees: Cleanup purges confirmed abandoned entries using `HDEL` only when the individual lease key has expired and the container version still matches the expired lease version. Newer active leases and concurrent replacements are strictly preserved.
+   - Fail Closed Invalidation Safety: Missing lease records cause `SET_ORIGIN_CACHE_LUA` to fail closed (rejected with return code 0). Cleanup only removes entries and never inserts or updates them, making it impossible for cleanup to enable a stale write after invalidation.
 6. Disposable MongoDB Verification and Endpoint Parsing: The test isolation helper `parseMongoEndpoint` accurately parses loopback host and port using URL parsing. Ambiguous forms, different local ports, multi host strings, and remote endpoints are rejected without leakage of credentials or connection strings in error messages.
 7. Dashboard Data Accuracy and Honest Reporting: In `/api/admin/stats`, fallbacks that masked real zero values (such as `activeClients || totalClients` and `recentLogins || activeSessions || 1`) have been completely removed. Real zero counts are preserved. Disabled and inactive clients are comprehensively excluded from operational counts. The 24 hour session count reflects actual session creations and is labeled transparently as "New sessions (24h)" with helper text "Created in last 24h". Missing IP addresses return null rather than fabricating loopback 127.0.0.1. Missing historical timestamps return null rather than fabricating current timestamps. In `getTrustedClientIp`, missing forwarding headers evaluate to "unknown" rather than loopback 127.0.0.1, preserving secure rate limiting and trusted proxy chain evaluation.
 
-All local security suites, unit suites, multi process tests, linters, and application builds passed cleanly. Real Redis server and browser test suites require external environment execution due to environment dependencies (missing system `redis-server` binary and Chromium `libglib-2.0.so.0` library).
+All local security suites, unit suites, cross process tests, linters, application builds, and real Redis concurrency suites passed cleanly. Live browser test suite execution remains pending due to an external Linux environment dependency (Chromium `libglib-2.0.so.0` shared library).
 
 ---
 
@@ -56,8 +58,8 @@ None observed.
 
 ### Low
 Environment Dependencies Recorded:
-- System `redis-server` binary is absent in this container environment (`which redis-server` exited with code 1). Concurrency, outage, and lease cleanup suites executed against the isolated mock Redis HTTP server fixture. Verification against live managed Redis infrastructure is recommended before production deployment.
-- Live browser test suite (`npm run test:browser-e2e`) exited with error due to missing Linux library `libglib-2.0.so.0` required by the Chromium headless shell in this container.
+- Real Redis 8.8.3 Service Verified: Concurrency, outage, race condition, atomic read, and bounded lease cleanup suites executed directly against real Redis 8.8.3 on localhost port 6379 via the real Redis HTTP bridge fixture (`backend/tests/fixtures/real-redis-server.ts`). All 7 real Redis suites (CORS-41 through CORS-47) passed cleanly.
+- Live browser test suite (`npm run test:browser-e2e`) exited with error due to missing Linux library `libglib-2.0.so.0` required by the Chromium headless shell in this container. Execution requires `npx playwright install-deps` in an environment with desktop package installation permissions.
 
 ### Nits
 None remaining. All observations regarding root package script forwarding, test fixture port candidate probing, and bounded lease cleanup have been resolved.
@@ -96,7 +98,7 @@ In `backend/src/db/state.ts`, `backend/src/cache/origin-cache.ts`, and `backend/
 - Monotonic Invalidation Markers: Redis Lua invalidation scripts inspect existing markers and update them only if the incoming version is strictly greater. Out of order invalidations cannot reduce markers.
 - Persistent Markers in Redis: Lua invalidation scripts accept `ttl = 0`, allowing persistent markers. Global pattern deletion skips `swyra:origin:inv:*` keys.
 - Active Lease Verification and Containerized Global Purge in Redis: During `startOriginCheck`, an active lease is registered both as an individual key `swyra:origin:lease:${origin}` and inside a global leases container `swyra:origin:leases`. In per origin invalidation, both keys are removed. In global invalidation, `INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA` deletes `swyra:origin:leases` atomically in the exact same Lua invocation as updating `swyra:inv:global`. The atomic write script `SET_ORIGIN_CACHE_LUA` checks both the individual lease key and the container `swyra:origin:leases`. If either does not exist or does not match `checkVersion`, the write is rejected immediately. This guarantees that if global invalidation executes and pauses before its background scan loop deletes individual lease keys, and Redis selectively evicts `swyra:inv:global`, an old lookup cannot write a stale allow decision to Redis.
-- Bounded Lease Cleanup: `cleanupAbandonedOriginLeasesRedis` provides bounded `HSCAN` batch cleanup of orphaned hash entries when individual lease keys expire. A Lua check guarantees that cleanup only deletes hash fields whose stored version still matches the expired lease version, preventing removal of concurrent fresh leases. Because cleanup only removes entries, missing entries force `SET_ORIGIN_CACHE_LUA` to fail closed.
+- Bounded Lease Cleanup and Shared Cursor Progress: `cleanupAbandonedOriginLeasesRedis` provides bounded `HSCAN` batch cleanup of orphaned hash entries when individual lease keys expire. The Lua script evaluates the shared cursor stored at `swyra:origin:leases:cursor` when called with auto mode. When Redis hashes scale beyond listpack limits into hashtables, `HSCAN` returns non zero cursors across multiple calls. The shared cursor in Redis ensures monotonic progress across invocations and separate worker processes. Redis `HSCAN COUNT` is treated as an advisory hint, while the script enforces an explicit `maxEntries` processing cap. Cleanup removes entries using `HDEL` only after verifying that the individual lease key is missing and that the container field still matches the evaluated version, preventing removal of concurrent fresh leases. Because cleanup only removes entries and never creates them, missing lease container records force `SET_ORIGIN_CACHE_LUA` to fail closed.
 - Atomic Snapshot Read in Redis: `getCachedOriginRedis` evaluates `GET_ORIGIN_CACHE_LUA` in a single atomic Redis script. All four keys (`originKey`, `verKey`, `invKey`, `globalInvKey`) are retrieved and compared atomically, preventing non atomic read interleaving where an old allow decision could be paired with a newer version.
 - Delayed Write Rejection Conditions:
   1. Active individual lease check: Active individual lease key in Redis matches the check version.
@@ -152,7 +154,7 @@ In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pag
 Execution results across test suites and operational checks:
 
 1. CORS Cache Correctness Suite (`npm run test:cors-cache`):
-   - Status: PASSED (41 of 41 tests passed).
+   - Status: PASSED (47 of 47 tests passed).
    - Validated:
      - CORS-18: Old lookup -> invalidation -> fresh write -> delayed old write proving delayed writes cannot overwrite fresh decisions.
      - CORS-19: Old lookup -> global invalidation interleaved with cache write proving global tombstones block stale repopulation.
@@ -177,15 +179,21 @@ Execution results across test suites and operational checks:
      - CORS-38: Multi process race where worker pauses after final MongoDB check, parent invalidates and flushes Redis marker, and worker cannot write stale allow.
      - CORS-39: Outage recovery and Redis restart with lease loss strictly blocks delayed write.
      - CORS-40: Global invalidation pauses before lease scan; marker loss with intact lease strictly blocks stale write.
-     - CORS-41: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes.
+     - CORS-41 [Real Redis 8.8.3]: Bounded lease cleanup purges expired leases without removing newer active leases or enabling stale writes.
+     - CORS-42 [Real Redis 8.8.3]: Large lease hash requiring multiple `HSCAN` calls and cursor progress across repeated calls.
+     - CORS-43 [Real Redis 8.8.3]: Cleanup overlapping a newer lease registration.
+     - CORS-44 [Real Redis 8.8.3]: Per origin and global invalidation with delayed writers and real Lua execution.
+     - CORS-45 [Real Redis 8.8.3]: Global marker loss before subsequent lease scan strictly blocks delayed write.
+     - CORS-46 [Real Redis 8.8.3]: Redis restart simulation and selective key loss with MongoDB cache expiry.
+     - CORS-47 [Real Redis 8.8.3 + Multi process Worker]: Atomic Redis reads and separate process concurrency.
    - Test Infrastructure Execution Details:
      - Real MongoDB 8.2.6 ran via `mongodb-memory-server` spawning local `mongod` on loopback.
-     - Redis tests ran against disposable mock Redis HTTP server fixture simulating Upstash REST, Lua evaluation, outages, selective key loss, and recovery.
-     - System binary `redis-server` is not installed in this environment (`which redis-server` returned empty with exit code 1).
-     - To run CORS concurrency tests against an external real Redis server:
+     - Real Redis 8.8.3 execution: Executed against real Redis 8.8.3 running in local container on port 6379 via `redis-compose.yml`. The test bridge fixture (`backend/tests/fixtures/real-redis-server.ts`) connects directly via TCP RESP, authenticates with `redis_password`, verifies `INFO server` `redis_version: 8.8.3`, and translates `@upstash/redis` HTTP REST calls to real Redis TCP commands. If real Redis cannot be reached or fails authentication, the test suite aborts immediately with a fatal error; fallback to mock is strictly disallowed for these tests.
+     - Mock Redis HTTP server fixture (`backend/tests/fixtures/mock-redis-server.ts`) remains in place for lightweight unit mock testing.
+     - Command to run CORS tests with real Redis service:
        ```bash
-       redis-server --port 6379 &
-       TEST_REDIS_URL="redis://127.0.0.1:6379" npm run test:cors-cache
+       docker compose -f redis-compose.yml up -d
+       npm run test:cors-cache
        ```
 
 2. Private App Isolation Security Suite (`npm run test:private-app-isolation`):
@@ -237,12 +245,11 @@ Execution results across test suites and operational checks:
 
 ## Conclusion and Final Verdict
 
-**Verdict**: Ready for Independent Review (Pending External Real Redis and Browser Verification)
+**Verdict**: Ready for Independent Review (Real Redis v8.8.3 Verified; Browser E2E Pending libglib System Dependency)
 
 The implementation is verified and secure against distributed race conditions, TTL eviction gaps, inter process delays, and abandoned lease accumulation. All cross source conflict requirements, legacy migration safeguards, stable identity self healing rules, authoritative version sequencing, durable invalidation isolation, bounded lease cleanup, and test environment isolation protections are met.
 
 Unresolved risks to be verified in external environments prior to production merge:
-1. Concurrency verification against live managed Redis infrastructure (simulated via mock HTTP server in container due to missing `redis-server` binary).
-2. Live browser testing via Playwright (blocked in container by missing system `libglib-2.0.so.0` library).
+1. Live browser testing via Playwright (blocked in container by missing system `libglib-2.0.so.0` library; reproduction command: `npx playwright install-deps && npm run test:browser-e2e`).
 
 The branch remains isolated on `fix/cors-cache-security-perf` without merging to `main` or deploying.

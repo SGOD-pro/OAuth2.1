@@ -201,19 +201,43 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               // 0b. Atomic Lua Cleanup Abandoned Leases Script
               if (scriptStr.includes("LUA_CLEANUP_ABANDONED_LEASES")) {
                 const leasesKey = keys[0] || "swyra:origin:leases";
-                const count = Number(scriptArgs[1]) || 50;
+                const cursorKey = keys[1] || "swyra:origin:leases:cursor";
+                const reqCursor = scriptArgs[0];
+                const countHint = Number(scriptArgs[1]) || 50;
+                const maxEntries = Number(scriptArgs[2]) || countHint;
+
+                let cursor = "0";
+                let useSharedCursor = false;
+                if (!reqCursor || reqCursor === "" || reqCursor === "auto") {
+                  useSharedCursor = true;
+                  const stored = store.get(cursorKey);
+                  if (stored && !isExpired(stored)) {
+                    cursor = String(stored.value);
+                  }
+                } else {
+                  cursor = String(reqCursor);
+                }
 
                 const entry = store.get(leasesKey);
                 if (!entry || isExpired(entry) || !(entry.value instanceof Map)) {
-                  return { result: ["0", 0] };
+                  return { result: ["0", 0, 0] };
                 }
 
                 const map = entry.value as Map<string, any>;
+                const allEntries = Array.from(map.entries());
+                let startIndex = parseInt(cursor, 10);
+                if (isNaN(startIndex) || startIndex < 0 || startIndex >= allEntries.length) {
+                  startIndex = 0;
+                }
+
                 let cleaned = 0;
-                let checked = 0;
-                for (const [origin, version] of Array.from(map.entries())) {
-                  if (checked >= count) break;
-                  checked++;
+                let processed = 0;
+                let currentIndex = startIndex;
+
+                while (currentIndex < allEntries.length && processed < maxEntries) {
+                  const [origin, version] = allEntries[currentIndex];
+                  currentIndex++;
+                  processed++;
 
                   const leaseKey = `swyra:origin:lease:${origin}`;
                   const leaseEntry = store.get(leaseKey);
@@ -227,7 +251,17 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                     }
                   }
                 }
-                return { result: ["0", cleaned] };
+
+                const nextCursor = currentIndex >= allEntries.length ? "0" : String(currentIndex);
+
+                if (useSharedCursor) {
+                  store.set(cursorKey, {
+                    value: nextCursor,
+                    expiresAt: Date.now() + 86400 * 1000,
+                  });
+                }
+
+                return { result: [nextCursor, cleaned, processed] };
               }
 
               // 1. Atomic Lua Invalidation Script (Per-Origin)

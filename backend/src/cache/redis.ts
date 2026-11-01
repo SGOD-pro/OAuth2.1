@@ -302,15 +302,38 @@ return 1
 export const CLEANUP_ABANDONED_LEASES_LUA = `
 -- LUA_CLEANUP_ABANDONED_LEASES
 local leasesKey = KEYS[1]
-local cursor = ARGV[1] or "0"
-local count = tonumber(ARGV[2]) or 50
+local cursorKey = KEYS[2]
+local reqCursor = ARGV[1]
+local countHint = tonumber(ARGV[2]) or 50
+local maxEntries = tonumber(ARGV[3]) or countHint
 
-local scanResult = redis.call('hscan', leasesKey, cursor, 'COUNT', count)
+-- If cursor is "auto" or empty/nil, retrieve the shared cursor from Redis
+local cursor = "0"
+local useSharedCursor = false
+if not reqCursor or reqCursor == "" or reqCursor == "auto" then
+    useSharedCursor = true
+    if cursorKey then
+        local storedCursor = redis.call('get', cursorKey)
+        if storedCursor then
+            cursor = storedCursor
+        end
+    end
+else
+    cursor = reqCursor
+end
+
+local scanResult = redis.call('hscan', leasesKey, cursor, 'COUNT', countHint)
 local nextCursor = scanResult[1]
 local entries = scanResult[2]
 
 local cleaned = 0
+local processed = 0
 for i = 1, #entries, 2 do
+    if processed >= maxEntries then
+        break
+    end
+    processed = processed + 1
+
     local origin = entries[i]
     local version = tonumber(entries[i + 1])
     local leaseKey = "swyra:origin:lease:" .. origin
@@ -328,7 +351,17 @@ for i = 1, #entries, 2 do
     end
 end
 
-return { nextCursor, cleaned }
+-- Update the shared cursor key so next call continues progress across processes
+if useSharedCursor and cursorKey then
+    if nextCursor == "0" then
+        -- Full cycle completed; wrap around to 0
+        redis.call('set', cursorKey, "0", 'EX', 86400)
+    else
+        redis.call('set', cursorKey, nextCursor, 'EX', 86400)
+    end
+end
+
+return { nextCursor, cleaned, processed }
 `;
 
 /**
@@ -379,7 +412,7 @@ export async function setOriginLeaseRedis(
 
     // Opportunistic bounded cleanup: 1 out of 20 lease sets triggers a bounded batch cleanup in production
     if (config.env === "production" && Math.random() < 0.05) {
-      cleanupAbandonedOriginLeasesRedis().catch(() => {});
+      cleanupAbandonedOriginLeasesRedis("auto", 50, 50).catch(() => {});
     }
 
     return res === 1 || res === "1" || res === true;
@@ -390,25 +423,28 @@ export async function setOriginLeaseRedis(
 }
 
 export async function cleanupAbandonedOriginLeasesRedis(
-  cursor: string = "0",
+  cursor: string = "auto",
   batchSize: number = 50,
-): Promise<{ nextCursor: string; cleanedCount: number }> {
-  if (!redis) return { nextCursor: "0", cleanedCount: 0 };
+  maxEntries: number = batchSize,
+): Promise<{ nextCursor: string; cleanedCount: number; processedCount: number }> {
+  if (!redis) return { nextCursor: "0", cleanedCount: 0, processedCount: 0 };
   try {
     const leasesKey = "swyra:origin:leases";
+    const cursorKey = "swyra:origin:leases:cursor";
     const res = await redis.eval(
       CLEANUP_ABANDONED_LEASES_LUA,
-      [leasesKey],
-      [cursor, String(batchSize)],
+      [leasesKey, cursorKey],
+      [cursor, String(batchSize), String(maxEntries)],
     );
-    if (!res || !Array.isArray(res)) return { nextCursor: "0", cleanedCount: 0 };
+    if (!res || !Array.isArray(res)) return { nextCursor: "0", cleanedCount: 0, processedCount: 0 };
     return {
       nextCursor: String(res[0] ?? "0"),
       cleanedCount: Number(res[1] ?? 0),
+      processedCount: Number(res[2] ?? 0),
     };
   } catch (err) {
     console.error({ event: "redis_cleanup_abandoned_leases_failed", error: String(err) });
-    return { nextCursor: "0", cleanedCount: 0 };
+    return { nextCursor: "0", cleanedCount: 0, processedCount: 0 };
   }
 }
 
