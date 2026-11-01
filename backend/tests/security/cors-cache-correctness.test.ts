@@ -1414,6 +1414,364 @@ await runTest("CORS-24: Shared origin used by another active client remains allo
   }
 });
 
+// =============================================================================
+// TEST 25: Per origin invalidation with marker expired or removed
+// Proves that when an old lookup pauses before cache write, origin is revoked,
+// and the Redis invalidation marker expires or is removed, the resumed old
+// lookup CANNOT restore a stale allow to Redis or MongoDB.
+// =============================================================================
+await runTest("CORS-25: Per origin invalidation with expired or removed marker prevents stale allow", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://stale-per-origin-expiry.example.com";
+  const clientId = "client_expiry_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Expiry Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    // 1. Initial verification: origin is allowed
+    assert.equal(await isOriginAllowed(origin), true, "Origin is initially allowed");
+
+    // 2. Old lookup starts: captures start version when origin was active
+    const oldLookupCheck = await startOriginCheck(origin);
+    assert.ok(oldLookupCheck.startVersion > 0, "Lookup check has valid sequence version");
+
+    // Old lookup pauses here before setCachedOrigin!
+
+    // 3. Client is disabled and origin is invalidated
+    await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+    await invalidateOrigins([origin]);
+
+    // Verify invalidation marker exists in Redis
+    assert.equal(mockRedis.has(`swyra:origin:inv:${origin}`), true, "Redis invalidation marker was written");
+
+    // 4. Expire or remove the relevant marker from Redis
+    mockRedis.delete(`swyra:origin:inv:${origin}`);
+    assert.equal(mockRedis.has(`swyra:origin:inv:${origin}`), false, "Redis invalidation marker is removed or expired");
+
+    // 5. Old lookup resumes and attempts to cache allowed=true with its old sequence version
+    await setCachedOrigin(origin, true, oldLookupCheck);
+
+    // 6. Assertions: stale allow MUST NOT be restored
+    const cachedResult = await getCachedOrigin(origin);
+    assert.notEqual(cachedResult, true, "Old lookup must not restore stale true in cache");
+
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis must not hold stale allow key");
+
+    const mongoDoc = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.notEqual(mongoDoc?.allowed, true, "MongoDB cache must not store allowed=true from old lookup");
+
+    // 7. Authoritative isOriginAllowed check proves origin is rejected
+    assert.equal(await isOriginAllowed(origin), false, "Origin is correctly disallowed");
+
+    // 8. Fresh check stores allowed=false cleanly
+    const freshCheck = await startOriginCheck(origin);
+    await setCachedOrigin(origin, false, freshCheck);
+    assert.equal(await getCachedOrigin(origin), false, "Fresh lookup caches negative result");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 26: Global invalidation with global marker expired or removed
+// Proves that when an old lookup pauses before cache write, global invalidation
+// runs, and the Redis global marker expires or is removed, the resumed old
+// lookup CANNOT restore a stale allow.
+// =============================================================================
+await runTest("CORS-26: Global invalidation with expired or removed marker prevents stale allow", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://stale-global-expiry.example.com";
+  const clientId = "client_global_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Global Expiry Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    assert.equal(await isOriginAllowed(origin), true, "Origin is initially allowed");
+
+    // 1. Old lookup starts: captures start version
+    const oldLookupCheck = await startOriginCheck(origin);
+
+    // 2. Revoke client and run global invalidation
+    await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+    await invalidateOrigins();
+
+    // Verify global marker was written
+    assert.equal(mockRedis.has("swyra:inv:global"), true, "Redis global marker was written");
+
+    // 3. Expire or remove the global marker from Redis
+    mockRedis.delete("swyra:inv:global");
+    assert.equal(mockRedis.has("swyra:inv:global"), false, "Redis global marker is removed or expired");
+
+    // 4. Old lookup resumes and attempts to cache allowed=true
+    await setCachedOrigin(origin, true, oldLookupCheck);
+
+    // 5. Assertions: stale allow MUST NOT be restored
+    const cachedResult = await getCachedOrigin(origin);
+    assert.notEqual(cachedResult, true, "Old lookup must not restore stale true after global invalidation");
+
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis must not hold stale allow key after global invalidation");
+
+    const mongoDoc = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.notEqual(mongoDoc?.allowed, true, "MongoDB cache must not store allowed=true");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 27: Concurrent writers with expired or removed markers
+// Proves that multiple paused lookups attempting to write after client revocation
+// and marker removal cannot populate the cache with stale data.
+// =============================================================================
+await runTest("CORS-27: Concurrent writers with expired or removed markers rejected", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://stale-concurrent-writers.example.com";
+  const clientId = "client_concurrent_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Concurrent Writers Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    // 1. Two separate lookups start before mutation
+    const checkWorker1 = await startOriginCheck(origin);
+    const checkWorker2 = await startOriginCheck(origin);
+
+    // 2. Client is revoked and invalidation runs
+    await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+    await invalidateOrigins([origin]);
+
+    // 3. Expire or remove the invalidation marker from Redis
+    mockRedis.delete(`swyra:origin:inv:${origin}`);
+
+    // 4. Both paused workers resume concurrently and attempt to write stale allowed=true
+    await Promise.all([
+      setCachedOrigin(origin, true, checkWorker1),
+      setCachedOrigin(origin, true, checkWorker2),
+    ]);
+
+    // 5. Verification: neither worker restored stale true
+    assert.notEqual(await getCachedOrigin(origin), true, "Neither concurrent worker can restore stale allow");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis does not hold stale key");
+
+    const mongoDoc = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.notEqual(mongoDoc?.allowed, true, "MongoDB does not hold stale allow");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 28: Out of order invalidations with expired or removed markers
+// Proves that out of order invalidation sequences followed by marker removal
+// still protect against delayed stale lookups.
+// =============================================================================
+await runTest("CORS-28: Out of order invalidations with expired or removed markers prevent stale allow", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const origin = "https://stale-out-of-order.example.com";
+
+  try {
+    // 1. Old lookup starts at v0
+    const lookupCheck = await startOriginCheck(origin);
+
+    // 2. Invalidation v1 and v2 sequence
+    const v1 = await getNextAuthoritativeVersion();
+    const v2 = await getNextAuthoritativeVersion();
+    assert.ok(v2 > v1 && v1 > lookupCheck.startVersion);
+
+    // Invalidation v2 completes first
+    await invalidateCachedOriginRedis([origin], v2);
+    await invalidateOriginCache([origin], v2);
+
+    // Delayed invalidation v1 arrives out of order
+    await invalidateCachedOriginRedis([origin], v1);
+    await invalidateOriginCache([origin], v1);
+
+    // 3. Remove the marker from Redis
+    mockRedis.delete(`swyra:origin:inv:${origin}`);
+
+    // 4. Old lookup from v0 resumes and tries to write allowed=true
+    await setCachedOrigin(origin, true, lookupCheck);
+
+    // 5. Verification: stale write rejected
+    assert.notEqual(await getCachedOrigin(origin), true, "Old lookup cannot write after out of order invalidations");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis does not hold stale key");
+
+    const mongoDoc = await db.collection("origin_cache").findOne({ _id: `ORIGIN#${origin}` });
+    assert.notEqual(mongoDoc?.allowed, true, "MongoDB does not hold stale allow");
+  } finally {
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 29: Multi process stale write prevention with expired or removed marker
+// Proves that when a separate worker process initiates a lookup, client is revoked,
+// and Redis marker is removed, the child process write CANNOT restore a stale allow.
+// =============================================================================
+await runTest("CORS-29: Multi process stale write prevention with expired or removed marker", async () => {
+  const mockRedis = await createMockRedisServer();
+  const testRedis = new Redis({
+    url: mockRedis.url,
+    token: mockRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const workerPath = path.resolve(__dirname, "../fixtures/cors-multi-process-worker.ts");
+  const child = fork(workerPath, [], {
+    execPath: process.execPath,
+    execArgv: process.execArgv,
+    env: {
+      ...process.env,
+      MONGO_URI: mongoUri,
+      NODE_ENV: "test",
+    },
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+  });
+
+  const sendToChild = (msg: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      const handler = (res: any) => {
+        if (res.type === "ERROR") {
+          child.off("message", handler);
+          reject(new Error(res.error));
+        } else {
+          child.off("message", handler);
+          resolve(res);
+        }
+      };
+      child.on("message", handler);
+      child.send(msg);
+    });
+  };
+
+  const origin = "https://cross-process-stale-expiry.example.com";
+  const clientId = "client_proc_expiry_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Process Expiry Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    await sendToChild({
+      type: "INIT",
+      redisUrl: mockRedis.url,
+      redisToken: mockRedis.token,
+    });
+
+    // 1. Worker process initiates lookup reading active client state
+    const check1 = await sendToChild({ type: "START_CHECK", origin });
+    assert.equal(check1.type, "CHECK_STARTED");
+
+    // 2. Parent disables client and performs invalidation
+    await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+    await invalidateOrigins([origin]);
+
+    // 3. Parent explicitly clears the Redis invalidation marker
+    mockRedis.delete(`swyra:origin:inv:${origin}`);
+    assert.equal(mockRedis.has(`swyra:origin:inv:${origin}`), false, "Redis marker cleared");
+
+    // 4. Worker process resumes and executes delayed old write with startVersion
+    const writeRes = await sendToChild({
+      type: "COMPLETE_WRITE",
+      origin,
+      allowed: true,
+      startTime: check1.startTime,
+    });
+    assert.equal(writeRes.type, "WRITE_COMPLETED");
+
+    // 5. Parent verifies cache: must NOT be true
+    const parentCache = await getCachedOrigin(origin);
+    assert.notEqual(parentCache, true, "Parent cache must not return stale true");
+    assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis must not hold stale key");
+
+    // 6. Worker verifies cache: must NOT be true
+    const workerCacheRes = await sendToChild({ type: "CHECK_CACHE", origin });
+    assert.notEqual(workerCacheRes.value, true, "Worker cache must not return stale true");
+  } finally {
+    try {
+      child.send({ type: "EXIT" });
+      await new Promise<void>((r) => {
+        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
+        child.on("exit", () => { clearTimeout(timer); r(); });
+      });
+    } catch {}
+    setRedisClientForTesting(null);
+    await mockRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
 await closeDb();
 await mongod.stop();
 

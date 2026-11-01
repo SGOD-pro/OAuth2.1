@@ -208,14 +208,38 @@ export async function setCachedOrigin(
     }
   }
 
-  await Promise.allSettled([
-    setCachedOriginRedis(normalized, allowed, startVersion).catch((err) => {
-      console.error({ event: "redis_origin_cache_write_error", origin: normalized, error: String(err) });
-    }),
-    putOriginCache(normalized, allowed, startVersion).catch((err) => {
-      console.error({ event: "mongo_origin_cache_write_error", origin: normalized, error: String(err) });
-    }),
-  ]);
+  // Authoritative Durable Verification:
+  // Write to MongoDB FIRST. MongoDB is the authoritative, durable sequence coordinator.
+  // putOriginCache performs an atomic conditional update/insert against durable
+  // invalidation markers (ORIGIN#__GLOBAL_TOMBSTONE__ and origin-specific invalidatedVersion).
+  // If an invalidation occurred at or after startVersion, putOriginCache returns false.
+  let mongoAccepted = false;
+  try {
+    mongoAccepted = await putOriginCache(normalized, allowed, startVersion);
+  } catch (err) {
+    console.error({ event: "mongo_origin_cache_write_error", origin: normalized, error: String(err) });
+    // MongoDB is unavailable. We cannot prove this write is not stale.
+    // In accordance with fail-secure policy, do NOT write unverified data to Redis.
+    return;
+  }
+
+  // If MongoDB rejected the write as stale or superseded, NEVER write to Redis.
+  if (!mongoAccepted) {
+    if (typeof startVersion === "number" && startVersion > 0) {
+      const cur = lastInvalidatedVersion.get(normalized) || 0;
+      if (startVersion > cur) {
+        lastInvalidatedVersion.set(normalized, startVersion);
+      }
+    }
+    return;
+  }
+
+  // MongoDB accepted the write: populate Redis with the verified decision.
+  try {
+    await setCachedOriginRedis(normalized, allowed, startVersion);
+  } catch (err) {
+    console.error({ event: "redis_origin_cache_write_error", origin: normalized, error: String(err) });
+  }
 }
 
 /**

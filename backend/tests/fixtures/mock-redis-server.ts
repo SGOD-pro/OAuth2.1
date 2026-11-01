@@ -9,6 +9,7 @@ export interface MockRedisServerInstance {
   simulateRecovery: () => void;
   get: (key: string) => any;
   set: (key: string, value: any, ttlSeconds?: number) => void;
+  delete: (key: string) => boolean;
   has: (key: string) => boolean;
   clear: () => void;
   close: () => Promise<void>;
@@ -91,7 +92,7 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               // 1. Atomic Lua Invalidation Script (Per-Origin)
               if (scriptStr.includes("LUA_INVALIDATE_ORIGIN_CACHE") || scriptStr.includes("swyra:origin:inv:\" .. origin")) {
                 const newVersion = Number(scriptArgs[0]) || 0;
-                const ttlSeconds = Number(scriptArgs[1]) || 60;
+                const ttlSeconds = Number(scriptArgs[1]) || 0;
                 for (const origin of keys) {
                   const invKey = `swyra:origin:inv:${origin}`;
                   const currentInv = store.get(invKey);
@@ -99,9 +100,9 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                   if (newVersion > curNum || !currentInv || isExpired(currentInv)) {
                     store.set(invKey, {
                       value: newVersion,
-                      expiresAt: Date.now() + ttlSeconds * 1000,
+                      expiresAt: ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : undefined,
                     });
-                  } else if (newVersion === curNum && currentInv) {
+                  } else if (newVersion === curNum && currentInv && ttlSeconds > 0) {
                     const currentExpires = currentInv.expiresAt || 0;
                     const newExpires = Date.now() + ttlSeconds * 1000;
                     if (newExpires > currentExpires) {
@@ -118,15 +119,15 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               if (scriptStr.includes("LUA_INVALIDATE_GLOBAL_ORIGIN_CACHE")) {
                 const globalKey = keys[0] || "swyra:inv:global";
                 const newVersion = Number(scriptArgs[0]) || 0;
-                const ttlSeconds = Number(scriptArgs[1]) || 60;
+                const ttlSeconds = Number(scriptArgs[1]) || 0;
                 const currentGlobal = store.get(globalKey);
                 const curNum = currentGlobal && !isExpired(currentGlobal) ? Number(currentGlobal.value) : 0;
                 if (newVersion > curNum || !currentGlobal || isExpired(currentGlobal)) {
                   store.set(globalKey, {
                     value: newVersion,
-                    expiresAt: Date.now() + ttlSeconds * 1000,
+                    expiresAt: ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : undefined,
                   });
-                } else if (newVersion === curNum && currentGlobal) {
+                } else if (newVersion === curNum && currentGlobal && ttlSeconds > 0) {
                   const currentExpires = currentGlobal.expiresAt || 0;
                   const newExpires = Date.now() + ttlSeconds * 1000;
                   if (newExpires > currentExpires) {
@@ -254,11 +255,16 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
           return entry.value;
         },
         set: (key: string, value: any, ttlSeconds?: number) => {
+          if (value === null || value === undefined) {
+            store.delete(key);
+            return;
+          }
           store.set(key, {
             value,
             expiresAt: ttlSeconds ? Date.now() + ttlSeconds * 1000 : undefined,
           });
         },
+        delete: (key: string) => store.delete(key),
         has: (key: string) => {
           const entry = store.get(key);
           if (!entry || isExpired(entry)) return false;

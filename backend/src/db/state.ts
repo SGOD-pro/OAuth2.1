@@ -195,6 +195,11 @@ export async function getOriginCache(
     return null;
   }
 
+  // Check 300s software TTL expiration on cachedAt
+  if (entry.cachedAt && Date.now() - new Date(entry.cachedAt).getTime() > 300_000) {
+    return null;
+  }
+
   // If specific entry was invalidated at or after its cached version, entry is stale
   if (
     typeof entry.invalidatedVersion === "number" &&
@@ -384,7 +389,6 @@ export async function invalidateOriginCache(
 
   const db = await getDb();
   const collection = db.collection<OriginCacheDoc>("origin_cache");
-  const now = new Date();
 
   if (origins && origins.length > 0) {
     const ids = origins.map((origin) => `ORIGIN#${origin}`);
@@ -395,7 +399,9 @@ export async function invalidateOriginCache(
           update: {
             $set: {
               allowed: null,
-              cachedAt: now,
+            },
+            $unset: {
+              cachedAt: "",
             },
             ...(typeof version === "number" && version > 0
               ? { $max: { invalidatedVersion: version } }
@@ -412,7 +418,9 @@ export async function invalidateOriginCache(
           {
             $set: {
               allowed: null,
-              cachedAt: now,
+            },
+            $unset: {
+              cachedAt: "",
             },
             ...(typeof version === "number" && version > 0
               ? { $max: { invalidatedVersion: version } }
@@ -426,15 +434,12 @@ export async function invalidateOriginCache(
   }
 
   // Global invalidation:
-  // Step 1: Update global tombstone FIRST with atomic $max
-  const globalSet: any = {
-    allowed: null,
-    cachedAt: now,
-  };
+  // Step 1: Update global tombstone FIRST with atomic $max, unsetting cachedAt so it never expires
   await collection.updateOne(
     { _id: "ORIGIN#__GLOBAL_TOMBSTONE__" },
     {
-      $set: globalSet,
+      $set: { allowed: null },
+      $unset: { cachedAt: "" },
       ...(typeof version === "number" && version > 0
         ? { $max: { invalidatedVersion: version } }
         : {}),
@@ -442,8 +447,17 @@ export async function invalidateOriginCache(
     { upsert: true },
   );
 
-  // Step 2: Delete existing origin entries
-  await collection.deleteMany({ _id: /^ORIGIN#https?:\/\// });
+  // Step 2: Mark all existing origin entries invalidated without deleting their version history
+  await collection.updateMany(
+    { _id: /^ORIGIN#https?:\/\// },
+    {
+      $set: { allowed: null },
+      $unset: { cachedAt: "" },
+      ...(typeof version === "number" && version > 0
+        ? { $max: { invalidatedVersion: version } }
+        : {}),
+    },
+  );
 }
 
 // -------------------------------------------------------------

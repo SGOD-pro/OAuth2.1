@@ -175,7 +175,7 @@ return 1
 export const INVALIDATE_ORIGIN_CACHE_LUA = `
 -- LUA_INVALIDATE_ORIGIN_CACHE
 local invalidationVersion = tonumber(ARGV[1]) or 0
-local ttl = tonumber(ARGV[2]) or 60
+local ttl = tonumber(ARGV[2]) or 0
 for i = 1, #KEYS do
     local origin = KEYS[i]
     local invKey = "swyra:origin:inv:" .. origin
@@ -183,10 +183,14 @@ for i = 1, #KEYS do
     local curNum = tonumber(currentInv)
 
     if not curNum or invalidationVersion > curNum then
-        redis.call("set", invKey, invalidationVersion, "EX", ttl)
-    elseif invalidationVersion == curNum then
+        if ttl > 0 then
+            redis.call("set", invKey, invalidationVersion, "EX", ttl)
+        else
+            redis.call("set", invKey, invalidationVersion)
+        end
+    elseif invalidationVersion == curNum and ttl > 0 then
         local currentTtl = redis.call("ttl", invKey)
-        if currentTtl and currentTtl < ttl then
+        if currentTtl and currentTtl > 0 and currentTtl < ttl then
             redis.call("expire", invKey, ttl)
         end
     end
@@ -200,15 +204,19 @@ export const INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA = `
 -- LUA_INVALIDATE_GLOBAL_ORIGIN_CACHE
 local globalInvKey = KEYS[1]
 local invalidationVersion = tonumber(ARGV[1]) or 0
-local ttl = tonumber(ARGV[2]) or 60
+local ttl = tonumber(ARGV[2]) or 0
 
 local currentGlobal = redis.call("get", globalInvKey)
 local curNum = tonumber(currentGlobal)
 if not curNum or invalidationVersion > curNum then
-    redis.call("set", globalInvKey, invalidationVersion, "EX", ttl)
-elseif invalidationVersion == curNum then
+    if ttl > 0 then
+        redis.call("set", globalInvKey, invalidationVersion, "EX", ttl)
+    else
+        redis.call("set", globalInvKey, invalidationVersion)
+    end
+elseif invalidationVersion == curNum and ttl > 0 then
     local currentTtl = redis.call("ttl", globalInvKey)
-    if currentTtl and currentTtl < ttl then
+    if currentTtl and currentTtl > 0 and currentTtl < ttl then
         redis.call("expire", globalInvKey, ttl)
     end
 end
@@ -282,7 +290,7 @@ export async function invalidateCachedOriginRedis(
     await redis.eval(
       INVALIDATE_ORIGIN_CACHE_LUA,
       origins,
-      [String(marker), "60"],
+      [String(marker), "0"],
     );
     return;
   }
@@ -293,7 +301,7 @@ export async function invalidateCachedOriginRedis(
   await redis.eval(
     INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA,
     ["swyra:inv:global"],
-    [String(marker), "60"],
+    [String(marker), "0"],
   );
 
   let cursor: string | number = 0;
@@ -303,7 +311,11 @@ export async function invalidateCachedOriginRedis(
       count: 100,
     });
     const [nextCursor, keys] = result;
-    const originKeys = keys.filter((k) => k.startsWith("swyra:origin:") && k !== "swyra:inv:global");
+    // Delete only cached origin decisions and version keys.
+    // Preserve swyra:origin:inv:* so per-origin invalidation markers remain intact!
+    const originKeys = keys.filter(
+      (k) => (k.startsWith("swyra:origin:") || k.startsWith("swyra:origin:ver:")) && !k.startsWith("swyra:origin:inv:")
+    );
     if (originKeys.length > 0) await redis.del(...originKeys);
     cursor = nextCursor;
   } while (String(cursor) !== "0");
