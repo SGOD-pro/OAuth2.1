@@ -89,6 +89,45 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               const keys = rest.slice(0, numKeys);
               const scriptArgs = rest.slice(numKeys);
 
+              // 0. Atomic Lua Read Script
+              if (scriptStr.includes("LUA_GET_ORIGIN_CACHE")) {
+                const originKey = keys[0];
+                const verKey = keys[1];
+                const invKey = keys[2];
+                const globalInvKey = keys[3];
+
+                const originEntry = store.get(originKey);
+                if (!originEntry || isExpired(originEntry)) {
+                  if (originEntry) store.delete(originKey);
+                  return { result: null };
+                }
+
+                const verEntry = store.get(verKey);
+                const ver = verEntry && !isExpired(verEntry) ? Number(verEntry.value) : 0;
+
+                const invEntry = store.get(invKey);
+                const inv = invEntry && !isExpired(invEntry) ? Number(invEntry.value) : 0;
+
+                const globalInvEntry = store.get(globalInvKey);
+                const globalInv = globalInvEntry && !isExpired(globalInvEntry) ? Number(globalInvEntry.value) : 0;
+
+                if (globalInv > 0 && ver <= globalInv) {
+                  return { result: null };
+                }
+                if (inv > 0 && ver <= inv) {
+                  return { result: null };
+                }
+
+                const rawVal = originEntry.value;
+                const resultVal =
+                  rawVal === true || rawVal === "1" || rawVal === 1 || rawVal === "true"
+                    ? "1"
+                    : rawVal === false || rawVal === "0" || rawVal === 0 || rawVal === "false"
+                    ? "0"
+                    : String(rawVal);
+                return { result: resultVal };
+              }
+
               // 1. Atomic Lua Invalidation Script (Per-Origin)
               if (scriptStr.includes("LUA_INVALIDATE_ORIGIN_CACHE") || scriptStr.includes("swyra:origin:inv:\" .. origin")) {
                 const newVersion = Number(scriptArgs[0]) || 0;
@@ -111,6 +150,7 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                   }
                   store.delete(`swyra:origin:${origin}`);
                   store.delete(`swyra:origin:ver:${origin}`);
+                  store.delete(`swyra:origin:lease:${origin}`);
                 }
                 return { result: 1 };
               }
@@ -134,6 +174,11 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                     currentGlobal.expiresAt = newExpires;
                   }
                 }
+                for (const key of store.keys()) {
+                  if (key.startsWith("swyra:origin:lease:")) {
+                    store.delete(key);
+                  }
+                }
                 return { result: 1 };
               }
 
@@ -142,11 +187,18 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               const invKey = keys[1];
               const globalInvKey = keys[2];
               const verKey = keys[3];
+              const leaseKey = keys[4];
               const allowed = scriptArgs[0];
               const startTime = Number(scriptArgs[1]) || 0;
               const ttlSeconds = Number(scriptArgs[2]) || 300;
 
               if (startTime > 0) {
+                if (leaseKey) {
+                  const leaseEntry = store.get(leaseKey);
+                  if (!leaseEntry || isExpired(leaseEntry) || Number(leaseEntry.value) !== startTime) {
+                    return { result: 0 };
+                  }
+                }
                 if (verKey) {
                   const verEntry = store.get(verKey);
                   if (verEntry && !isExpired(verEntry) && Number(verEntry.value) >= startTime) {
@@ -173,6 +225,10 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                   expiresAt: Date.now() + ttlSeconds * 1000,
                 });
               }
+              if (leaseKey) {
+                store.delete(leaseKey);
+              }
+              return { result: 1 };
               return { result: 1 };
             }
 

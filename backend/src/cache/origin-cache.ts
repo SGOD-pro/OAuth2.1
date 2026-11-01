@@ -10,6 +10,7 @@ import { getDb } from "../db/mongo";
 import {
   getCachedOriginRedis,
   setCachedOriginRedis,
+  setOriginLeaseRedis,
   invalidateCachedOriginRedis,
 } from "./redis";
 import {
@@ -124,6 +125,10 @@ export async function startOriginCheck(origin: string): Promise<OriginCheckConte
   const normalized = normalizeOrigin(origin) || origin;
   const version = await getNextAuthoritativeVersion();
 
+  try {
+    await setOriginLeaseRedis(normalized, version);
+  } catch {}
+
   return {
     origin: normalized,
     startVersion: version,
@@ -180,11 +185,18 @@ export async function getCachedOrigin(
 }
 
 let preRedisWriteHook: ((origin: string, allowed: boolean, version?: number) => Promise<void>) | null = null;
+let postMongoCheckHook: ((origin: string, allowed: boolean, version?: number) => Promise<void>) | null = null;
 
 export function setPreRedisWriteHookForTesting(
   hook: ((origin: string, allowed: boolean, version?: number) => Promise<void>) | null,
 ): void {
   preRedisWriteHook = hook;
+}
+
+export function setPostMongoCheckHookForTesting(
+  hook: ((origin: string, allowed: boolean, version?: number) => Promise<void>) | null,
+): void {
+  postMongoCheckHook = hook;
 }
 
 export async function setCachedOrigin(
@@ -202,6 +214,11 @@ export async function setCachedOrigin(
   if (startVersion === undefined || startVersion <= 0) {
     try {
       startVersion = await getNextAuthoritativeVersion();
+      await setOriginLeaseRedis(normalized, startVersion);
+    } catch {}
+  } else if (typeof checkContext === "number") {
+    try {
+      await setOriginLeaseRedis(normalized, startVersion);
     } catch {}
   }
 
@@ -280,6 +297,17 @@ export async function setCachedOrigin(
     } catch {
       // Fail secure: if verification fails, do NOT write to Redis
       return;
+    }
+  }
+
+  // Post-Mongo Check Hook:
+  // Testing hook to simulate an interleaved pause right AFTER the final MongoDB
+  // check passes, but BEFORE setCachedOriginRedis is invoked.
+  if (postMongoCheckHook) {
+    try {
+      await postMongoCheckHook(normalized, allowed, startVersion);
+    } catch (hookErr) {
+      console.error({ event: "post_mongo_check_hook_error", origin: normalized, error: String(hookErr) });
     }
   }
 

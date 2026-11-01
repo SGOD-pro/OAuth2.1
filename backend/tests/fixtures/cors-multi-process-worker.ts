@@ -1,6 +1,12 @@
 import "./test-env-isolation";
 import { getDb, closeDb } from "../../src/db/mongo";
-import { startOriginCheck, getCachedOrigin, setCachedOrigin, setRedisOutageDetectedForTesting } from "../../src/cache/origin-cache";
+import {
+  startOriginCheck,
+  getCachedOrigin,
+  setCachedOrigin,
+  setRedisOutageDetectedForTesting,
+  setPostMongoCheckHookForTesting,
+} from "../../src/cache/origin-cache";
 import { setRedisClientForTesting } from "../../src/cache/redis";
 import { markSharedRedisOutage, getSharedRedisOutage } from "../../src/db/state";
 import { Redis } from "@upstash/redis";
@@ -69,6 +75,25 @@ async function handleMessage(msg: any) {
         type: "OUTAGE_TRIGGERED",
       });
     }
+    return;
+  }
+
+  if (msg.type === "SET_POST_MONGO_CHECK_HOOK") {
+    setPostMongoCheckHookForTesting(async () => {
+      if (process.send) {
+        process.send({ type: "POST_MONGO_CHECK_PAUSED" });
+      }
+      await new Promise<void>((resolve) => {
+        const resumeHandler = (resumeMsg: any) => {
+          if (resumeMsg?.type === "RESUME_POST_MONGO_CHECK") {
+            process.off("message", resumeHandler);
+            resolve();
+          }
+        };
+        process.on("message", resumeHandler);
+      });
+    });
+    if (process.send) process.send({ type: "HOOK_CONFIGURED" });
     return;
   }
 

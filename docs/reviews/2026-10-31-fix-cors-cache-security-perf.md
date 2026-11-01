@@ -88,13 +88,15 @@ In `backend/src/db/state.ts`, `backend/src/cache/origin-cache.ts`, and `backend/
 - Durable MongoDB Cache Ordering: `putOriginCache` verifies both `cachedVersion < version` and `invalidatedVersion < version`. `invalidatedVersion` is kept on the document and on the durable tombstone, ensuring older lookups cannot overwrite newer decisions even after fresh writes complete and expire.
 - Monotonic Invalidation Markers: Redis Lua invalidation scripts inspect existing markers and update them only if the incoming version is strictly greater. Out of order invalidations cannot reduce markers.
 - Persistent Markers in Redis: Lua invalidation scripts accept `ttl = 0`, allowing persistent markers. Global pattern deletion skips `swyra:origin:inv:*` keys.
-- Read Path Redis Invalidation Check: `getCachedOriginRedis` validates both `swyra:origin:inv:${origin}` and `swyra:inv:global`, rejecting cache hits if invalidated.
+- Active Lease Verification in Redis: During `startOriginCheck`, an active lease `swyra:origin:lease:${origin}` is registered in Redis matching the authoritative version sequence. Invalidation explicitly deletes active leases, and Redis restart, key eviction, or outage wipes them. The atomic write script `SET_ORIGIN_CACHE_LUA` checks the active lease key. If the lease does not exist or does not match `checkVersion`, the write is rejected immediately. This guarantees that an old lookup paused after the final MongoDB check cannot write a stale decision to Redis even if Redis loses its invalidation marker.
+- Atomic Snapshot Read in Redis: `getCachedOriginRedis` evaluates `GET_ORIGIN_CACHE_LUA` in a single atomic Redis script. All four keys (`originKey`, `verKey`, `invKey`, `globalInvKey`) are retrieved and compared atomically, preventing non atomic read interleaving where an old allow decision could be paired with a newer version.
 - Delayed Write Rejection Conditions:
-  1. Version key check: Existing cached version is greater than or equal to the lookup check version.
-  2. Specific marker check: Invalidation marker version is greater than or equal to the lookup check version.
-  3. Global marker check: Global invalidation marker version is greater than or equal to the lookup check version.
-  4. MongoDB atomic filter: Update requires `cachedVersion < effectiveVersion` and `invalidatedVersion < effectiveVersion`.
-  5. Pre Redis Write Guard check: MongoDB tombstones confirm no invalidation occurred during any pause before Redis dispatch.
+  1. Active lease check: Active lease key in Redis matches the check version.
+  2. Version key check: Existing cached version is greater than or equal to the lookup check version.
+  3. Specific marker check: Invalidation marker version is greater than or equal to the lookup check version.
+  4. Global marker check: Global invalidation marker version is greater than or equal to the lookup check version.
+  5. MongoDB atomic filter: Update requires `cachedVersion < effectiveVersion` and `invalidatedVersion < effectiveVersion`.
+  6. Pre Redis Write Guard check: MongoDB tombstones confirm no invalidation occurred during any pause before Redis dispatch.
 - Safe Outage and Recovery Behavior: If Redis becomes unreachable, operations fall back safely to MongoDB. MongoDB invalidations use atomic `$max`. Upon Redis recovery, invalidation purges potentially stale keys before cache hits are trusted. If MongoDB is unavailable, the system fails closed, preventing unverified origin caching.
 - Multi Client Shared Origins: Origin invalidation preserves access for origins shared with other active clients.
 - Selective Deletion: Global invalidation updates only origin cache entries (`_id: /^ORIGIN#https?:\/\//`), preserving internal sequence counters and shared outage state.
@@ -122,7 +124,7 @@ In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pag
 All test suites gate successfully with zero failures:
 
 1. CORS Cache Correctness Suite (`npm run test:cors-cache`):
-   - 34 of 34 tests passed, including:
+   - 39 of 39 tests passed, including:
      - CORS-18: Old lookup -> invalidation -> fresh write -> delayed old write proving delayed writes cannot overwrite fresh decisions.
      - CORS-19: Old lookup -> global invalidation interleaved with cache write proving global tombstones block stale repopulation.
      - CORS-20: Two processes performing concurrent lookups and client changes with delayed stale writes.
@@ -140,7 +142,12 @@ All test suites gate successfully with zero failures:
      - CORS-32: Pause between MongoDB acceptance and Redis write rejected on per origin invalidation.
      - CORS-33: Pause between MongoDB acceptance and Redis write rejected on global invalidation.
      - CORS-34: Multi process stale write prevention with TTL removal and marker loss.
-     - Note on test infrastructure: Tests CORS-10, CORS-13, CORS-16, CORS-23, and CORS-25 through CORS-34 use disposable mock Redis HTTP server fixtures simulating real Upstash REST calls, Lua evaluation, network outages, and recovery. Tests CORS-11, CORS-20, CORS-29, and CORS-34 use child worker processes to verify cross process race prevention against MongoDB Memory Server. Real system `redis-server` binary is not installed in this environment (`which redis-server` confirmed absent); tests execute against the isolated mock HTTP server to preserve hermetic test isolation.
+     - CORS-35: Pause after final MongoDB check before Redis write, per origin invalidation, and Redis marker loss strictly blocks stale write.
+     - CORS-36: Pause after final MongoDB check before Redis write, global invalidation, and Redis marker loss strictly blocks stale write.
+     - CORS-37: Atomic Redis Lua read prevents pairing old cached value with new version.
+     - CORS-38: Multi process race where worker pauses after final MongoDB check, parent invalidates and flushes Redis marker, and worker cannot write stale allow.
+     - CORS-39: Outage recovery and Redis restart with lease loss strictly blocks delayed write.
+     - Note on test infrastructure: Tests CORS-10, CORS-13, CORS-16, CORS-23, CORS-25 through CORS-33, CORS-35 through CORS-37, and CORS-39 use disposable mock Redis HTTP server fixtures simulating real Upstash REST calls, Lua evaluation, network outages, and recovery. Tests CORS-11, CORS-20, CORS-29, CORS-34, and CORS-38 use child worker processes to verify cross process race prevention against MongoDB Memory Server. Real system `redis-server` binary is not installed in this environment (`which redis-server` confirmed absent); tests execute against the isolated mock HTTP server to preserve hermetic test isolation.
 
 2. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
    - 9 of 9 tests passed, validating real zero counts, disabled client exclusions, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, UI value formatting, and explicit UI source verification of the "New sessions (24h)" card label.

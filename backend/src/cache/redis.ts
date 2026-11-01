@@ -138,17 +138,52 @@ export async function checkRateLimit(
 
 const ORIGIN_CACHE_TTL_SECONDS = 300;
 
-const SET_ORIGIN_CACHE_LUA = `
+export const GET_ORIGIN_CACHE_LUA = `
+-- LUA_GET_ORIGIN_CACHE
+local originKey = KEYS[1]
+local verKey = KEYS[2]
+local invKey = KEYS[3]
+local globalInvKey = KEYS[4]
+
+local value = redis.call("get", originKey)
+if not value then
+    return nil
+end
+
+local ver = tonumber(redis.call("get", verKey)) or 0
+local inv = tonumber(redis.call("get", invKey)) or 0
+local globalInv = tonumber(redis.call("get", globalInvKey)) or 0
+
+if globalInv > 0 and ver <= globalInv then
+    return nil
+end
+
+if inv > 0 and ver <= inv then
+    return nil
+end
+
+return value
+`;
+
+export const SET_ORIGIN_CACHE_LUA = `
 -- LUA_SET_ORIGIN_CACHE
 local originKey = KEYS[1]
 local invKey = KEYS[2]
 local globalInvKey = KEYS[3]
 local verKey = KEYS[4]
+local leaseKey = KEYS[5]
 local allowed = ARGV[1]
 local checkVersion = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 
 if checkVersion and checkVersion > 0 then
+    if leaseKey then
+        local activeLease = redis.call('get', leaseKey)
+        if not activeLease or tonumber(activeLease) ~= checkVersion then
+            return 0
+        end
+    end
+
     local currentVersion = redis.call('get', verKey)
     if currentVersion and tonumber(currentVersion) >= checkVersion then
         return 0
@@ -168,6 +203,9 @@ end
 redis.call('set', originKey, allowed, 'EX', ttl)
 if checkVersion and checkVersion > 0 then
     redis.call('set', verKey, checkVersion, 'EX', ttl)
+    if leaseKey then
+        redis.call('del', leaseKey)
+    end
 end
 return 1
 `;
@@ -179,6 +217,7 @@ local ttl = tonumber(ARGV[2]) or 0
 for i = 1, #KEYS do
     local origin = KEYS[i]
     local invKey = "swyra:origin:inv:" .. origin
+    local leaseKey = "swyra:origin:lease:" .. origin
     local currentInv = redis.call("get", invKey)
     local curNum = tonumber(currentInv)
 
@@ -196,6 +235,7 @@ for i = 1, #KEYS do
     end
     redis.call("del", "swyra:origin:" .. origin)
     redis.call("del", "swyra:origin:ver:" .. origin)
+    redis.call("del", leaseKey)
 end
 return 1
 `;
@@ -238,31 +278,35 @@ export async function getCachedOriginRedis(origin: string): Promise<boolean | nu
     const invKey = `swyra:origin:inv:${origin}`;
     const globalInvKey = "swyra:inv:global";
 
-    const [value, verStr, invStr, globalInvStr] = await Promise.all([
-      redis.get<boolean | string | number>(originKey),
-      redis.get<string | number>(verKey),
-      redis.get<string | number>(invKey),
-      redis.get<string | number>(globalInvKey),
-    ]);
-    if (value === null || value === undefined) return null;
+    const res = await redis.eval(
+      GET_ORIGIN_CACHE_LUA,
+      [originKey, verKey, invKey, globalInvKey],
+      [],
+    );
+    if (res === null || res === undefined) return null;
 
-    const ver = typeof verStr === "number" ? verStr : Number(verStr) || 0;
-    const inv = typeof invStr === "number" ? invStr : Number(invStr) || 0;
-    const globalInv = typeof globalInvStr === "number" ? globalInvStr : Number(globalInvStr) || 0;
-
-    if (globalInv > 0 && ver <= globalInv) {
-      return null;
-    }
-    if (inv > 0 && ver <= inv) {
-      return null;
-    }
-
-    if (value === true || value === "1" || value === 1 || value === "true") return true;
-    if (value === false || value === "0" || value === 0 || value === "false") return false;
+    if (res === true || res === "1" || res === 1 || res === "true") return true;
+    if (res === false || res === "0" || res === 0 || res === "false") return false;
     return null;
   } catch (error) {
     console.error({ event: "redis_origin_cache_read_failed", origin, error: String(error) });
     return null;
+  }
+}
+
+export async function setOriginLeaseRedis(
+  origin: string,
+  version: number,
+  ttlSeconds: number = 60,
+): Promise<boolean> {
+  if (!redis || !version || version <= 0) return false;
+  try {
+    const leaseKey = `swyra:origin:lease:${origin}`;
+    await redis.set(leaseKey, version, { ex: ttlSeconds });
+    return true;
+  } catch (err) {
+    console.error({ event: "redis_origin_lease_set_failed", origin, error: String(err) });
+    return false;
   }
 }
 
@@ -277,10 +321,11 @@ export async function setCachedOriginRedis(
     const invKey = `swyra:origin:inv:${origin}`;
     const globalInvKey = "swyra:inv:global";
     const verKey = `swyra:origin:ver:${origin}`;
+    const leaseKey = `swyra:origin:lease:${origin}`;
 
     const res = await redis.eval(
       SET_ORIGIN_CACHE_LUA,
-      [originKey, invKey, globalInvKey, verKey],
+      [originKey, invKey, globalInvKey, verKey, leaseKey],
       [allowed ? "1" : "0", typeof startTime === "number" ? startTime : 0, ORIGIN_CACHE_TTL_SECONDS],
     );
 
@@ -322,10 +367,14 @@ export async function invalidateCachedOriginRedis(
       count: 100,
     });
     const [nextCursor, keys] = result;
-    // Delete only cached origin decisions and version keys.
+    // Delete only cached origin decisions, version keys, and lease keys.
     // Preserve swyra:origin:inv:* so per-origin invalidation markers remain intact!
     const originKeys = keys.filter(
-      (k) => (k.startsWith("swyra:origin:") || k.startsWith("swyra:origin:ver:")) && !k.startsWith("swyra:origin:inv:")
+      (k) =>
+        (k.startsWith("swyra:origin:") ||
+          k.startsWith("swyra:origin:ver:") ||
+          k.startsWith("swyra:origin:lease:")) &&
+        !k.startsWith("swyra:origin:inv:")
     );
     if (originKeys.length > 0) await redis.del(...originKeys);
     cursor = nextCursor;
