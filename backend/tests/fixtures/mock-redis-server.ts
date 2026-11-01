@@ -242,21 +242,20 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               const origin = scriptArgs[3];
 
               if (startTime > 0) {
-                if (leaseKey) {
-                  const leaseEntry = store.get(leaseKey);
-                  if (!leaseEntry || isExpired(leaseEntry) || Number(leaseEntry.value) !== startTime) {
-                    return { result: 0 };
-                  }
+                if (!leaseKey || !leasesKey || !origin) {
+                  return { result: 0 };
                 }
-                if (leasesKey && origin) {
-                  const leasesEntry = store.get(leasesKey);
-                  if (!leasesEntry || isExpired(leasesEntry) || !(leasesEntry.value instanceof Map)) {
-                    return { result: 0 };
-                  }
-                  const val = leasesEntry.value.get(origin);
-                  if (val === undefined || Number(val) !== startTime) {
-                    return { result: 0 };
-                  }
+                const leaseEntry = store.get(leaseKey);
+                if (!leaseEntry || isExpired(leaseEntry) || Number(leaseEntry.value) !== startTime) {
+                  return { result: 0 };
+                }
+                const leasesEntry = store.get(leasesKey);
+                if (!leasesEntry || isExpired(leasesEntry) || !(leasesEntry.value instanceof Map)) {
+                  return { result: 0 };
+                }
+                const val = leasesEntry.value.get(origin);
+                if (val === undefined || Number(val) !== startTime) {
+                  return { result: 0 };
                 }
                 if (verKey) {
                   const verEntry = store.get(verKey);

@@ -179,18 +179,18 @@ local ttl = tonumber(ARGV[3])
 local origin = ARGV[4]
 
 if checkVersion and checkVersion > 0 then
-    if leaseKey then
-        local activeLease = redis.call('get', leaseKey)
-        if not activeLease or tonumber(activeLease) ~= checkVersion then
-            return 0
-        end
+    if not leaseKey or not leasesKey or not origin then
+        return 0
     end
 
-    if leasesKey and origin then
-        local activeGlobalLease = redis.call('hget', leasesKey, origin)
-        if not activeGlobalLease or tonumber(activeGlobalLease) ~= checkVersion then
-            return 0
-        end
+    local activeLease = redis.call('get', leaseKey)
+    if not activeLease or tonumber(activeLease) ~= checkVersion then
+        return 0
+    end
+
+    local activeGlobalLease = redis.call('hget', leasesKey, origin)
+    if not activeGlobalLease or tonumber(activeGlobalLease) ~= checkVersion then
+        return 0
     end
 
     local currentVersion = redis.call('get', verKey)
