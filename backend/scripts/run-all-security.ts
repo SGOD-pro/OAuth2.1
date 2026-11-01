@@ -31,6 +31,7 @@ const securityTestFiles = [
   "tests/security/e2e-oidc-interop.test.ts",
   "tests/security/cors-cache-correctness.test.ts",
   "tests/security/membership-lifecycle.test.ts",
+  "tests/security/dashboard-stats-accuracy.test.ts",
 ];
 
 console.log("================================================================");

@@ -60,6 +60,7 @@
     "test:nosql-boundary": "tsx tests/security/nosql-injection-boundary.test.ts",
     "test:cors-cache": "tsx tests/security/cors-cache-correctness.test.ts",
     "test:membership-lifecycle": "tsx tests/security/membership-lifecycle.test.ts",
+    "test:dashboard-stats": "tsx tests/security/dashboard-stats-accuracy.test.ts",
     "test:all-security": "tsx scripts/run-all-security.ts",
     "test:all-security:local": "tsx scripts/run-all-security.ts",
     "security:docs-check": "tsx scripts/check-security-doc-consistency.ts",

@@ -7,6 +7,8 @@ export interface Stats {
   activeClients: number;
   totalUsers: number;
   recentLogins: number;
+  recentSessions24h?: number;
+  activeSessions?: number;
 }
 
 export interface OAuthClient {
@@ -46,7 +48,7 @@ export interface LogEntry {
   userEmail: string | null;
   action: string;
   ipAddress: string | null;
-  createdAt: string;
+  createdAt: string | null;
 }
 
 export interface User {

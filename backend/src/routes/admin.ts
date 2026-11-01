@@ -277,10 +277,18 @@ admin.get("/stats", requireSuperAdmin, async (c) => {
       ? { $or: [{ clientId: scopedClientId }, { client_id: scopedClientId }, { id: scopedClientId }] }
       : {};
 
+    const activeClientFilter = {
+      ...clientQuery,
+      disabled: { $ne: true },
+      is_active: { $ne: false },
+      isActive: { $ne: false },
+      status: { $nin: ["disabled", "inactive", "revoked", "suspended"] },
+    };
+
     const [totalUsers, totalClients, activeClients, recent24hLogins, activeSessions, recentLogs] = await Promise.all([
       scopedClientId ? 1 : database.collection("user").countDocuments(),
       database.collection("oauthClient").countDocuments(clientQuery),
-      database.collection("oauthClient").countDocuments({ ...clientQuery, disabled: { $ne: true } }),
+      database.collection("oauthClient").countDocuments(activeClientFilter),
       database.collection("session").countDocuments({ createdAt: { $gte: oneDayAgo } }),
       database.collection("session").countDocuments({ expiresAt: { $gt: new Date() } }),
       database.collection("session").find().sort({ createdAt: -1 }).limit(10).toArray(),
@@ -289,17 +297,24 @@ admin.get("/stats", requireSuperAdmin, async (c) => {
     return c.json({
       totalUsers,
       totalClients,
-      activeClients: activeClients || totalClients,
-      recentLogins: recent24hLogins || activeSessions || 1,
+      activeClients,
+      recentLogins: recent24hLogins,
+      recentSessions24h: recent24hLogins,
       activeSessions,
-      recentActivity: recentLogs.map((log: any) => ({
-        id: log.id || log._id?.toString(),
-        type: "session_created",
-        userId: log.userId,
-        ipAddress: log.ipAddress || "Unknown",
-        userAgent: log.userAgent ? log.userAgent.split(" ")[0] : "Unknown",
-        timestamp: log.createdAt || log.updatedAt,
-      })),
+      recentActivity: recentLogs.map((log: any) => {
+        const rawIp = typeof log.ipAddress === "string" ? log.ipAddress.trim() : null;
+        const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
+        const ts = log.createdAt || log.updatedAt;
+        const timestamp = ts ? new Date(ts).toISOString() : null;
+        return {
+          id: log.id || log._id?.toString(),
+          type: "session_created",
+          userId: log.userId,
+          ipAddress,
+          userAgent: log.userAgent ? log.userAgent.split(" ")[0] : null,
+          timestamp,
+        };
+      }),
     });
   } catch (err) {
     console.error("[ADMIN_STATS] Error fetching stats:", err);
@@ -361,25 +376,40 @@ admin.get("/logs", requireSuperAdmin, async (c) => {
       }
     });
 
-    const sessionLogs = sessions.map((s: any) => ({
-      userId: String(s.userId || s._id),
-      userEmail: userMap.get(String(s.userId)) || s.userId || "Active Session",
-      action: "user_sign_in",
-      ipAddress: s.ipAddress || "127.0.0.1",
-      createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString(),
-    }));
+    const sessionLogs = sessions.map((s: any) => {
+      const rawIp = typeof s.ipAddress === "string" ? s.ipAddress.trim() : null;
+      const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
+      const ts = s.createdAt || s.updatedAt;
+      const createdAt = ts ? new Date(ts).toISOString() : null;
+      return {
+        userId: String(s.userId || s._id),
+        userEmail: userMap.get(String(s.userId)) || s.userId || "Active Session",
+        action: "user_sign_in",
+        ipAddress,
+        createdAt,
+      };
+    });
 
-    const auditLogs = audits.map((a: any) => ({
-      userId: String(a.actorUserId || "system"),
-      userEmail: a.actorEmail || userMap.get(String(a.actorUserId)) || (a.actorUserId ? String(a.actorUserId) : "Security Engine"),
-      action: a.action || "admin_audit",
-      ipAddress: a.ipAddress || "127.0.0.1",
-      createdAt: a.timestamp ? new Date(a.timestamp).toISOString() : new Date().toISOString(),
-    }));
+    const auditLogs = audits.map((a: any) => {
+      const rawIp = typeof a.ipAddress === "string" ? a.ipAddress.trim() : null;
+      const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
+      const ts = a.timestamp || a.createdAt;
+      const createdAt = ts ? new Date(ts).toISOString() : null;
+      return {
+        userId: String(a.actorUserId || "system"),
+        userEmail: a.actorEmail || userMap.get(String(a.actorUserId)) || (a.actorUserId ? String(a.actorUserId) : "Security Engine"),
+        action: a.action || "admin_audit",
+        ipAddress,
+        createdAt,
+      };
+    });
 
-    const combined = [...sessionLogs, ...auditLogs].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    const combined = [...sessionLogs, ...auditLogs].sort((a, b) => {
+      if (!a.createdAt && !b.createdAt) return 0;
+      if (!a.createdAt) return 1;
+      if (!b.createdAt) return -1;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
 
     return c.json(combined);
   } catch (err) {

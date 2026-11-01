@@ -9,9 +9,12 @@ import { usePageTitle } from '@/hooks/usePageTitle';
 
 const PAGE_SIZE = 20;
 
-function formatDate(iso: string): string {
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return 'Unknown';
   try {
-    return new Date(iso).toLocaleString('en-US', {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return 'Unknown';
+    return d.toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -21,7 +24,7 @@ function formatDate(iso: string): string {
       hour12: false,
     });
   } catch {
-    return iso;
+    return 'Unknown';
   }
 }
 
@@ -190,7 +193,7 @@ export const AdminLogs: React.FC = () => {
                       </TableCell>
                       <TableCell className="text-right py-3">
                         <code className="font-mono text-xs text-muted-foreground">
-                          {log.ipAddress ?? '—'}
+                          {log.ipAddress && log.ipAddress.toLowerCase() !== 'unknown' ? log.ipAddress : 'Unknown'}
                         </code>
                       </TableCell>
                     </TableRow>

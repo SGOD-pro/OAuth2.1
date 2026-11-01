@@ -486,7 +486,7 @@ export function getTrustedClientIp(
   const xff = headers.get("x-forwarded-for");
 
   if (!xff && !singleHop) {
-    return "127.0.0.1";
+    return "unknown";
   }
 
   if (trustedProxyCidrs.length === 0) {
@@ -503,7 +503,7 @@ export function getTrustedClientIp(
     if (!trustedProxyCidrs.some((cidr) => ipMatchesCidr(ip, cidr))) return ip;
   }
 
-  return chain[0] ?? "127.0.0.1";
+  return chain[0] ?? "unknown";
 }
 
 export function getHeaders(c: any): Headers {

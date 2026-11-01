@@ -15,9 +15,9 @@ This review validates the complete resolution of all findings identified in the 
 3. Stable Identity in App Admin Self Healing: The `selfHealAppAdmins` sweep queries active records and verifies immutable `userId` existence, looking up accounts strictly by `userId`. Deleted users, mismatched identifiers, and legacy email only records are quarantined and skipped, preventing a newly created account with a recycled email from inheriting administrative rights. Explicit revocations in `user_app_registrations` are honored and never reactivated.
 4. Single Authoritative Monotonic Version Sequencing: Invalidation ordering does not rely on comparing wall clock timestamps (`Date.now()`) across disparate process clocks or comparing values between independent Redis and MongoDB counters. Origin checks and invalidations acquire shared monotonic integer sequence numbers exclusively from MongoDB (`__ORIGIN_AUTHORITATIVE_VERSION__`). Redis Lua scripts receive and enforce this authoritative version. Stale in flight writes are rejected whenever their start version is older than or equal to an invalidation version. Global invalidation deletes only actual origin entries (`/^ORIGIN#https?:\/\//`), preserving internal metadata and the version counter. Fallback and recovery across Redis outages with delayed writes and shared client origins are verified.
 5. Disposable MongoDB Verification and Endpoint Parsing: The test isolation helper `parseMongoEndpoint` accurately parses loopback host and port using URL parsing. Ambiguous forms, different local ports, multi host strings, and remote endpoints are rejected without leakage of credentials or connection strings in error messages.
-6. Hard Bounded Map and Proven Test Isolation: The `lastInvalidatedAt` tracking map in `origin-cache.ts` enforces a strict hard cap of 1,000 entries with eviction of oldest insertion order entries upon overflow. Test isolation guards inspect all MongoDB aliases (`MONGO_URI`, `MONGODB_URI`, `DATABASE_URL`, `MONGO_URL`) and Redis aliases (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `UPSTASH_REDIS_API_KEY`, `REDIS_URL`, `REDIS_TOKEN`, `REDIS_REST_URL`, `REDIS_REST_TOKEN`). Tests that instantiate `MongoMemoryServer` explicitly prove via `assertIsMemoryServerUri` that the active URI matches the in process disposable server.
+6. Dashboard Data Accuracy and Honest IP/Timestamp Reporting: In `/api/admin/stats`, fallbacks that masked real zero values (such as `activeClients || totalClients` and `recentLogins || activeSessions || 1`) have been completely removed. Real zero counts are preserved. Disabled and inactive clients are comprehensively excluded from operational counts. The 24-hour login count reflects actual new session creations and is labeled transparently as 'New sessions (24h)'. Missing IP addresses return `null` rather than fabricating loopback `127.0.0.1`. Missing historical timestamps return `null` rather than fabricating current timestamps. In `getTrustedClientIp`, missing forwarding headers evaluate to `'unknown'` rather than loopback `127.0.0.1`, preserving secure rate limiting and trusted proxy chain evaluation.
 
-All 21 security test suites and all unit test suites pass cleanly with zero failures.
+All 22 security test suites and all unit test suites pass cleanly with zero failures.
 
 ---
 
@@ -78,6 +78,14 @@ In `backend/tests/fixtures/test-env-isolation.ts`:
 - Safe URI Validation: Loopback addresses are permitted while remote and cloud URIs throw security violations.
 - Credential Redaction: Error strings omit raw URIs, passwords, and tokens to prevent accidental log leakage.
 
+### 6. Dashboard Data Accuracy and Honest IP/Timestamp Reporting
+In `backend/src/routes/admin.ts`, `backend/src/utils/security.ts`, `frontend/pages/admin/AdminDashboard.tsx`, and `frontend/pages/admin/AdminLogs.tsx`:
+- Real Zero Counts: In `/api/admin/stats`, fallbacks from `activeClients` to `totalClients` and from `recentLogins` to `activeSessions` or `1` have been eliminated. Real zero counts are strictly preserved.
+- Disabled Client Discrimination: Queries for active clients filter out records with `disabled: true`, `is_active: false`, `isActive: false`, or status in `["disabled", "inactive", "revoked", "suspended"]`.
+- Honest Login Metrics: Login metrics represent actual sessions created in the last 24 hours without fallback, transparently labeled in the UI as 'Logins (24h)' with helper text 'New sessions (24h)'.
+- Null for Missing IPs and Timestamps: Missing IPs return `null` instead of fabricating loopback `127.0.0.1`. Real loopback headers preserve `127.0.0.1`. Missing timestamps return `null` instead of generating current time.
+- Trusted Proxy and Rate Limit Preservation: `getTrustedClientIp` resolves missing forwarding headers to `'unknown'` while preserving client IP extraction through trusted proxy chains.
+
 ---
 
 ## Verification Evidence
@@ -85,9 +93,10 @@ In `backend/tests/fixtures/test-env-isolation.ts`:
 All test suites gate successfully with zero failures:
 
 1. Security Suite Manifest (`npm run test:all-security`):
-   - 21 of 21 test suites passed (0 failures).
+   - 22 of 22 test suites passed (0 failures).
    - `cors-cache-correctness.test.ts`: 17 of 17 tests passed, including atomic Lua invalidation, hard bounded map capacity, Redis outage recovery, cross process race rejection, scan marker preservation, monotonic version sequencing, and shared origin retention.
    - `membership-lifecycle.test.ts`: 23 of 23 tests passed, including cross source conflict precedence, zero write dry run migration, background self heal isolation, memory server URI verification, email reuse detection, revocation preservation, endpoint port discrimination, and stable user ID self healing.
+   - `dashboard-stats-accuracy.test.ts`: 8 of 8 tests passed, validating real zero counts, disabled client exclusions, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, and UI formatting.
 
 2. Unit Test Suite (`npm run test:unit`):
    - All unit test suites passed cleanly across admin scoping, runtime resilience, gateway pipeline, dev isolation, and operator identity audits.
