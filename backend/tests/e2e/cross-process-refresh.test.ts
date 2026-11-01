@@ -90,6 +90,7 @@ function spawnIdpProcess(): ChildProcess {
       env: {
         ...process.env,
         NODE_ENV: "test",
+        HOST: "127.0.0.1",
         PORT: String(IDP_PORT),
         MONGO_URI: mongoUri,
         BETTER_AUTH_SECRET: BETTER_AUTH_SECRET,

@@ -47,7 +47,8 @@ None observed.
 None observed. All observations regarding cache version ordering, global tombstone sequencing, stale write rejection, honest dashboard metric labeling, and endpoint parsing have been fully resolved.
 
 ### Nits
-None observed.
+1. Root package script forwarding: Adding `"test:dashboard-stats": "npm --prefix backend run test:dashboard-stats"` to root `package.json` provides parity with `test:cors-cache` and `test:membership-lifecycle`.
+2. Ephemeral port allocation in test fixtures: `getAvailablePort` in `backend/tests/e2e/cross-process-refresh.test.ts` and `backend/tests/e2e/idp-process-restart.test.ts` closes a temporary listening socket, leaving the port in TIME WAIT on Linux while the child server binds wildcard 0.0.0.0. Adopting the non binding connection probe pattern from `browser-e2e.test.ts` or passing `HOST: "127.0.0.1"` ensures reliable process startup across all environments.
 
 ---
 
@@ -112,7 +113,7 @@ All test suites gate successfully with zero failures:
      - CORS-20: Two processes performing concurrent lookups and client changes with delayed stale writes.
      - Atomic Lua invalidation, hard bounded map capacity, Redis outage recovery, cross process race rejection, scan marker preservation, monotonic version sequencing, and shared origin retention.
 
-2. Dashboard Stats Accuracy Suite (`npm run test:dashboard-stats`):
+2. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
    - 9 of 9 tests passed, validating real zero counts, disabled client exclusions, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, UI value formatting, and explicit UI source verification of the "New sessions (24h)" card label.
 
 3. Membership Lifecycle Suite (`npm run test:membership-lifecycle`):

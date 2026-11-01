@@ -21,6 +21,7 @@
     "test:private-app-isolation": "npm --prefix backend run test:private-app-isolation",
     "test:cors-cache": "npm --prefix backend run test:cors-cache",
     "test:membership-lifecycle": "npm --prefix backend run test:membership-lifecycle",
+    "test:dashboard-stats": "npm --prefix backend run test:dashboard-stats",
     "test:browser-e2e": "npm --prefix backend run test:browser-e2e"
   }
 }
