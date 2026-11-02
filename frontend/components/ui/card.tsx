@@ -16,17 +16,17 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        "relative overflow-hidden rounded-[12px] border border-border bg-card shadow-xs text-card-foreground",
+        "relative overflow-hidden rounded-lg border border-border bg-card shadow-xs text-card-foreground",
         className
       )}
       {...props}
     >
       {/* Optional BMW M-Series Motorsport Accent Top Segment */}
       {accent === "motorsport" && (
-        <div aria-hidden="true" className="absolute top-0 left-0 right-0 h-[2.5px] flex pointer-events-none z-20">
-          <div className="w-1/3 h-full bg-[#0066B1]" />
-          <div className="w-1/3 h-full bg-[#1C69D4]" />
-          <div className="w-1/3 h-full bg-[#E22718]" />
+        <div aria-hidden="true" className="absolute top-0 left-0 right-0 h-[3px] flex pointer-events-none z-20">
+          <div className="w-1/3 h-full bg-motorsport-light" />
+          <div className="w-1/3 h-full bg-motorsport-dark" />
+          <div className="w-1/3 h-full bg-motorsport-red" />
         </div>
       )}
 
@@ -100,10 +100,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-footer"
-      className={cn(
-        "flex items-center p-5 sm:p-6 pt-0",
-        className
-      )}
+      className={cn("flex items-center p-5 sm:p-6 pt-0", className)}
       {...props}
     />
   )

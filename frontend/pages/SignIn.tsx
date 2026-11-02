@@ -3,7 +3,6 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Card, CardContent } from '@/components/ui/card';
@@ -98,13 +97,14 @@ export const SignIn: React.FC = () => {
     if (searchParams.get('prompt') === 'login') return;
     if (!callbackURL) return;
 
-    const getSessionFn = authClient.getSession as unknown as () => Promise<{ data?: { user?: Record<string, unknown> } | null }>;
-    getSessionFn().then((sessionRes) => {
-      if (sessionRes?.data?.user) {
-        setRedirecting(true);
-        window.location.assign(callbackURL);
-      }
+    let active = true;
+    authClient.getSession().then(({ data }) => {
+      if (!active || !data?.user) return;
+      setRedirecting(true);
+      window.location.assign(callbackURL);
     }).catch(() => {});
+
+    return () => { active = false; };
   }, [callbackURL, searchParams]);
 
   const handleSignIn = async (values: z.infer<typeof signInSchema>) => {
@@ -115,49 +115,29 @@ export const SignIn: React.FC = () => {
       const res = await authClient.signIn.email({
         email: values.email,
         password: values.password,
-        callbackURL,
+        rememberMe: false,
       });
 
-      if (res?.error) {
-        setRedirecting(false);
+      if (res.error) {
+        setError(res.error.message || 'Authentication failed. Please verify credentials.');
         setLoading(false);
-        const is2FA =
-          res.error.message?.toLowerCase().includes("two factor") ||
-          res.error.message?.toLowerCase().includes("two-factor") ||
-          (res.error as unknown as { code?: string }).code === "TWO_FACTOR_REQUIRED";
-        if (is2FA) {
-          toast.info('Two-factor authentication required. Please complete verification.');
-          window.location.assign(`/two-factor${window.location.search}`);
-          return;
-        }
-        const msg = res.error.message || 'Invalid email or password. Please check your credentials.';
-        setError(msg);
-        toast.error(msg);
+        return;
+      }
+
+      if ((res.data as Record<string, unknown>)?.twoFactorRedirect) {
+        const twoFactorUrl = `/two-factor?${searchParams.toString()}`;
+        window.location.assign(twoFactorUrl);
+        return;
+      }
+
+      setRedirecting(true);
+      if (callbackURL) {
+        window.location.assign(callbackURL);
       } else {
-        if ((res?.data as { twoFactorRedirect?: boolean })?.twoFactorRedirect) {
-          window.location.assign(`/two-factor${window.location.search}`);
-          return;
-        }
-        setRedirecting(true);
-        const data = res?.data as { url?: string; redirect?: boolean } | undefined;
-        const isOAuth = Boolean(searchParams.get('client_id') && searchParams.get('redirect_uri'));
-        const oauthParams = new URLSearchParams(searchParams);
-        oauthParams.delete('prompt');
-        const safeDest = isOAuth ? `/api/auth/oauth2/authorize?${oauthParams.toString()}` : callbackURL;
-        if (data?.redirect && data?.url && !data.url.includes('/admin') && !isOAuth) {
-          // Better Auth client redirectPlugin has already initiated navigation to data.url
-          return;
-        }
-        if (safeDest) {
-          window.location.assign(safeDest);
-        } else {
-          setLoading(false);
-          toast.success("Signed in successfully.");
-        }
+        window.location.assign('/admin');
       }
     } catch (err: unknown) {
-      setRedirecting(false);
-      const msg = err instanceof Error ? err.message : 'Network error communicating with authentication service.';
+      const msg = err instanceof Error ? err.message : 'A network error occurred.';
       setError(msg);
       toast.error(msg);
       setLoading(false);
@@ -166,62 +146,34 @@ export const SignIn: React.FC = () => {
 
   const handleSignUp = async (values: z.infer<typeof signUpSchema>) => {
     if (!signupEnabled) {
-      toast.error('Public sign-up is disabled.');
+      setError('Registration is disabled.');
       return;
     }
+
     setLoading(true);
-    setRedirecting(false);
     setError(null);
+
     try {
       const res = await authClient.signUp.email({
+        name: values.name,
         email: values.email,
         password: values.password,
-        name: values.name,
-        callbackURL,
-      } as Parameters<typeof authClient.signUp.email>[0]);
-      const { error: authError } = res;
-      if (authError) {
-        setRedirecting(false);
-        const msg = authError.message || 'Registration failed. Please check your details.';
-        setError(msg);
-        toast.error(msg);
+      });
+
+      if (res.error) {
+        setError(res.error.message || 'Failed to create account.');
         setLoading(false);
         return;
       }
 
-      const signInRes = await authClient.signIn.email({
-        email: values.email,
-        password: values.password,
-        callbackURL,
-      });
-
-      if (signInRes?.error) {
-        setRedirecting(false);
-        setLoading(false);
-        toast.success("Account created successfully. Please sign in.");
-        signInForm.setValue('email', values.email);
-        setTab('sign-in');
+      setRedirecting(true);
+      if (callbackURL) {
+        window.location.assign(callbackURL);
       } else {
-        setRedirecting(true);
-        const data = signInRes?.data as { url?: string; redirect?: boolean } | undefined;
-        const isOAuth = Boolean(searchParams.get('client_id') && searchParams.get('redirect_uri'));
-        const oauthParams = new URLSearchParams(searchParams);
-        oauthParams.delete('prompt');
-        const safeDest = isOAuth ? `/api/auth/oauth2/authorize?${oauthParams.toString()}` : callbackURL;
-        if (data?.redirect && data?.url && !data.url.includes('/admin') && !isOAuth) {
-          // Better Auth client redirectPlugin has already initiated navigation to data.url
-          return;
-        }
-        if (safeDest) {
-          window.location.assign(safeDest);
-        } else {
-          setLoading(false);
-          toast.success("Account created and signed in successfully.");
-        }
+        window.location.assign('/admin');
       }
     } catch (err: unknown) {
-      setRedirecting(false);
-      const msg = err instanceof Error ? err.message : 'Network error during registration.';
+      const msg = err instanceof Error ? err.message : 'Registration failed.';
       setError(msg);
       toast.error(msg);
       setLoading(false);
@@ -253,39 +205,49 @@ export const SignIn: React.FC = () => {
         <ThemeToggle />
       </div>
 
-      {/* Left Brand Panel (approx 42% on desktop) */}
-      <div className="lg:col-span-5 hidden lg:flex flex-col justify-between p-8 sm:p-12 lg:p-[55px] border-r border-border bg-sidebar relative overflow-hidden">
-        <div>
+      {/* Left Brand Panel (Evergreen Forest Stone in both themes) */}
+      <div className="lg:col-span-5 hidden lg:flex flex-col justify-between p-8 sm:p-12 lg:p-14 border-r border-[#1B3A31] bg-[#102D25] text-white relative overflow-hidden">
+        {/* Topographic Contour SVG */}
+        <svg
+          aria-hidden="true"
+          className="absolute inset-0 w-full h-full opacity-[0.07] pointer-events-none"
+          viewBox="0 0 400 600"
+          preserveAspectRatio="none"
+        >
+          <path d="M0,80 Q100,140 200,80 T400,100 M0,180 Q140,240 260,160 T400,200 M0,280 Q80,360 220,280 T400,320 M0,380 Q160,460 300,380 T400,420 M0,480 Q100,560 240,480 T400,520" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
+
+        <div className="relative z-10">
           <BrandMark />
 
-          {/* Short M tricolor accent on authentication panel */}
-          <div className="mt-12 flex h-1 w-12 items-stretch rounded-full overflow-hidden" aria-hidden="true">
-            <div className="w-1/3 bg-[#0066B1]" />
-            <div className="w-1/3 bg-[#1C69D4]" />
-            <div className="w-1/3 bg-[#E22718]" />
+          {/* Motorsport tricolor accent */}
+          <div className="mt-8 flex h-1 w-12 items-stretch rounded-full overflow-hidden" aria-hidden="true">
+            <div className="w-1/3 bg-motorsport-light" />
+            <div className="w-1/3 bg-motorsport-dark" />
+            <div className="w-1/3 bg-motorsport-red" />
           </div>
 
-          <h1 className="mt-6 font-heading text-[55px] leading-[1.05] tracking-tight font-semibold text-foreground">
+          <h1 className="mt-6 font-heading text-4xl sm:text-[46px] leading-[1.08] tracking-tight font-semibold text-white">
             Identity.<br />Under control.
           </h1>
-          <p className="mt-5 font-sans text-sm text-muted-foreground leading-relaxed">
-            High-performance OAuth 2.1 authorization service. Precision tokens, cryptographic integrity, and session protection.
+          <p className="mt-4 font-sans text-sm text-[#EEECE5]/80 leading-relaxed max-w-md">
+            High performance OAuth 2.1 authorization service. Precision tokens, cryptographic integrity, and session protection.
           </p>
         </div>
 
-        <div className="space-y-2 pt-6 border-t border-border/80">
-          <div className="flex items-center justify-between font-sans text-xs text-muted-foreground">
+        <div className="relative z-10 space-y-2.5 pt-6 border-t border-[#1B3A31]">
+          <div className="flex items-center justify-between font-sans text-xs text-[#EEECE5]/70">
             <span>Protocol</span>
-            <span className="text-foreground font-mono">OAuth 2.1 RFC 6749 / 7636</span>
+            <span className="text-[#B7C9AD] font-mono">OAuth 2.1 RFC 6749 / 7636</span>
           </div>
-          <div className="flex items-center justify-between font-sans text-xs text-muted-foreground">
+          <div className="flex items-center justify-between font-sans text-xs text-[#EEECE5]/70">
             <span>Security standard</span>
-            <span className="text-foreground font-mono">PKCE & RS256 JWKS</span>
+            <span className="text-[#B7C9AD] font-mono">PKCE & RS256 JWKS</span>
           </div>
         </div>
       </div>
 
-      {/* Right Form Area (approx 58% on desktop) */}
+      {/* Right Form Area */}
       <div className="lg:col-span-7 w-full flex items-center justify-center p-4 sm:p-8 lg:p-12">
         <div className="w-full max-w-[440px]">
           {/* Mobile brand header */}
@@ -293,11 +255,11 @@ export const SignIn: React.FC = () => {
             <BrandMark />
           </div>
 
-          <Card className="w-full border border-border bg-card shadow-sm">
+          <Card className="w-full border border-border bg-card shadow-xs rounded-xl overflow-hidden">
             {redirecting && (
-              <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-card/95 backdrop-blur-md p-8 text-center animate-in fade-in duration-200">
+              <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-card/95 p-8 text-center animate-in fade-in duration-200">
                 <div className="relative mb-5">
-                  <div className="size-14 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
+                  <div className="size-14 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
                     <svg className="size-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                     </svg>
@@ -325,7 +287,7 @@ export const SignIn: React.FC = () => {
               </div>
 
               {isPrivateApp && (
-                <div className="mb-6 rounded-md border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground flex items-center gap-2">
+                <div role="status" className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-3.5 text-xs text-muted-foreground flex items-center gap-2.5">
                   <svg className="size-4 shrink-0 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                   </svg>
@@ -335,9 +297,9 @@ export const SignIn: React.FC = () => {
 
               <Tabs value={tab} onValueChange={setTab} className="w-full">
                 {signupEnabled && (
-                  <TabsList className="w-full grid grid-cols-2 mb-6 h-9">
-                    <TabsTrigger value="sign-in" className="text-xs">Sign In</TabsTrigger>
-                    <TabsTrigger value="sign-up" className="text-xs">Sign Up</TabsTrigger>
+                  <TabsList className="w-full grid grid-cols-2 mb-6 h-10 p-1 bg-secondary rounded-pill">
+                    <TabsTrigger value="sign-in" className="text-xs rounded-pill data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-medium transition-colors">Sign in</TabsTrigger>
+                    <TabsTrigger value="sign-up" className="text-xs rounded-pill data-[state=active]:bg-primary data-[state=active]:text-primary-foreground font-medium transition-colors">Sign up</TabsTrigger>
                   </TabsList>
                 )}
 
@@ -345,7 +307,7 @@ export const SignIn: React.FC = () => {
                   <Form {...signInForm}>
                     <form onSubmit={signInForm.handleSubmit(handleSignIn)} className="space-y-4">
                       {error && (
-                        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+                        <div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 font-sans text-xs text-destructive flex items-center gap-2.5">
                           <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
@@ -365,7 +327,6 @@ export const SignIn: React.FC = () => {
                                 placeholder="name@example.com"
                                 {...field}
                                 disabled={loading}
-                                className="h-10"
                               />
                             </FormControl>
                             <FormMessage />
@@ -382,7 +343,7 @@ export const SignIn: React.FC = () => {
                               <FormLabel className="font-sans text-xs font-medium text-foreground">Password</FormLabel>
                               <Link
                                 to="/forgot-password"
-                                className="font-sans text-xs text-primary hover:underline transition-colors"
+                                className="font-sans text-xs text-primary hover:underline transition-colors font-medium"
                               >
                                 Forgot password?
                               </Link>
@@ -394,12 +355,12 @@ export const SignIn: React.FC = () => {
                                   placeholder="••••••••••••"
                                   {...field}
                                   disabled={loading}
-                                  className="h-10 pr-10"
+                                  className="pr-10"
                                 />
                                 <button
                                   type="button"
                                   onClick={() => setShowSignInPassword(!showSignInPassword)}
-                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none cursor-pointer"
                                   aria-label={showSignInPassword ? 'Hide password' : 'Show password'}
                                   tabIndex={-1}
                                 >
@@ -412,26 +373,7 @@ export const SignIn: React.FC = () => {
                         )}
                       />
 
-                      <FormField
-                        control={signInForm.control}
-                        name="remember"
-                        render={({ field }) => (
-                          <FormItem className="flex items-center space-x-2 space-y-0 pt-0.5">
-                            <FormControl>
-                              <Checkbox
-                                checked={field.value}
-                                onCheckedChange={field.onChange}
-                                disabled={loading}
-                              />
-                            </FormControl>
-                            <FormLabel className="text-xs font-sans text-muted-foreground font-normal cursor-pointer">
-                              Remember this device
-                            </FormLabel>
-                          </FormItem>
-                        )}
-                      />
-
-                      <Button type="submit" className="w-full h-10 font-medium" disabled={loading}>
+                      <Button type="submit" className="w-full h-11 font-medium rounded-pill mt-2" disabled={loading}>
                         {loading ? 'Signing in...' : 'Sign in'}
                       </Button>
                     </form>
@@ -439,7 +381,7 @@ export const SignIn: React.FC = () => {
 
                   <div className="my-5 flex items-center gap-3">
                     <Separator className="flex-1" />
-                    <span className="font-sans text-[11px] text-muted-foreground">
+                    <span className="font-sans text-xs text-muted-foreground">
                       or
                     </span>
                     <Separator className="flex-1" />
@@ -448,7 +390,7 @@ export const SignIn: React.FC = () => {
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full h-10"
+                    className="w-full h-11 rounded-pill"
                     onClick={handleGoogleSignIn}
                     disabled={loading}
                   >
@@ -467,7 +409,7 @@ export const SignIn: React.FC = () => {
                     <Form {...signUpForm}>
                       <form onSubmit={signUpForm.handleSubmit(handleSignUp)} className="space-y-4">
                         {error && (
-                          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+                          <div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 font-sans text-xs text-destructive flex items-center gap-2.5">
                             <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
@@ -486,7 +428,6 @@ export const SignIn: React.FC = () => {
                                   placeholder="Alex Walker"
                                   {...field}
                                   disabled={loading}
-                                  className="h-10"
                                 />
                               </FormControl>
                               <FormMessage />
@@ -506,7 +447,6 @@ export const SignIn: React.FC = () => {
                                   placeholder="alex@example.com"
                                   {...field}
                                   disabled={loading}
-                                  className="h-10"
                                 />
                               </FormControl>
                               <FormMessage />
@@ -527,12 +467,12 @@ export const SignIn: React.FC = () => {
                                     placeholder="••••••••••••"
                                     {...field}
                                     disabled={loading}
-                                    className="h-10 pr-10"
+                                    className="pr-10"
                                   />
                                   <button
                                     type="button"
                                     onClick={() => setShowSignUpPassword(!showSignUpPassword)}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none cursor-pointer"
                                     aria-label={showSignUpPassword ? 'Hide password' : 'Show password'}
                                     tabIndex={-1}
                                   >
@@ -546,31 +486,31 @@ export const SignIn: React.FC = () => {
                         />
 
                         {/* Password Requirements Checklist */}
-                        <div className="rounded-md border border-border bg-secondary/30 p-3 space-y-1.5 font-sans text-xs">
-                          <span className="text-muted-foreground text-[11px] font-medium block mb-1">
+                        <div className="rounded-lg border border-border bg-secondary/30 p-3.5 space-y-2 font-sans text-xs">
+                          <span className="text-muted-foreground text-xs font-medium block">
                             Password requirements:
                           </span>
                           <div className="flex items-center gap-2">
-                            <span className={`size-1.5 rounded-full ${signUpPassword.length >= 12 ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
-                            <span className={signUpPassword.length >= 12 ? 'text-foreground' : 'text-muted-foreground'}>
+                            <span className={`size-1.5 rounded-full ${signUpPassword.length >= 12 ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                            <span className={signUpPassword.length >= 12 ? 'text-foreground font-medium' : 'text-muted-foreground'}>
                               At least 12 characters
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className={`size-1.5 rounded-full ${/[a-z]/.test(signUpPassword) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
-                            <span className={signUpPassword.length >= 12 ? 'text-foreground' : 'text-muted-foreground'}>
+                            <span className={`size-1.5 rounded-full ${/[a-z]/.test(signUpPassword) && /[A-Z]/.test(signUpPassword) ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                            <span className={signUpPassword.length >= 12 ? 'text-foreground font-medium' : 'text-muted-foreground'}>
                               Lowercase and uppercase letters
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className={`size-1.5 rounded-full ${/[0-9]/.test(signUpPassword) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
-                            <span className={signUpPassword.length >= 12 ? 'text-foreground' : 'text-muted-foreground'}>
+                            <span className={`size-1.5 rounded-full ${/[0-9]/.test(signUpPassword) ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                            <span className={signUpPassword.length >= 12 ? 'text-foreground font-medium' : 'text-muted-foreground'}>
                               At least one number
                             </span>
                           </div>
                         </div>
 
-                        <Button type="submit" className="w-full h-10 font-medium" disabled={loading}>
+                        <Button type="submit" className="w-full h-11 font-medium rounded-pill mt-2" disabled={loading}>
                           {loading ? 'Creating account...' : 'Create account'}
                         </Button>
                       </form>
@@ -578,7 +518,7 @@ export const SignIn: React.FC = () => {
 
                     <div className="my-5 flex items-center gap-3">
                       <Separator className="flex-1" />
-                      <span className="font-sans text-[11px] text-muted-foreground">
+                      <span className="font-sans text-xs text-muted-foreground">
                         or
                       </span>
                       <Separator className="flex-1" />
@@ -587,7 +527,7 @@ export const SignIn: React.FC = () => {
                     <Button
                       type="button"
                       variant="outline"
-                      className="w-full h-10"
+                      className="w-full h-11 rounded-pill"
                       onClick={handleGoogleSignIn}
                       disabled={loading}
                     >

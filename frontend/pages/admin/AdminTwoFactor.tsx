@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
-import { isSuperAdminUser, isAppAdminUser, type UserWithRole } from '@/lib/role-predicates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Separator } from '@/components/ui/separator';
 import { Card, CardContent } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 import { toast } from 'sonner';
 import { BrandMark } from '@/components/BrandMark';
 import { usePageTitle } from '@/hooks/usePageTitle';
@@ -14,7 +13,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 type Mode = 'totp' | 'backup';
 
 export const AdminTwoFactor: React.FC = () => {
-  usePageTitle('Two-factor authentication');
+  usePageTitle('Administrator two factor verification');
 
   const [code, setCode] = useState('');
   const [mode, setMode] = useState<Mode>('totp');
@@ -25,23 +24,21 @@ export const AdminTwoFactor: React.FC = () => {
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmedCode = code.trim();
-    if (!trimmedCode) return;
+    if (!code.trim()) return;
     setLoading(true);
     setError(null);
 
     try {
-      let verifiedUser: UserWithRole | null | undefined = null;
       if (mode === 'totp') {
-        const verifyRes = await authClient.twoFactor.verifyTotp({ code: trimmedCode });
-        if (verifyRes.error) {
-          const errCode = (verifyRes.error as { code?: string })?.code;
-          const errMsg = verifyRes.error.message || 'Invalid 6 digit code. Check your authenticator app.';
+        const { error: err } = await authClient.twoFactor.verifyTotp({ code });
+        if (err) {
+          const errCode = (err as { code?: string })?.code;
+          const errMsg = err.message || 'Invalid 6 digit code. Check your authenticator app.';
           const isExpired = errCode === 'INVALID_TWO_FACTOR_COOKIE' ||
                             errMsg.toLowerCase().includes('cookie') ||
                             errMsg.toLowerCase().includes('session') ||
                             errMsg.toLowerCase().includes('expired');
-          const isRateLimited = verifyRes.error.status === 429 || errCode === 'ACCOUNT_TEMPORARILY_LOCKED';
+          const isRateLimited = err.status === 429 || errCode === 'ACCOUNT_TEMPORARILY_LOCKED';
 
           if (isRateLimited) {
             setError('Too many verification attempts. Please wait before trying again.');
@@ -50,8 +47,8 @@ export const AdminTwoFactor: React.FC = () => {
           }
 
           if (isExpired) {
-            setError('Verification session expired. Please sign in again.');
-            toast.error('Verification session expired. Please sign in again.');
+            setError('Verification challenge expired. Please sign in again.');
+            toast.error('Verification challenge expired. Please sign in again.');
             setTimeout(() => {
               navigate('/admin/login?error=mfa_expired', { replace: true });
             }, 1200);
@@ -71,17 +68,16 @@ export const AdminTwoFactor: React.FC = () => {
           }
           return;
         }
-        verifiedUser = (verifyRes.data as unknown as { user?: UserWithRole })?.user;
       } else {
-        const verifyRes = await authClient.twoFactor.verifyBackupCode({ code: trimmedCode });
-        if (verifyRes.error) {
-          const errCode = (verifyRes.error as { code?: string })?.code;
-          const errMsg = verifyRes.error.message || 'Invalid backup code.';
+        const { error: err } = await authClient.twoFactor.verifyBackupCode({ code });
+        if (err) {
+          const errCode = (err as { code?: string })?.code;
+          const errMsg = err.message || 'Invalid recovery code.';
           const isExpired = errCode === 'INVALID_TWO_FACTOR_COOKIE' ||
                             errMsg.toLowerCase().includes('cookie') ||
                             errMsg.toLowerCase().includes('session') ||
                             errMsg.toLowerCase().includes('expired');
-          const isRateLimited = verifyRes.error.status === 429 || errCode === 'ACCOUNT_TEMPORARILY_LOCKED';
+          const isRateLimited = err.status === 429 || errCode === 'ACCOUNT_TEMPORARILY_LOCKED';
 
           if (isRateLimited) {
             setError('Too many verification attempts. Please wait before trying again.');
@@ -90,8 +86,8 @@ export const AdminTwoFactor: React.FC = () => {
           }
 
           if (isExpired) {
-            setError('Verification session expired. Please sign in again.');
-            toast.error('Verification session expired. Please sign in again.');
+            setError('Verification challenge expired. Please sign in again.');
+            toast.error('Verification challenge expired. Please sign in again.');
             setTimeout(() => {
               navigate('/admin/login?error=mfa_expired', { replace: true });
             }, 1200);
@@ -111,36 +107,11 @@ export const AdminTwoFactor: React.FC = () => {
           }
           return;
         }
-        verifiedUser = (verifyRes.data as unknown as { user?: UserWithRole })?.user;
       }
 
-      if (!verifiedUser) {
-        const getSessionFn = authClient.getSession as unknown as () => Promise<{
-          data?: { user?: UserWithRole };
-        }>;
-        const userRes = await getSessionFn();
-        verifiedUser = userRes?.data?.user;
-      }
-
-      const isSuperAdmin = isSuperAdminUser(verifiedUser);
-      const isAppAdmin = isAppAdminUser(verifiedUser);
-
-      if (isAppAdmin) {
-        await authClient.signOut({});
-        navigate('/admin/login?error=access_denied_scoped', { replace: true });
-        return;
-      }
-
-      if (!isSuperAdmin) {
-        await authClient.signOut({});
-        navigate('/admin/login?error=access_denied', { replace: true });
-        return;
-      }
-
-      toast.success('Two factor authentication verified');
-      navigate('/admin', { replace: true });
+      window.location.assign('/admin');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Network error validating code';
+      const msg = err instanceof Error ? err.message : 'Verification failed.';
       setError(msg);
       toast.error(msg);
     } finally {
@@ -165,7 +136,7 @@ export const AdminTwoFactor: React.FC = () => {
       </div>
 
       <div className="w-full max-w-[420px]">
-        <Card className="w-full border border-border bg-card shadow-sm">
+        <Card className="w-full border border-border bg-card shadow-xs rounded-xl overflow-hidden">
           <CardContent className="p-6 sm:p-8">
             <div className="mb-6">
               <BrandMark />
@@ -173,17 +144,17 @@ export const AdminTwoFactor: React.FC = () => {
 
             <div className="mb-6">
               <h1 className="font-heading text-2xl font-semibold text-foreground tracking-tight">
-                {mode === 'totp' ? 'Two-factor authentication' : 'Recovery code'}
+                {mode === 'totp' ? 'Two factor authentication' : 'Recovery code'}
               </h1>
               <p className="font-sans text-xs text-muted-foreground mt-1">
                 {mode === 'totp'
-                  ? 'Enter the 6-digit code generated by your authenticator app.'
-                  : 'Enter one of your saved single-use recovery codes.'}
+                  ? 'Enter the 6 digit code generated by your authenticator app.'
+                  : 'Enter one of your saved single use recovery codes.'}
               </p>
             </div>
 
             {error && (
-              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+              <div role="alert" className="mb-4 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 font-sans text-xs text-destructive flex items-center gap-2.5">
                 <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -209,18 +180,18 @@ export const AdminTwoFactor: React.FC = () => {
                     setCode(e.target.value.trim());
                   }}
                   disabled={loading}
-                  className={mode === 'totp' ? 'text-center font-mono text-lg tracking-widest h-11' : 'font-mono text-sm h-10'}
+                  className={mode === 'totp' ? 'text-center font-mono text-xl tracking-[0.35em] h-12' : 'font-mono text-sm h-11 text-center'}
                 />
               </div>
 
-              <Button type="submit" className="w-full h-10 font-medium mt-2" disabled={loading || !code}>
+              <Button type="submit" className="w-full h-11 font-medium rounded-pill mt-2" disabled={loading || !code}>
                 {loading ? 'Verifying...' : 'Verify'}
               </Button>
             </form>
 
             <div className="my-5 flex items-center gap-3">
               <Separator className="flex-1" />
-              <span className="font-sans text-[11px] text-muted-foreground">
+              <span className="font-sans text-xs text-muted-foreground">
                 or
               </span>
               <Separator className="flex-1" />
@@ -230,18 +201,18 @@ export const AdminTwoFactor: React.FC = () => {
               type="button"
               variant="outline"
               onClick={toggleMode}
-              className="w-full h-10 text-xs"
+              className="w-full h-11 text-xs rounded-pill"
             >
               {mode === 'totp' ? 'Use a recovery code instead' : 'Use authenticator app'}
             </Button>
 
-            <div className="mt-6 pt-4 border-t border-border text-center">
+            <div className="mt-6 pt-4 border-t border-border/60 text-center">
               <button
                 type="button"
                 onClick={handleBackToLogin}
-                className="font-sans text-xs text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1 cursor-pointer"
+                className="font-sans text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
               >
-                ← Back to sign in
+                Return to admin sign in
               </button>
             </div>
           </CardContent>

@@ -41,5 +41,6 @@ Future sessions picking this project back up. Read this before re-deriving decis
 - **Deferred**: Email verification at signup stays off until a real mailer is wired.
 
 ## Recent Fixes
+- UI redesign pass completed: Full Evergreen Cockpit redesign implemented according to `frontend/UI-UX.md` and `frontend/AGENTS.md`. Preserved all backend endpoints, OAuth 2.1 parameters, token flows, and session contracts. Added persistent shell layout, dark theme as default, motorsport accents, honest data representations without fabricated metrics, and Playwright verified visual workflows.
 - Fix 1 resolution: The `config.env === "production" &&` gate was already removed from the code, meaning `AUTH_PUBLIC_SIGNUP_ENABLED` and `AUTH_EMAIL_VERIFICATION_ENABLED` are unconditionally enforced. The README note was therefore true as written. Added ADR 016 to record this deliberate design choice (gating a security control behind an environment variable is an implicit coupling risk).
 - Fix 2 resolution: Removed "Provision App Admin" instructions from README.md. The UI implementation exists in `ProvisionAdminModal.tsx` and `AdminClients.tsx`, but the public documentation is deferred until the design ambiguity is resolved (whether it's an informational label vs. enforced scope).

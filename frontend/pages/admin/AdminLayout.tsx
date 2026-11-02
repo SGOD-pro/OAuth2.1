@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import React, { useCallback, useMemo, useState, useEffect, Suspense } from 'react';
+import { useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { authClient, useSession } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -7,16 +7,27 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Toaster } from '@/components/ui/sonner';
 import { AppSidebar } from "@/components/app-sidebar"
 import { Separator } from "@/components/ui/separator"
+import { ContentSkeleton } from "@/components/ContentSkeleton"
+import { cn } from "@/lib/utils"
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 
-export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AdminLayout: React.FC = () => {
   const { data: session } = useSession();
   const navigate = useNavigate();
   const location = useLocation();
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setScrolled(window.scrollY > 8);
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   const user = (session as { user?: { name?: string; email?: string } } | null)?.user;
 
@@ -42,18 +53,23 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
       <SidebarProvider
         style={
           {
-            "--sidebar-width": "232px",
+            "--sidebar-width": "264px",
           } as React.CSSProperties
         }
       >
         <AppSidebar />
         <SidebarInset className="bg-background min-h-screen flex flex-col">
-          <header className="flex h-[60px] shrink-0 items-center justify-between gap-3 px-4 sm:px-6 border-b border-border/80 bg-background/95 backdrop-blur-md sticky top-0 z-40">
+          <header
+            className={cn(
+              "sticky top-0 z-40 flex h-[64px] shrink-0 items-center justify-between gap-3 px-4 sm:px-6 transition-colors duration-200",
+              scrolled ? "glass shadow-xs" : "bg-card border-b border-border/80"
+            )}
+          >
             <div className="flex items-center gap-3">
               <SidebarTrigger className="-ml-1 text-muted-foreground hover:text-foreground transition-colors" />
               <Separator orientation="vertical" className="h-4 bg-border" />
               <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 font-sans text-xs sm:text-sm">
-                <span className="text-muted-foreground">Admin</span>
+                <span className="text-muted-foreground">Console</span>
                 <span className="text-muted-foreground/60">/</span>
                 <span className="font-medium text-foreground">{breadcrumbSection}</span>
               </nav>
@@ -85,7 +101,7 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
                   <Button 
                     variant="ghost" 
                     size="icon" 
-                    className="size-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors" 
+                    className="size-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-pill transition-colors" 
                     onClick={handleSignOut} 
                     aria-label="Sign out"
                   >
@@ -103,12 +119,14 @@ export const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children 
             </div>
           </header>
 
-          <main className="flex-1 w-full max-w-[1440px] mx-auto p-4 sm:p-6 lg:p-[34px] flex flex-col">
-            {children}
+          <main className="flex-1 w-full max-w-[1440px] mx-auto p-4 sm:p-6 lg:p-8 flex flex-col">
+            <Suspense fallback={<ContentSkeleton />}>
+              <Outlet />
+            </Suspense>
           </main>
           <Toaster />
         </SidebarInset>
       </SidebarProvider>
     </TooltipProvider>
-  )
-}
+  );
+};

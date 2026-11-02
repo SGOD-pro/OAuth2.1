@@ -1,9 +1,22 @@
 import React, { useEffect } from 'react';
-import { AdminLayout } from './AdminLayout';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useAdminStore } from '@/lib/adminStore';
 import { usePageTitle } from '@/hooks/usePageTitle';
+
+function formatRelativeTime(dateString?: string | null): string {
+  if (!dateString) return '—';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffSec = Math.floor((now.getTime() - date.getTime()) / 1000);
+  if (diffSec < 0 || diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}h ago`;
+  const diffDay = Math.floor(diffHour / 24);
+  return `${diffDay}d ago`;
+}
 
 const StatCard = React.memo(
   ({ 
@@ -21,7 +34,7 @@ const StatCard = React.memo(
     helperText: string;
     accent?: 'none' | 'motorsport';
   }) => (
-    <Card accent={accent}>
+    <Card accent={accent} className="transition-none hover:translate-y-0">
       <CardContent className="p-5 sm:p-6">
         <div className="flex items-center justify-between mb-3">
           <span className="font-sans text-xs font-medium text-muted-foreground">
@@ -40,13 +53,8 @@ const StatCard = React.memo(
           </div>
         )}
 
-        <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
-          <span className="font-sans text-xs text-muted-foreground">
-            Status
-          </span>
-          <span className="font-sans text-xs text-foreground font-medium">
-            {helperText}
-          </span>
+        <div className="mt-2 font-sans text-xs text-muted-foreground">
+          {helperText}
         </div>
       </CardContent>
     </Card>
@@ -63,9 +71,11 @@ export const AdminDashboard: React.FC = () => {
     void fetchStats();
   }, [fetchStats]);
 
+  const recentActivity = stats?.recentActivity || [];
+
   return (
-    <AdminLayout>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
+    <div className="flex flex-col gap-6 sm:gap-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="font-heading text-2xl sm:text-[34px] font-semibold text-foreground tracking-tight leading-tight">
             Overview
@@ -80,7 +90,7 @@ export const AdminDashboard: React.FC = () => {
           size="sm" 
           onClick={() => void fetchStats(true)} 
           disabled={loading}
-          className="h-9 px-3 self-start sm:self-auto shrink-0"
+          className="h-9 px-3.5 self-start sm:self-auto shrink-0"
         >
           <svg className={`mr-1.5 size-3.5 ${loading ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
@@ -95,7 +105,7 @@ export const AdminDashboard: React.FC = () => {
           label="Total Applications"
           value={stats?.totalClients ?? null}
           loading={loading && !stats}
-          helperText="Registered"
+          helperText={`${stats?.activeClients ?? 0} active`}
           accent="motorsport"
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -104,21 +114,10 @@ export const AdminDashboard: React.FC = () => {
           }
         />
         <StatCard
-          label="Active Applications"
-          value={stats?.activeClients ?? null}
-          loading={loading && !stats}
-          helperText="Operational"
-          icon={
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
-            </svg>
-          }
-        />
-        <StatCard
           label="Total Users"
           value={stats?.totalUsers ?? null}
           loading={loading && !stats}
-          helperText="Enrolled"
+          helperText="Enrolled platform users"
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
@@ -136,9 +135,71 @@ export const AdminDashboard: React.FC = () => {
             </svg>
           }
         />
+        <StatCard
+          label="Active Sessions"
+          value={stats?.activeSessions ?? null}
+          loading={loading && !stats}
+          helperText="Current active sessions"
+          icon={
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+          }
+        />
       </div>
 
-      <div className="mt-8 grid gap-6 grid-cols-1 md:grid-cols-2">
+      {/* Recent Activity Card */}
+      <Card>
+        <CardContent className="p-5 sm:p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="font-heading text-base font-medium text-foreground">Recent sign ins</h2>
+              <p className="font-sans text-xs text-muted-foreground mt-0.5">Most recent user authentication sessions</p>
+            </div>
+            <span className="font-mono text-xs text-muted-foreground">
+              {recentActivity.length} logged
+            </span>
+          </div>
+
+          {recentActivity.length === 0 ? (
+            <div className="py-8 text-center font-sans text-sm text-muted-foreground">
+              No recent sign-ins.
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {recentActivity.map((activity, idx) => {
+                const date = activity.timestamp ? new Date(activity.timestamp) : null;
+                const absoluteTime = date ? `${date.toISOString()} (${date.toUTCString()})` : '';
+                return (
+                  <div key={activity.id || idx} className="py-3 flex items-center justify-between text-xs font-sans">
+                    <div className="flex items-center gap-3">
+                      <div className="size-2 rounded-full bg-emerald-500 shrink-0" />
+                      <div>
+                        <span className="font-mono font-medium text-foreground block">
+                          {activity.ipAddress || 'Unknown IP'}
+                        </span>
+                        <span className="text-muted-foreground text-[11px] block">
+                          {activity.userAgent || 'Web Client'}
+                        </span>
+                      </div>
+                    </div>
+                    <time 
+                      dateTime={activity.timestamp || undefined} 
+                      title={absoluteTime}
+                      className="text-muted-foreground font-sans text-xs shrink-0"
+                    >
+                      {formatRelativeTime(activity.timestamp)}
+                    </time>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
         <Card>
           <CardContent className="p-5 sm:p-6 flex flex-col justify-between min-h-[210px]">
             <div>
@@ -154,7 +215,7 @@ export const AdminDashboard: React.FC = () => {
                     <p className="font-sans text-xs text-muted-foreground">RFC 6749 / RFC 7636</p>
                   </div>
                 </div>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-pill text-xs font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   <span className="size-1.5 rounded-full bg-emerald-500" />
                   Active
                 </span>
@@ -163,7 +224,7 @@ export const AdminDashboard: React.FC = () => {
               <div className="grid grid-cols-3 gap-3 my-4 p-3.5 rounded-md bg-secondary/30 border border-border">
                 <div>
                   <span className="font-sans text-xs text-muted-foreground block">PKCE Method</span>
-                  <span className="font-mono text-xs font-medium text-foreground mt-0.5 block">S256 (SHA-256)</span>
+                  <span className="font-mono text-xs font-medium text-foreground mt-0.5 block">S256</span>
                 </div>
                 <div>
                   <span className="font-sans text-xs text-muted-foreground block">Grant Flow</span>
@@ -199,7 +260,7 @@ export const AdminDashboard: React.FC = () => {
                     <p className="font-sans text-xs text-muted-foreground">JWKS & OIDC Discovery</p>
                   </div>
                 </div>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-pill text-xs font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   <span className="size-1.5 rounded-full bg-emerald-500" />
                   Configured
                 </span>
@@ -228,6 +289,6 @@ export const AdminDashboard: React.FC = () => {
           </CardContent>
         </Card>
       </div>
-    </AdminLayout>
+    </div>
   );
 };

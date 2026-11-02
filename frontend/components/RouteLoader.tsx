@@ -22,9 +22,9 @@ export const RouteLoader: React.FC = () => {
       </div>
       <div className="flex w-64 flex-col gap-2.5">
         {/* 3 bars: 1st full length, 2nd 3/4 length, 3rd 1/2 length */}
-        <div className={`h-[2.5px] w-full bg-[#0066B1] rounded-full origin-left ${shouldAnimate ? 'animate-m-line-1' : ''}`} />
-        <div className={`h-[2.5px] w-3/4 bg-[#1C69D4] rounded-full origin-left ${shouldAnimate ? 'animate-m-line-2' : ''}`} />
-        <div className={`h-[2.5px] w-1/2 bg-[#E22718] rounded-full origin-left ${shouldAnimate ? 'animate-m-line-3' : ''}`} />
+        <div className={`h-[2.5px] w-full bg-motorsport-light rounded-full origin-left ${shouldAnimate ? 'animate-m-line-1' : ''}`} />
+        <div className={`h-[2.5px] w-3/4 bg-motorsport-dark rounded-full origin-left ${shouldAnimate ? 'animate-m-line-2' : ''}`} />
+        <div className={`h-[2.5px] w-1/2 bg-motorsport-red rounded-full origin-left ${shouldAnimate ? 'animate-m-line-3' : ''}`} />
       </div>
     </div>
   );

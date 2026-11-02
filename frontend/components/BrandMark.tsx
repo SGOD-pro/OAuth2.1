@@ -13,9 +13,9 @@ export const BrandMark: React.FC<BrandMarkProps> = ({ size = 'default', classNam
     <div className={`flex items-center gap-2.5 select-none ${className}`}>
       {/* BMW M-Series Inspired Motorsport Geometric Signature */}
       <div className="flex gap-0.5 items-center shrink-0">
-        <div className={`${isLg ? 'w-1 h-5' : isSm ? 'w-[2.5px] h-3' : 'w-[3px] h-4'} bg-[#0066B1] -skew-x-12 rounded-[0.5px]`} />
-        <div className={`${isLg ? 'w-1 h-5' : isSm ? 'w-[2.5px] h-3' : 'w-[3px] h-4'} bg-[#1C69D4] -skew-x-12 rounded-[0.5px]`} />
-        <div className={`${isLg ? 'w-1 h-5' : isSm ? 'w-[2.5px] h-3' : 'w-[3px] h-4'} bg-[#E22718] -skew-x-12 rounded-[0.5px]`} />
+        <div className={`${isLg ? 'w-1 h-5' : isSm ? 'w-[2.5px] h-3' : 'w-[3px] h-4'} bg-motorsport-light -skew-x-12 rounded-[0.5px]`} />
+        <div className={`${isLg ? 'w-1 h-5' : isSm ? 'w-[2.5px] h-3' : 'w-[3px] h-4'} bg-motorsport-dark -skew-x-12 rounded-[0.5px]`} />
+        <div className={`${isLg ? 'w-1 h-5' : isSm ? 'w-[2.5px] h-3' : 'w-[3px] h-4'} bg-motorsport-red -skew-x-12 rounded-[0.5px]`} />
       </div>
 
       <div className="flex flex-col leading-none">

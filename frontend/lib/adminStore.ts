@@ -2,6 +2,15 @@ import { create } from 'zustand';
 import { toast } from 'sonner';
 import { apiFetch } from './api';
 
+export interface RecentActivityItem {
+  id?: string;
+  type?: string;
+  userId?: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  timestamp?: string | null;
+}
+
 export interface Stats {
   totalClients: number;
   activeClients: number;
@@ -9,6 +18,7 @@ export interface Stats {
   recentLogins: number;
   recentSessions24h?: number;
   activeSessions?: number;
+  recentActivity?: RecentActivityItem[];
 }
 
 export interface OAuthClient {

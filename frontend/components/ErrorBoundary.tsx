@@ -33,23 +33,27 @@ export class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-[400px] flex items-center justify-center p-6">
-          <div className="w-full rounded-2xl border border-destructive/30 bg-destructive/5 p-6 text-center space-y-4 shadow-lg">
-            <div className="w-12 h-12 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mx-auto text-xl font-bold">
-              !
+        <div className="min-h-[400px] flex items-center justify-center p-6 bg-background">
+          <div className="w-full max-w-[480px] rounded-xl border border-border bg-card p-6 text-center space-y-4 shadow-xs">
+            <div className="size-12 rounded-full border border-destructive/20 bg-destructive/10 text-destructive flex items-center justify-center mx-auto">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
             </div>
-            <h2 className="text-lg font-semibold text-foreground">
+            <h2 className="font-heading text-lg font-semibold text-foreground">
               {this.props.fallbackTitle || 'Something went wrong'}
             </h2>
-            <p className="text-xs text-muted-foreground font-mono break-all">
+            <p className="text-xs text-muted-foreground font-mono break-all bg-secondary/50 p-2.5 rounded-md border border-border">
               {this.state.error?.message || 'An unexpected rendering error occurred.'}
             </p>
             <div className="pt-2 flex justify-center gap-3">
-              <Button size="sm" variant="outline" onClick={() => window.history.back()}>
-                Go Back
+              <Button size="sm" variant="outline" className="rounded-pill" onClick={() => window.history.back()}>
+                Go back
               </Button>
-              <Button size="sm" onClick={this.handleReset}>
-                Reload Page
+              <Button size="sm" className="rounded-pill" onClick={this.handleReset}>
+                Reload page
               </Button>
             </div>
           </div>

@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { AdminLayout } from './AdminLayout';
 import { authClient, useSession } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -132,8 +131,7 @@ export const AdminSecurity: React.FC = () => {
   }, [rawKey]);
 
   return (
-    <AdminLayout>
-      <div className="flex flex-col flex-1 max-w-[800px] w-full">
+    <div className="flex flex-col flex-1 max-w-[800px] w-full">
         <div className="mb-6 sm:mb-8">
           <h1 className="font-heading text-2xl sm:text-[34px] font-semibold text-foreground tracking-tight leading-tight">
             Security
@@ -154,9 +152,17 @@ export const AdminSecurity: React.FC = () => {
                   Protect administrative access by requiring a 6-digit code from an authenticator app.
                 </p>
               </div>
-              <Badge variant={isTwoFactorEnabled ? 'success' : 'secondary'}>
-                {isTwoFactorEnabled ? 'Enabled' : 'Disabled'}
-              </Badge>
+              {isTwoFactorEnabled ? (
+                <Badge variant="success" className="gap-1.5 py-1 px-3">
+                  <span className="size-1.5 rounded-full bg-emerald-500" />
+                  On
+                </Badge>
+              ) : (
+                <Badge variant="warning" className="gap-1.5 py-1 px-3">
+                  <span className="size-1.5 rounded-full bg-amber-500" />
+                  Off
+                </Badge>
+              )}
             </div>
 
             {step === 'done' && (
@@ -321,7 +327,6 @@ export const AdminSecurity: React.FC = () => {
 
           </CardContent>
         </Card>
-      </div>
 
       {/* Backup codes dialog with motorsport accent */}
       <Dialog open={showBackupDialog} onOpenChange={setShowBackupDialog}>
@@ -349,6 +354,6 @@ export const AdminSecurity: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </AdminLayout>
+    </div>
   );
 };

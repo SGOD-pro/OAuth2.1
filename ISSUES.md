@@ -34,6 +34,10 @@ Fix: Optional breach check; MFA for admin role.
 **L3** — Frontend `AdminRoute` is UX-only; server `requireAdmin` is the real gate.  
 **L4** — Frontend `validateUri` does not reject private IPs (server does in prod) — OK if server remains source of truth.  
 **N4b** — Security self-check covers the trusted-proxy edge case and password/redirect helpers; route-level integration coverage remains limited.
+**N5** — Backend telemetry backlog (found during Evergreen UI pass, Section 0.7):
+  - `stats.recentLogins` trailing fallback `|| 1` and `activeClients: n || totalClients` fabricate fallback values on empty state. Remove trailing fallbacks.
+  - Audit logs fall back to IP `"127.0.0.1"` and `"Active Session"` when missing; return `null` instead of simulated loopback data.
+  - To support future security analytics, persist failed authentication events, outcomes, target `client_id`, and expose signing key age.
 
 ────────────────────────────────────────
 

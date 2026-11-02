@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { AdminLayout } from './AdminLayout';
 import { RegisterAppModal } from './RegisterAppModal';
 import { EditAppModal } from './EditAppModal';
 import { AppAdminManager } from './ProvisionAdminModal';
@@ -51,6 +50,7 @@ function formatAppDate(isoString?: string | Date) {
     const timeStr = d.toLocaleTimeString(undefined, {
       hour: '2-digit',
       minute: '2-digit',
+      timeZoneName: 'short',
     });
     return { dateStr, timeStr, fullIso: d.toISOString() };
   } catch {
@@ -229,8 +229,7 @@ export const AdminClients: React.FC = () => {
   }, []);
 
   return (
-    <AdminLayout>
-      <div className="flex flex-col flex-1">
+    <div className="flex flex-col flex-1">
         {/* Header section */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
           <div>
@@ -266,7 +265,7 @@ export const AdminClients: React.FC = () => {
                 onClick={() => confirmDelete && void handleDelete(confirmDelete)}
                 disabled={deletingId === confirmDelete?.client_id}
               >
-                {deletingId === confirmDelete?.client_id ? 'Revoking...' : 'Revoke application'}
+                {deletingId === confirmDelete?.client_id ? 'Revoking...' : `Revoke ${confirmDelete?.client_name || 'application'}`}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -407,11 +406,11 @@ export const AdminClients: React.FC = () => {
                 <Table>
                   <TableHeader className="bg-secondary/40 border-b border-border">
                     <TableRow>
-                      <TableHead className="w-[28%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Application</TableHead>
-                      <TableHead className="w-[26%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Client ID</TableHead>
-                      <TableHead className="w-[18%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</TableHead>
-                      <TableHead className="w-[14%] text-xs font-medium uppercase tracking-wider text-muted-foreground">Created</TableHead>
-                      <TableHead className="text-right text-xs font-medium uppercase tracking-wider text-muted-foreground">Actions</TableHead>
+                      <TableHead className="w-[28%] text-xs font-medium text-muted-foreground">Application</TableHead>
+                      <TableHead className="w-[26%] text-xs font-medium text-muted-foreground">Client ID</TableHead>
+                      <TableHead className="w-[18%] text-xs font-medium text-muted-foreground">Status</TableHead>
+                      <TableHead className="w-[14%] text-xs font-medium text-muted-foreground">Created</TableHead>
+                      <TableHead className="text-right text-xs font-medium text-muted-foreground">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -463,31 +462,45 @@ export const AdminClients: React.FC = () => {
                               </div>
                             </TableCell>
                             <TableCell className="py-3.5">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <Badge variant={c.disabled ? 'destructive' : 'success'}>
-                                  {c.disabled ? 'Suspended' : 'Active'}
-                                </Badge>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {c.disabled ? (
+                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive">
+                                    <span className="size-1.5 rounded-full bg-destructive" />
+                                    Disabled
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                                    <span className="size-1.5 rounded-full bg-emerald-500" />
+                                    Active
+                                  </span>
+                                )}
                                 <Badge
-                                  variant="outline"
-                                  className={c.is_dev ? 'bg-amber-500/10 text-amber-500 border-amber-500/30 text-[11px]' : 'bg-primary/10 text-primary border-primary/30 text-[11px]'}
+                                  variant={c.is_dev || c.isDev ? 'warning' : 'secondary'}
+                                  className="text-[11px]"
                                 >
-                                  {c.is_dev ? 'Dev' : 'Prod'}
+                                  {c.is_dev || c.isDev ? 'Development' : 'Production'}
                                 </Badge>
                                 <Badge
                                   variant="outline"
-                                  className={c.is_public !== false && c.isPublic !== false ? 'bg-sky-500/10 text-sky-500 border-sky-500/30 text-[11px]' : 'bg-purple-500/10 text-purple-500 border-purple-500/30 text-[11px]'}
+                                  className="text-[11px]"
                                 >
                                   {c.is_public !== false && c.isPublic !== false ? 'Public' : 'Private'}
                                 </Badge>
                                 {Boolean(c.has_custom_admins || c.hasCustomAdmins || c.adminEmail || c.adminUserId) && (
-                                  <Badge
-                                    variant="outline"
-                                    className="bg-emerald-500/10 text-emerald-500 border-emerald-500/30 text-[11px] flex items-center gap-1"
-                                    title="Custom application administrators assigned"
-                                  >
-                                    <ShieldCheck className="size-3" />
-                                    Admin
-                                  </Badge>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Badge
+                                        variant="outline"
+                                        className="text-[11px] flex items-center gap-1"
+                                      >
+                                        <ShieldCheck className="size-3" />
+                                        Custom admins
+                                      </Badge>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top">
+                                      This app has its own administrator account
+                                    </TooltipContent>
+                                  </Tooltip>
                                 )}
                               </div>
                             </TableCell>
@@ -734,6 +747,5 @@ export const AdminClients: React.FC = () => {
           />
         )}
       </div>
-    </AdminLayout>
   );
 };

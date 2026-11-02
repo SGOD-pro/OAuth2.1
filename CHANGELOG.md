@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+* Complete Evergreen Cockpit frontend redesign across public auth, OAuth consent, and platform admin console (see UI-UX.md)
+* Inset administrative shell layout with floating navigation, active pill indicator, and security posture card
+* Recent sign ins activity feed in admin dashboard showing authentic session records with relative and absolute timestamps
+* Semantic status indicators and chips in applications registry distinguishing environment, access tier, and custom administrators
+* Restrained glass header utility activating only on scroll over underlying content with reduced transparency fallbacks
+* In-shell content skeleton eliminating layout shift during lazy page transitions
 * Dynamic per client role resolution in OAuth token issuance, token introspection, and userinfo endpoints (see spec 0001)
 * Multi application administration support allowing application admins to manage multiple consumer apps via user app registrations without privilege leakage
 * Conflict detection and resolution in administrative provisioning scripts protecting Global Super Admin accounts from scoped client overrides
@@ -37,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Automated unit test suite verifying gateway configuration generation, cleaning, length validation, and deployment overrides (`tests/unit/gateway-pipeline.test.ts`)
 
 ### Changed
+* Switched default theme to dark mode while maintaining full light mode compatibility
+* Replaced hard-coded color values with semantic design tokens and motorsport tricolor accents
+* Updated interactive button styling to 44px pill shapes with 1px hover lift and pressed scale states
+* Replaced native select elements with tokenized select components in logs and application management
+* Paused automatic 30s audit log polling when browser tab visibility state is hidden
+* Removed unused Three.js dependencies and dead Figtree font references reducing bundle overhead
 * Background synchronization sweeps and cold start self healing routines respect Global Super Admin privileges without mutating scoped client bindings, passwords, or ban status
 * Administrative middleware requireScopedAdmin and checkUserIsClientAdmin evaluate multi app memberships across registrations and assigned client records
 * Scoped administrator removal deterministically re-points remaining application bindings or demotes to standard user status only when zero assignments remain

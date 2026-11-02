@@ -99,28 +99,21 @@ export const AdminLogin: React.FC = () => {
       const userRes = await getSessionFn();
       const currentUser = userRes?.data?.user;
 
-      if (isAppAdminUser(currentUser)) {
-        await authClient.signOut({});
-        const msg = 'Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal.';
-        setError(msg);
-        toast.error(msg);
-        form.setValue('password', '');
-        return;
-      }
-
       if (!isSuperAdminUser(currentUser)) {
-        await authClient.signOut({});
-        const msg = 'Access denied: Administrator privileges required for the platform console.';
-        setError(msg);
-        toast.error(msg);
-        form.setValue('password', '');
+        const isAppAdmin = isAppAdminUser(currentUser);
+        setError(
+          isAppAdmin
+            ? 'Access restricted: Application administrators manage their app through their application portal. To access the central console, sign in with Global Super Admin credentials.'
+            : 'Access restricted: Administrator privileges required.'
+        );
+        toast.error('Insufficient privileges for platform administration');
+        setLoading(false);
         return;
       }
 
-      toast.success('Signed in successfully');
       navigate('/admin');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Authentication service unavailable';
+      const msg = err instanceof Error ? err.message : 'Authentication service error';
       setError(msg);
       toast.error(msg);
     } finally {
@@ -130,23 +123,12 @@ export const AdminLogin: React.FC = () => {
 
   const handleSignOut = async () => {
     setLoading(true);
-    setError(null);
     try {
-      const res = await authClient.signOut({});
-      if (res?.error) {
-        const errorMsg = res.error.message || 'Failed to sign out current session. Please try again.';
-        setError(errorMsg);
-        toast.error(errorMsg);
-        setLoading(false);
-        return;
-      }
-
-      // Invalidate and refetch session state using supported SDK APIs
-      if (typeof refetch === 'function') {
+      await authClient.signOut();
+      if (refetch) {
         await refetch();
       }
 
-      // Verify that the server session is actually cleared
       const getSessionFn = authClient.getSession as unknown as () => Promise<{
         data?: { user?: unknown };
         error?: unknown;
@@ -186,7 +168,7 @@ export const AdminLogin: React.FC = () => {
       </div>
 
       <div className="w-full max-w-[420px]">
-        <Card className="w-full border border-border bg-card shadow-sm">
+        <Card className="w-full border border-border bg-card shadow-xs rounded-xl overflow-hidden">
           <CardContent className="p-6 sm:p-8">
             <div className="mb-6">
               <BrandMark />
@@ -203,8 +185,8 @@ export const AdminLogin: React.FC = () => {
 
             {isConflictingSession ? (
               <div className="space-y-4">
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-xs">
-                  <h4 className="font-sans font-medium text-amber-900 dark:text-amber-200 text-sm">
+                <div className="rounded-lg border border-warning/20 bg-warning/10 p-4 text-xs">
+                  <h4 className="font-sans font-semibold text-foreground text-sm">
                     Active consumer session detected
                   </h4>
                   <div className="mt-2 space-y-1 text-muted-foreground">
@@ -220,7 +202,7 @@ export const AdminLogin: React.FC = () => {
                   </p>
                 </div>
                 {error && (
-                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+                  <div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 font-sans text-xs text-destructive flex items-center gap-2.5">
                     <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
@@ -230,16 +212,16 @@ export const AdminLogin: React.FC = () => {
                 <Button
                   type="button"
                   onClick={handleSignOut}
-                  className="w-full h-10 font-medium"
+                  className="w-full h-11 font-medium rounded-pill"
                   disabled={loading}
                 >
                   {loading ? 'Switching account...' : 'Sign in with a different account'}
                 </Button>
-                <div className="text-center">
+                <div className="text-center pt-2">
                   <button
                     type="button"
                     onClick={() => { window.location.href = '/'; }}
-                    className="font-sans text-xs text-muted-foreground hover:text-foreground underline underline-offset-4"
+                    className="font-sans text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                   >
                     Return to home
                   </button>
@@ -249,7 +231,7 @@ export const AdminLogin: React.FC = () => {
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(handleSignIn)} className="space-y-4">
                   {error && (
-                    <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+                    <div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 font-sans text-xs text-destructive flex items-center gap-2.5">
                       <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
@@ -269,7 +251,6 @@ export const AdminLogin: React.FC = () => {
                             placeholder="admin@example.com" 
                             {...field} 
                             disabled={loading} 
-                            className="h-10"
                           />
                         </FormControl>
                         <FormMessage />
@@ -290,12 +271,12 @@ export const AdminLogin: React.FC = () => {
                               placeholder="••••••••••••" 
                               {...field} 
                               disabled={loading} 
-                              className="h-10 pr-10"
+                              className="pr-10"
                             />
                             <button
                               type="button"
                               onClick={() => setShowPassword(!showPassword)}
-                              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none cursor-pointer"
                               aria-label={showPassword ? "Hide password" : "Show password"}
                               tabIndex={-1}
                             >
@@ -308,14 +289,14 @@ export const AdminLogin: React.FC = () => {
                     )}
                   />
 
-                  <Button type="submit" className="w-full h-10 font-medium mt-2" disabled={loading}>
+                  <Button type="submit" className="w-full h-11 font-medium rounded-pill mt-2" disabled={loading}>
                     {loading ? 'Signing in...' : 'Sign in to console'}
                   </Button>
                 </form>
               </Form>
             )}
 
-            <p className="font-sans text-[11px] text-muted-foreground text-center mt-6">
+            <p className="font-sans text-xs text-muted-foreground text-center mt-6">
               Protected by two factor authentication.
             </p>
           </CardContent>

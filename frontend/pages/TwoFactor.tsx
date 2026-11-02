@@ -117,30 +117,29 @@ export const TwoFactor: React.FC = () => {
         }
       }
 
-      toast.success('Two factor authentication verified');
+      // Check for OAuth continuation parameters
+      const clientId = searchParams.get('client_id');
+      const redirectUri = searchParams.get('redirect_uri');
 
-      // 1. Authoritative OAuth continuation takes strict precedence
-      if (searchParams.get('client_id') && searchParams.get('redirect_uri')) {
+      if (clientId && redirectUri) {
         const oauthParams = new URLSearchParams(searchParams);
         oauthParams.delete('prompt');
         window.location.assign(`/api/auth/oauth2/authorize?${oauthParams.toString()}`);
         return;
       }
 
-      // 2. Otherwise check explicit callbackURL, strictly rejecting platform administrator routes
-      const rawCallback = searchParams.get('callbackURL');
-      if (rawCallback) {
-        const safe = safeCallbackURL(rawCallback);
-        if (safe && !safe.startsWith('/admin') && !safe.startsWith('/api/admin')) {
-          window.location.assign(safe);
+      const explicitCallback = searchParams.get('callbackURL');
+      if (explicitCallback) {
+        const validated = safeCallbackURL(explicitCallback);
+        if (validated && !validated.startsWith('/admin') && !validated.startsWith('/api/admin')) {
+          window.location.assign(validated);
           return;
         }
       }
 
-      // 3. Fallback to application home
-      window.location.assign('/');
+      window.location.assign('/admin');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Network error validating code';
+      const msg = err instanceof Error ? err.message : 'Verification failed.';
       setError(msg);
       toast.error(msg);
     } finally {
@@ -149,14 +148,14 @@ export const TwoFactor: React.FC = () => {
   };
 
   const toggleMode = () => {
+    setMode((m) => (m === 'totp' ? 'backup' : 'totp'));
     setCode('');
     setError(null);
-    setMode((m) => (m === 'totp' ? 'backup' : 'totp'));
   };
 
   const handleBackToSignIn = async () => {
-    await authClient.signOut({}).catch(() => {});
-    navigate(`/auth?${searchParams.toString()}`);
+    await authClient.signOut({}).catch(() => undefined);
+    navigate(getAuthRedirect('mfa_cancelled'));
   };
 
   return (
@@ -166,7 +165,7 @@ export const TwoFactor: React.FC = () => {
       </div>
 
       <div className="w-full max-w-[420px]">
-        <Card className="w-full border border-border bg-card shadow-sm">
+        <Card className="w-full border border-border bg-card shadow-xs rounded-xl overflow-hidden">
           <CardContent className="p-6 sm:p-8">
             <div className="mb-6">
               <BrandMark />
@@ -184,7 +183,7 @@ export const TwoFactor: React.FC = () => {
             </div>
 
             {error && (
-              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 font-sans text-xs text-destructive flex items-center gap-2">
+              <div role="alert" className="mb-4 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 font-sans text-xs text-destructive flex items-center gap-2.5">
                 <svg className="size-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -207,24 +206,24 @@ export const TwoFactor: React.FC = () => {
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
                   disabled={loading}
-                  className="font-mono text-center tracking-widest text-base h-11"
+                  className={mode === 'totp' ? 'font-mono text-center tracking-[0.35em] text-xl h-12' : 'font-mono text-center text-sm h-11'}
                 />
               </div>
 
               <Button
                 type="submit"
-                className="w-full h-10 font-sans text-xs font-medium"
+                className="w-full h-11 font-medium rounded-pill mt-2"
                 disabled={loading || !code.trim()}
               >
                 {loading ? 'Verifying...' : 'Verify and continue'}
               </Button>
             </form>
 
-            <div className="mt-6 flex flex-col items-center gap-2">
+            <div className="mt-6 flex flex-col items-center gap-2 pt-4 border-t border-border/60">
               <button
                 type="button"
                 onClick={toggleMode}
-                className="font-sans text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4"
+                className="font-sans text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4 cursor-pointer"
               >
                 {mode === 'totp' ? 'Use recovery backup code instead' : 'Use authenticator code instead'}
               </button>
@@ -232,7 +231,7 @@ export const TwoFactor: React.FC = () => {
               <button
                 type="button"
                 onClick={handleBackToSignIn}
-                className="font-sans text-xs text-muted-foreground hover:text-foreground transition-colors mt-2"
+                className="font-sans text-xs text-muted-foreground hover:text-foreground transition-colors mt-1 cursor-pointer"
               >
                 Return to sign in
               </button>

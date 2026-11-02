@@ -20,7 +20,8 @@ export const ThemeToggle: React.FC = () => {
   };
 
   const toggleTheme = () => {
-    if (!document.startViewTransition) {
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!document.startViewTransition || prefersReducedMotion) {
       switchTheme();
       return;
     }
@@ -32,9 +33,9 @@ export const ThemeToggle: React.FC = () => {
       type="button"
       onClick={toggleTheme}
       aria-label="Toggle theme"
-      className="relative h-8 w-14 rounded-full bg-secondary transition-colors duration-300 ease-in-out focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background cursor-pointer"
+      className="relative h-8 w-14 rounded-full bg-secondary transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-pointer"
     >
-      <span className="absolute left-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-background shadow-sm transition-transform duration-300 ease-in-out dark:translate-x-6 text-foreground">
+      <span className="absolute left-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-background shadow-sm transition-transform duration-200 ease-in-out dark:translate-x-6 text-foreground">
         {isDark ? (
           <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />

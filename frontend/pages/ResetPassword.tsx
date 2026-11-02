@@ -71,29 +71,29 @@ export const ResetPassword: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-6 sm:p-12 bg-background">
-      <div className="w-full max-w-[460px]">
-        <Card className="w-full shadow-lg border-border">
-          <CardContent className="p-8 sm:p-[34px]">
-            <div className="mb-8">
+    <div className="min-h-screen w-full flex items-center justify-center p-4 sm:p-8 bg-background">
+      <div className="w-full max-w-[440px]">
+        <Card className="w-full shadow-xs border-border rounded-xl overflow-hidden">
+          <CardContent className="p-6 sm:p-8">
+            <div className="mb-6">
               <div className="flex items-center justify-between mb-4">
-                <BrandMark size="md" />
-                <span className="font-mono text-[11px] text-muted-foreground border border-border px-2 py-0.5 rounded-sm">
+                <BrandMark size="default" />
+                <span className="font-mono text-xs text-muted-foreground border border-border px-2.5 py-0.5 rounded-pill bg-secondary/50">
                   OAuth 2.1
                 </span>
               </div>
-              <h1 className="font-heading text-[34px] leading-tight font-semibold text-foreground">
+              <h1 className="font-heading text-2xl sm:text-[30px] leading-tight font-semibold text-foreground">
                 Set new password
               </h1>
-              <p className="font-sans text-sm text-muted-foreground mt-2">
+              <p className="font-sans text-xs text-muted-foreground mt-1.5">
                 Create a strong password of at least 12 characters.
               </p>
             </div>
 
             {success ? (
               <div className="space-y-6">
-                <div className="rounded-[12px] border border-border bg-secondary/50 p-6 text-center">
-                  <div className="mx-auto size-11 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-500 mb-3">
+                <div className="rounded-lg border border-border bg-secondary/50 p-6 text-center">
+                  <div className="mx-auto size-11 rounded-full bg-success/10 border border-success/20 flex items-center justify-center text-success mb-3">
                     <CheckCircle2 className="size-5" />
                   </div>
                   <h3 className="font-heading text-base font-semibold text-foreground mb-1">
@@ -104,9 +104,9 @@ export const ResetPassword: React.FC = () => {
                   </p>
                 </div>
 
-                <Button asChild variant="outline" className="w-full">
+                <Button asChild variant="outline" className="w-full h-11 rounded-pill font-medium">
                   <Link to="/auth" className="flex items-center justify-center gap-2">
-                    <ArrowLeft className="size-4" /> Go to sign in now
+                    <ArrowLeft className="size-4" /> Sign in now
                   </Link>
                 </Button>
               </div>
@@ -122,18 +122,19 @@ export const ResetPassword: React.FC = () => {
                           <FormLabel className="text-xs font-medium text-foreground">New password</FormLabel>
                           <FormControl>
                             <div className="relative">
-                              <Input 
-                                type={showPassword ? "text" : "password"} 
-                                placeholder="••••••••••••" 
-                                {...field} 
-                                disabled={loading} 
+                              <Input
+                                type={showPassword ? 'text' : 'password'}
+                                placeholder="••••••••••••"
+                                {...field}
+                                disabled={loading}
                                 className="pr-10"
+                                autoFocus
                               />
                               <button
                                 type="button"
                                 onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
-                                aria-label={showPassword ? "Hide password" : "Show password"}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none cursor-pointer"
+                                aria-label={showPassword ? 'Hide password' : 'Show password'}
                                 tabIndex={-1}
                               >
                                 {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -153,18 +154,18 @@ export const ResetPassword: React.FC = () => {
                           <FormLabel className="text-xs font-medium text-foreground">Confirm new password</FormLabel>
                           <FormControl>
                             <div className="relative">
-                              <Input 
-                                type={showConfirmPassword ? "text" : "password"} 
-                                placeholder="••••••••••••" 
-                                {...field} 
-                                disabled={loading} 
+                              <Input
+                                type={showConfirmPassword ? 'text' : 'password'}
+                                placeholder="••••••••••••"
+                                {...field}
+                                disabled={loading}
                                 className="pr-10"
                               />
                               <button
                                 type="button"
                                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
-                                aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none cursor-pointer"
+                                aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
                                 tabIndex={-1}
                               >
                                 {showConfirmPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -176,18 +177,16 @@ export const ResetPassword: React.FC = () => {
                       )}
                     />
 
-                    <div className="pt-2">
-                      <Button type="submit" className="w-full h-10" disabled={loading}>
-                        {loading ? 'Updating password...' : 'Update password'}
-                      </Button>
-                    </div>
+                    <Button type="submit" className="w-full h-11 font-medium rounded-pill mt-2" disabled={loading}>
+                      {loading ? 'Updating password...' : 'Update password'}
+                    </Button>
                   </form>
                 </Form>
 
-                <div className="pt-2 border-t border-border text-center">
+                <div className="pt-2 text-center">
                   <Link
                     to="/auth"
-                    className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors font-medium"
                   >
                     <ArrowLeft className="size-3.5" /> Back to sign in
                   </Link>

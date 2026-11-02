@@ -43,6 +43,9 @@ const AdminTwoFactor = lazy(() =>
 const AdminSecurity = lazy(() =>
   import('@/pages/admin/AdminSecurity').then((module) => ({ default: module.AdminSecurity }))
 );
+const AdminLayout = lazy(() =>
+  import('@/pages/admin/AdminLayout').then((module) => ({ default: module.AdminLayout }))
+);
 
 const withSuspense = (node: ReactNode) => (
   <Suspense fallback={<RouteLoader />}>{node}</Suspense>
@@ -66,35 +69,17 @@ const router = createBrowserRouter([
   { path: '/admin/two-factor', element: withSuspense(<AdminTwoFactor />) },
   {
     path: '/admin',
-    element: withSuspense(
+    element: (
       <AdminRoute>
-        <AdminDashboard />
+        {withSuspense(<AdminLayout />)}
       </AdminRoute>
     ),
-  },
-  {
-    path: '/admin/clients',
-    element: withSuspense(
-      <AdminRoute>
-        <AdminClients />
-      </AdminRoute>
-    ),
-  },
-  {
-    path: '/admin/logs',
-    element: withSuspense(
-      <AdminRoute>
-        <AdminLogs />
-      </AdminRoute>
-    ),
-  },
-  {
-    path: '/admin/security',
-    element: withSuspense(
-      <AdminRoute>
-        <AdminSecurity />
-      </AdminRoute>
-    ),
+    children: [
+      { index: true, element: <AdminDashboard /> },
+      { path: 'clients', element: <AdminClients /> },
+      { path: 'logs', element: <AdminLogs /> },
+      { path: 'security', element: <AdminSecurity /> },
+    ],
   },
   { path: '*', element: withLayout(<NotFound />) },
 ]);
