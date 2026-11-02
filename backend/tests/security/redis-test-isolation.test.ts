@@ -291,39 +291,121 @@ await runTest(
 );
 
 // =============================================================================
-// TEST 6: Test containers or processes are stopped on normal completion and failure
+// TEST 6: Production fixture cleans up container on startup failure and preserves existing Redis
 // =============================================================================
 await runTest(
-  "ISOLATION-06: Test containers are stopped on normal completion and failure",
+  "ISOLATION-06: Production fixture stops and removes container on port discovery failure and normal teardown works",
   async () => {
+    // 1. Verify container from Test 5 was stopped on normal completion
     assert.ok(recordedContainerName, "Recorded container name from Test 5 must exist");
-
-    // Verify container from Test 5 is stopped
-    const checkRunning = execSync(
+    const checkRunningNormal = execSync(
       `docker ps -q -f name=${recordedContainerName}`,
       { stdio: "pipe" },
     ).toString().trim();
     assert.equal(
-      checkRunning,
+      checkRunningNormal,
       "",
       "Dedicated test container must be stopped after close()",
     );
 
-    // Test container cleanup on connection failure
-    const tempContainer = `swyra-test-redis-fail-${Date.now()}`;
-    execSync(
-      `docker run -d --rm -p 127.0.0.1:0:6379 --name ${tempContainer} redis:8.8.3-alpine redis-server --requirepass tempsecret`,
-      { stdio: "pipe" },
-    );
+    // 2. Set up pre-existing data on local Redis to verify no fallback or corruption
+    const directClient = new SimpleRedisClient(6379, "127.0.0.1", "redis_password");
+    await directClient.connect();
 
-    // Verify running
-    let status = execSync(`docker ps -q -f name=${tempContainer}`, { stdio: "pipe" }).toString().trim();
-    assert.ok(status.length > 0, "Container is temporarily running");
+    const canaryKey = "swyra:canary:portfail:test";
+    const canaryVal = `canary_portfail_${Date.now()}`;
+    await directClient.sendCommand(["SET", canaryKey, canaryVal]);
 
-    // Stop container cleanly
-    execSync(`docker stop -t 1 ${tempContainer}`, { stdio: "ignore" });
-    status = execSync(`docker ps -q -f name=${tempContainer}`, { stdio: "pipe" }).toString().trim();
-    assert.equal(status, "", "Container is stopped");
+    const targetContainerName = `swyra-test-redis-portfail-${Date.now()}`;
+    let createdContainerName: string | null = null;
+
+    try {
+      // 3. Call production fixture with failure injected after container creation during port discovery
+      await assert.rejects(
+        createRealRedisServer({
+          containerName: targetContainerName,
+          simulatePortDiscoveryFailure: true,
+          onContainerCreated: (name) => {
+            createdContainerName = name;
+          },
+        }),
+        (err: any) => {
+          // Verify it reports failure
+          assert.ok(
+            err.message.includes("[SECURITY_VIOLATION]"),
+            "Fixture must report security violation failure",
+          );
+          assert.ok(
+            err.message.includes("Fallback to existing instances is disallowed"),
+            "Fixture must refuse fallback to existing instances",
+          );
+          return true;
+        },
+        "Fixture must fail closed when port discovery fails after container creation",
+      );
+
+      assert.equal(
+        createdContainerName,
+        targetContainerName,
+        "Container was successfully created before port discovery failed",
+      );
+
+      // 4. Verify container it started is stopped and removed
+      const runningStatus = execSync(
+        `docker ps -q -f name=${targetContainerName}`,
+        { stdio: "pipe" },
+      ).toString().trim();
+      assert.equal(
+        runningStatus,
+        "",
+        "Container started by fixture must not be running after startup failure",
+      );
+
+      const allStatus = execSync(
+        `docker ps -a -q -f name=${targetContainerName}`,
+        { stdio: "pipe" },
+      ).toString().trim();
+      assert.equal(
+        allStatus,
+        "",
+        "Container started by fixture must be removed after startup failure",
+      );
+
+      // 5. Verify it does not connect to, alter, or flush existing Redis instance
+      const canaryRead = await directClient.sendCommand(["GET", canaryKey]);
+      assert.equal(
+        canaryRead,
+        canaryVal,
+        "Pre-existing data on local Redis survived untouched",
+      );
+
+      // 6. Verify normal fixture startup and teardown still work
+      const normalFixture = await createRealRedisServer();
+      try {
+        assert.equal(normalFixture.isRealRedis, true, "Normal startup produces real Redis");
+        assert.equal(normalFixture.isDedicated, true, "Normal startup is dedicated");
+        assert.ok(normalFixture.dedicatedContainer, "Normal container name exists");
+        await normalFixture.set("test:subsequent:lifecycle", "verified");
+        assert.equal(await normalFixture.get("test:subsequent:lifecycle"), "verified");
+        await normalFixture.clear();
+        assert.equal(await normalFixture.get("test:subsequent:lifecycle"), null);
+      } finally {
+        const normalContainerName = normalFixture.dedicatedContainer!;
+        await normalFixture.close();
+        const normalCheck = execSync(
+          `docker ps -a -q -f name=${normalContainerName}`,
+          { stdio: "pipe" },
+        ).toString().trim();
+        assert.equal(
+          normalCheck,
+          "",
+          "Subsequent normal container stopped and removed on close()",
+        );
+      }
+    } finally {
+      await directClient.sendCommand(["DEL", canaryKey]);
+      directClient.close();
+    }
   },
 );
 
@@ -334,3 +416,4 @@ console.log("================================================================\n"
 if (failed > 0) {
   process.exit(1);
 }
+

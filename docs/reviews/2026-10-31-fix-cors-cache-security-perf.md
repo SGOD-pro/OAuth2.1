@@ -44,7 +44,7 @@ This review evaluates the resolution of distributed CORS cache consistency, boun
    - Fail Closed Without Silent Fallback: If a dedicated harness instance cannot be started or verified, the fixture fails closed immediately with a security violation. It never silently falls back to port 6379 or any pre existing instance.
    - Remote and Upstash Rejection: Any remote host, domain, or Upstash URL is strictly rejected with a security violation without printing credentials.
    - Disposable MongoDB Endpoint Parsing: The test isolation helper `parseMongoEndpoint` accurately parses loopback host and port using URL parsing. Ambiguous forms, different local ports, multi host strings, and remote endpoints are rejected without leakage of credentials or connection strings in error messages.
-   - Dedicated Isolation Regression Suite: `backend/tests/security/redis-test-isolation.test.ts` validates that existing local Redis instances are never claimed or flushed, pre existing data survives rejected test connections, remote and Upstash endpoints are rejected without credential leakage, startup failure fails closed without fallback, and test containers stop cleanly on normal completion and failure.
+   - Dedicated Isolation Regression Suite: `backend/tests/security/redis-test-isolation.test.ts` validates that existing local Redis instances are never claimed or flushed, pre existing data survives rejected test connections, remote and Upstash endpoints are rejected without credential leakage, startup failure fails closed without fallback, container cleanup succeeds when port discovery fails after container start, and normal fixture startup and teardown still work.
 7. Dashboard Data Accuracy and Honest Reporting: In `/api/admin/stats`, fallbacks that masked real zero values (such as `activeClients || totalClients` and `recentLogins || activeSessions || 1`) have been completely removed. Real zero counts are preserved. Disabled and inactive clients are comprehensively excluded from operational counts. The 24 hour session count reflects actual session creations and is labeled transparently as "New sessions (24h)" with helper text "Created in last 24h". Missing IP addresses return null rather than fabricating loopback 127.0.0.1. Missing historical timestamps return null rather than fabricating current timestamps. In `getTrustedClientIp`, missing forwarding headers evaluate to "unknown" rather than loopback 127.0.0.1, preserving secure rate limiting and trusted proxy chain evaluation.
 
 All local security suites, unit suites, cross process tests, linters, application builds, and real Redis concurrency suites passed cleanly. Live browser test suite execution remains pending due to an external Linux environment dependency (Chromium `libglib-2.0.so.0` shared library).
@@ -212,7 +212,7 @@ Execution results across test suites and operational checks:
      - ISOLATION-03: Pre existing data on local Redis survives rejected connection attempts and denied flushes.
      - ISOLATION-04: Startup failure fails closed and does not silently fall back to another Redis instance.
      - ISOLATION-05: Harness owned Redis instance runs on isolated ephemeral port, verifies ownership, and cleans up.
-     - ISOLATION-06: Test containers or processes are stopped on normal completion and failure.
+     - ISOLATION-06: Production fixture stops and removes container on port discovery failure, pre existing data remains untouched, and normal teardown still works.
    - Command to run isolation regression tests:
      ```bash
      npm run test:redis-isolation

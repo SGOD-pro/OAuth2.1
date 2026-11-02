@@ -201,6 +201,9 @@ export interface RealRedisOptions {
   password?: string;
   allowExisting?: boolean;
   simulateStartupFailure?: boolean;
+  simulatePortDiscoveryFailure?: boolean;
+  containerName?: string;
+  onContainerCreated?: (name: string) => void;
 }
 
 export async function createRealRedisServer(
@@ -231,6 +234,22 @@ export async function createRealRedisServer(
   const harnessRunId = `swyra:test:disposable:${crypto.randomBytes(8).toString("hex")}`;
   let isDedicated = false;
 
+  const cleanupContainer = () => {
+    process.removeListener("exit", cleanupContainer);
+    process.removeListener("SIGINT", cleanupContainer);
+    process.removeListener("SIGTERM", cleanupContainer);
+    if (dedicatedContainerName) {
+      try {
+        execSync(`docker stop -t 1 ${dedicatedContainerName}`, { stdio: "ignore" });
+      } catch {}
+      dedicatedContainerName = null;
+    }
+  };
+
+  process.once("exit", cleanupContainer);
+  process.once("SIGINT", cleanupContainer);
+  process.once("SIGTERM", cleanupContainer);
+
   if (options.allowExisting) {
     host = options.host || "127.0.0.1";
     port = options.port || 6379;
@@ -247,13 +266,23 @@ export async function createRealRedisServer(
     validateLoopbackEndpoint(host);
     isDedicated = false;
   } else {
-    const containerName = `swyra-test-redis-${crypto.randomBytes(6).toString("hex")}`;
+    const containerName = options.containerName || `swyra-test-redis-${crypto.randomBytes(6).toString("hex")}`;
     const generatedPassword = crypto.randomBytes(16).toString("hex");
     try {
       execSync(
         `docker run -d --rm -p 127.0.0.1:0:6379 --name ${containerName} redis:8.8.3-alpine redis-server --requirepass ${generatedPassword}`,
         { stdio: "pipe" },
       );
+      // Container is running in Docker. Record it immediately so any later failure or process exit stops and removes it.
+      dedicatedContainerName = containerName;
+      if (options.onContainerCreated) {
+        options.onContainerCreated(containerName);
+      }
+
+      if (options.simulatePortDiscoveryFailure) {
+        throw new Error("Simulated port discovery failure after container start");
+      }
+
       const portOut = execSync(`docker port ${containerName} 6379`, { stdio: "pipe" }).toString().trim();
       const portMatch = portOut.match(/:(\d+)$/m);
       if (!portMatch) {
@@ -262,14 +291,9 @@ export async function createRealRedisServer(
       port = parseInt(portMatch[1], 10);
       host = "127.0.0.1";
       password = generatedPassword;
-      dedicatedContainerName = containerName;
       isDedicated = true;
     } catch (startErr: any) {
-      if (dedicatedContainerName) {
-        try {
-          execSync(`docker stop -t 1 ${dedicatedContainerName}`, { stdio: "ignore" });
-        } catch {}
-      }
+      cleanupContainer();
       throw new Error(
         `[SECURITY_VIOLATION] Could not start a dedicated test Redis instance. Destructive tests strictly require a harness-owned Redis process or container on an isolated loopback port. Fallback to existing instances is disallowed: ${startErr?.message || String(startErr)}`,
       );
@@ -277,22 +301,6 @@ export async function createRealRedisServer(
   }
 
   validateLoopbackEndpoint(host);
-
-  const cleanupContainer = () => {
-    process.removeListener("exit", cleanupContainer);
-    process.removeListener("SIGINT", cleanupContainer);
-    process.removeListener("SIGTERM", cleanupContainer);
-    if (dedicatedContainerName) {
-      try {
-        execSync(`docker stop -t 1 ${dedicatedContainerName}`, { stdio: "ignore" });
-      } catch {}
-      dedicatedContainerName = null;
-    }
-  };
-
-  process.once("exit", cleanupContainer);
-  process.once("SIGINT", cleanupContainer);
-  process.once("SIGTERM", cleanupContainer);
 
   const client = new SimpleRedisClient(port, host, password);
   try {
