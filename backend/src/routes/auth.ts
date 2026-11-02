@@ -14,6 +14,7 @@ import {
     createOAuthTransaction,
     getOAuthTransaction,
     consumeOAuthTransaction,
+    recordAuthEvent,
 } from "../db/state";
 import { rateLimiters, checkRateLimit } from "../cache/redis";
 import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, checkUserHasAppAccess, hashToken, hasDangerousMongoKeys, validateSafePrimitiveString } from "../utils/security";
@@ -465,12 +466,26 @@ auth.post("/sign-in/email", async (c) => {
     const clientId = clientCtx.clientId;
     const database = await getDb();
 
+    const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+    const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+    const safeUserAgent = c.req.header("user-agent") ? c.req.header("user-agent")!.slice(0, 128) : null;
+    const targetIdentifier = typeof body?.email === "string" ? body.email.toLowerCase().trim().slice(0, 256) : null;
+
     // STRICT FAIL-CLOSED: Validate client identifier FIRST whenever provided
     let clientDoc: any = null;
     let canonicalClientId: string | null = null;
     if (clientId) {
         clientDoc = await resolveOAuthClient(database, clientId);
         if (!clientDoc || clientDoc.disabled) {
+            await recordAuthEvent({
+                eventType: "sign_in",
+                outcome: "denied",
+                clientId,
+                targetIdentifier,
+                ipAddress: safeIp,
+                userAgent: safeUserAgent,
+                reason: clientDoc?.disabled ? "client_disabled" : "invalid_client",
+            });
             return c.json(
                 {
                     status: false,
@@ -482,6 +497,9 @@ auth.post("/sign-in/email", async (c) => {
         }
         canonicalClientId = clientDoc.clientId;
     }
+
+    const boundClientId = (clientCtx.isBoundOAuthFlow && canonicalClientId) ? canonicalClientId : null;
+    const boundClientName = (clientCtx.isBoundOAuthFlow && clientDoc) ? (clientDoc.client_name || clientDoc.name || null) : null;
 
     if (body?.email && typeof body.email === "string") {
         const normalizedEmail = body.email.toLowerCase().trim();
@@ -525,6 +543,17 @@ auth.post("/sign-in/email", async (c) => {
         }
 
         if (!targetAllowed) {
+            await recordAuthEvent({
+                eventType: "account_lockout",
+                outcome: "denied",
+                targetIdentifier,
+                clientId: boundClientId,
+                clientName: boundClientName,
+                ipAddress: safeIp,
+                userAgent: safeUserAgent,
+                reason: "rate_limit_exceeded",
+                details: { threshold: 15, windowSeconds: 300 },
+            });
             return c.json(
                 {
                     error: "too_many_requests",
@@ -540,6 +569,17 @@ auth.post("/sign-in/email", async (c) => {
             await executeDummyHash();
         } else if (user.disabled === true || user.isActive === false || user.banned === true) {
             await executeDummyHash();
+            await recordAuthEvent({
+                eventType: "sign_in",
+                outcome: "denied",
+                userId: String(user.id || user._id),
+                targetIdentifier,
+                clientId: boundClientId,
+                clientName: boundClientName,
+                ipAddress: safeIp,
+                userAgent: safeUserAgent,
+                reason: "account_disabled",
+            });
             return c.json(
                 {
                     status: false,
@@ -553,6 +593,17 @@ auth.post("/sign-in/email", async (c) => {
             const hasAccess = await checkUserHasAppAccess(database, user, canonicalClientId);
 
             if (!hasAccess) {
+                await recordAuthEvent({
+                    eventType: "sign_in",
+                    outcome: "denied",
+                    userId: String(user.id || user._id),
+                    targetIdentifier,
+                    clientId: canonicalClientId,
+                    clientName: clientDoc.client_name || clientDoc.name || null,
+                    ipAddress: safeIp,
+                    userAgent: safeUserAgent,
+                    reason: "private_app_unauthorized",
+                });
                 return c.json(
                     {
                         status: false,
@@ -571,27 +622,54 @@ auth.post("/sign-in/email", async (c) => {
     // CRITICAL SECURITY INVARIANT:
     // Application membership MUST NEVER mutate before successful authentication!
     // Only if credentials were valid (res.status 2xx) and application is public, record registration.
-    if (res.status >= 200 && res.status < 300 && clientDoc && clientDoc.isPublic && canonicalClientId && body?.email) {
-        try {
-            const normalizedEmail = body.email.toLowerCase().trim();
-            const authUser = await database.collection("user").findOne({ email: normalizedEmail });
-            if (authUser) {
-                const userId = String(authUser.id || authUser._id);
-                const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
-                if (!isRegistered) {
-                    await database.collection("user_app_registrations").insertOne({
-                        userId,
-                        clientId: canonicalClientId,
-                        registeredAt: new Date(),
-                    }).catch((err: any) => {
-                        if (err?.code === 11000) return;
-                        throw err;
-                    });
+    if (res.status >= 200 && res.status < 300) {
+        let authUserId: string | null = null;
+        if (body?.email) {
+            try {
+                const normalizedEmail = body.email.toLowerCase().trim();
+                const authUser = await database.collection("user").findOne({ email: normalizedEmail });
+                if (authUser) {
+                    authUserId = String(authUser.id || authUser._id);
+                    if (clientDoc && clientDoc.isPublic && canonicalClientId) {
+                        const isRegistered = await checkUserAppRegistration(database, authUserId, canonicalClientId);
+                        if (!isRegistered) {
+                            await database.collection("user_app_registrations").insertOne({
+                                userId: authUserId,
+                                clientId: canonicalClientId,
+                                registeredAt: new Date(),
+                            }).catch((err: any) => {
+                                if (err?.code === 11000) return;
+                                throw err;
+                            });
+                        }
+                    }
                 }
+            } catch (err) {
+                console.error("[SIGNIN] Failed to record public app registration:", err);
             }
-        } catch (err) {
-            console.error("[SIGNIN] Failed to record public app registration:", err);
         }
+
+        await recordAuthEvent({
+            eventType: "sign_in",
+            outcome: "success",
+            userId: authUserId,
+            targetIdentifier,
+            clientId: boundClientId,
+            clientName: boundClientName,
+            ipAddress: safeIp,
+            userAgent: safeUserAgent,
+        });
+    } else {
+        await recordAuthEvent({
+            eventType: "sign_in",
+            outcome: "failure",
+            targetIdentifier,
+            clientId: boundClientId,
+            clientName: boundClientName,
+            ipAddress: safeIp,
+            userAgent: safeUserAgent,
+            reason: "invalid_credentials",
+        });
     }
 
     return res;
@@ -599,7 +677,12 @@ auth.post("/sign-in/email", async (c) => {
 
 // 3. Sign-Up App-Isolation Registration
 auth.post("/sign-up/email", async (c) => {
+    const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+    const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+    const userAgent = c.req.header("user-agent");
+    const safeUserAgent = userAgent ? userAgent.slice(0, 128) : null;
     const body = await c.req.raw.clone().json().catch(() => null);
+    const targetIdentifier = typeof body?.email === "string" ? body.email.trim() : null;
 
     // Defense against NoSQL operator injection and prototype pollution
     if (body && hasDangerousMongoKeys(body)) {
@@ -634,6 +717,15 @@ auth.post("/sign-up/email", async (c) => {
     if (clientId) {
         clientDoc = await resolveOAuthClient(database, clientId);
         if (!clientDoc || clientDoc.disabled) {
+            await recordAuthEvent({
+                eventType: "sign_up",
+                outcome: "denied",
+                clientId,
+                targetIdentifier,
+                ipAddress: safeIp,
+                userAgent: safeUserAgent,
+                reason: clientDoc?.disabled ? "client_disabled" : "invalid_client",
+            });
             return c.json(
                 {
                     status: false,
@@ -645,6 +737,16 @@ auth.post("/sign-up/email", async (c) => {
         }
         canonicalClientId = clientDoc.clientId;
         if (!clientDoc.isPublic && clientCtx.isBoundOAuthFlow) {
+            await recordAuthEvent({
+                eventType: "sign_up",
+                outcome: "denied",
+                clientId: canonicalClientId,
+                clientName: clientDoc.client_name || clientDoc.name || null,
+                targetIdentifier,
+                ipAddress: safeIp,
+                userAgent: safeUserAgent,
+                reason: "private_app_registration_disabled",
+            });
             return c.json(
                 {
                     status: false,
@@ -673,9 +775,11 @@ auth.post("/sign-up/email", async (c) => {
     });
 
     const res = await authProvider.handler(sanitizedReq);
+    const isSuccess = res.status >= 200 && res.status < 300;
+    let createdUserId: string | null = null;
 
     // Only upon successful user creation (res.status 2xx), ensure no privilege fields and record public app registration
-    if (res.status >= 200 && res.status < 300 && body?.email) {
+    if (isSuccess && body?.email) {
         try {
             const email = String(body.email).toLowerCase().trim();
             // Invariant: New user must NEVER possess admin or scoped privileges
@@ -694,13 +798,13 @@ auth.post("/sign-up/email", async (c) => {
                 }
             );
 
-            if (canonicalClientId && clientDoc?.isPublic) {
-                const createdUser = await database.collection("user").findOne({ email });
-                if (createdUser) {
-                    const userId = String(createdUser.id || createdUser._id);
+            const createdUser = await database.collection("user").findOne({ email });
+            if (createdUser) {
+                createdUserId = String(createdUser.id || createdUser._id);
+                if (canonicalClientId && clientDoc?.isPublic) {
                     await database.collection("user_app_registrations").updateOne(
-                        { userId, clientId: canonicalClientId },
-                        { $setOnInsert: { userId, clientId: canonicalClientId, registeredAt: new Date() } },
+                        { userId: createdUserId, clientId: canonicalClientId },
+                        { $setOnInsert: { userId: createdUserId, clientId: canonicalClientId, registeredAt: new Date() } },
                         { upsert: true }
                     );
                 }
@@ -709,6 +813,18 @@ auth.post("/sign-up/email", async (c) => {
             console.error("[SIGNUP] Failed to record app registration:", err);
         }
     }
+
+    await recordAuthEvent({
+        eventType: "sign_up",
+        outcome: isSuccess ? "success" : "failure",
+        userId: createdUserId,
+        targetIdentifier,
+        clientId: (clientCtx.isBoundOAuthFlow && canonicalClientId) ? canonicalClientId : null,
+        clientName: (clientCtx.isBoundOAuthFlow && clientDoc) ? (clientDoc.client_name || clientDoc.name || null) : null,
+        ipAddress: safeIp,
+        userAgent: safeUserAgent,
+        reason: isSuccess ? null : "registration_failed",
+    });
 
     return res;
 });
@@ -887,6 +1003,18 @@ auth.get("/oauth2/authorize", async (c) => {
             const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 
             if (!hasAccess) {
+                const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+                const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+                await recordAuthEvent({
+                    eventType: "oauth_authorize",
+                    outcome: "denied",
+                    userId: String(sessionUser.id || (sessionUser as any)._id),
+                    targetIdentifier: sessionUser.email || null,
+                    clientId: canonicalClientId,
+                    clientName: client.client_name || client.name || null,
+                    ipAddress: safeIp,
+                    reason: "private_app_unauthorized",
+                });
                 // Deny authorization immediately! Do NOT issue code or continue to token issuance.
                 const errorUrl = new URL(redirectUri);
                 errorUrl.searchParams.set("error", "access_denied");
@@ -1080,6 +1208,16 @@ auth.post("/oauth2/token", async (c) => {
             // Otherwise, token was already rotated; check if within grace window or replay theft
             const check = await verifyAndRotateTokenFamily(incomingHash, "dummy", undefined, Date.now(), canonicalClientId);
             if (check.replayed) {
+                const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+                const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+                await recordAuthEvent({
+                    eventType: "oauth_token",
+                    outcome: "denied",
+                    clientId: canonicalClientId,
+                    clientName: clientDoc?.client_name || clientDoc?.name || null,
+                    ipAddress: safeIp,
+                    reason: "refresh_token_reuse",
+                });
                 return c.json(
                     {
                         error: "invalid_grant",
@@ -1368,6 +1506,16 @@ auth.post("/oauth2/token", async (c) => {
             // Check if failure was due to replaying an already consumed token
             const check = await verifyAndRotateTokenFamily(incomingHash, "dummy", undefined, Date.now(), canonicalClientId);
             if (check.replayed) {
+                const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+                const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+                await recordAuthEvent({
+                    eventType: "oauth_token",
+                    outcome: "denied",
+                    clientId: canonicalClientId,
+                    clientName: clientDoc?.client_name || clientDoc?.name || null,
+                    ipAddress: safeIp,
+                    reason: "refresh_token_reuse",
+                });
                 return c.json(
                     {
                         error: "invalid_grant",
@@ -2190,6 +2338,233 @@ auth.all("/admin/*", async (c) => {
     }
 
     return authProvider.handler(c.req.raw);
+});
+
+// 12. Two-Factor Authentication Verification Telemetry Handlers
+auth.post("/two-factor/verify-totp", async (c) => {
+    const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+    const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+    const userAgent = c.req.header("user-agent");
+    const safeUserAgent = userAgent ? userAgent.slice(0, 128) : null;
+    let actor: string | null = null;
+    let userId: string | null = null;
+    let clientId: string | null = null;
+    let clientName: string | null = null;
+
+    const txIdCookie = getCookie(c, "oauth_transaction_id");
+    if (txIdCookie) {
+        try {
+            const tx = await getOAuthTransaction({ transactionId: txIdCookie });
+            if (tx?.clientId) {
+                clientId = tx.clientId;
+                const database = await getDb();
+                const clientDoc = await database.collection("oauthClient").findOne({ clientId });
+                if (clientDoc?.clientName || clientDoc?.client_name || clientDoc?.name) {
+                    clientName = clientDoc.clientName || clientDoc.client_name || clientDoc.name;
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    try {
+        const sessionResult = await authProvider.api.getSession({
+            headers: getHeaders(c),
+        });
+        if (sessionResult?.user) {
+            userId = (sessionResult.user.id || (sessionResult.user as any)._id)?.toString() || null;
+            actor = sessionResult.user.email || null;
+        }
+    } catch {
+        // no active session yet
+    }
+
+    if (!userId) {
+        try {
+            const twoFactorCookie = getCookie(c, "better-auth.two_factor");
+            if (twoFactorCookie) {
+                const database = await getDb();
+                const parts = twoFactorCookie.split(".");
+                const tokenVal = parts[0];
+                const record = await database.collection("verification").findOne({
+                    $or: [
+                        { identifier: twoFactorCookie },
+                        { identifier: tokenVal },
+                        { value: twoFactorCookie },
+                        { value: tokenVal },
+                    ],
+                });
+                if (record?.value) {
+                    const candidateUserId = record.value;
+                    const u = await database.collection("user").findOne({
+                        $or: [{ id: candidateUserId }, { _id: candidateUserId }],
+                    });
+                    if (u) {
+                        userId = (u.id || u._id)?.toString() || null;
+                        actor = u.email || null;
+                    }
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    const res = await authProvider.handler(c.req.raw);
+    const isSuccess = res.status < 400;
+
+    if (isSuccess && !userId) {
+        try {
+            const setCookie = res.headers.get("set-cookie") || "";
+            const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
+            if (match) {
+                const rawToken = decodeURIComponent(match[1]);
+                const token = rawToken.split(".")[0];
+                const database = await getDb();
+                const sessionDoc = await database.collection("session").findOne({ token });
+                if (sessionDoc?.userId) {
+                    userId = sessionDoc.userId.toString();
+                    const u = await database.collection("user").findOne({
+                        $or: [{ id: userId }, { _id: userId }],
+                    });
+                    if (u?.email) {
+                        actor = u.email;
+                    }
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    await recordAuthEvent({
+        eventType: "two_factor_verify",
+        outcome: isSuccess ? "success" : "failure",
+        userId,
+        targetIdentifier: actor,
+        clientId,
+        clientName,
+        ipAddress: safeIp,
+        userAgent: safeUserAgent,
+        reason: isSuccess ? null : "invalid_totp_code",
+        details: { method: "totp" },
+    });
+
+    return res;
+});
+
+auth.post("/two-factor/verify-backup-code", async (c) => {
+    const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+    const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+    const userAgent = c.req.header("user-agent");
+    const safeUserAgent = userAgent ? userAgent.slice(0, 128) : null;
+    let actor: string | null = null;
+    let userId: string | null = null;
+    let clientId: string | null = null;
+    let clientName: string | null = null;
+
+    const txIdCookie = getCookie(c, "oauth_transaction_id");
+    if (txIdCookie) {
+        try {
+            const tx = await getOAuthTransaction({ transactionId: txIdCookie });
+            if (tx?.clientId) {
+                clientId = tx.clientId;
+                const database = await getDb();
+                const clientDoc = await database.collection("oauthClient").findOne({ clientId });
+                if (clientDoc?.clientName || clientDoc?.client_name || clientDoc?.name) {
+                    clientName = clientDoc.clientName || clientDoc.client_name || clientDoc.name;
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    try {
+        const sessionResult = await authProvider.api.getSession({
+            headers: getHeaders(c),
+        });
+        if (sessionResult?.user) {
+            userId = (sessionResult.user.id || (sessionResult.user as any)._id)?.toString() || null;
+            actor = sessionResult.user.email || null;
+        }
+    } catch {
+        // no active session yet
+    }
+
+    if (!userId) {
+        try {
+            const twoFactorCookie = getCookie(c, "better-auth.two_factor");
+            if (twoFactorCookie) {
+                const database = await getDb();
+                const parts = twoFactorCookie.split(".");
+                const tokenVal = parts[0];
+                const record = await database.collection("verification").findOne({
+                    $or: [
+                        { identifier: twoFactorCookie },
+                        { identifier: tokenVal },
+                        { value: twoFactorCookie },
+                        { value: tokenVal },
+                    ],
+                });
+                if (record?.value) {
+                    const candidateUserId = record.value;
+                    const u = await database.collection("user").findOne({
+                        $or: [{ id: candidateUserId }, { _id: candidateUserId }],
+                    });
+                    if (u) {
+                        userId = (u.id || u._id)?.toString() || null;
+                        actor = u.email || null;
+                    }
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    const res = await authProvider.handler(c.req.raw);
+    const isSuccess = res.status < 400;
+
+    if (isSuccess && !userId) {
+        try {
+            const setCookie = res.headers.get("set-cookie") || "";
+            const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
+            if (match) {
+                const rawToken = decodeURIComponent(match[1]);
+                const token = rawToken.split(".")[0];
+                const database = await getDb();
+                const sessionDoc = await database.collection("session").findOne({ token });
+                if (sessionDoc?.userId) {
+                    userId = sessionDoc.userId.toString();
+                    const u = await database.collection("user").findOne({
+                        $or: [{ id: userId }, { _id: userId }],
+                    });
+                    if (u?.email) {
+                        actor = u.email;
+                    }
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
+    await recordAuthEvent({
+        eventType: "recovery_code_verify",
+        outcome: isSuccess ? "success" : "failure",
+        userId,
+        targetIdentifier: actor,
+        clientId,
+        clientName,
+        ipAddress: safeIp,
+        userAgent: safeUserAgent,
+        reason: isSuccess ? null : "invalid_backup_code",
+        details: { method: "backup_code" },
+    });
+
+    return res;
 });
 
 // Catch-all delegate to Better Auth

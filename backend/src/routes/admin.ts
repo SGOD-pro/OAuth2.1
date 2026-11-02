@@ -322,24 +322,225 @@ admin.get("/stats", requireSuperAdmin, async (c) => {
   }
 });
 
-// 4. Audit & Activity Logs (Super-Admin only)
-admin.get("/logs", requireSuperAdmin, async (c) => {
-  try {
-    const database = await getDb();
-    const [sessions, audits] = await Promise.all([
-      database.collection("session").find().sort({ createdAt: -1 }).limit(50).toArray(),
-      database.collection("admin_audit").find().sort({ timestamp: -1 }).limit(50).toArray(),
-    ]);
+interface NormalizedLogEntry {
+  userId: string;
+  userEmail: string | null;
+  action: string;
+  outcome: string | null;
+  ipAddress: string | null;
+  createdAt: string | null;
+  appName?: string | null;
+  applicationName?: string | null;
+  clientId?: string | null;
+  reason?: string | null;
+  details?: Record<string, unknown> | null;
+}
 
-    const userIds = new Set<string>();
-    sessions.forEach((s: any) => {
-      if (s.userId) userIds.add(String(s.userId));
-    });
-    audits.forEach((a: any) => {
-      if (a.actorUserId) userIds.add(String(a.actorUserId));
-    });
+async function getAggregatedLogs(
+  database: any,
+  params: {
+    page: number;
+    limit: number;
+    outcome?: string | null;
+    action?: string | null;
+    clientId?: string | null;
+    from?: Date | null;
+    to?: Date | null;
+    search?: string | null;
+  }
+): Promise<{
+  entries: NormalizedLogEntry[];
+  totalCount: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}> {
+  const { page, limit, outcome, action, clientId, from, to, search } = params;
 
-    const stringIds = Array.from(userIds);
+  // Build filters for auth_events
+  const authFilter: any = {};
+  if (outcome) {
+    authFilter.outcome = outcome;
+  }
+  if (action) {
+    authFilter.eventType = action;
+  }
+  if (clientId) {
+    authFilter.clientId = clientId;
+  }
+  if (from || to) {
+    authFilter.timestamp = {};
+    if (from) authFilter.timestamp.$gte = from;
+    if (to) authFilter.timestamp.$lte = to;
+  }
+
+  // Build filters for admin_audit
+  const auditFilter: any = {};
+  if (outcome) {
+    if (outcome === "success") {
+      // admin_audit entries are successful administrative actions
+    } else {
+      auditFilter._id = { $exists: false };
+    }
+  }
+  if (action) {
+    auditFilter.action = action;
+  }
+  if (clientId) {
+    auditFilter.targetClientId = clientId;
+  }
+  if (from || to) {
+    auditFilter.timestamp = {};
+    if (from) auditFilter.timestamp.$gte = from;
+    if (to) auditFilter.timestamp.$lte = to;
+  }
+
+  // Build filters for session
+  const sessionFilter: any = {};
+  if (outcome) {
+    if (outcome === "unknown") {
+      // Historical sessions honestly lack explicit outcome flags
+    } else {
+      sessionFilter._id = { $exists: false };
+    }
+  }
+  if (action) {
+    if (action === "user_sign_in" || action === "sign_in") {
+      // session matches sign in
+    } else {
+      sessionFilter._id = { $exists: false };
+    }
+  }
+  if (clientId) {
+    sessionFilter._id = { $exists: false };
+  }
+  if (from || to) {
+    sessionFilter.createdAt = {};
+    if (from) sessionFilter.createdAt.$gte = from;
+    if (to) sessionFilter.createdAt.$lte = to;
+  }
+
+  // Search filter across searchable fields
+  if (search && search.trim()) {
+    const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(escaped, "i");
+    authFilter.$or = [
+      { targetIdentifier: regex },
+      { userId: regex },
+      { ipAddress: regex },
+      { clientId: regex },
+      { clientName: regex },
+      { eventType: regex },
+      { reason: regex },
+    ];
+    if (!auditFilter._id) {
+      auditFilter.$or = [
+        { actorEmail: regex },
+        { actorUserId: regex },
+        { action: regex },
+        { targetClientId: regex },
+        { ipAddress: regex },
+      ];
+    }
+    if (!sessionFilter._id) {
+      sessionFilter.$or = [
+        { userId: regex },
+        { ipAddress: regex },
+      ];
+    }
+  }
+
+  const maxToFetch = Math.min(page * limit, 1000);
+
+  const [authCount, auditCount, sessionCount, authDocs, auditDocs, sessionDocs] = await Promise.all([
+    database.collection("auth_events").countDocuments(authFilter),
+    database.collection("admin_audit").countDocuments(auditFilter),
+    database.collection("session").countDocuments(sessionFilter),
+    database.collection("auth_events").find(authFilter).sort({ timestamp: -1 }).limit(maxToFetch).toArray(),
+    database.collection("admin_audit").find(auditFilter).sort({ timestamp: -1 }).limit(maxToFetch).toArray(),
+    database.collection("session").find(sessionFilter).sort({ createdAt: -1 }).limit(maxToFetch).toArray(),
+  ]);
+
+  const totalCount = authCount + auditCount + sessionCount;
+  const totalPages = Math.ceil(totalCount / limit) || 1;
+
+  const authEntries: NormalizedLogEntry[] = authDocs.map((e: any) => {
+    const rawIp = typeof e.ipAddress === "string" ? e.ipAddress.trim() : null;
+    const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
+    const ts = e.timestamp;
+    const createdAt = ts ? new Date(ts).toISOString() : null;
+    return {
+      userId: e.userId ? String(e.userId) : (e.targetIdentifier || "unknown"),
+      userEmail: e.targetIdentifier || (e.userId ? String(e.userId) : null),
+      action: e.eventType || "auth_event",
+      outcome: e.outcome || null,
+      ipAddress,
+      createdAt,
+      appName: e.clientName || e.clientId || null,
+      applicationName: e.clientName || e.clientId || null,
+      clientId: e.clientId || null,
+      reason: e.reason || null,
+      details: e.details || null,
+    };
+  });
+
+  const auditEntries: NormalizedLogEntry[] = auditDocs.map((a: any) => {
+    const rawIp = typeof a.ipAddress === "string" ? a.ipAddress.trim() : null;
+    const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
+    const ts = a.timestamp || a.createdAt;
+    const createdAt = ts ? new Date(ts).toISOString() : null;
+    return {
+      userId: String(a.actorUserId || "system"),
+      userEmail: a.actorEmail || (a.actorUserId ? String(a.actorUserId) : "Security Engine"),
+      action: a.action || "admin_audit",
+      outcome: a.outcome || "success",
+      ipAddress,
+      createdAt,
+      appName: "Console",
+      applicationName: "Console",
+      clientId: a.targetClientId || null,
+      details: a.details || null,
+    };
+  });
+
+  const sessionEntries: NormalizedLogEntry[] = sessionDocs.map((s: any) => {
+    const rawIp = typeof s.ipAddress === "string" ? s.ipAddress.trim() : null;
+    const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
+    const ts = s.createdAt || s.updatedAt;
+    const createdAt = ts ? new Date(ts).toISOString() : null;
+    return {
+      userId: String(s.userId || s._id),
+      userEmail: s.userId ? String(s.userId) : "Active Session",
+      action: "user_sign_in",
+      outcome: "unknown",
+      ipAddress,
+      createdAt,
+      appName: "Unknown application",
+      applicationName: "Unknown application",
+      clientId: null,
+    };
+  });
+
+  const combined = [...authEntries, ...auditEntries, ...sessionEntries].sort((a, b) => {
+    if (!a.createdAt && !b.createdAt) return 0;
+    if (!a.createdAt) return 1;
+    if (!b.createdAt) return -1;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+
+  const skip = (page - 1) * limit;
+  const paginated = combined.slice(skip, skip + limit);
+
+  // Single batch user resolution for any unpopulated emails
+  const unresolvedUserIds = new Set<string>();
+  paginated.forEach((entry) => {
+    if (entry.userId && (!entry.userEmail || entry.userEmail === entry.userId || entry.userEmail === "unknown")) {
+      unresolvedUserIds.add(entry.userId);
+    }
+  });
+
+  if (unresolvedUserIds.size > 0) {
+    const stringIds = Array.from(unresolvedUserIds);
     const objectIds = stringIds
       .filter((id) => ObjectId.isValid(id))
       .map((id) => {
@@ -351,70 +552,132 @@ admin.get("/logs", requireSuperAdmin, async (c) => {
       })
       .filter((id): id is ObjectId => id !== null);
 
-    // MongoDB user documents use string id for Better Auth or ObjectId for _id
-    const userDocs =
-      stringIds.length > 0
-        ? await database
-            .collection("user")
-            .find(
-              {
-                $or: [
-                  ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
-                  { id: { $in: stringIds } },
-                ],
-              },
-              { projection: { email: 1, id: 1 } }
-            )
-            .toArray()
-        : [];
+    const userDocs = await database
+      .collection("user")
+      .find(
+        {
+          $or: [
+            ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
+            { id: { $in: stringIds } },
+          ],
+        },
+        { projection: { email: 1, id: 1 } }
+      )
+      .toArray();
 
-    const userMap = new Map<string, string>();
+    const emailMap = new Map<string, string>();
     userDocs.forEach((u: any) => {
       if (u.email) {
-        userMap.set(String(u._id), u.email);
-        if (u.id) userMap.set(String(u.id), u.email);
+        emailMap.set(String(u._id), u.email);
+        if (u.id) emailMap.set(String(u.id), u.email);
       }
     });
 
-    const sessionLogs = sessions.map((s: any) => {
-      const rawIp = typeof s.ipAddress === "string" ? s.ipAddress.trim() : null;
-      const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
-      const ts = s.createdAt || s.updatedAt;
-      const createdAt = ts ? new Date(ts).toISOString() : null;
-      return {
-        userId: String(s.userId || s._id),
-        userEmail: userMap.get(String(s.userId)) || s.userId || "Active Session",
-        action: "user_sign_in",
-        ipAddress,
-        createdAt,
-      };
+    paginated.forEach((entry) => {
+      if (entry.userId && (!entry.userEmail || entry.userEmail === entry.userId || entry.userEmail === "unknown")) {
+        const found = emailMap.get(entry.userId);
+        if (found) {
+          entry.userEmail = found;
+        }
+      }
+    });
+  }
+
+  return {
+    entries: paginated,
+    totalCount,
+    page,
+    limit,
+    totalPages,
+  };
+}
+
+// 4. Audit & Activity Logs (Super-Admin only)
+admin.get("/logs", requireSuperAdmin, async (c) => {
+  try {
+    const database = await getDb();
+    const rawPage = parseInt(c.req.query("page") || "1", 10);
+    const rawLimit = parseInt(c.req.query("limit") || "50", 10);
+    const page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
+    const limit = isNaN(rawLimit) || rawLimit < 1 ? 50 : Math.min(rawLimit, 100);
+
+    const outcome = c.req.query("outcome") || null;
+    const action = c.req.query("action") || c.req.query("eventType") || null;
+    const clientId = c.req.query("clientId") || null;
+    const fromStr = c.req.query("from");
+    const toStr = c.req.query("to");
+    const from = fromStr ? new Date(fromStr) : null;
+    const to = toStr ? new Date(toStr) : null;
+    const validFrom = from && !isNaN(from.getTime()) ? from : null;
+    const validTo = to && !isNaN(to.getTime()) ? to : null;
+    const search = c.req.query("search") || null;
+
+    const result = await getAggregatedLogs(database, {
+      page,
+      limit,
+      outcome,
+      action,
+      clientId,
+      from: validFrom,
+      to: validTo,
+      search,
     });
 
-    const auditLogs = audits.map((a: any) => {
-      const rawIp = typeof a.ipAddress === "string" ? a.ipAddress.trim() : null;
-      const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
-      const ts = a.timestamp || a.createdAt;
-      const createdAt = ts ? new Date(ts).toISOString() : null;
-      return {
-        userId: String(a.actorUserId || "system"),
-        userEmail: a.actorEmail || userMap.get(String(a.actorUserId)) || (a.actorUserId ? String(a.actorUserId) : "Security Engine"),
-        action: a.action || "admin_audit",
-        ipAddress,
-        createdAt,
-      };
-    });
+    c.header("X-Total-Count", String(result.totalCount));
+    c.header("X-Page", String(result.page));
+    c.header("X-Limit", String(result.limit));
+    c.header("X-Total-Pages", String(result.totalPages));
 
-    const combined = [...sessionLogs, ...auditLogs].sort((a, b) => {
-      if (!a.createdAt && !b.createdAt) return 0;
-      if (!a.createdAt) return 1;
-      if (!b.createdAt) return -1;
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
-
-    return c.json(combined);
+    return c.json(result.entries);
   } catch (err) {
     console.error("[ADMIN_LOGS] Error fetching logs:", err);
     return c.json([], 200);
+  }
+});
+
+// 4b. Versioned Structured Audit Logs API (Super-Admin only)
+admin.get("/v2/logs", requireSuperAdmin, async (c) => {
+  try {
+    const database = await getDb();
+    const rawPage = parseInt(c.req.query("page") || "1", 10);
+    const rawLimit = parseInt(c.req.query("limit") || "50", 10);
+    const page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
+    const limit = isNaN(rawLimit) || rawLimit < 1 ? 50 : Math.min(rawLimit, 100);
+
+    const outcome = c.req.query("outcome") || null;
+    const action = c.req.query("action") || c.req.query("eventType") || null;
+    const clientId = c.req.query("clientId") || null;
+    const fromStr = c.req.query("from");
+    const toStr = c.req.query("to");
+    const from = fromStr ? new Date(fromStr) : null;
+    const to = toStr ? new Date(toStr) : null;
+    const validFrom = from && !isNaN(from.getTime()) ? from : null;
+    const validTo = to && !isNaN(to.getTime()) ? to : null;
+    const search = c.req.query("search") || null;
+
+    const result = await getAggregatedLogs(database, {
+      page,
+      limit,
+      outcome,
+      action,
+      clientId,
+      from: validFrom,
+      to: validTo,
+      search,
+    });
+
+    return c.json({
+      logs: result.entries,
+      pagination: {
+        totalCount: result.totalCount,
+        page: result.page,
+        limit: result.limit,
+        totalPages: result.totalPages,
+      },
+    });
+  } catch (err) {
+    console.error("[ADMIN_LOGS_V2] Error fetching logs:", err);
+    return c.json({ error: "Failed to fetch audit logs" }, 500);
   }
 });
 

@@ -90,6 +90,12 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("oauthAccessToken", { token: 1 }),
       safeIndex("oauthAuthorizationCode", { code: 1 }),
       safeIndex("admin_audit", { timestamp: -1 }),
+      safeIndex("auth_events", { timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 3600 }),
+      safeIndex("auth_events", { timestamp: -1 }),
+      safeIndex("auth_events", { eventType: 1, timestamp: -1 }),
+      safeIndex("auth_events", { outcome: 1, timestamp: -1 }),
+      safeIndex("auth_events", { clientId: 1, timestamp: -1 }),
+      safeIndex("auth_events", { userId: 1, timestamp: -1 }),
       safeIndex("app_admin_revoked_tokens", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("user_app_registrations", { clientId: 1, userId: 1 }, { unique: true }),
       safeIndex("oauthClient", { allowedOrigins: 1, disabled: 1 }),
@@ -125,6 +131,181 @@ export async function recordAdminAudit(event: AdminAuditEvent): Promise<void> {
     });
   } catch (err) {
     console.error("[AUDIT] Failed to record admin audit event:", err);
+  }
+}
+
+export type AuthEventOutcome = "success" | "failure" | "denied";
+
+export type AuthEventType =
+  | "sign_in"
+  | "sign_up"
+  | "oauth_authorize"
+  | "oauth_token"
+  | "two_factor_verify"
+  | "recovery_code_verify"
+  | "sign_out"
+  | "password_reset"
+  | "account_lockout";
+
+export interface AuthAuditEvent {
+  _id?: any;
+  timestamp: Date;
+  eventType: AuthEventType;
+  outcome: AuthEventOutcome;
+  userId?: string | null;
+  targetIdentifier?: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  reason?: string | null;
+  details?: Record<string, unknown>;
+}
+
+const FORBIDDEN_EVENT_KEYS = new Set([
+  "password",
+  "newpassword",
+  "currentpassword",
+  "secret",
+  "clientsecret",
+  "token",
+  "accesstoken",
+  "refreshtoken",
+  "idtoken",
+  "code",
+  "authorizationcode",
+  "totp",
+  "otp",
+  "cookie",
+  "sessiontoken",
+  "credentials",
+]);
+
+export function sanitizeAuthEvent(event: Partial<AuthAuditEvent>): AuthAuditEvent {
+  const now = new Date();
+  const rawTs = event.timestamp ? new Date(event.timestamp) : now;
+  const timestamp = isNaN(rawTs.getTime()) ? now : rawTs;
+
+  const validOutcomes: AuthEventOutcome[] = ["success", "failure", "denied"];
+  const outcome: AuthEventOutcome = validOutcomes.includes(event.outcome as any)
+    ? (event.outcome as AuthEventOutcome)
+    : "failure";
+
+  const validTypes: AuthEventType[] = [
+    "sign_in",
+    "sign_up",
+    "oauth_authorize",
+    "oauth_token",
+    "two_factor_verify",
+    "recovery_code_verify",
+    "sign_out",
+    "password_reset",
+    "account_lockout",
+  ];
+  const eventType: AuthEventType = validTypes.includes(event.eventType as any)
+    ? (event.eventType as AuthEventType)
+    : "sign_in";
+
+  let safeTarget: string | null = null;
+  if (typeof event.targetIdentifier === "string") {
+    const trimmed = event.targetIdentifier.trim();
+    if (trimmed.length > 0 && trimmed.length <= 256) {
+      safeTarget = trimmed;
+    }
+  }
+
+  let safeClientId: string | null = null;
+  if (typeof event.clientId === "string") {
+    const trimmed = event.clientId.trim();
+    if (trimmed.length > 0 && trimmed.length <= 128 && !trimmed.startsWith("$")) {
+      safeClientId = trimmed;
+    }
+  }
+
+  let safeClientName: string | null = null;
+  if (typeof event.clientName === "string") {
+    const trimmed = event.clientName.trim();
+    if (trimmed.length > 0 && trimmed.length <= 128) {
+      safeClientName = trimmed;
+    }
+  }
+
+  let safeUserId: string | null = null;
+  if (typeof event.userId === "string") {
+    const trimmed = event.userId.trim();
+    if (trimmed.length > 0 && trimmed.length <= 128 && !trimmed.startsWith("$")) {
+      safeUserId = trimmed;
+    }
+  }
+
+  let safeIp: string | null = null;
+  if (typeof event.ipAddress === "string") {
+    const trimmed = event.ipAddress.trim();
+    if (trimmed.length > 0 && trimmed.toLowerCase() !== "unknown" && trimmed.length <= 64) {
+      safeIp = trimmed;
+    }
+  }
+
+  let safeUserAgent: string | null = null;
+  if (typeof event.userAgent === "string") {
+    const trimmed = event.userAgent.trim();
+    if (trimmed.length > 0) {
+      safeUserAgent = trimmed.slice(0, 128);
+    }
+  }
+
+  let safeReason: string | null = null;
+  if (typeof event.reason === "string") {
+    const trimmed = event.reason.trim();
+    if (trimmed.length > 0) {
+      safeReason = trimmed.slice(0, 128);
+    }
+  }
+
+  const safeDetails: Record<string, unknown> = {};
+  if (event.details && typeof event.details === "object" && !Array.isArray(event.details)) {
+    for (const [key, val] of Object.entries(event.details)) {
+      const lower = key.toLowerCase();
+      if (FORBIDDEN_EVENT_KEYS.has(lower)) continue;
+      if (typeof val === "string" || typeof val === "number" || typeof val === "boolean" || val === null) {
+        safeDetails[key] = val;
+      }
+    }
+  }
+
+  return {
+    timestamp,
+    eventType,
+    outcome,
+    userId: safeUserId,
+    targetIdentifier: safeTarget,
+    clientId: safeClientId,
+    clientName: safeClientName,
+    ipAddress: safeIp,
+    userAgent: safeUserAgent,
+    reason: safeReason,
+    ...(Object.keys(safeDetails).length > 0 ? { details: safeDetails } : {}),
+  };
+}
+
+let authEventStoreFailureSimulated = false;
+
+export function __simulateAuthEventStoreFailure(enable: boolean): void {
+  authEventStoreFailureSimulated = enable;
+}
+
+export async function recordAuthEvent(event: Partial<AuthAuditEvent>): Promise<void> {
+  if (authEventStoreFailureSimulated) {
+    console.warn("[AUTH_EVENT] Simulated auth event store failure");
+    return;
+  }
+  try {
+    await ensureTtlIndexes();
+    const db = await getDb();
+    const sanitized = sanitizeAuthEvent(event);
+    await db.collection<AuthAuditEvent>("auth_events").insertOne(sanitized);
+  } catch (err) {
+    console.error("[AUTH_EVENT] Failed to record auth event:", err);
   }
 }
 

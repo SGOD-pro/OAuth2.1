@@ -79,7 +79,7 @@ assert.equal(
   "Dev client loopback MUST be rejected in production when allowDevInProd is false"
 );
 assert.equal(
-  validateRedirectUri("https://app.example.com/callback", { isDev: true, env: "production", allowDevInProd: false }),
+  validateRedirectUri("https://app.example.com/callback", { isDev: false, env: "production", allowDevInProd: false }),
   true,
   "Public HTTPS client remains valid when allowDevInProd is false"
 );

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
 import { safeCallbackURL } from '@/lib/security';
@@ -22,6 +22,16 @@ export const TwoFactor: React.FC = () => {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const focusInput = () => {
+      inputRef.current?.focus();
+    };
+    focusInput();
+    const timer = setTimeout(focusInput, 60);
+    return () => clearTimeout(timer);
+  }, [mode]);
 
   const getAuthRedirect = (errorVal: string) => {
     const params = new URLSearchParams(searchParams);
@@ -197,6 +207,7 @@ export const TwoFactor: React.FC = () => {
                   {mode === 'totp' ? 'Verification Code' : 'Recovery Code'}
                 </label>
                 <Input
+                  ref={inputRef}
                   type="text"
                   inputMode={mode === 'totp' ? 'numeric' : 'text'}
                   pattern={mode === 'totp' ? '[0-9]*' : undefined}

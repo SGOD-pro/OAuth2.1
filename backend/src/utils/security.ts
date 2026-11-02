@@ -622,7 +622,7 @@ export function normalizeOAuthClientFields<T extends Record<string, any>>(rawCli
   const isPublic = rawClient.isPublic !== false && rawClient.is_public !== false;
   const isDev = Boolean(rawClient.isDev || rawClient.is_dev);
   const disabled = Boolean(rawClient.disabled);
-  const name = String(rawClient.name || rawClient.client_name || "Application").trim();
+  const name = String(rawClient.name || rawClient.client_name || rawClient.clientName || "Application").trim();
   const clientSecret = rawClient.clientSecret || rawClient.client_secret;
   const skipConsent = Boolean(rawClient.skipConsent || rawClient.skip_consent);
 
@@ -633,6 +633,7 @@ export function normalizeOAuthClientFields<T extends Record<string, any>>(rawCli
     client_id: canonicalId,
     name,
     client_name: name,
+    clientName: name,
     redirectUris,
     redirect_uris: redirectUris,
     allowedOrigins,

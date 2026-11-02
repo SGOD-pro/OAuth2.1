@@ -33,6 +33,7 @@ const securityTestFiles = [
   "tests/security/redis-test-isolation.test.ts",
   "tests/security/membership-lifecycle.test.ts",
   "tests/security/dashboard-stats-accuracy.test.ts",
+  "tests/security/auth-event-telemetry.test.ts",
 ];
 
 console.log("================================================================");

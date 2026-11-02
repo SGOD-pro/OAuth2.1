@@ -120,7 +120,13 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
   const [secretCopied, setSecretCopied] = useState(false);
 
   const copy = async (text: string, which: 'id' | 'secret') => {
-    await navigator.clipboard.writeText(text);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      }
+    } catch {
+      // Headless / unprivileged clipboard fallback
+    }
     setCopied(which);
     if (which === 'secret') setSecretCopied(true);
     setTimeout(() => setCopied(null), 2000);

@@ -62,6 +62,7 @@
     "test:redis-isolation": "tsx tests/security/redis-test-isolation.test.ts",
     "test:membership-lifecycle": "tsx tests/security/membership-lifecycle.test.ts",
     "test:dashboard-stats": "tsx tests/security/dashboard-stats-accuracy.test.ts",
+    "test:auth-telemetry": "tsx tests/security/auth-event-telemetry.test.ts",
     "test:all-security": "tsx scripts/run-all-security.ts",
     "test:all-security:local": "tsx scripts/run-all-security.ts",
     "security:docs-check": "tsx scripts/check-security-doc-consistency.ts",

@@ -59,6 +59,10 @@ export interface LogEntry {
   action: string;
   ipAddress: string | null;
   createdAt: string | null;
+  appName?: string | null;
+  applicationName?: string | null;
+  outcome?: string | null;
+  clientId?: string | null;
 }
 
 export interface User {
@@ -95,6 +99,11 @@ interface AdminStore {
 
 const CACHE_TTL = 30_000; // 30 seconds
 
+let inFlightStats: Promise<void> | null = null;
+let inFlightClients: Promise<void> | null = null;
+let inFlightLogs: Promise<void> | null = null;
+let inFlightUsers: Promise<void> | null = null;
+
 export const useAdminStore = create<AdminStore>((set, get) => ({
   stats: { data: null, lastFetched: 0, loading: false },
   clients: { data: null, lastFetched: 0, loading: false },
@@ -104,70 +113,98 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
   fetchStats: async (force = false) => {
     const { stats } = get();
     if (!force && stats.data && Date.now() - stats.lastFetched < CACHE_TTL) return;
+    if (inFlightStats) return inFlightStats;
 
-    set({ stats: { ...get().stats, loading: true } });
-    try {
-      const res = await apiFetch('/api/admin/stats');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: Stats = await res.json();
-      set({ stats: { data, lastFetched: Date.now(), loading: false } });
-    } catch (err) {
-      toast.error(`Failed to load stats: ${String(err)}`);
-      set({ stats: { ...get().stats, loading: false } });
-    }
+    inFlightStats = (async () => {
+      set({ stats: { ...get().stats, loading: true } });
+      try {
+        const res = await apiFetch('/api/admin/stats');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: Stats = await res.json();
+        set({ stats: { data, lastFetched: Date.now(), loading: false } });
+      } catch (err) {
+        toast.error(`Failed to load stats: ${String(err)}`);
+        set({ stats: { ...get().stats, loading: false } });
+      } finally {
+        inFlightStats = null;
+      }
+    })();
+
+    return inFlightStats;
   },
 
   fetchClients: async (force = false) => {
     const { clients } = get();
     if (!force && clients.data && Date.now() - clients.lastFetched < CACHE_TTL) return;
+    if (inFlightClients) return inFlightClients;
 
-    set({ clients: { ...get().clients, loading: true } });
-    try {
-      const res = await apiFetch('/api/admin/clients');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: OAuthClient[] = await res.json();
-      const sorted = (data || []).sort((a, b) => {
-        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
-        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
-        return timeB - timeA;
-      });
-      set({ clients: { data: sorted, lastFetched: Date.now(), loading: false } });
-    } catch (err) {
-      toast.error(String(err));
-      set({ clients: { ...get().clients, loading: false } });
-    }
+    inFlightClients = (async () => {
+      set({ clients: { ...get().clients, loading: true } });
+      try {
+        const res = await apiFetch('/api/admin/clients');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: OAuthClient[] = await res.json();
+        const sorted = (data || []).sort((a, b) => {
+          const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.created_at ? new Date(a.created_at).getTime() : 0);
+          const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b.created_at ? new Date(b.created_at).getTime() : 0);
+          return timeB - timeA;
+        });
+        set({ clients: { data: sorted, lastFetched: Date.now(), loading: false } });
+      } catch (err) {
+        toast.error(String(err));
+        set({ clients: { ...get().clients, loading: false } });
+      } finally {
+        inFlightClients = null;
+      }
+    })();
+
+    return inFlightClients;
   },
 
   fetchLogs: async (force = false) => {
     const { logs } = get();
     if (!force && logs.data && Date.now() - logs.lastFetched < CACHE_TTL) return;
+    if (inFlightLogs) return inFlightLogs;
 
-    set({ logs: { ...get().logs, loading: true } });
-    try {
-      const res = await apiFetch('/api/admin/logs');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: LogEntry[] = await res.json();
-      set({ logs: { data, lastFetched: Date.now(), loading: false } });
-    } catch (err) {
-      toast.error(`Failed to load logs: ${String(err)}`);
-      set({ logs: { ...get().logs, loading: false } });
-    }
+    inFlightLogs = (async () => {
+      set({ logs: { ...get().logs, loading: true } });
+      try {
+        const res = await apiFetch('/api/admin/logs');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: LogEntry[] = await res.json();
+        set({ logs: { data, lastFetched: Date.now(), loading: false } });
+      } catch (err) {
+        toast.error(`Failed to load logs: ${String(err)}`);
+        set({ logs: { ...get().logs, loading: false } });
+      } finally {
+        inFlightLogs = null;
+      }
+    })();
+
+    return inFlightLogs;
   },
 
   fetchUsers: async (force = false) => {
     const { users } = get();
     if (!force && users.data && Date.now() - users.lastFetched < CACHE_TTL) return;
+    if (inFlightUsers) return inFlightUsers;
 
-    set({ users: { ...get().users, loading: true } });
-    try {
-      const res = await apiFetch('/api/admin/users');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: User[] = await res.json();
-      set({ users: { data, lastFetched: Date.now(), loading: false } });
-    } catch (err) {
-      toast.error(`Failed to load users: ${String(err)}`);
-      set({ users: { ...get().users, loading: false } });
-    }
+    inFlightUsers = (async () => {
+      set({ users: { ...get().users, loading: true } });
+      try {
+        const res = await apiFetch('/api/admin/users');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: User[] = await res.json();
+        set({ users: { data, lastFetched: Date.now(), loading: false } });
+      } catch (err) {
+        toast.error(`Failed to load users: ${String(err)}`);
+        set({ users: { ...get().users, loading: false } });
+      } finally {
+        inFlightUsers = null;
+      }
+    })();
+
+    return inFlightUsers;
   },
 
   addClientLocal: (client) => {

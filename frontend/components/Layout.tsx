@@ -33,7 +33,7 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
           </div>
         )}
 
-        <div className="z-10 w-full relative">
+        <div key={location.pathname} className="z-10 w-full relative animate-content-reveal">
           {children}
         </div>
       </main>

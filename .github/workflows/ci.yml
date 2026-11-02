@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - bug-fix
+      - ui
   pull_request:
     branches:
       - main
       - bug-fix
+      - ui
     paths:
       - 'backend/**'
       - 'frontend/**'

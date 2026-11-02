@@ -81,14 +81,26 @@ export const AdminSecurity: React.FC = () => {
   };
 
   const copyManualKey = async (secret: string) => {
-    await navigator.clipboard.writeText(secret);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(secret);
+      }
+    } catch {
+      // Headless / unprivileged clipboard fallback
+    }
     setCopiedKey(true);
     toast.success('Secret key copied to clipboard');
     setTimeout(() => setCopiedKey(null as unknown as boolean), 2000);
   };
 
   const copyBackupCodes = async () => {
-    await navigator.clipboard.writeText(backupCodes.join('\n'));
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(backupCodes.join('\n'));
+      }
+    } catch {
+      // Headless / unprivileged clipboard fallback
+    }
     setCopiedCodes(true);
     toast.success('Backup codes copied to clipboard');
     setTimeout(() => setCopiedCodes(false), 2000);

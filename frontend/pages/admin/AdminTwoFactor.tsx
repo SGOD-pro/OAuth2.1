@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authClient } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,16 @@ export const AdminTwoFactor: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [failedAttempts, setFailedAttempts] = useState(0);
   const navigate = useNavigate();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const focusInput = () => {
+      inputRef.current?.focus();
+    };
+    focusInput();
+    const timer = setTimeout(focusInput, 60);
+    return () => clearTimeout(timer);
+  }, [mode]);
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -168,9 +178,11 @@ export const AdminTwoFactor: React.FC = () => {
                   {mode === 'totp' ? 'Verification Code' : 'Recovery Code'}
                 </label>
                 <Input
+                  ref={inputRef}
                   type="text"
                   inputMode={mode === 'totp' ? 'numeric' : 'text'}
                   autoComplete="one-time-code"
+                  autoFocus
                   placeholder={mode === 'totp' ? '000000' : 'xxxxxxxx-xxxx'}
                   maxLength={mode === 'totp' ? 6 : 24}
                   required

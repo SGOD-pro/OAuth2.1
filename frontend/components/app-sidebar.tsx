@@ -71,11 +71,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   return (
     <Sidebar variant="inset" className="w-[264px] p-2 sm:p-3 bg-sidebar" {...props}>
-      <SidebarHeader className="h-[68px] flex items-center justify-between px-4">
-        <BrandMark size="default" />
-        <span className="px-2 py-0.5 rounded-pill font-mono text-[10px] font-semibold uppercase tracking-wider bg-primary/10 text-primary border border-primary/20">
-          IDP 2.1
-        </span>
+      <SidebarHeader className="h-[72px] flex items-center justify-start px-4">
+        <BrandMark size="default" showBadge />
       </SidebarHeader>
 
       <SidebarContent className="p-3">
@@ -90,7 +87,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   to={to}
                   end={end}
                   className={({ isActive }) =>
-                    `group relative flex items-center gap-3 px-3.5 h-11 rounded-lg text-sm font-sans transition-colors duration-140 outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
+                    `group relative flex items-center gap-3 px-3.5 h-11 rounded-lg text-sm font-sans transition-[color,background-color,transform] duration-140 ease-standard active:scale-[0.99] outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
                       isActive
                         ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-2xs'
                         : 'text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground'
@@ -102,7 +99,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       {isActive && (
                         <div
                           aria-hidden="true"
-                          className="absolute left-1.5 top-1/2 -translate-y-1/2 w-1 h-5 rounded-full bg-primary transition-transform duration-200"
+                          className="absolute left-1.5 top-1/2 -translate-y-1/2 w-1 h-5 rounded-full bg-primary animate-in fade-in-0 duration-180 transition-transform"
                         />
                       )}
                       <span className="shrink-0 opacity-80 group-hover:opacity-100 transition-opacity pl-1">

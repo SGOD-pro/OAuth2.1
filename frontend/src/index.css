@@ -63,7 +63,17 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-emphasis: cubic-bezier(0.22, 1, 0.36, 1);
   --expo-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── Universal Motion Tokens ── */
+  --motion-instant: 80ms;
+  --motion-fast: 120ms;
+  --motion-hover: 140ms;
+  --motion-normal: 180ms;
+  --motion-medium: 240ms;
+  --motion-slow: 320ms;
+  --motion-emphasis: 450ms;
 
   /* ── Light: Soft Neutral Luminous Craft ── */
   --background: #F3F4F6;
@@ -237,6 +247,18 @@
   }
 }
 
+/* ── Hardware Acceleration & Compositing ── */
+.glass {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+header {
+  transform: translateZ(0);
+}
+
 /* ── Content View Transitions (Spatial & Subtle) ── */
 @keyframes content-reveal {
   from {
@@ -251,6 +273,49 @@
 
 .animate-content-reveal {
   animation: content-reveal 160ms var(--ease-enter) both;
+}
+
+/* ── Sonner Toaster Premium Motion & Theming ── */
+[data-sonner-toaster] {
+  font-family: var(--font-sans);
+}
+
+[data-sonner-toast] {
+  transition: transform var(--motion-normal) var(--ease-enter),
+              opacity var(--motion-normal) var(--ease-enter),
+              height var(--motion-normal) var(--ease-enter),
+              box-shadow var(--motion-hover) var(--ease-standard) !important;
+}
+
+[data-sonner-toast][data-styled="true"] {
+  border-radius: var(--radius-lg, 16px) !important;
+  box-shadow: var(--shadow-float) !important;
+  font-family: var(--font-sans) !important;
+}
+
+[data-sonner-toast] [data-title] {
+  font-family: var(--font-sans) !important;
+  font-weight: 500 !important;
+  color: var(--card-foreground) !important;
+}
+
+[data-sonner-toast] [data-description] {
+  font-family: var(--font-sans) !important;
+  color: var(--muted-foreground) !important;
+}
+
+[data-sonner-toast] [data-close-button] {
+  border-radius: var(--radius-pill) !important;
+  border-color: var(--border) !important;
+  background: var(--card) !important;
+  color: var(--muted-foreground) !important;
+  transition: color var(--motion-fast) var(--ease-standard),
+              background-color var(--motion-fast) var(--ease-standard) !important;
+}
+
+[data-sonner-toast] [data-close-button]:hover {
+  color: var(--foreground) !important;
+  background: var(--secondary) !important;
 }
 
 /* ── Accessibility: Reduced Motion ── */

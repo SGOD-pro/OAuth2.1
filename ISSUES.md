@@ -34,15 +34,13 @@ Fix: Optional breach check; MFA for admin role.
 **L3** — Frontend `AdminRoute` is UX-only; server `requireAdmin` is the real gate.  
 **L4** — Frontend `validateUri` does not reject private IPs (server does in prod) — OK if server remains source of truth.  
 **N4b** — Security self-check covers the trusted-proxy edge case and password/redirect helpers; route-level integration coverage remains limited.
-**N5a** (telemetry backlog): Persist failed authentication events and outcomes for security analytics.  
-**N5b** (telemetry backlog): Persist target `client_id` on OAuth authorization failures and access denied events.  
 **N5c** (telemetry backlog): Expose signing key age and rotation metadata in admin security telemetry.
 
 ────────────────────────────────────────
 
 ## Closed in this pass (do not re-open unless regressing)
 
-H2 (trusted IP helper + CIDRs), H4 core (min 12 + complexity + auth rate limits), H5 email and Google signup gates, H7 `safeCallbackURL`, H8 Compose Nginx removal + TLS note, M2 cookie flags, M3 generic 500s, M4 privacy-safe auth logs, M5 JWT PII stripped, M6 provider refresh rotation/reuse detection, M7 short origin cache TTL, M8 strict CSP, N1 atomic window reset, N2/N6 URI invariants, N4 security self-check, M11 admin and reset-password validators mirrored, N5 core (honest metrics, zero values preserved without fallbacks, null IP and timestamp handling, session count semantics aligned).
+H2 (trusted IP helper + CIDRs), H4 core (min 12 + complexity + auth rate limits), H5 email and Google signup gates, H7 `safeCallbackURL`, H8 Compose Nginx removal + TLS note, M2 cookie flags, M3 generic 500s, M4 privacy-safe auth logs, M5 JWT PII stripped, M6 provider refresh rotation/reuse detection, M7 short origin cache TTL, M8 strict CSP, N1 atomic window reset, N2/N6 URI invariants, N4 security self-check, M11 admin and reset-password validators mirrored, N5 core (honest metrics, zero values preserved without fallbacks, null IP and timestamp handling, session count semantics aligned), N5a (persisted authentication outcomes and events with trustworthy IP, no credentials or secrets), N5b (persisted target clientId and clientName on authorization failures and access denied events).
 
 ────────────────────────────────────────
 
@@ -53,7 +51,7 @@ H2 (trusted IP helper + CIDRs), H4 core (min 12 + complexity + auth rate limits)
 | Critical | 0 |
 | High | 0 |
 | Medium | 3 |
-| Low / Info | 6 |
+| Low / Info | 4 |
 
 ────────────────────────────────────────
 

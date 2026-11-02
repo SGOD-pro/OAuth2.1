@@ -45,7 +45,7 @@ function TabsTrigger({
     <TabsPrimitive.Trigger
       data-slot="tabs-trigger"
       className={cn(
-        "inline-flex flex-1 items-center justify-center rounded-pill px-4 py-2 font-mono text-xs uppercase tracking-wider text-muted-foreground transition-all duration-200 hover:text-foreground focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 data-active:bg-background data-active:text-foreground data-active:shadow-sm",
+        "inline-flex flex-1 items-center justify-center rounded-pill px-4 py-2 font-mono text-xs uppercase tracking-wider text-muted-foreground transition-[color,background-color,box-shadow,transform] duration-180 ease-standard hover:text-foreground active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-active:bg-background data-active:text-foreground data-active:shadow-2xs",
         className
       )}
       {...props}
@@ -60,7 +60,10 @@ function TabsContent({
   return (
     <TabsPrimitive.Content
       data-slot="tabs-content"
-      className={cn("flex-1 text-sm outline-none focus-visible:outline-none", className)}
+      className={cn(
+        "flex-1 text-sm outline-none focus-visible:outline-none data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-bottom-1 duration-140",
+        className
+      )}
       {...props}
     />
   )

@@ -222,7 +222,13 @@ export const AdminClients: React.FC = () => {
 
   const copyClientId = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await navigator.clipboard.writeText(id);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(id);
+      }
+    } catch {
+      // Headless / unprivileged clipboard fallback
+    }
     setCopiedId(id);
     toast.success('Client ID copied to clipboard');
     setTimeout(() => setCopiedId(null), 2000);
@@ -463,156 +469,269 @@ export const AdminClients: React.FC = () => {
                 </CardContent>
               </Card>
             ) : (
-              <div className="border border-border rounded-[12px] overflow-hidden bg-card">
-                <Table>
-                  <TableHeader className="bg-secondary/40 border-b border-border">
-                    <TableRow>
-                      <TableHead className="w-[28%] text-xs font-medium text-muted-foreground">Application</TableHead>
-                      <TableHead className="w-[26%] text-xs font-medium text-muted-foreground">Client ID</TableHead>
-                      <TableHead className="w-[18%] text-xs font-medium text-muted-foreground">Status</TableHead>
-                      <TableHead className="w-[14%] text-xs font-medium text-muted-foreground">Created</TableHead>
-                      <TableHead className="text-right text-xs font-medium text-muted-foreground">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {paginatedClients.map((c) => {
-                      const isSelected = selectedClient?.client_id === c.client_id;
+              <div className="space-y-4">
+                {/* Mobile and Compact View (< md) */}
+                <div className="md:hidden space-y-3">
+                  {paginatedClients.map((c) => {
+                    const isSelected = selectedClient?.client_id === c.client_id;
+                    const isDev = Boolean(c.is_dev || c.isDev);
+                    const isPublic = c.is_public !== false && c.isPublic !== false;
+                    const { dateStr, timeStr } = formatAppDate(c.createdAt || c.created_at);
 
-                      return (
-                        <React.Fragment key={c.client_id}>
-                          <TableRow
-                            className={`cursor-pointer transition-colors border-b border-border/70 ${isSelected ? 'bg-secondary/60' : 'hover:bg-secondary/30'}`}
-                            onClick={() => setSelectedClient((s) => (s?.client_id === c.client_id ? null : c))}
-                          >
-                            <TableCell className="font-medium py-3.5">
-                              <div className="flex items-center gap-3">
-                                <div className="size-8 rounded-md bg-secondary border border-border flex items-center justify-center font-mono text-xs text-foreground font-semibold uppercase shrink-0">
-                                  {c.client_name.substring(0, 2)}
+                    return (
+                      <Card
+                        key={c.client_id}
+                        className={`transition-colors border border-border cursor-pointer ${
+                          isSelected ? 'bg-secondary/40 ring-1 ring-border' : 'bg-card'
+                        }`}
+                        onClick={() => setSelectedClient((s) => (s?.client_id === c.client_id ? null : c))}
+                      >
+                        <CardContent className="p-4 space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="size-9 rounded-xl bg-secondary border border-border flex items-center justify-center font-mono text-xs text-foreground font-semibold uppercase shrink-0">
+                                {c.client_name.substring(0, 2)}
+                              </div>
+                              <div className="min-w-0">
+                                <h3 className="font-sans font-medium text-foreground text-sm truncate">
+                                  {c.client_name}
+                                </h3>
+                                <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
+                                  <span>{isPublic ? 'Public client' : 'Private tenant'}</span>
+                                  <span>•</span>
+                                  <span>{isDev ? 'Development' : 'Production'}</span>
                                 </div>
-                                <span className="font-sans font-medium text-foreground text-sm">{c.client_name}</span>
                               </div>
-                            </TableCell>
-                            <TableCell className="py-3.5">
-                              <div className="flex items-center gap-1.5">
-                                <code className="font-mono text-xs bg-secondary/70 px-2 py-1 rounded-md text-muted-foreground border border-border">
-                                  {c.client_id.slice(0, 8)}...{c.client_id.slice(-4)}
-                                </code>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="size-7 rounded-md text-muted-foreground hover:text-foreground"
-                                      onClick={(e) => copyClientId(c.client_id, e)}
-                                      aria-label="Copy Client ID"
-                                    >
-                                      {copiedId === c.client_id ? (
-                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-500">
-                                          <polyline points="20 6 9 17 4 12" />
-                                        </svg>
-                                      ) : (
-                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                                        </svg>
-                                      )}
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top">Copy Client ID</TooltipContent>
-                                </Tooltip>
-                              </div>
-                            </TableCell>
-                            <TableCell className="py-3.5">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                {c.disabled ? (
-                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive">
-                                    <span className="size-1.5 rounded-full bg-destructive" />
-                                    Disabled
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                                    <span className="size-1.5 rounded-full bg-emerald-500" />
-                                    Active
-                                  </span>
-                                )}
-                                <Badge
-                                  variant={c.is_dev || c.isDev ? 'warning' : 'secondary'}
-                                  className="text-[11px]"
-                                >
-                                  {c.is_dev || c.isDev ? 'Development' : 'Production'}
-                                </Badge>
-                                <Badge
-                                  variant="outline"
-                                  className="text-[11px]"
-                                >
-                                  {c.is_public !== false && c.isPublic !== false ? 'Public' : 'Private'}
-                                </Badge>
-                                {Boolean(c.has_custom_admins || c.hasCustomAdmins || c.adminEmail || c.adminUserId) && (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Badge
-                                        variant="outline"
-                                        className="text-[11px] flex items-center gap-1"
-                                      >
-                                        <ShieldCheck className="size-3" />
-                                        Custom admins
-                                      </Badge>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top">
-                                      This app has its own administrator account
-                                    </TooltipContent>
-                                  </Tooltip>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell className="py-3.5">
-                              {(() => {
-                                const { dateStr, timeStr, fullIso } = formatAppDate(c.createdAt || c.created_at);
-                                if (!dateStr || dateStr === '—') return <span className="text-muted-foreground text-xs">—</span>;
-                                return (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <div className="flex flex-col text-xs cursor-default">
-                                        <span className="font-medium text-foreground whitespace-nowrap">{dateStr}</span>
-                                        <span className="text-[11px] text-muted-foreground whitespace-nowrap">{timeStr}</span>
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top" className="text-xs">
-                                      <div><span className="font-semibold">Registered:</span> {fullIso}</div>
-                                      {(c.updatedAt || c.updated_at) && (
-                                        <div className="mt-0.5"><span className="font-semibold">Updated:</span> {new Date(c.updatedAt || c.updated_at!).toISOString()}</div>
-                                      )}
-                                    </TooltipContent>
-                                  </Tooltip>
-                                );
-                              })()}
-                            </TableCell>
-                            <TableCell className="text-right py-3.5" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex justify-end gap-1.5">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 px-2.5 text-xs rounded-md"
-                                  onClick={() => setEditClient(c)}
-                                >
-                                  Edit
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 px-2.5 text-xs rounded-md text-destructive hover:text-destructive hover:bg-destructive/10"
-                                  onClick={() => setConfirmDelete(c)}
-                                >
-                                  Revoke
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
+                            </div>
+
+                            <div className="shrink-0">
+                              {c.disabled ? (
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive">
+                                  <span className="size-1.5 rounded-full bg-destructive" />
+                                  Disabled
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                                  <span className="size-1.5 rounded-full bg-emerald-500" />
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-secondary/50 border border-border text-xs">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-muted-foreground font-sans shrink-0">ID:</span>
+                              <code className="font-mono text-xs text-foreground truncate">
+                                {c.client_id}
+                              </code>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs shrink-0"
+                              onClick={(e) => copyClientId(c.client_id, e)}
+                            >
+                              {copiedId === c.client_id ? 'Copied' : 'Copy'}
+                            </Button>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1 text-xs text-muted-foreground">
+                            <span>Created: {dateStr} {timeStr}</span>
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 px-2.5 text-xs rounded-md"
+                                onClick={() => setEditClient(c)}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 px-2.5 text-xs rounded-md text-destructive hover:text-destructive hover:bg-destructive/10"
+                                onClick={() => setConfirmDelete(c)}
+                              >
+                                Revoke
+                              </Button>
+                            </div>
+                          </div>
 
                           {isSelected && (
-                            <TableRow className="bg-secondary/20 hover:bg-secondary/20 border-b border-border">
-                              <TableCell colSpan={5} className="p-5 sm:p-6 whitespace-normal">
-                                <div className="space-y-5">
+                            <div className="pt-3 border-t border-border space-y-3 text-xs">
+                              <div>
+                                <span className="font-medium text-foreground block mb-1">Redirect URIs</span>
+                                <div className="space-y-1">
+                                  {(c.redirect_uris ?? c.redirectUris ?? []).map((uri, idx) => (
+                                    <code key={idx} className="block font-mono text-[11px] bg-secondary p-1 rounded truncate">
+                                      {uri}
+                                    </code>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop and Tablet Table (>= md) */}
+                <div className="hidden md:block border border-border rounded-[12px] overflow-hidden bg-card">
+                  <Table>
+                    <TableHeader className="bg-secondary/40 border-b border-border">
+                      <TableRow>
+                        <TableHead className="w-[30%] text-xs font-medium text-muted-foreground">Application</TableHead>
+                        <TableHead className="w-[24%] text-xs font-medium text-muted-foreground">Client ID</TableHead>
+                        <TableHead className="w-[18%] text-xs font-medium text-muted-foreground">Status</TableHead>
+                        <TableHead className="w-[14%] text-xs font-medium text-muted-foreground">Created</TableHead>
+                        <TableHead className="text-right text-xs font-medium text-muted-foreground">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {paginatedClients.map((c) => {
+                        const isSelected = selectedClient?.client_id === c.client_id;
+                        const isDev = Boolean(c.is_dev || c.isDev);
+                        const isPublic = c.is_public !== false && c.isPublic !== false;
+
+                        return (
+                          <React.Fragment key={c.client_id}>
+                            <TableRow
+                              className={`cursor-pointer transition-colors border-b border-border/70 ${isSelected ? 'bg-secondary/60' : 'hover:bg-secondary/30'}`}
+                              onClick={() => setSelectedClient((s) => (s?.client_id === c.client_id ? null : c))}
+                            >
+                              <TableCell className="font-medium py-3.5">
+                                <div className="flex items-center gap-3">
+                                  <div className="size-9 rounded-xl bg-secondary border border-border flex items-center justify-center font-mono text-xs text-foreground font-semibold uppercase shrink-0 shadow-2xs">
+                                    {c.client_name.substring(0, 2)}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <span className="font-sans font-medium text-foreground text-sm block truncate">
+                                      {c.client_name}
+                                    </span>
+                                    <span className="font-sans text-xs text-muted-foreground block truncate">
+                                      {isPublic ? 'Public client' : 'Private tenant'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="py-3.5">
+                                <div className="flex items-center gap-1.5">
+                                  <code className="font-mono text-xs bg-secondary/70 px-2 py-1 rounded-md text-muted-foreground border border-border">
+                                    {c.client_id.slice(0, 8)}...{c.client_id.slice(-4)}
+                                  </code>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="size-7 rounded-md text-muted-foreground hover:text-foreground"
+                                        onClick={(e) => copyClientId(c.client_id, e)}
+                                        aria-label="Copy Client ID"
+                                      >
+                                        {copiedId === c.client_id ? (
+                                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-500">
+                                            <polyline points="20 6 9 17 4 12" />
+                                          </svg>
+                                        ) : (
+                                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                          </svg>
+                                        )}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top">Copy Client ID</TooltipContent>
+                                  </Tooltip>
+                                </div>
+                              </TableCell>
+                              <TableCell className="py-3.5">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {c.disabled ? (
+                                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive">
+                                      <span className="size-1.5 rounded-full bg-destructive" />
+                                      Disabled
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                                      <span className="size-1.5 rounded-full bg-emerald-500" />
+                                      Active
+                                    </span>
+                                  )}
+                                  <Badge
+                                    variant={isDev ? 'warning' : 'secondary'}
+                                    className="text-[11px]"
+                                  >
+                                    {isDev ? 'Development' : 'Production'}
+                                  </Badge>
+                                  {Boolean(c.has_custom_admins || c.hasCustomAdmins || c.adminEmail || c.adminUserId) && (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Badge
+                                          variant="outline"
+                                          className="text-[11px] flex items-center gap-1"
+                                        >
+                                          <ShieldCheck className="size-3" />
+                                          Custom admins
+                                        </Badge>
+                                      </TooltipTrigger>
+                                      <TooltipContent side="top">
+                                        This app has its own administrator account
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell className="py-3.5">
+                                {(() => {
+                                  const { dateStr, timeStr, fullIso } = formatAppDate(c.createdAt || c.created_at);
+                                  if (!dateStr || dateStr === '—') return <span className="text-muted-foreground text-xs">—</span>;
+                                  return (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <div className="flex flex-col text-xs cursor-default">
+                                          <span className="font-medium text-foreground whitespace-nowrap">{dateStr}</span>
+                                          <span className="text-[11px] text-muted-foreground whitespace-nowrap">{timeStr}</span>
+                                        </div>
+                                      </TooltipTrigger>
+                                      <TooltipContent side="top" className="text-xs">
+                                        <div><span className="font-semibold">Registered:</span> {fullIso}</div>
+                                        {(c.updatedAt || c.updated_at) && (
+                                          <div className="mt-0.5"><span className="font-semibold">Updated:</span> {new Date(c.updatedAt || c.updated_at!).toISOString()}</div>
+                                        )}
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  );
+                                })()}
+                              </TableCell>
+                              <TableCell className="text-right py-3.5" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex justify-end gap-1.5">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 px-2.5 text-xs rounded-md"
+                                    onClick={() => setEditClient(c)}
+                                  >
+                                    Edit
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 px-2.5 text-xs rounded-md text-destructive hover:text-destructive hover:bg-destructive/10"
+                                    onClick={() => setConfirmDelete(c)}
+                                  >
+                                    Revoke
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+
+                            {isSelected && (
+                              <TableRow className="bg-secondary/20 hover:bg-secondary/20 border-b border-border">
+                                <TableCell colSpan={5} className="p-5 sm:p-6 whitespace-normal">
+                                  <div className="space-y-5">
                                   <div className="flex items-center justify-between pb-3 border-b border-border">
                                     <div className="flex items-center gap-2">
                                       <span className="font-heading text-sm font-medium text-foreground">
@@ -765,9 +884,10 @@ export const AdminClients: React.FC = () => {
                   )}
                 </div>
               </div>
-            )}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
+      )}
 
         {showRegister && (
           <RegisterAppModal

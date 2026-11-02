@@ -37,7 +37,7 @@ const StatCard = React.memo(
     helperText: string;
     accent?: 'none' | 'motorsport';
   }) => (
-    <Card accent={accent} className="transition-none hover:translate-y-0 relative overflow-hidden">
+    <Card accent={accent} className="transition-[transform,box-shadow,border-color] duration-160 ease-standard hover:-translate-y-0.5 hover:shadow-xs relative overflow-hidden">
       <CardContent className="p-5 sm:p-6">
         <div className="flex items-center justify-between mb-3">
           <span className="font-sans text-xs font-medium text-muted-foreground">
@@ -73,17 +73,28 @@ export const AdminDashboard: React.FC = () => {
   const fetchClients = useAdminStore((state) => state.fetchClients);
 
   const [copiedEndpoint, setCopiedEndpoint] = useState<string | null>(null);
+  const copyTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     void fetchStats();
     void fetchClients();
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
   }, [fetchStats, fetchClients]);
 
   const copyToClipboard = async (text: string, label: string) => {
-    await navigator.clipboard.writeText(text);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      }
+    } catch {
+      // Headless / unprivileged clipboard write fallback
+    }
     setCopiedEndpoint(label);
     toast.success(`${label} copied to clipboard`);
-    setTimeout(() => setCopiedEndpoint(null), 1600);
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    copyTimeoutRef.current = setTimeout(() => setCopiedEndpoint(null), 1600);
   };
 
   const recentActivity = stats?.recentActivity || [];
@@ -171,12 +182,12 @@ export const AdminDashboard: React.FC = () => {
         />
       </div>
 
-      {/* Cockpit Asymmetric Layout: Left Main Column & Right Architecture Column */}
-      <div className="grid gap-6 grid-cols-1 lg:grid-cols-12">
-        {/* Left Column (8 cols): Recent Authentication Activity & Registered Apps Quick-Matrix */}
-        <div className="lg:col-span-8 flex flex-col gap-6">
+      {/* Cockpit Layout: Left Main Column & Right Architecture Column */}
+      <div className="grid gap-6 grid-cols-1 lg:grid-cols-12 items-stretch">
+        {/* Left Column (7 cols): Recent Authentication Activity & Registered Apps */}
+        <div className="lg:col-span-7 flex flex-col gap-6">
           {/* Recent Sign-Ins Ledger */}
-          <Card className="flex flex-col">
+          <Card className="flex flex-col flex-1">
             <CardContent className="p-5 sm:p-6 flex flex-col flex-1">
               <div className="flex items-center justify-between pb-3.5 border-b border-border/60">
                 <div>
@@ -201,7 +212,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               {recentActivity.length === 0 ? (
-                <div className="py-12 text-center font-sans text-sm text-muted-foreground flex flex-col items-center justify-center">
+                <div className="py-12 my-auto text-center font-sans text-sm text-muted-foreground flex flex-col items-center justify-center flex-1">
                   <div className="size-10 rounded-full bg-secondary border border-border flex items-center justify-center text-muted-foreground mb-3">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -210,7 +221,7 @@ export const AdminDashboard: React.FC = () => {
                   <span>No recent sign-ins.</span>
                 </div>
               ) : (
-                <div className="divide-y divide-border/40 pt-1">
+                <div className="divide-y divide-border/40 pt-1 flex-1">
                   {recentActivity.map((activity, idx) => {
                     const date = activity.timestamp ? new Date(activity.timestamp) : null;
                     const absoluteTime = date ? `${date.toISOString()} (${date.toUTCString()})` : '';
@@ -249,7 +260,7 @@ export const AdminDashboard: React.FC = () => {
           </Card>
 
           {/* Registered Applications Quick-Matrix */}
-          <Card>
+          <Card className="mt-auto">
             <CardContent className="p-5 sm:p-6">
               <div className="flex items-center justify-between pb-3.5 border-b border-border/60">
                 <div>
@@ -310,130 +321,105 @@ export const AdminDashboard: React.FC = () => {
           </Card>
         </div>
 
-        {/* Right Column (4 cols): Protocol & Cryptographic Cockpit */}
-        <div className="lg:col-span-4 flex flex-col gap-6">
+        {/* Right Column (5 cols): Protocol & Cryptographic Architecture */}
+        <div className="lg:col-span-5 flex flex-col gap-6">
           {/* OAuth 2.1 Specification Cockpit Card */}
-          <Card>
-            <CardContent className="p-5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between pb-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="size-8 rounded-md border border-border bg-secondary flex items-center justify-center text-primary">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+          <Card className="flex flex-col flex-1">
+            <CardContent className="p-5 sm:p-6 flex flex-col justify-between flex-1">
+              <div>
+                <div className="flex items-center gap-3 pb-3.5 border-b border-border/60">
+                  <div className="size-8 rounded-lg border border-border bg-secondary flex items-center justify-center text-primary shrink-0">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                      <path d="m9 12 2 2 4-4" />
                     </svg>
                   </div>
-                  <div>
-                    <h3 className="font-heading text-sm sm:text-base font-medium text-foreground">OAuth 2.1 Specification</h3>
-                    <p className="font-sans text-xs text-muted-foreground">RFC 6749 / RFC 7636</p>
+                  <div className="min-w-0">
+                    <h3 className="font-heading text-base font-medium text-foreground tracking-tight truncate">
+                      OAuth 2.1 Specification
+                    </h3>
+                    <p className="font-sans text-xs text-muted-foreground truncate">
+                      RFC 6749 · RFC 7636 Protocol Standards
+                    </p>
                   </div>
                 </div>
-                <span className="px-2 py-0.5 rounded-pill font-mono text-[10px] font-medium text-muted-foreground bg-secondary border border-border/80">
-                  RFC 6749
-                </span>
-              </div>
 
-              <div className="space-y-2.5 font-sans text-xs">
-                <div className="flex items-center justify-between py-1">
-                  <span className="text-muted-foreground">PKCE Method</span>
-                  <span className="font-mono font-medium text-foreground">S256</span>
-                </div>
-                <div className="flex items-center justify-between py-1">
-                  <span className="text-muted-foreground">Grant Flow</span>
-                  <span className="font-mono font-medium text-foreground">Authorization Code</span>
-                </div>
-                <div className="flex items-center justify-between py-1">
-                  <span className="text-muted-foreground">Token Reuse</span>
-                  <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">Protected</span>
-                </div>
-                <div className="flex items-center justify-between py-1">
-                  <span className="text-muted-foreground">Client Authentication</span>
-                  <span className="font-medium text-foreground text-right">Public (PKCE) & Confidential</span>
+                <div className="divide-y divide-border/40 font-sans text-xs pt-1">
+                  <div className="flex items-center justify-between py-2.5">
+                    <span className="text-muted-foreground">Grant Flow</span>
+                    <span className="font-mono font-medium text-foreground">Authorization Code</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2.5">
+                    <span className="text-muted-foreground">PKCE Method</span>
+                    <span className="font-mono font-medium text-foreground">S256 (SHA-256)</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2.5">
+                    <span className="text-muted-foreground">Token Security</span>
+                    <span className="font-mono font-medium text-foreground">Family Rotation & Reuse Protection</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2.5">
+                    <span className="text-muted-foreground">Client Profiles</span>
+                    <span className="font-mono font-medium text-foreground">Public & Confidential</span>
+                  </div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Keys & Discovery Cockpit Card */}
-          <Card>
-            <CardContent className="p-5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between pb-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="size-8 rounded-md border border-border bg-secondary flex items-center justify-center text-primary">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          <Card className="flex flex-col flex-1">
+            <CardContent className="p-5 sm:p-6 flex flex-col justify-between flex-1">
+              <div>
+                <div className="flex items-center gap-3 pb-3.5 border-b border-border/60">
+                  <div className="size-8 rounded-lg border border-border bg-secondary flex items-center justify-center text-primary shrink-0">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="7.5" cy="15.5" r="5.5" />
+                      <path d="m21 2-9.6 9.6" />
+                      <path d="m15.5 7.5 3 3" />
+                      <path d="M18.5 4.5 20 6" />
                     </svg>
                   </div>
-                  <div>
-                    <h3 className="font-heading text-sm sm:text-base font-medium text-foreground">Keys & Token Discovery</h3>
-                    <p className="font-sans text-xs text-muted-foreground">JWKS & OIDC Discovery</p>
+                  <div className="min-w-0">
+                    <h3 className="font-heading text-base font-medium text-foreground tracking-tight truncate">
+                      Keys & Token Discovery
+                    </h3>
+                    <p className="font-sans text-xs text-muted-foreground truncate">
+                      Asymmetric Signing & Keystore Endpoints
+                    </p>
                   </div>
                 </div>
-                <span className="px-2 py-0.5 rounded-pill font-mono text-[10px] font-medium text-muted-foreground bg-secondary border border-border/80">
-                  OIDC Discovery
-                </span>
-              </div>
 
-              <div className="space-y-2.5 font-sans text-xs">
-                <div className="flex items-center justify-between py-1">
-                  <span className="text-muted-foreground">Signing Algorithm</span>
-                  <span className="font-mono font-medium text-foreground">RS256</span>
-                </div>
-                <div className="flex items-center justify-between py-1">
-                  <span className="text-muted-foreground">Key Size</span>
-                  <span className="font-mono font-medium text-foreground">2048-bit RSA</span>
-                </div>
-                <div className="flex items-center justify-between py-1">
-                  <span className="text-muted-foreground">JWKS Verification</span>
-                  <span className="font-mono font-medium text-foreground">Offline RS256</span>
-                </div>
-                <div className="pt-1">
-                  <div className="flex items-center justify-between text-muted-foreground mb-1">
-                    <span>Metadata URL</span>
-                    <button
-                      type="button"
-                      onClick={() => void copyToClipboard('/.well-known/openid-configuration', 'Metadata URL')}
-                      className="text-primary hover:underline text-[11px] cursor-pointer"
-                    >
-                      {copiedEndpoint === 'Metadata URL' ? 'Copied!' : 'Copy'}
-                    </button>
+                <div className="divide-y divide-border/40 font-sans text-xs pt-1">
+                  <div className="flex items-center justify-between py-2.5">
+                    <span className="text-muted-foreground">Signing Algorithm</span>
+                    <span className="font-mono font-medium text-foreground">RS256</span>
                   </div>
-                  <code className="text-foreground font-mono text-[11px] bg-secondary/60 px-2 py-1 rounded block truncate border border-border">
-                    /.well-known/openid-configuration
-                  </code>
+                  <div className="flex items-center justify-between py-2.5">
+                    <span className="text-muted-foreground">Key Format</span>
+                    <span className="font-mono font-medium text-foreground">2048-bit RSA</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2.5">
+                    <span className="text-muted-foreground">JWKS Verification</span>
+                    <span className="font-mono font-medium text-foreground">Offline RS256</span>
+                  </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
 
-          {/* Quick Platform Shortcuts */}
-          <Card>
-            <CardContent className="p-4 sm:p-5">
-              <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground block mb-3">
-                Quick Console Actions
-              </span>
-              <div className="grid grid-cols-1 gap-2">
-                <NavLink
-                  to="/admin/clients"
-                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/60 active:scale-[0.99] text-xs font-sans text-foreground transition-all duration-120 group"
-                >
-                  <span className="font-medium">Register Application</span>
-                  <span className="text-muted-foreground group-hover:text-foreground">→</span>
-                </NavLink>
-                <NavLink
-                  to="/admin/logs"
-                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/60 active:scale-[0.99] text-xs font-sans text-foreground transition-all duration-120 group"
-                >
-                  <span className="font-medium">Audit Event Logs</span>
-                  <span className="text-muted-foreground group-hover:text-foreground">→</span>
-                </NavLink>
-                <NavLink
-                  to="/admin/security"
-                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/60 active:scale-[0.99] text-xs font-sans text-foreground transition-all duration-120 group"
-                >
-                  <span className="font-medium">Security & 2FA Configuration</span>
-                  <span className="text-muted-foreground group-hover:text-foreground">→</span>
-                </NavLink>
+              <div className="pt-3 border-t border-border/40 space-y-2 mt-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground text-[11px] font-medium">Metadata Discovery URL</span>
+                  <button
+                    type="button"
+                    onClick={() => void copyToClipboard('/.well-known/openid-configuration', 'Metadata URL')}
+                    className="text-primary hover:underline font-mono text-[11px] font-medium cursor-pointer"
+                  >
+                    {copiedEndpoint === 'Metadata URL' ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-secondary/50 border border-border/70 font-mono text-[11px] text-foreground">
+                  <span className="text-muted-foreground/80 select-none text-[10px] font-semibold">GET</span>
+                  <span className="truncate flex-1">/.well-known/openid-configuration</span>
+                </div>
               </div>
             </CardContent>
           </Card>
