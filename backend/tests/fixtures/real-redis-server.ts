@@ -1,5 +1,7 @@
 import http from "node:http";
 import net from "node:net";
+import crypto from "node:crypto";
+import { execSync } from "node:child_process";
 
 export interface RealRedisServerInstance {
   server: http.Server;
@@ -8,6 +10,8 @@ export interface RealRedisServerInstance {
   token: string;
   isRealRedis: true;
   redisVersion: string;
+  dedicatedContainer?: string | null;
+  harnessRunId: string;
   simulateOutage: () => void;
   simulateRecovery: () => void;
   get: (key: string) => Promise<any>;
@@ -149,10 +153,25 @@ function encodeForUpstash(val: any, isBase64: boolean): any {
   return val;
 }
 
+export function validateLoopbackEndpoint(host: string): void {
+  const normalized = host.toLowerCase().trim();
+  if (
+    normalized !== "127.0.0.1" &&
+    normalized !== "localhost" &&
+    normalized !== "::1" &&
+    normalized !== "[::1]"
+  ) {
+    throw new Error(
+      "[SECURITY_VIOLATION] Remote or Upstash Redis endpoint is strictly forbidden in test harness. Tests must run against a local disposable instance.",
+    );
+  }
+}
+
 export interface RealRedisOptions {
   host?: string;
   port?: number;
   password?: string;
+  reuseConfigured?: boolean;
 }
 
 export async function createRealRedisServer(
@@ -167,26 +186,74 @@ export async function createRealRedisServer(
       : process.env.LOCAL_REDIS_PASSWORD || "redis_password";
 
   if (envUrl) {
+    let parsedUrl: URL;
     try {
-      const u = new URL(envUrl);
-      if (u.hostname) {
-        host = u.hostname === "localhost" ? "127.0.0.1" : u.hostname;
-      }
-      if (u.port) {
-        port = parseInt(u.port, 10);
-      }
-      if (u.password) {
-        password = decodeURIComponent(u.password);
-      }
+      parsedUrl = new URL(envUrl);
     } catch {
-      // Keep defaults
+      throw new Error("[SECURITY_VIOLATION] Malformed Redis URL provided in environment.");
+    }
+    if (parsedUrl.protocol !== "redis:" && parsedUrl.protocol !== "rediss:") {
+      throw new Error("[SECURITY_VIOLATION] Disallowed protocol in Redis URL. Only redis: is permitted.");
+    }
+    validateLoopbackEndpoint(parsedUrl.hostname);
+    host = parsedUrl.hostname === "localhost" ? "127.0.0.1" : parsedUrl.hostname;
+    if (parsedUrl.port) {
+      port = parseInt(parsedUrl.port, 10);
+    }
+    if (parsedUrl.password) {
+      password = decodeURIComponent(parsedUrl.password);
     }
   }
+
+  let dedicatedContainerName: string | null = null;
+  const harnessRunId = `swyra:test:disposable:${crypto.randomBytes(8).toString("hex")}`;
+  const shouldReuse = options.reuseConfigured === true || process.env.REUSE_LOCAL_REDIS === "true";
+
+  // When not explicitly reusing existing configured Redis, prefer starting a dedicated container on an isolated port
+  if (!shouldReuse && !options.port && !envUrl) {
+    try {
+      const containerName = `swyra-test-redis-${crypto.randomBytes(6).toString("hex")}`;
+      const generatedPassword = crypto.randomBytes(16).toString("hex");
+      execSync(
+        `docker run -d --rm -p 127.0.0.1:0:6379 --name ${containerName} redis:8.8.3-alpine redis-server --requirepass ${generatedPassword}`,
+        { stdio: "pipe" },
+      );
+      const portOut = execSync(`docker port ${containerName} 6379`, { stdio: "pipe" }).toString().trim();
+      const portMatch = portOut.match(/:(\d+)$/m);
+      if (portMatch) {
+        port = parseInt(portMatch[1], 10);
+        host = "127.0.0.1";
+        password = generatedPassword;
+        dedicatedContainerName = containerName;
+      }
+    } catch {
+      // Docker unavailable in this execution context; fallback to verifying configured local Redis
+    }
+  }
+
+  validateLoopbackEndpoint(host);
+
+  const cleanupContainer = () => {
+    process.removeListener("exit", cleanupContainer);
+    process.removeListener("SIGINT", cleanupContainer);
+    process.removeListener("SIGTERM", cleanupContainer);
+    if (dedicatedContainerName) {
+      try {
+        execSync(`docker stop ${dedicatedContainerName}`, { stdio: "ignore" });
+      } catch {}
+      dedicatedContainerName = null;
+    }
+  };
+
+  process.once("exit", cleanupContainer);
+  process.once("SIGINT", cleanupContainer);
+  process.once("SIGTERM", cleanupContainer);
 
   const client = new SimpleRedisClient(port, host, password);
   try {
     await client.connect();
   } catch (err: any) {
+    cleanupContainer();
     throw new Error(
       `Failed to connect to real Redis on ${host}:${port}: ${err?.message || String(err)}. Real Redis is required for these tests. Fallback to mock is disallowed.`,
     );
@@ -197,6 +264,7 @@ export async function createRealRedisServer(
     info = await client.sendCommand(["INFO", "server"]);
   } catch (err: any) {
     client.close();
+    cleanupContainer();
     throw new Error(
       `Failed to query real Redis INFO on ${host}:${port}: ${err?.message || String(err)}. Fallback to mock is disallowed.`,
     );
@@ -204,6 +272,28 @@ export async function createRealRedisServer(
 
   const versionMatch = info.match(/redis_version:([^\r\n]+)/);
   const redisVersion = versionMatch ? versionMatch[1] : "unknown";
+
+  // Establish and prove ownership of this Redis instance before permitting destructive operations
+  if (dedicatedContainerName) {
+    await client.sendCommand(["SET", "swyra:test:disposable:owner", harnessRunId]);
+    await client.sendCommand(["SET", "swyra:test:disposable:container", dedicatedContainerName]);
+  } else {
+    // Reusing local Redis: verify that the instance is disposable and owned
+    const dbsize = await client.sendCommand(["DBSIZE"]);
+    if (Number(dbsize) === 0) {
+      // Completely empty: claim ownership for this test run
+      await client.sendCommand(["SET", "swyra:test:disposable:owner", harnessRunId]);
+    } else {
+      // Non-empty: check for existing ownership marker
+      const existingOwner = await client.sendCommand(["GET", "swyra:test:disposable:owner"]);
+      if (existingOwner !== harnessRunId) {
+        client.close();
+        throw new Error(
+          `[SECURITY_VIOLATION] Local Redis instance on ${host}:${port} contains pre-existing keys and cannot be proven disposable. Destructive flush is strictly refused.`,
+        );
+      }
+    }
+  }
 
   let isOutage = false;
 
@@ -249,6 +339,7 @@ export async function createRealRedisServer(
   const addr = server.address();
   if (!addr || typeof addr === "string") {
     client.close();
+    cleanupContainer();
     throw new Error("Failed to get bridge server address");
   }
 
@@ -263,6 +354,8 @@ export async function createRealRedisServer(
     token,
     isRealRedis: true,
     redisVersion,
+    dedicatedContainer: dedicatedContainerName,
+    harnessRunId,
     simulateOutage: () => {
       isOutage = true;
     },
@@ -300,7 +393,19 @@ export async function createRealRedisServer(
       return Number(count) > 0;
     },
     clear: async (): Promise<void> => {
+      // Prove that this test harness owns the instance before issuing any destructive flush
+      const currentOwner = await client.sendCommand(["GET", "swyra:test:disposable:owner"]);
+      if (currentOwner !== harnessRunId) {
+        throw new Error(
+          "[SECURITY_VIOLATION] Refusing to flush Redis: instance ownership marker mismatch. Harness does not own this instance.",
+        );
+      }
       await client.sendCommand(["FLUSHDB"]);
+      // Re-establish ownership marker immediately after FLUSHDB
+      await client.sendCommand(["SET", "swyra:test:disposable:owner", harnessRunId]);
+      if (dedicatedContainerName) {
+        await client.sendCommand(["SET", "swyra:test:disposable:container", dedicatedContainerName]);
+      }
     },
     close: async (): Promise<void> => {
       if (typeof (server as any).closeAllConnections === "function") {
@@ -308,6 +413,7 @@ export async function createRealRedisServer(
       }
       await new Promise<void>((r) => server.close(() => r()));
       client.close();
+      cleanupContainer();
     },
     sendCommand: (args: (string | number)[]) => client.sendCommand(args),
   };

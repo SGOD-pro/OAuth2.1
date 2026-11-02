@@ -51,7 +51,7 @@ const {
   setPreRedisWriteHookForTesting,
   setPostMongoCheckHookForTesting,
 } = await import("../../src/cache/origin-cache");
-const { setRedisClientForTesting, invalidateCachedOriginRedis, getCachedOriginRedis, setCachedOriginRedis, setOriginLeaseRedis, cleanupAbandonedOriginLeasesRedis, INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA } = await import("../../src/cache/redis");
+const { setRedisClientForTesting, invalidateCachedOriginRedis, getCachedOriginRedis, setCachedOriginRedis, setOriginLeaseRedis, cleanupAbandonedOriginLeasesRedis, setGlobalInvalidationMidHookForTesting, INVALIDATE_GLOBAL_ORIGIN_CACHE_LUA } = await import("../../src/cache/redis");
 const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCache: getOriginCacheMongo, getNextAuthoritativeVersion, invalidateOriginCache } = await import("../../src/db/state");
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
@@ -2817,22 +2817,39 @@ await runTest("CORS-45 [Real Redis 8.8.3]: Global marker loss before subsequent 
   try {
     // 1. Lookup starts, registers lease
     await setOriginLeaseRedis(origin, 50);
+    assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), true, "Individual lease active in Redis");
+    const leasesMap = await realRedis.get("swyra:origin:leases");
+    assert.ok(leasesMap instanceof Map && leasesMap.has(origin), "Container lease active in Redis");
 
-    // 2. Global invalidation runs: deletes swyra:origin:leases and sets swyra:inv:global = 60
+    let midHookRan = false;
+
+    // 2. Configure mid-hook to intercept after atomic Lua script and BEFORE the scan loop
+    setGlobalInvalidationMidHookForTesting(async () => {
+      midHookRan = true;
+
+      // Verify exact timing: atomic Lua step finished, but scan loop has NOT executed yet
+      assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), true, "Individual lease is STILL present in Redis during pause");
+      assert.equal(await realRedis.has("swyra:origin:leases"), false, "Container was atomically deleted by Lua script");
+      assert.equal(await realRedis.has("swyra:inv:global"), true, "Global invalidation marker was written");
+
+      // Simulate selective key loss: Redis evicts or drops swyra:inv:global while individual lease is still present
+      await realRedis.delete("swyra:inv:global");
+      assert.equal(await realRedis.has("swyra:inv:global"), false, "Global marker evicted");
+
+      // Resumed delayed writer at v50 attempts write
+      const writeResult = await setCachedOriginRedis(origin, true, 50);
+      assert.equal(writeResult, false, "Delayed write rejected because container lease is missing even though individual lease key is still present");
+      assert.equal(await getCachedOriginRedis(origin), null, "Origin not cached in Redis");
+    });
+
+    // 3. Run global invalidation (which executes atomic Lua, invokes mid-hook, then executes scan loop)
     await invalidateCachedOriginRedis(undefined, 60);
+    assert.equal(midHookRan, true, "Mid-hook executed during invalidation pause");
 
-    // 3. Simulate selective key loss: Redis evicts or drops swyra:inv:global
-    await realRedis.delete("swyra:inv:global");
-    assert.equal(await realRedis.has("swyra:inv:global"), false, "Global marker evicted");
-
-    // Note: swyra:origin:leases was deleted by global invalidation
-    assert.equal(await realRedis.has("swyra:origin:leases"), false, "Container was dropped by global invalidation");
-
-    // 4. Delayed writer at v50 attempts write
-    const writeResult = await setCachedOriginRedis(origin, true, 50);
-    assert.equal(writeResult, false, "Delayed write rejected by SET_ORIGIN_CACHE_LUA because container lease is missing");
-    assert.equal(await getCachedOriginRedis(origin), null, "Origin not cached");
+    // 4. Verify scan loop finished after mid-hook and deleted the individual lease key
+    assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), false, "Individual lease key was cleaned up by subsequent scan loop");
   } finally {
+    setGlobalInvalidationMidHookForTesting(null);
     setRedisClientForTesting(null);
     await realRedis.clear();
     await realRedis.close();
@@ -3019,6 +3036,218 @@ await runTest("CORS-47 [Real Redis 8.8.3 + Multi-process Worker]: Atomic Redis r
     const workerCheck = await sendToChild({ type: "CHECK_CACHE", origin });
     assert.notEqual(workerCheck.value, true, "Worker cache check returns null");
   } finally {
+    try {
+      child.send({ type: "EXIT" });
+      await new Promise<void>((r) => {
+        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
+        child.on("exit", () => { clearTimeout(timer); r(); });
+      });
+    } catch {}
+    setRedisClientForTesting(null);
+    await realRedis.clear();
+    await realRedis.close();
+    await db.collection("oauthClient").deleteOne({ clientId });
+    await invalidateOrigins([origin]);
+  }
+});
+
+// =============================================================================
+// TEST 48: Oversized HSCAN batch larger than maxEntries preserves unprocessed entries [Real Redis]
+// =============================================================================
+await runTest("CORS-48 [Real Redis 8.8.3]: Oversized HSCAN batch larger than maxEntries preserves unprocessed entries via leftovers buffering", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
+  const testRedis = new Redis({
+    url: realRedis.url,
+    token: realRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const totalEntries = 40;
+  const expiredCount = 20;
+  const activeCount = 20;
+
+  try {
+    // 1. Seed 20 expired entries and 20 active entries in real Redis
+    for (let i = 0; i < totalEntries; i++) {
+      const origin = `https://oversized-batch-${i}.example.com`;
+      const version = 200 + i;
+      await setOriginLeaseRedis(origin, version);
+
+      if (i < expiredCount) {
+        // Expired: delete individual lease key
+        await realRedis.delete(`swyra:origin:lease:${origin}`);
+      }
+    }
+
+    let leasesEntry = await realRedis.get("swyra:origin:leases");
+    assert.ok(leasesEntry instanceof Map);
+    assert.equal(leasesEntry.size, totalEntries, "All 40 entries registered initially in container");
+
+    // 2. Call cleanup with countHint = 50, but maxEntries = 4.
+    // HSCAN returns all 40 entries in one batch. maxEntries limits processing to 4.
+    const res1 = await cleanupAbandonedOriginLeasesRedis("auto", 50, 4);
+    assert.ok(res1.processedCount <= 4, `First call processed strictly bounded entries (${res1.processedCount} <= 4)`);
+
+    // 3. Loop until all expired entries are cleaned up across repeated calls
+    let totalCleaned = res1.cleanedCount;
+    let calls = 1;
+    while (totalCleaned < expiredCount && calls < 30) {
+      calls++;
+      const res = await cleanupAbandonedOriginLeasesRedis("auto", 50, 4);
+      totalCleaned += res.cleanedCount;
+    }
+
+    assert.ok(calls > 1, `Multiple bounded calls required to drain batch (${calls} calls)`);
+    assert.equal(totalCleaned, expiredCount, "All 20 expired entries were successfully cleaned up");
+
+    // 4. Verify only the 20 active entries remain in container
+    leasesEntry = await realRedis.get("swyra:origin:leases");
+    assert.ok(leasesEntry instanceof Map);
+    assert.equal(leasesEntry.size, activeCount, "Exactly 20 active entries remain");
+
+    // Verify all active entries retained their exact versions
+    for (let i = expiredCount; i < totalEntries; i++) {
+      const origin = `https://oversized-batch-${i}.example.com`;
+      assert.equal(leasesEntry.has(origin), true, `Active entry ${origin} preserved`);
+      assert.equal(Number(leasesEntry.get(origin)), 200 + i, `Active entry version preserved`);
+    }
+  } finally {
+    setRedisClientForTesting(null);
+    await realRedis.clear();
+    await realRedis.close();
+  }
+});
+
+// =============================================================================
+// TEST 49: Global invalidation timing race with separate worker process pausing after atomic Lua [Real Redis + Child Process]
+// =============================================================================
+await runTest("CORS-49 [Real Redis 8.8.3 + Multi-process Worker]: Global invalidation timing race with separate worker process pausing after atomic Lua", async () => {
+  const realRedis = await createRealRedisServer();
+  assert.equal(realRedis.isRealRedis, true, "Must be connected to real Redis");
+  await realRedis.clear();
+
+  const testRedis = new Redis({
+    url: realRedis.url,
+    token: realRedis.token,
+    retry: false,
+    signal: () => AbortSignal.timeout(2000),
+  });
+  setRedisClientForTesting(testRedis);
+
+  const workerPath = path.resolve(__dirname, "../fixtures/cors-multi-process-worker.ts");
+  const child = fork(workerPath, [], {
+    execPath: process.execPath,
+    execArgv: process.execArgv,
+    env: {
+      ...process.env,
+      MONGO_URI: mongoUri,
+      NODE_ENV: "test",
+    },
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+  });
+
+  const sendToChild = (msg: any): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      const handler = (res: any) => {
+        if (res.type === "ERROR") {
+          child.off("message", handler);
+          reject(new Error(res.error));
+        } else {
+          child.off("message", handler);
+          resolve(res);
+        }
+      };
+      child.on("message", handler);
+      child.send(msg);
+    });
+  };
+
+  const origin = "https://real-multi-global-timing.example.com";
+  const clientId = "client_real_glob_time_" + crypto.randomBytes(4).toString("hex");
+
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    name: "Client Real Process Global Timing Test",
+    allowedOrigins: [origin],
+    redirectUris: [`${origin}/callback`],
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  try {
+    // 1. Initialize child worker with real Redis
+    await sendToChild({
+      type: "INIT",
+      redisUrl: realRedis.url,
+      redisToken: realRedis.token,
+    });
+
+    // 2. Child worker starts origin check: registers active lease at startVersion
+    const checkRes = await sendToChild({ type: "START_CHECK", origin });
+    assert.equal(checkRes.type, "CHECK_STARTED");
+    const childStartTime = checkRes.startTime;
+
+    // Verify lease is present on real Redis
+    assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), true, "Child registered individual lease");
+    const containerLeases = await realRedis.get("swyra:origin:leases");
+    assert.ok(containerLeases instanceof Map && containerLeases.has(origin), "Child registered container lease");
+
+    let midHookExecuted = false;
+
+    // 3. Parent sets mid-hook to intercept global invalidation after atomic Lua and before scan loop
+    setGlobalInvalidationMidHookForTesting(async () => {
+      midHookExecuted = true;
+
+      // Prove exact timing: container deleted, individual lease key still present
+      assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), true, "Individual lease still present during mid-hook");
+      assert.equal(await realRedis.has("swyra:origin:leases"), false, "Container was deleted by atomic Lua");
+
+      // Simulate global marker loss / eviction
+      await realRedis.delete("swyra:inv:global");
+      assert.equal(await realRedis.has("swyra:inv:global"), false, "Global marker evicted");
+
+      // While paused here, parent instructs child worker to complete write
+      const writePromise = new Promise<void>((resolve) => {
+        const handler = (msg: any) => {
+          if (msg?.type === "WRITE_COMPLETED") {
+            child.off("message", handler);
+            resolve();
+          }
+        };
+        child.on("message", handler);
+      });
+
+      child.send({
+        type: "COMPLETE_WRITE",
+        origin,
+        allowed: true,
+        startTime: childStartTime,
+      });
+
+      await writePromise;
+
+      // Child write attempt completed. Verify it was REJECTED by real Redis:
+      assert.equal(await realRedis.has(`swyra:origin:${origin}`), false, "Real Redis must not contain stale key from child");
+      assert.equal(await getCachedOriginRedis(origin), null, "Parent getCachedOriginRedis returns null");
+
+      const workerCheck = await sendToChild({ type: "CHECK_CACHE", origin });
+      assert.notEqual(workerCheck.value, true, "Worker cache check returns null");
+    });
+
+    // 4. Parent triggers global invalidation at version 999
+    await db.collection("oauthClient").updateOne({ clientId }, { $set: { disabled: true } });
+    await invalidateOrigins();
+    assert.equal(midHookExecuted, true, "Mid-hook was executed during global invalidation");
+
+    // 5. Verify scan loop finished after mid-hook and deleted individual lease key
+    assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), false, "Individual lease key cleaned up by scan loop");
+  } finally {
+    setGlobalInvalidationMidHookForTesting(null);
     try {
       child.send({ type: "EXIT" });
       await new Promise<void>((r) => {

@@ -303,6 +303,7 @@ export const CLEANUP_ABANDONED_LEASES_LUA = `
 -- LUA_CLEANUP_ABANDONED_LEASES
 local leasesKey = KEYS[1]
 local cursorKey = KEYS[2]
+local leftoversKey = KEYS[3]
 local reqCursor = ARGV[1]
 local countHint = tonumber(ARGV[2]) or 50
 local maxEntries = tonumber(ARGV[3]) or countHint
@@ -322,20 +323,10 @@ else
     cursor = reqCursor
 end
 
-local scanResult = redis.call('hscan', leasesKey, cursor, 'COUNT', countHint)
-local nextCursor = scanResult[1]
-local entries = scanResult[2]
-
 local cleaned = 0
 local processed = 0
-for i = 1, #entries, 2 do
-    if processed >= maxEntries then
-        break
-    end
-    processed = processed + 1
 
-    local origin = entries[i]
-    local version = tonumber(entries[i + 1])
+local function checkAndCleanEntry(origin, version)
     local leaseKey = "swyra:origin:lease:" .. origin
     local activeVal = redis.call('get', leaseKey)
     local activeVer = tonumber(activeVal)
@@ -349,6 +340,53 @@ for i = 1, #entries, 2 do
             cleaned = cleaned + 1
         end
     end
+end
+
+-- 1. If leftovers exist from an oversized batch where HSCAN returned more entries than maxEntries, drain them first
+if leftoversKey then
+    local leftoversLen = redis.call('llen', leftoversKey)
+    while leftoversLen > 0 and processed < maxEntries do
+        local item = redis.call('lpop', leftoversKey)
+        leftoversLen = leftoversLen - 1
+        if item then
+            local sep = string.find(item, "\t")
+            if sep then
+                local origin = string.sub(item, 1, sep - 1)
+                local version = tonumber(string.sub(item, sep + 1))
+                processed = processed + 1
+                checkAndCleanEntry(origin, version)
+            end
+        end
+    end
+end
+
+-- If quota was fulfilled purely from leftovers, return without issuing a new HSCAN yet
+if processed >= maxEntries then
+    return { cursor, cleaned, processed }
+end
+
+-- 2. Leftovers drained; scan the next batch using HSCAN
+local scanResult = redis.call('hscan', leasesKey, cursor, 'COUNT', countHint)
+local nextCursor = scanResult[1]
+local entries = scanResult[2]
+
+for i = 1, #entries, 2 do
+    local origin = entries[i]
+    local version = tonumber(entries[i + 1])
+
+    if processed < maxEntries then
+        processed = processed + 1
+        checkAndCleanEntry(origin, version)
+    else
+        -- Quota reached: buffer remaining entries from this HSCAN batch into leftoversKey so they are never lost
+        if leftoversKey then
+            redis.call('rpush', leftoversKey, origin .. "\t" .. tostring(version))
+        end
+    end
+end
+
+if leftoversKey then
+    redis.call('expire', leftoversKey, 86400)
 end
 
 -- Update the shared cursor key so next call continues progress across processes
@@ -431,9 +469,10 @@ export async function cleanupAbandonedOriginLeasesRedis(
   try {
     const leasesKey = "swyra:origin:leases";
     const cursorKey = "swyra:origin:leases:cursor";
+    const leftoversKey = "swyra:origin:leases:leftovers";
     const res = await redis.eval(
       CLEANUP_ABANDONED_LEASES_LUA,
-      [leasesKey, cursorKey],
+      [leasesKey, cursorKey, leftoversKey],
       [cursor, String(batchSize), String(maxEntries)],
     );
     if (!res || !Array.isArray(res)) return { nextCursor: "0", cleanedCount: 0, processedCount: 0 };
@@ -446,6 +485,14 @@ export async function cleanupAbandonedOriginLeasesRedis(
     console.error({ event: "redis_cleanup_abandoned_leases_failed", error: String(err) });
     return { nextCursor: "0", cleanedCount: 0, processedCount: 0 };
   }
+}
+
+let _globalInvalidationMidHook: (() => Promise<void>) | null = null;
+
+export function setGlobalInvalidationMidHookForTesting(
+  hook: (() => Promise<void>) | null,
+): void {
+  _globalInvalidationMidHook = hook;
 }
 
 export async function setCachedOriginRedis(
@@ -503,6 +550,11 @@ export async function invalidateCachedOriginRedis(
     ["swyra:inv:global", "swyra:origin:leases"],
     [String(marker), "0"],
   );
+
+  // Hook for testing race conditions between the atomic Lua step and the background scan loop
+  if (_globalInvalidationMidHook) {
+    await _globalInvalidationMidHook();
+  }
 
   let cursor: string | number = 0;
   do {

@@ -202,6 +202,7 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
               if (scriptStr.includes("LUA_CLEANUP_ABANDONED_LEASES")) {
                 const leasesKey = keys[0] || "swyra:origin:leases";
                 const cursorKey = keys[1] || "swyra:origin:leases:cursor";
+                const leftoversKey = keys[2] || "swyra:origin:leases:leftovers";
                 const reqCursor = scriptArgs[0];
                 const countHint = Number(scriptArgs[1]) || 50;
                 const maxEntries = Number(scriptArgs[2]) || countHint;
@@ -218,27 +219,10 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                   cursor = String(reqCursor);
                 }
 
-                const entry = store.get(leasesKey);
-                if (!entry || isExpired(entry) || !(entry.value instanceof Map)) {
-                  return { result: ["0", 0, 0] };
-                }
-
-                const map = entry.value as Map<string, any>;
-                const allEntries = Array.from(map.entries());
-                let startIndex = parseInt(cursor, 10);
-                if (isNaN(startIndex) || startIndex < 0 || startIndex >= allEntries.length) {
-                  startIndex = 0;
-                }
-
                 let cleaned = 0;
                 let processed = 0;
-                let currentIndex = startIndex;
 
-                while (currentIndex < allEntries.length && processed < maxEntries) {
-                  const [origin, version] = allEntries[currentIndex];
-                  currentIndex++;
-                  processed++;
-
+                const checkAndCleanEntry = (origin: string, version: number, map: Map<string, any>) => {
                   const leaseKey = `swyra:origin:lease:${origin}`;
                   const leaseEntry = store.get(leaseKey);
                   const active = leaseEntry && !isExpired(leaseEntry);
@@ -250,6 +234,67 @@ export function createMockRedisServer(): Promise<MockRedisServerInstance> {
                       cleaned++;
                     }
                   }
+                };
+
+                const entry = store.get(leasesKey);
+                if (!entry || isExpired(entry) || !(entry.value instanceof Map)) {
+                  return { result: ["0", 0, 0] };
+                }
+                const map = entry.value as Map<string, any>;
+
+                // 1. Drain leftovers first if present
+                const leftoversEntry = store.get(leftoversKey);
+                let leftovers: string[] = [];
+                if (leftoversEntry && !isExpired(leftoversEntry) && Array.isArray(leftoversEntry.value)) {
+                  leftovers = leftoversEntry.value;
+                  while (leftovers.length > 0 && processed < maxEntries) {
+                    const item = leftovers.shift();
+                    if (item) {
+                      const sep = item.indexOf("\t");
+                      if (sep !== -1) {
+                        const origin = item.substring(0, sep);
+                        const version = Number(item.substring(sep + 1));
+                        processed++;
+                        checkAndCleanEntry(origin, version, map);
+                      }
+                    }
+                  }
+                  if (leftovers.length === 0) {
+                    store.delete(leftoversKey);
+                  }
+                }
+
+                if (processed >= maxEntries) {
+                  return { result: [cursor, cleaned, processed] };
+                }
+
+                // 2. Scan next batch
+                const allEntries = Array.from(map.entries());
+                let startIndex = parseInt(cursor, 10);
+                if (isNaN(startIndex) || startIndex < 0 || startIndex >= allEntries.length) {
+                  startIndex = 0;
+                }
+
+                let currentIndex = startIndex;
+                const batchLimit = Math.min(allEntries.length, startIndex + countHint);
+
+                while (currentIndex < batchLimit) {
+                  const [origin, version] = allEntries[currentIndex];
+                  currentIndex++;
+
+                  if (processed < maxEntries) {
+                    processed++;
+                    checkAndCleanEntry(origin, version, map);
+                  } else {
+                    leftovers.push(`${origin}\t${version}`);
+                  }
+                }
+
+                if (leftovers.length > 0) {
+                  store.set(leftoversKey, {
+                    value: leftovers,
+                    expiresAt: Date.now() + 86400 * 1000,
+                  });
                 }
 
                 const nextCursor = currentIndex >= allEntries.length ? "0" : String(currentIndex);
