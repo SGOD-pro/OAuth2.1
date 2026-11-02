@@ -70,8 +70,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const isTwoFactorOff = Boolean(user && user.twoFactorEnabled !== true);
 
   return (
-    <Sidebar variant="inset" className="w-[264px] p-2 sm:p-3 border-r border-sidebar-border/70 bg-sidebar" {...props}>
-      <SidebarHeader className="h-[68px] flex items-center justify-between px-4 border-b border-sidebar-border/70">
+    <Sidebar variant="inset" className="w-[264px] p-2 sm:p-3 bg-sidebar" {...props}>
+      <SidebarHeader className="h-[68px] flex items-center justify-between px-4">
         <BrandMark size="default" />
         <span className="px-2 py-0.5 rounded-pill font-mono text-[10px] font-semibold uppercase tracking-wider bg-primary/10 text-primary border border-primary/20">
           IDP 2.1

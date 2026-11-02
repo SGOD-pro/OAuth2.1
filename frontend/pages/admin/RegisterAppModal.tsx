@@ -179,10 +179,7 @@ export const RegisterAppModal: React.FC<RegisterAppModalProps> = ({ onClose, onS
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent 
-        className="sm:max-w-[620px] w-full"
-        accent={created ? "motorsport" : "none"}
-      >
+      <DialogContent className="sm:max-w-[620px] w-full">
         <DialogHeader>
           <DialogTitle>
             {created ? 'Application credentials generated' : 'Register application'}

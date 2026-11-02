@@ -75,12 +75,6 @@ export const AdminLayout: React.FC = () => {
                   <span className="text-muted-foreground/60">/</span>
                   <span className="font-medium text-foreground">{breadcrumbSection}</span>
                 </nav>
-                <div className="hidden lg:flex items-center gap-1.5 ml-3 pl-3 border-l border-border/80">
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-pill text-[11px] font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                    <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Engine Active
-                  </span>
-                </div>
               </div>
 
               <div className="flex items-center gap-2.5 sm:gap-3">
@@ -134,7 +128,9 @@ export const AdminLayout: React.FC = () => {
 
             <main className="flex-1 w-full max-w-[1400px] mx-auto p-4 sm:p-6 lg:p-8 flex flex-col md:overflow-y-auto">
               <Suspense fallback={<ContentSkeleton />}>
-                <Outlet />
+                <div key={location.pathname} className="animate-content-reveal flex flex-col flex-1">
+                  <Outlet />
+                </div>
               </Suspense>
             </main>
             <Toaster />

@@ -34,16 +34,15 @@ Fix: Optional breach check; MFA for admin role.
 **L3** — Frontend `AdminRoute` is UX-only; server `requireAdmin` is the real gate.  
 **L4** — Frontend `validateUri` does not reject private IPs (server does in prod) — OK if server remains source of truth.  
 **N4b** — Security self-check covers the trusted-proxy edge case and password/redirect helpers; route-level integration coverage remains limited.
-**N5** — Backend telemetry backlog (found during Evergreen UI pass, Section 0.7):
-  - `stats.recentLogins` trailing fallback `|| 1` and `activeClients: n || totalClients` fabricate fallback values on empty state. Remove trailing fallbacks.
-  - Audit logs fall back to IP `"127.0.0.1"` and `"Active Session"` when missing; return `null` instead of simulated loopback data.
-  - To support future security analytics, persist failed authentication events, outcomes, target `client_id`, and expose signing key age.
+**N5a** (telemetry backlog): Persist failed authentication events and outcomes for security analytics.  
+**N5b** (telemetry backlog): Persist target `client_id` on OAuth authorization failures and access denied events.  
+**N5c** (telemetry backlog): Expose signing key age and rotation metadata in admin security telemetry.
 
 ────────────────────────────────────────
 
 ## Closed in this pass (do not re-open unless regressing)
 
-H2 (trusted IP helper + CIDRs), H4 core (min 12 + complexity + auth rate limits), H5 email and Google signup gates, H7 `safeCallbackURL`, H8 Compose Nginx removal + TLS note, M2 cookie flags, M3 generic 500s, M4 privacy-safe auth logs, M5 JWT PII stripped, M6 provider refresh rotation/reuse detection, M7 short origin cache TTL, M8 strict CSP, N1 atomic window reset, N2/N6 URI invariants, N4 security self-check, M11 admin and reset-password validators mirrored.
+H2 (trusted IP helper + CIDRs), H4 core (min 12 + complexity + auth rate limits), H5 email and Google signup gates, H7 `safeCallbackURL`, H8 Compose Nginx removal + TLS note, M2 cookie flags, M3 generic 500s, M4 privacy-safe auth logs, M5 JWT PII stripped, M6 provider refresh rotation/reuse detection, M7 short origin cache TTL, M8 strict CSP, N1 atomic window reset, N2/N6 URI invariants, N4 security self-check, M11 admin and reset-password validators mirrored, N5 core (honest metrics, zero values preserved without fallbacks, null IP and timestamp handling, session count semantics aligned).
 
 ────────────────────────────────────────
 
@@ -54,7 +53,7 @@ H2 (trusted IP helper + CIDRs), H4 core (min 12 + complexity + auth rate limits)
 | Critical | 0 |
 | High | 0 |
 | Medium | 3 |
-| Low / Info | 4 |
+| Low / Info | 6 |
 
 ────────────────────────────────────────
 
@@ -83,4 +82,4 @@ H2 (trusted IP helper + CIDRs), H4 core (min 12 + complexity + auth rate limits)
 4. Strong password (12+ mixed) accepted; `Password1` / 8-char rejected on sign-up and reset
 5. Access token JWT has `sub` (+ optional `role`) only — no email/name
 6. `callbackURL=https://evil.com` ignored; `/relative` accepted
-7. `npx tsx hono/scripts/security-self-check.ts` passes (extend for new cases)
+7. `npx tsx backend/scripts/security-self-check.ts` passes (extend for new cases)

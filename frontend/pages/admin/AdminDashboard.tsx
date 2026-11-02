@@ -129,7 +129,6 @@ export const AdminDashboard: React.FC = () => {
           value={stats?.totalClients ?? null}
           loading={statsLoading && !stats}
           helperText={`${stats?.activeClients ?? 0} active`}
-          accent="motorsport"
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" />
@@ -179,7 +178,7 @@ export const AdminDashboard: React.FC = () => {
           {/* Recent Sign-Ins Ledger */}
           <Card className="flex flex-col">
             <CardContent className="p-5 sm:p-6 flex flex-col flex-1">
-              <div className="flex items-center justify-between pb-4 border-b border-border">
+              <div className="flex items-center justify-between pb-3.5 border-b border-border/60">
                 <div>
                   <h2 className="font-heading text-base sm:text-lg font-medium text-foreground">
                     Recent sign ins
@@ -211,14 +210,14 @@ export const AdminDashboard: React.FC = () => {
                   <span>No recent sign-ins.</span>
                 </div>
               ) : (
-                <div className="divide-y divide-border/70">
+                <div className="divide-y divide-border/40 pt-1">
                   {recentActivity.map((activity, idx) => {
                     const date = activity.timestamp ? new Date(activity.timestamp) : null;
                     const absoluteTime = date ? `${date.toISOString()} (${date.toUTCString()})` : '';
                     return (
-                      <div key={activity.id || idx} className="py-3.5 flex items-center justify-between gap-3 text-xs font-sans">
+                      <div key={activity.id || idx} className="py-3 px-2 rounded-md hover:bg-secondary/40 transition-colors duration-120 flex items-center justify-between gap-3 text-xs font-sans">
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className="size-2 rounded-full bg-emerald-500 shrink-0" />
+                          <div className="size-2 rounded-full bg-emerald-500/80 shrink-0" />
                           <div className="min-w-0">
                             <span className="font-mono font-medium text-foreground block truncate">
                               {activity.ipAddress || 'Unknown IP'}
@@ -252,7 +251,7 @@ export const AdminDashboard: React.FC = () => {
           {/* Registered Applications Quick-Matrix */}
           <Card>
             <CardContent className="p-5 sm:p-6">
-              <div className="flex items-center justify-between pb-4 border-b border-border">
+              <div className="flex items-center justify-between pb-3.5 border-b border-border/60">
                 <div>
                   <h2 className="font-heading text-base sm:text-lg font-medium text-foreground">
                     Registered Applications
@@ -274,12 +273,12 @@ export const AdminDashboard: React.FC = () => {
                   No applications registered yet.
                 </div>
               ) : (
-                <div className="divide-y divide-border/70">
+                <div className="divide-y divide-border/40 pt-1">
                   {clientList.map((client) => {
                     const isDev = Boolean(client.is_dev || client.isDev);
                     const isPublic = client.is_public !== false && client.isPublic !== false;
                     return (
-                      <div key={client.client_id} className="py-3 flex items-center justify-between gap-3 text-xs font-sans">
+                      <div key={client.client_id} className="py-3 px-2 rounded-md hover:bg-secondary/40 transition-colors duration-120 flex items-center justify-between gap-3 text-xs font-sans">
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="size-8 rounded-md bg-secondary border border-border flex items-center justify-center font-mono text-xs font-semibold text-foreground uppercase shrink-0">
                             {client.client_name.substring(0, 2)}
@@ -316,7 +315,7 @@ export const AdminDashboard: React.FC = () => {
           {/* OAuth 2.1 Specification Cockpit Card */}
           <Card>
             <CardContent className="p-5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-border">
+              <div className="flex items-center justify-between pb-3">
                 <div className="flex items-center gap-2.5">
                   <div className="size-8 rounded-md border border-border bg-secondary flex items-center justify-center text-primary">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -328,22 +327,21 @@ export const AdminDashboard: React.FC = () => {
                     <p className="font-sans text-xs text-muted-foreground">RFC 6749 / RFC 7636</p>
                   </div>
                 </div>
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-pill text-[11px] font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  <span className="size-1.5 rounded-full bg-emerald-500" />
-                  Active
+                <span className="px-2 py-0.5 rounded-pill font-mono text-[10px] font-medium text-muted-foreground bg-secondary border border-border/80">
+                  RFC 6749
                 </span>
               </div>
 
               <div className="space-y-2.5 font-sans text-xs">
-                <div className="flex items-center justify-between py-1 border-b border-border/50">
+                <div className="flex items-center justify-between py-1">
                   <span className="text-muted-foreground">PKCE Method</span>
                   <span className="font-mono font-medium text-foreground">S256</span>
                 </div>
-                <div className="flex items-center justify-between py-1 border-b border-border/50">
+                <div className="flex items-center justify-between py-1">
                   <span className="text-muted-foreground">Grant Flow</span>
                   <span className="font-mono font-medium text-foreground">Authorization Code</span>
                 </div>
-                <div className="flex items-center justify-between py-1 border-b border-border/50">
+                <div className="flex items-center justify-between py-1">
                   <span className="text-muted-foreground">Token Reuse</span>
                   <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">Protected</span>
                 </div>
@@ -358,7 +356,7 @@ export const AdminDashboard: React.FC = () => {
           {/* Keys & Discovery Cockpit Card */}
           <Card>
             <CardContent className="p-5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-border">
+              <div className="flex items-center justify-between pb-3">
                 <div className="flex items-center gap-2.5">
                   <div className="size-8 rounded-md border border-border bg-secondary flex items-center justify-center text-primary">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -371,24 +369,23 @@ export const AdminDashboard: React.FC = () => {
                     <p className="font-sans text-xs text-muted-foreground">JWKS & OIDC Discovery</p>
                   </div>
                 </div>
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-pill text-[11px] font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  <span className="size-1.5 rounded-full bg-emerald-500" />
-                  Configured
+                <span className="px-2 py-0.5 rounded-pill font-mono text-[10px] font-medium text-muted-foreground bg-secondary border border-border/80">
+                  OIDC Discovery
                 </span>
               </div>
 
               <div className="space-y-2.5 font-sans text-xs">
-                <div className="flex items-center justify-between py-1 border-b border-border/50">
+                <div className="flex items-center justify-between py-1">
                   <span className="text-muted-foreground">Signing Algorithm</span>
                   <span className="font-mono font-medium text-foreground">RS256</span>
                 </div>
-                <div className="flex items-center justify-between py-1 border-b border-border/50">
+                <div className="flex items-center justify-between py-1">
                   <span className="text-muted-foreground">Key Size</span>
                   <span className="font-mono font-medium text-foreground">2048-bit RSA</span>
                 </div>
-                <div className="flex items-center justify-between py-1 border-b border-border/50">
-                  <span className="text-muted-foreground">JWKS Endpoint</span>
-                  <span className="font-mono font-medium text-foreground">Active</span>
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-muted-foreground">JWKS Verification</span>
+                  <span className="font-mono font-medium text-foreground">Offline RS256</span>
                 </div>
                 <div className="pt-1">
                   <div className="flex items-center justify-between text-muted-foreground mb-1">
@@ -418,21 +415,21 @@ export const AdminDashboard: React.FC = () => {
               <div className="grid grid-cols-1 gap-2">
                 <NavLink
                   to="/admin/clients"
-                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/50 text-xs font-sans text-foreground transition-colors group"
+                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/60 active:scale-[0.99] text-xs font-sans text-foreground transition-all duration-120 group"
                 >
                   <span className="font-medium">Register Application</span>
                   <span className="text-muted-foreground group-hover:text-foreground">→</span>
                 </NavLink>
                 <NavLink
                   to="/admin/logs"
-                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/50 text-xs font-sans text-foreground transition-colors group"
+                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/60 active:scale-[0.99] text-xs font-sans text-foreground transition-all duration-120 group"
                 >
                   <span className="font-medium">Audit Event Logs</span>
                   <span className="text-muted-foreground group-hover:text-foreground">→</span>
                 </NavLink>
                 <NavLink
                   to="/admin/security"
-                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/50 text-xs font-sans text-foreground transition-colors group"
+                  className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-card hover:bg-secondary/60 active:scale-[0.99] text-xs font-sans text-foreground transition-all duration-120 group"
                 >
                   <span className="font-medium">Security & 2FA Configuration</span>
                   <span className="text-muted-foreground group-hover:text-foreground">→</span>

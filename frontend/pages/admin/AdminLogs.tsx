@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/select';
 import { useAdminStore, type LogEntry } from '@/lib/adminStore';
 import { usePageTitle } from '@/hooks/usePageTitle';
+import { RotateCcw } from 'lucide-react';
 
 const PAGE_SIZE = 20;
 
@@ -136,7 +137,7 @@ export const AdminLogs: React.FC = () => {
         
         <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
           <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-pill text-[11px] font-sans text-muted-foreground bg-secondary/40 border border-border">
-            <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <RotateCcw className="size-3 text-muted-foreground" />
             30s auto refresh
           </span>
           <Select value={actionFilter} onValueChange={(val) => setActionFilter(val)}>
@@ -193,7 +194,7 @@ export const AdminLogs: React.FC = () => {
             <TableBody>
               {pageRows.map((log, index) => {
                 const { local, utc } = formatDate(log.createdAt);
-                const isEngine = !log.userEmail || log.userEmail.toLowerCase().includes('engine') || log.userEmail.toLowerCase().includes('system');
+                const isSystemAccount = !log.userEmail || log.userEmail.toLowerCase().includes('system') || log.userEmail.toLowerCase().includes('engine');
                 return (
                   <TableRow 
                     key={index} 
@@ -205,7 +206,7 @@ export const AdminLogs: React.FC = () => {
                     <TableCell className="py-3">
                       {log.userEmail ? (
                         <div className="flex items-center gap-2.5">
-                          {isEngine ? (
+                          {isSystemAccount ? (
                             <div className="size-6 rounded-full bg-secondary border border-border flex items-center justify-center text-muted-foreground shrink-0">
                               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <circle cx="12" cy="12" r="3" />
