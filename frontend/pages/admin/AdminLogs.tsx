@@ -134,7 +134,11 @@ export const AdminLogs: React.FC = () => {
           </p>
         </div>
         
-        <div className="flex items-center gap-2.5 self-start sm:self-auto">
+        <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
+          <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-pill text-[11px] font-sans text-muted-foreground bg-secondary/40 border border-border">
+            <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            30s auto refresh
+          </span>
           <Select value={actionFilter} onValueChange={(val) => setActionFilter(val)}>
             <SelectTrigger className="w-[180px] h-9 text-xs">
               <SelectValue placeholder="All actions" />

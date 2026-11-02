@@ -296,6 +296,65 @@ export const AdminClients: React.FC = () => {
           </Card>
         ) : (
           <div className="w-full space-y-4">
+            {/* Quick Segmented Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-pill bg-secondary/50 border border-border w-fit">
+              <button
+                type="button"
+                onClick={() => { setEnvFilter('all'); setAccessFilter('all'); }}
+                className={`px-3 py-1 rounded-pill text-xs font-sans transition-colors cursor-pointer ${
+                  envFilter === 'all' && accessFilter === 'all'
+                    ? 'bg-card text-foreground font-medium shadow-2xs'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                All ({clients.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setEnvFilter('prod'); setAccessFilter('all'); }}
+                className={`px-3 py-1 rounded-pill text-xs font-sans transition-colors cursor-pointer ${
+                  envFilter === 'prod' && accessFilter === 'all'
+                    ? 'bg-card text-foreground font-medium shadow-2xs'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Production ({clients.filter((c) => !c.is_dev && !c.isDev).length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setEnvFilter('dev'); setAccessFilter('all'); }}
+                className={`px-3 py-1 rounded-pill text-xs font-sans transition-colors cursor-pointer ${
+                  envFilter === 'dev' && accessFilter === 'all'
+                    ? 'bg-card text-foreground font-medium shadow-2xs'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Development ({clients.filter((c) => c.is_dev || c.isDev).length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAccessFilter('public'); setEnvFilter('all'); }}
+                className={`px-3 py-1 rounded-pill text-xs font-sans transition-colors cursor-pointer ${
+                  accessFilter === 'public' && envFilter === 'all'
+                    ? 'bg-card text-foreground font-medium shadow-2xs'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Public ({clients.filter((c) => c.is_public !== false && c.isPublic !== false).length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAccessFilter('private'); setEnvFilter('all'); }}
+                className={`px-3 py-1 rounded-pill text-xs font-sans transition-colors cursor-pointer ${
+                  accessFilter === 'private' && envFilter === 'all'
+                    ? 'bg-card text-foreground font-medium shadow-2xs'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Private ({clients.filter((c) => c.is_public === false || c.isPublic === false).length})
+              </button>
+            </div>
+
             {/* Search and Filter Toolbar */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-3 rounded-[12px] bg-card border border-border shadow-2xs">
               <div className="flex flex-1 flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
@@ -357,8 +416,10 @@ export const AdminClients: React.FC = () => {
                 </div>
 
                 {/* Checkbox: Assigned custom admins */}
-                <label className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-secondary/20 hover:bg-secondary/40 cursor-pointer text-xs font-medium text-foreground select-none shrink-0 h-9 transition-colors">
+                <label htmlFor="filter-has-admins" className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-secondary/20 hover:bg-secondary/40 cursor-pointer text-xs font-medium text-foreground select-none shrink-0 h-9 transition-colors">
                   <Checkbox
+                    id="filter-has-admins"
+                    aria-label="Assigned custom admins"
                     checked={hasAdminsOnly}
                     onCheckedChange={(checked) => setHasAdminsOnly(Boolean(checked))}
                   />

@@ -33,6 +33,8 @@ const navItems = [
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+        <polyline points="3.29 7 12 12 20.71 7" />
+        <line x1="12" y1="22" x2="12" y2="12" />
       </svg>
     ),
   },
@@ -64,16 +66,23 @@ const navItems = [
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: session } = useSession();
-  const twoFactorEnabled = (session?.user as { twoFactorEnabled?: boolean } | undefined)?.twoFactorEnabled;
+  const user = session?.user as { twoFactorEnabled?: boolean } | undefined;
+  const isTwoFactorOff = Boolean(user && user.twoFactorEnabled !== true);
 
   return (
-    <Sidebar variant="inset" className="w-[264px] border-r border-sidebar-border bg-sidebar" {...props}>
-      <SidebarHeader className="h-[64px] flex items-center px-4 border-b border-sidebar-border">
+    <Sidebar variant="inset" className="w-[264px] p-2 sm:p-3 border-r border-sidebar-border/70 bg-sidebar" {...props}>
+      <SidebarHeader className="h-[68px] flex items-center justify-between px-4 border-b border-sidebar-border/70">
         <BrandMark size="default" />
+        <span className="px-2 py-0.5 rounded-pill font-mono text-[10px] font-semibold uppercase tracking-wider bg-primary/10 text-primary border border-primary/20">
+          IDP 2.1
+        </span>
       </SidebarHeader>
 
       <SidebarContent className="p-3">
         <SidebarGroup>
+          <div className="px-3 pb-2 pt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80 font-medium">
+            Management
+          </div>
           <SidebarMenu className="gap-1.5">
             {navItems.map(({ to, label, end, icon }) => (
               <SidebarMenuItem key={to}>
@@ -109,8 +118,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarGroup>
       </SidebarContent>
 
-      {twoFactorEnabled === false && (
-        <SidebarFooter className="p-3">
+      {isTwoFactorOff && (
+        <SidebarFooter className="p-3 mt-auto">
           <div className="relative overflow-hidden rounded-xl border border-primary/20 bg-[#102D25] p-3.5 text-white shadow-xs">
             <svg
               aria-hidden="true"
