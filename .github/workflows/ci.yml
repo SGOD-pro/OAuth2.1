@@ -141,6 +141,9 @@ jobs:
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine
 
+      - name: Start Local Development Redis Container
+        run: docker compose -f redis-compose.yml up -d --wait
+
       - name: Run Automated Security Test Suite
         working-directory: backend
         env:

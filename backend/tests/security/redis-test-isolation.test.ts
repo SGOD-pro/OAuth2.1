@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
+import net from "node:net";
 import {
   createRealRedisServer,
   validateLoopbackEndpoint,
@@ -13,6 +14,59 @@ console.log("================================================================\n"
 
 let passed = 0;
 let failed = 0;
+let simulatedExistingContainer: string | null = null;
+
+const cleanupSimulatedContainer = () => {
+  process.removeListener("exit", cleanupSimulatedContainer);
+  process.removeListener("SIGINT", cleanupSimulatedContainer);
+  process.removeListener("SIGTERM", cleanupSimulatedContainer);
+  if (simulatedExistingContainer) {
+    try {
+      if (simulatedExistingContainer === "compose") {
+        execSync("docker compose -f redis-compose.yml stop", { stdio: "ignore" });
+      } else {
+        execSync(`docker stop -t 1 ${simulatedExistingContainer}`, { stdio: "ignore" });
+      }
+    } catch {}
+    simulatedExistingContainer = null;
+  }
+};
+
+process.once("exit", cleanupSimulatedContainer);
+process.once("SIGINT", cleanupSimulatedContainer);
+process.once("SIGTERM", cleanupSimulatedContainer);
+
+async function ensureExistingRedisInstance(): Promise<void> {
+  const isListening = await new Promise<boolean>((resolve) => {
+    const s = net.createConnection({ port: 6379, host: "127.0.0.1" });
+    s.once("connect", () => {
+      s.destroy();
+      resolve(true);
+    });
+    s.once("error", () => {
+      s.destroy();
+      resolve(false);
+    });
+  });
+
+  if (!isListening) {
+    try {
+      execSync("docker compose -f redis-compose.yml up -d --wait", { stdio: "pipe" });
+      simulatedExistingContainer = "compose";
+    } catch {
+      const name = `swyra-test-sim-redis-${Date.now()}`;
+      execSync(
+        `docker run -d --rm -p 127.0.0.1:6379:6379 --name ${name} redis:8.8.3-alpine redis-server --requirepass redis_password`,
+        { stdio: "pipe" },
+      );
+      simulatedExistingContainer = name;
+    }
+
+    const probe = new SimpleRedisClient(6379, "127.0.0.1", "redis_password");
+    await probe.connect(10000, 100);
+    probe.close();
+  }
+}
 
 async function runTest(name: string, fn: () => Promise<void>) {
   try {
@@ -99,6 +153,8 @@ await runTest(
 // =============================================================================
 // TEST 2: Existing local Redis instance is not claimed or flushed, even if empty
 // =============================================================================
+await ensureExistingRedisInstance();
+
 await runTest(
   "ISOLATION-02: Existing local Redis instance is not claimed or flushed, even if empty",
   async () => {
@@ -408,6 +464,8 @@ await runTest(
     }
   },
 );
+
+cleanupSimulatedContainer();
 
 console.log("\n================================================================");
 console.log(`  REDIS TEST ISOLATION SUITE: ${passed} passed, ${failed} failed`);
