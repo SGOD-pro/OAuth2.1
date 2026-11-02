@@ -30,6 +30,7 @@ const securityTestFiles = [
   "tests/security/nosql-injection-boundary.test.ts",
   "tests/security/e2e-oidc-interop.test.ts",
   "tests/security/cors-cache-correctness.test.ts",
+  "tests/security/redis-test-isolation.test.ts",
   "tests/security/membership-lifecycle.test.ts",
   "tests/security/dashboard-stats-accuracy.test.ts",
 ];

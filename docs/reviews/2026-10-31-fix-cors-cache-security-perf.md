@@ -38,11 +38,13 @@ This review evaluates the resolution of distributed CORS cache consistency, boun
    - Advisory Hint and Leftovers Handling: Redis `HSCAN COUNT` is recognized as an advisory hint rather than a strict limit. To guarantee strict processing bounds without losing unprocessed records, when Redis returns more entries than `maxEntries`, remaining entries from that batch are buffered in a Redis list at `swyra:origin:leases:leftovers`. Subsequent calls drain leftovers first before calling `HSCAN` again, guaranteeing every returned entry is eventually considered.
    - Preservation Guarantees: Cleanup purges confirmed abandoned entries using `HDEL` only when the individual lease key has expired and the container version still matches the expired lease version. Newer active leases and concurrent replacements are strictly preserved.
    - Fail Closed Invalidation Safety: Missing lease records cause `SET_ORIGIN_CACHE_LUA` to fail closed (rejected with return code 0). Cleanup only removes entries and never inserts or updates them, making it impossible for cleanup to enable a stale write after invalidation.
-6. Disposable Redis and MongoDB Verification and Endpoint Parsing:
-   - Dedicated Test Container Lifecycle: The real Redis test fixture (`backend/tests/fixtures/real-redis-server.ts`) prefers spawning a dedicated Redis container on an isolated dynamic loopback port owned exclusively by the test harness run, terminating and removing it upon completion.
-   - Proof of Ownership Before Cleanup: When connecting to any Redis instance, the harness establishes a unique ownership token `swyra:test:disposable:owner`. Before executing `clear()` (`FLUSHDB`), the harness verifies the ownership token. Reusing an unowned local Redis instance containing preexisting keys fails closed and strictly refuses to flush.
+6. Disposable Redis and MongoDB Verification, Test Isolation Guard, and Endpoint Parsing:
+   - Dedicated Test Container Lifecycle: The real Redis test fixture (`backend/tests/fixtures/real-redis-server.ts`) strictly restricts destructive operations to a dedicated Redis container or process started and owned by the test harness on an isolated dynamic loopback port (`127.0.0.1:0`), with automatic teardown on completion.
+   - Prevention of Destructive Actions on Existing Instances: The fixture no longer treats an empty database as disposable. Existing local Redis instances are never claimed, altered, or flushed. When connecting to an existing instance for non destructive inspection (`allowExisting: true`), no ownership markers are written, and calling `clear()` fails closed with a security violation.
+   - Fail Closed Without Silent Fallback: If a dedicated harness instance cannot be started or verified, the fixture fails closed immediately with a security violation. It never silently falls back to port 6379 or any pre existing instance.
    - Remote and Upstash Rejection: Any remote host, domain, or Upstash URL is strictly rejected with a security violation without printing credentials.
    - Disposable MongoDB Endpoint Parsing: The test isolation helper `parseMongoEndpoint` accurately parses loopback host and port using URL parsing. Ambiguous forms, different local ports, multi host strings, and remote endpoints are rejected without leakage of credentials or connection strings in error messages.
+   - Dedicated Isolation Regression Suite: `backend/tests/security/redis-test-isolation.test.ts` validates that existing local Redis instances are never claimed or flushed, pre existing data survives rejected test connections, remote and Upstash endpoints are rejected without credential leakage, startup failure fails closed without fallback, and test containers stop cleanly on normal completion and failure.
 7. Dashboard Data Accuracy and Honest Reporting: In `/api/admin/stats`, fallbacks that masked real zero values (such as `activeClients || totalClients` and `recentLogins || activeSessions || 1`) have been completely removed. Real zero counts are preserved. Disabled and inactive clients are comprehensively excluded from operational counts. The 24 hour session count reflects actual session creations and is labeled transparently as "New sessions (24h)" with helper text "Created in last 24h". Missing IP addresses return null rather than fabricating loopback 127.0.0.1. Missing historical timestamps return null rather than fabricating current timestamps. In `getTrustedClientIp`, missing forwarding headers evaluate to "unknown" rather than loopback 127.0.0.1, preserving secure rate limiting and trusted proxy chain evaluation.
 
 All local security suites, unit suites, cross process tests, linters, application builds, and real Redis concurrency suites passed cleanly. Live browser test suite execution remains pending due to an external Linux environment dependency (Chromium `libglib-2.0.so.0` shared library).
@@ -195,50 +197,64 @@ Execution results across test suites and operational checks:
    - Test Infrastructure Execution Details:
      - Real MongoDB 8.2.6 ran via `mongodb-memory-server` spawning local `mongod` on loopback.
      - Real Redis 8.8.3 execution: Executed against a dedicated disposable Redis 8.8.3 container dynamically spawned and owned by the test harness on an isolated dynamic port, with automatic teardown on completion.
-     - Test Fixture Safety and Isolation: The test bridge fixture (`backend/tests/fixtures/real-redis-server.ts`) validates loopback hosts, rejects remote and Upstash URLs with a security violation without printing credentials, verifies server version with `INFO server`, writes an ownership identity token `swyra:test:disposable:owner`, and verifies this token before any `clear()` / `FLUSHDB` operation. Reusing unowned instances containing preexisting keys fails closed and refuses to flush.
+     - Test Fixture Safety and Isolation: The test bridge fixture (`backend/tests/fixtures/real-redis-server.ts`) validates loopback hosts, rejects remote and Upstash URLs with a security violation without printing credentials, verifies server version with `INFO server`, writes an ownership identity token `swyra:test:disposable:owner` exclusively on dedicated harness owned instances, and verifies this token before any `clear()` / `FLUSHDB` operation. Pre existing local Redis instances are never claimed or flushed. If dedicated container startup fails, the fixture fails closed immediately without silent fallback.
      - Mock Redis HTTP server fixture (`backend/tests/fixtures/mock-redis-server.ts`) remains in place for lightweight unit mock testing.
      - Command to run CORS tests with real Redis service:
        ```bash
        npm run test:cors-cache
        ```
 
-2. Private App Isolation Security Suite (`npm run test:private-app-isolation`):
+2. Redis Test Isolation Regression Suite (`npm run test:redis-isolation`):
+   - Status: PASSED (6 of 6 tests passed).
+   - Validated:
+     - ISOLATION-01: Rejection of remote and production Upstash endpoints without credential leakage.
+     - ISOLATION-02: Existing local Redis instance is not claimed or flushed, even if empty.
+     - ISOLATION-03: Pre existing data on local Redis survives rejected connection attempts and denied flushes.
+     - ISOLATION-04: Startup failure fails closed and does not silently fall back to another Redis instance.
+     - ISOLATION-05: Harness owned Redis instance runs on isolated ephemeral port, verifies ownership, and cleans up.
+     - ISOLATION-06: Test containers or processes are stopped on normal completion and failure.
+   - Command to run isolation regression tests:
+     ```bash
+     npm run test:redis-isolation
+     ```
+
+3. Private App Isolation Security Suite (`npm run test:private-app-isolation`):
    - Status: PASSED (10 of 10 tests passed).
    - Validated: Cookie isolation, super admin sign in continuity, app admin platform API denial, TOTP leading zero support, alphanumeric recovery codes, tampered session rejection, and role based authorization.
 
-3. Consumer OAuth MFA Continuation Suite (`npm run test:consumer-mfa`):
+4. Consumer OAuth MFA Continuation Suite (`npm run test:consumer-mfa`):
    - Status: PASSED (9 of 9 tests passed).
    - Validated: Private app TOTP continuation, recovery code flow, super admin MFA authorization, app admin platform denial, non MFA login, isolated multi tab states, forged challenge rejection, account switching continuity, and retry resilience.
 
-4. Local Consumer Protocol E2E Suite (`npm run test:local-consumer-e2e`):
+5. Local Consumer Protocol E2E Suite (`npm run test:local-consumer-e2e`):
    - Status: PASSED (11 of 11 flows passed).
    - Validated: In process protocol flows against disposable MongoDB, including platform metrics, dual app admin isolation, private app membership enforcement, account switching, access token refresh, concurrent refresh deduplication, refresh replay revocation, process restart continuity, and production mode guard enforcement.
 
-5. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
+6. Dashboard Stats Accuracy Suite (`npm --prefix backend run test:dashboard-stats`):
    - Status: PASSED (9 of 9 tests passed).
    - Validated: Real zero preservation, disabled client exclusion, zero recent sessions with older active sessions, honest null IP and timestamp mapping, trusted proxy resolution without 127.0.0.1 fabrication, safe unknown rate limiting, UI value formatting, and explicit UI source verification of the "New sessions (24h)" card label.
 
-6. Membership Lifecycle Suite (`npm run test:membership-lifecycle`):
+7. Membership Lifecycle Suite (`npm run test:membership-lifecycle`):
    - Status: PASSED (23 of 23 tests passed).
    - Validated: Cross source conflict precedence, zero write dry run migration, background self heal isolation, memory server URI verification, email reuse detection, revocation preservation, endpoint port discrimination, and stable user ID self healing.
 
-7. Multi Process Coordination Suites:
+8. Multi Process Coordination Suites:
    - `npm run test:cross-process-refresh`: PASSED (verified multi process single winner refresh token rotation and session recovery across separate consumer processes).
    - `npm run test:process-restart`: PASSED (verified process lifecycle restart retaining database continuity).
 
-8. Unit Test Suite (`npm run test:unit`):
+9. Unit Test Suite (`npm run test:unit`):
    - Status: PASSED (all 7 unit test subsuites passed cleanly across admin scoping, runtime resilience, gateway pipeline, dev isolation, config simplification, isolation policy, and audit identities).
 
-9. Contract Linters and Documentation Consistency:
-   - `npm run security:integration-check`: PASSED (0 contract violations).
-   - `npm run security:docs-check`: PASSED (0 documentation errors).
+10. Contract Linters and Documentation Consistency:
+    - `npm run security:integration-check`: PASSED (0 contract violations).
+    - `npm run security:docs-check`: PASSED (0 documentation errors).
 
-10. Application Builds and Frontend Lint:
+11. Application Builds and Frontend Lint:
     - Backend build (`npm --prefix backend run build`): PASSED (generated `dist/index.cjs` bundle in 225ms).
     - Frontend build (`npm --prefix frontend run build`): PASSED (Vite client production build completed in 3.55s).
     - Frontend lint (`npm --prefix frontend run lint`): PASSED (ESLint completed with zero errors).
 
-11. Live Browser E2E Suite (`npm run test:browser-e2e`):
+12. Live Browser E2E Suite (`npm run test:browser-e2e`):
     - Status: FAILED (skipped execution in container due to missing system dependency).
     - Root cause: Headless Chromium shell exited with `error while loading shared libraries: libglib-2.0.so.0: cannot open shared object file: No such file or directory`.
     - Exact command to execute in an environment with desktop Linux libraries or CI container:
