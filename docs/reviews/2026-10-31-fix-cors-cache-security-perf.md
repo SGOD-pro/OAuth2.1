@@ -263,6 +263,10 @@ Execution results across test suites and operational checks:
       npm run test:browser-e2e
       ```
 
+13. Continuous Integration and Pipeline Status:
+    - GitHub Actions CI: Skipped on this branch HEAD (the workflow in `.github/workflows/ci.yml` triggers only on `main` and `bug-fix` or pull requests targeting them; no pull request has been opened).
+    - Vercel Deployment: Builds frontend static artifacts only. It does not execute backend security tests, Redis isolation, or browser tests.
+
 ---
 
 ## Conclusion and Final Verdict
@@ -273,5 +277,6 @@ The implementation is verified and secure against distributed race conditions, T
 
 Unresolved risks to be verified in external environments prior to production merge:
 1. Live browser testing via Playwright (blocked in container by missing system `libglib-2.0.so.0` library; reproduction command: `npx playwright install-deps && npm run test:browser-e2e`).
+2. GitHub Actions CI pipeline execution across all jobs (triggers only on pull request creation targeting `main` or `bug-fix`).
 
 The branch remains isolated on `fix/cors-cache-security-perf` without merging to `main` or deploying.
