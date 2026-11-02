@@ -38,27 +38,112 @@ export class SimpleRedisClient {
     this.password = password;
   }
 
-  async connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.socket = net.createConnection({ port: this.port, host: this.host }, async () => {
+  private _attemptConnect(timeoutMs = 2000): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      this.buffer = Buffer.alloc(0);
+      const sock = net.createConnection({ port: this.port, host: this.host });
+      this.socket = sock;
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        sock.removeListener("connect", onConnect);
+        sock.removeListener("error", onInitialError);
+        sock.removeListener("close", onInitialClose);
+      };
+
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          sock.destroy();
+          this.socket = null;
+          reject(new Error(`Redis connection timeout after ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+
+      const onInitialError = (err: any) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          sock.destroy();
+          this.socket = null;
+          reject(err);
+        }
+      };
+
+      const onInitialClose = () => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          this.socket = null;
+          reject(new Error("Redis socket closed before connection was established"));
+        }
+      };
+
+      const onConnect = async () => {
+        cleanup();
+        sock.on("data", (chunk) => this._onData(chunk));
+        sock.on("error", (err) => {
+          while (this.pending.length) {
+            const p = this.pending.shift();
+            if (p) p.reject(err);
+          }
+        });
+        sock.on("close", () => {
+          while (this.pending.length) {
+            const p = this.pending.shift();
+            if (p) p.reject(new Error("Redis socket closed unexpectedly"));
+          }
+        });
+
         if (this.password) {
           try {
             await this.sendCommand(["AUTH", this.password]);
           } catch (e) {
-            return reject(e);
+            if (!settled) {
+              settled = true;
+              sock.destroy();
+              this.socket = null;
+              return reject(e);
+            }
           }
         }
-        resolve();
-      });
 
-      this.socket.on("data", (chunk) => this._onData(chunk));
-      this.socket.on("error", (err) => {
-        while (this.pending.length) {
-          const p = this.pending.shift();
-          if (p) p.reject(err);
+        if (!settled) {
+          settled = true;
+          resolve();
         }
-      });
+      };
+
+      sock.once("connect", onConnect);
+      sock.once("error", onInitialError);
+      sock.once("close", onInitialClose);
     });
+  }
+
+  async connect(totalTimeoutMs = 15000, retryIntervalMs = 100): Promise<void> {
+    const deadline = Date.now() + totalTimeoutMs;
+    let lastError: any = null;
+
+    while (Date.now() < deadline) {
+      const remaining = Math.max(500, deadline - Date.now());
+      const attemptTimeout = Math.min(2000, remaining);
+      try {
+        await this._attemptConnect(attemptTimeout);
+        return;
+      } catch (err: any) {
+        lastError = err;
+        const waitTime = Math.min(retryIntervalMs, Math.max(0, deadline - Date.now()));
+        if (waitTime > 0) {
+          await new Promise((r) => setTimeout(r, waitTime));
+        }
+      }
+    }
+
+    throw new Error(
+      `Failed to connect to Redis on ${this.host}:${this.port} after ${totalTimeoutMs}ms: ${lastError?.message || String(lastError)}`,
+    );
   }
 
   _encodeCommand(args: (string | number)[]): Buffer {
@@ -139,6 +224,10 @@ export class SimpleRedisClient {
     if (this.socket) {
       this.socket.destroy();
       this.socket = null;
+    }
+    while (this.pending.length) {
+      const p = this.pending.shift();
+      if (p) p.reject(new Error("Redis client was closed"));
     }
   }
 }
