@@ -15,8 +15,8 @@ import {
   validateSafePrimitiveString,
 } from "../utils/security";
 import { recordAdminAudit } from "../db/state";
-import { invalidateClientOrigins, invalidateOrigins } from "../cache/origin-cache";
-import { requireAdmin, requireSuperAdmin, requireScopedAdmin, requireConsumerAppAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
+import { invalidateClientOrigins } from "../cache/origin-cache";
+import { requireSuperAdmin, requireScopedAdmin, requireConsumerAppAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
@@ -451,45 +451,43 @@ async function getAggregatedLogs(
   }
 
   // Deduplicate active sessions already tracked in auth_events with correlation identifiers
-  const correlatedSessionIds = await database.collection("auth_events")
-    .distinct("sessionId", { sessionId: { $exists: true, $ne: null } })
-    .catch(() => []);
+  // Un-correlated historical sessions are filtered using database-side lookup without unbounded memory consumption
+  const unmappedSessionPipeline: any[] = [
+    { $match: sessionFilter },
+    {
+      $lookup: {
+        from: "auth_events",
+        let: { sidStr: { $toString: "$_id" }, sidId: { $ifNull: ["$id", ""] } },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $or: [
+                  { $eq: ["$sessionId", "$$sidStr"] },
+                  { $eq: ["$sessionId", "$$sidId"] },
+                ],
+              },
+            },
+          },
+          { $project: { _id: 1 } },
+          { $limit: 1 },
+        ],
+        as: "matchedAuth",
+      },
+    },
+    { $match: { matchedAuth: { $size: 0 } } },
+  ];
 
-  const historicalSessionFilter: any = { ...sessionFilter };
-  if (Array.isArray(correlatedSessionIds) && correlatedSessionIds.length > 0) {
-    const objectIds: ObjectId[] = [];
-    const stringIds: string[] = [];
-    for (const sid of correlatedSessionIds) {
-      if (typeof sid === "string") {
-        stringIds.push(sid);
-        if (ObjectId.isValid(sid) && sid.length === 24) {
-          try {
-            objectIds.push(new ObjectId(sid));
-          } catch {}
-        }
-      }
-    }
-    const excludeConditions: any[] = [];
-    if (objectIds.length > 0) {
-      excludeConditions.push({ _id: { $nin: objectIds } });
-    }
-    if (stringIds.length > 0) {
-      excludeConditions.push({ id: { $nin: stringIds } });
-    }
-    if (excludeConditions.length > 0) {
-      historicalSessionFilter.$and = [
-        ...(historicalSessionFilter.$and || []),
-        ...excludeConditions,
-      ];
-    }
-  }
-
-  const [authCount, auditCount, sessionCount] = await Promise.all([
+  const [authCount, auditCount, sessionCountDocs] = await Promise.all([
     database.collection("auth_events").countDocuments(authFilter),
     database.collection("admin_audit").countDocuments(auditFilter),
-    database.collection("session").countDocuments(historicalSessionFilter),
+    database.collection("session").aggregate([
+      ...unmappedSessionPipeline,
+      { $count: "total" },
+    ]).toArray(),
   ]);
 
+  const sessionCount = (sessionCountDocs && sessionCountDocs[0]?.total) || 0;
   const totalCount = authCount + auditCount + sessionCount;
   const totalPages = Math.ceil(totalCount / limit) || 1;
 
@@ -551,7 +549,7 @@ async function getAggregatedLogs(
       $unionWith: {
         coll: "session",
         pipeline: [
-          { $match: historicalSessionFilter },
+          ...unmappedSessionPipeline,
           {
             $project: {
               _id: 1,

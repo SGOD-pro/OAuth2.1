@@ -35,6 +35,7 @@ const securityTestFiles = [
   "tests/security/dashboard-stats-accuracy.test.ts",
   "tests/security/auth-event-telemetry.test.ts",
   "tests/security/auth-deduplication-and-attribution.test.ts",
+  "tests/security/session-expiry-and-isolation.test.ts",
 ];
 
 console.log("================================================================");
