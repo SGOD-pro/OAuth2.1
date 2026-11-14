@@ -630,19 +630,62 @@ auth.post("/sign-in/email", async (c) => {
                 const authUser = await database.collection("user").findOne({ email: normalizedEmail });
                 if (authUser) {
                     authUserId = String(authUser.id || authUser._id);
-                    if (clientDoc && clientDoc.isPublic && canonicalClientId) {
-                        const isRegistered = await checkUserAppRegistration(database, authUserId, canonicalClientId);
-                        if (!isRegistered) {
-                            await database.collection("user_app_registrations").insertOne({
-                                userId: authUserId,
-                                clientId: canonicalClientId,
-                                registeredAt: new Date(),
-                            }).catch((err: any) => {
-                                if (err?.code === 11000) return;
-                                throw err;
-                            });
-                        }
-                    }
+                }
+            } catch (err) {
+                console.error("[SIGNIN] Failed to find user for audit:", err);
+            }
+        }
+
+        const resClone = res.clone();
+        const resJson = await resClone.json().catch(() => null);
+        const isTwoFactorRequired = Boolean(resJson?.twoFactorRedirect);
+
+        if (isTwoFactorRequired) {
+            // CRITICAL AUTHENTICATION BOUNDARY:
+            // First factor (password) verified, but authentication is NOT completed until MFA finishes!
+            // Do NOT record sign_in success or mutate application registration here.
+            await recordAuthEvent({
+                eventType: "two_factor_challenge",
+                outcome: "success",
+                userId: authUserId,
+                targetIdentifier,
+                clientId: boundClientId,
+                clientName: boundClientName,
+                ipAddress: safeIp,
+                userAgent: safeUserAgent,
+                reason: "two_factor_required",
+                details: { stage: "two_factor_challenge" },
+            });
+            return res;
+        }
+
+        // Single-factor completed login: extract established session ID
+        let sessionId: string | null = null;
+        try {
+            const setCookie = res.headers.get("set-cookie") || "";
+            const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
+            if (match) {
+                const rawToken = decodeURIComponent(match[1]);
+                const token = rawToken.split(".")[0];
+                const sessionDoc = await database.collection("session").findOne({ token });
+                if (sessionDoc) {
+                    sessionId = String(sessionDoc._id || sessionDoc.id);
+                }
+            }
+        } catch {}
+
+        if (authUserId && clientDoc && clientDoc.isPublic && canonicalClientId) {
+            try {
+                const isRegistered = await checkUserAppRegistration(database, authUserId, canonicalClientId);
+                if (!isRegistered) {
+                    await database.collection("user_app_registrations").insertOne({
+                        userId: authUserId,
+                        clientId: canonicalClientId,
+                        registeredAt: new Date(),
+                    }).catch((err: any) => {
+                        if (err?.code === 11000) return;
+                        throw err;
+                    });
                 }
             } catch (err) {
                 console.error("[SIGNIN] Failed to record public app registration:", err);
@@ -652,6 +695,7 @@ auth.post("/sign-in/email", async (c) => {
         await recordAuthEvent({
             eventType: "sign_in",
             outcome: "success",
+            sessionId,
             userId: authUserId,
             targetIdentifier,
             clientId: boundClientId,
@@ -2414,7 +2458,8 @@ auth.post("/two-factor/verify-totp", async (c) => {
     const res = await authProvider.handler(c.req.raw);
     const isSuccess = res.status < 400;
 
-    if (isSuccess && !userId) {
+    let sessionId: string | null = null;
+    if (isSuccess) {
         try {
             const setCookie = res.headers.get("set-cookie") || "";
             const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
@@ -2423,13 +2468,16 @@ auth.post("/two-factor/verify-totp", async (c) => {
                 const token = rawToken.split(".")[0];
                 const database = await getDb();
                 const sessionDoc = await database.collection("session").findOne({ token });
-                if (sessionDoc?.userId) {
-                    userId = sessionDoc.userId.toString();
-                    const u = await database.collection("user").findOne({
-                        $or: [{ id: userId }, { _id: userId }],
-                    });
-                    if (u?.email) {
-                        actor = u.email;
+                if (sessionDoc) {
+                    sessionId = String(sessionDoc._id || sessionDoc.id);
+                    if (!userId && sessionDoc.userId) {
+                        userId = sessionDoc.userId.toString();
+                        const u = await database.collection("user").findOne({
+                            $or: [{ id: userId }, { _id: userId }],
+                        });
+                        if (u?.email) {
+                            actor = u.email;
+                        }
                     }
                 }
             }
@@ -2441,6 +2489,7 @@ auth.post("/two-factor/verify-totp", async (c) => {
     await recordAuthEvent({
         eventType: "two_factor_verify",
         outcome: isSuccess ? "success" : "failure",
+        sessionId,
         userId,
         targetIdentifier: actor,
         clientId,
@@ -2527,7 +2576,8 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
     const res = await authProvider.handler(c.req.raw);
     const isSuccess = res.status < 400;
 
-    if (isSuccess && !userId) {
+    let sessionId: string | null = null;
+    if (isSuccess) {
         try {
             const setCookie = res.headers.get("set-cookie") || "";
             const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
@@ -2536,13 +2586,16 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
                 const token = rawToken.split(".")[0];
                 const database = await getDb();
                 const sessionDoc = await database.collection("session").findOne({ token });
-                if (sessionDoc?.userId) {
-                    userId = sessionDoc.userId.toString();
-                    const u = await database.collection("user").findOne({
-                        $or: [{ id: userId }, { _id: userId }],
-                    });
-                    if (u?.email) {
-                        actor = u.email;
+                if (sessionDoc) {
+                    sessionId = String(sessionDoc._id || sessionDoc.id);
+                    if (!userId && sessionDoc.userId) {
+                        userId = sessionDoc.userId.toString();
+                        const u = await database.collection("user").findOne({
+                            $or: [{ id: userId }, { _id: userId }],
+                        });
+                        if (u?.email) {
+                            actor = u.email;
+                        }
                     }
                 }
             }
@@ -2554,6 +2607,7 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
     await recordAuthEvent({
         eventType: "recovery_code_verify",
         outcome: isSuccess ? "success" : "failure",
+        sessionId,
         userId,
         targetIdentifier: actor,
         clientId,

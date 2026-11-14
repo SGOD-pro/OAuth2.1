@@ -450,86 +450,163 @@ async function getAggregatedLogs(
     }
   }
 
-  const maxToFetch = Math.min(page * limit, 1000);
+  // Deduplicate active sessions already tracked in auth_events with correlation identifiers
+  const correlatedSessionIds = await database.collection("auth_events")
+    .distinct("sessionId", { sessionId: { $exists: true, $ne: null } })
+    .catch(() => []);
 
-  const [authCount, auditCount, sessionCount, authDocs, auditDocs, sessionDocs] = await Promise.all([
+  const historicalSessionFilter: any = { ...sessionFilter };
+  if (Array.isArray(correlatedSessionIds) && correlatedSessionIds.length > 0) {
+    const objectIds: ObjectId[] = [];
+    const stringIds: string[] = [];
+    for (const sid of correlatedSessionIds) {
+      if (typeof sid === "string") {
+        stringIds.push(sid);
+        if (ObjectId.isValid(sid) && sid.length === 24) {
+          try {
+            objectIds.push(new ObjectId(sid));
+          } catch {}
+        }
+      }
+    }
+    const excludeConditions: any[] = [];
+    if (objectIds.length > 0) {
+      excludeConditions.push({ _id: { $nin: objectIds } });
+    }
+    if (stringIds.length > 0) {
+      excludeConditions.push({ id: { $nin: stringIds } });
+    }
+    if (excludeConditions.length > 0) {
+      historicalSessionFilter.$and = [
+        ...(historicalSessionFilter.$and || []),
+        ...excludeConditions,
+      ];
+    }
+  }
+
+  const [authCount, auditCount, sessionCount] = await Promise.all([
     database.collection("auth_events").countDocuments(authFilter),
     database.collection("admin_audit").countDocuments(auditFilter),
-    database.collection("session").countDocuments(sessionFilter),
-    database.collection("auth_events").find(authFilter).sort({ timestamp: -1 }).limit(maxToFetch).toArray(),
-    database.collection("admin_audit").find(auditFilter).sort({ timestamp: -1 }).limit(maxToFetch).toArray(),
-    database.collection("session").find(sessionFilter).sort({ createdAt: -1 }).limit(maxToFetch).toArray(),
+    database.collection("session").countDocuments(historicalSessionFilter),
   ]);
 
   const totalCount = authCount + auditCount + sessionCount;
   const totalPages = Math.ceil(totalCount / limit) || 1;
 
-  const authEntries: NormalizedLogEntry[] = authDocs.map((e: any) => {
-    const rawIp = typeof e.ipAddress === "string" ? e.ipAddress.trim() : null;
-    const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
-    const ts = e.timestamp;
-    const createdAt = ts ? new Date(ts).toISOString() : null;
+  if (totalCount === 0) {
     return {
-      userId: e.userId ? String(e.userId) : (e.targetIdentifier || "unknown"),
-      userEmail: e.targetIdentifier || (e.userId ? String(e.userId) : null),
-      action: e.eventType || "auth_event",
-      outcome: e.outcome || null,
+      entries: [],
+      totalCount: 0,
+      page,
+      limit,
+      totalPages: 1,
+    };
+  }
+
+  // Robust unified aggregation pipeline across auth_events, admin_audit, and historical sessions
+  // Enables stable tie-breaker sorting ({ timestamp: -1, _id: -1 }) and correct pagination beyond 1,000 records
+  const pipeline: any[] = [
+    { $match: authFilter },
+    {
+      $project: {
+        _id: 1,
+        userId: 1,
+        targetIdentifier: 1,
+        eventType: 1,
+        outcome: 1,
+        ipAddress: 1,
+        timestamp: 1,
+        clientId: 1,
+        clientName: 1,
+        reason: 1,
+        details: 1,
+        source: { $literal: "auth_events" },
+      },
+    },
+    {
+      $unionWith: {
+        coll: "admin_audit",
+        pipeline: [
+          { $match: auditFilter },
+          {
+            $project: {
+              _id: 1,
+              userId: "$actorUserId",
+              targetIdentifier: "$actorEmail",
+              eventType: "$action",
+              outcome: { $ifNull: ["$outcome", "success"] },
+              ipAddress: 1,
+              timestamp: { $ifNull: ["$timestamp", "$createdAt"] },
+              clientId: "$targetClientId",
+              clientName: { $literal: "Platform Console" },
+              reason: { $literal: null },
+              details: 1,
+              source: { $literal: "admin_audit" },
+            },
+          },
+        ],
+      },
+    },
+    {
+      $unionWith: {
+        coll: "session",
+        pipeline: [
+          { $match: historicalSessionFilter },
+          {
+            $project: {
+              _id: 1,
+              userId: 1,
+              targetIdentifier: { $literal: null },
+              eventType: { $literal: "user_sign_in" },
+              outcome: { $literal: "unknown" },
+              ipAddress: 1,
+              timestamp: { $ifNull: ["$createdAt", "$updatedAt"] },
+              clientId: { $literal: null },
+              clientName: { $literal: "Unknown application" },
+              reason: { $literal: null },
+              details: { $literal: null },
+              source: { $literal: "session" },
+            },
+          },
+        ],
+      },
+    },
+    { $sort: { timestamp: -1, _id: -1 } },
+    { $skip: (page - 1) * limit },
+    { $limit: limit },
+  ];
+
+  const docs = await database.collection("auth_events").aggregate(pipeline).toArray();
+
+  const paginated: NormalizedLogEntry[] = docs.map((doc: any) => {
+    const rawIp = typeof doc.ipAddress === "string" ? doc.ipAddress.trim() : null;
+    const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
+    const ts = doc.timestamp;
+    const createdAt = ts ? new Date(ts).toISOString() : null;
+
+    let appName: string | null = null;
+    if (doc.source === "admin_audit") {
+      appName = "Platform Console";
+    } else if (doc.source === "session") {
+      appName = "Unknown application";
+    } else {
+      appName = doc.clientName || doc.clientId || (doc.clientId === null ? "Platform Console" : null);
+    }
+
+    return {
+      userId: doc.userId ? String(doc.userId) : (doc.targetIdentifier || "unknown"),
+      userEmail: doc.targetIdentifier || (doc.userId ? String(doc.userId) : null),
+      action: doc.eventType || "auth_event",
+      outcome: doc.outcome || null,
       ipAddress,
       createdAt,
-      appName: e.clientName || e.clientId || null,
-      applicationName: e.clientName || e.clientId || null,
-      clientId: e.clientId || null,
-      reason: e.reason || null,
-      details: e.details || null,
+      appName,
+      applicationName: appName,
+      clientId: doc.clientId || null,
+      reason: doc.reason || null,
+      details: doc.details || null,
     };
   });
-
-  const auditEntries: NormalizedLogEntry[] = auditDocs.map((a: any) => {
-    const rawIp = typeof a.ipAddress === "string" ? a.ipAddress.trim() : null;
-    const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
-    const ts = a.timestamp || a.createdAt;
-    const createdAt = ts ? new Date(ts).toISOString() : null;
-    return {
-      userId: String(a.actorUserId || "system"),
-      userEmail: a.actorEmail || (a.actorUserId ? String(a.actorUserId) : "Security Engine"),
-      action: a.action || "admin_audit",
-      outcome: a.outcome || "success",
-      ipAddress,
-      createdAt,
-      appName: "Console",
-      applicationName: "Console",
-      clientId: a.targetClientId || null,
-      details: a.details || null,
-    };
-  });
-
-  const sessionEntries: NormalizedLogEntry[] = sessionDocs.map((s: any) => {
-    const rawIp = typeof s.ipAddress === "string" ? s.ipAddress.trim() : null;
-    const ipAddress = (rawIp && rawIp.toLowerCase() !== "unknown") ? rawIp : null;
-    const ts = s.createdAt || s.updatedAt;
-    const createdAt = ts ? new Date(ts).toISOString() : null;
-    return {
-      userId: String(s.userId || s._id),
-      userEmail: s.userId ? String(s.userId) : "Active Session",
-      action: "user_sign_in",
-      outcome: "unknown",
-      ipAddress,
-      createdAt,
-      appName: "Unknown application",
-      applicationName: "Unknown application",
-      clientId: null,
-    };
-  });
-
-  const combined = [...authEntries, ...auditEntries, ...sessionEntries].sort((a, b) => {
-    if (!a.createdAt && !b.createdAt) return 0;
-    if (!a.createdAt) return 1;
-    if (!b.createdAt) return -1;
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
-
-  const skip = (page - 1) * limit;
-  const paginated = combined.slice(skip, skip + limit);
 
   // Single batch user resolution for any unpopulated emails
   const unresolvedUserIds = new Set<string>();
@@ -631,7 +708,7 @@ admin.get("/logs", requireSuperAdmin, async (c) => {
     return c.json(result.entries);
   } catch (err) {
     console.error("[ADMIN_LOGS] Error fetching logs:", err);
-    return c.json([], 200);
+    return c.json({ error: "Failed to fetch audit logs", code: "ERR_DATABASE_ERROR" }, 500);
   }
 });
 

@@ -96,6 +96,7 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("auth_events", { outcome: 1, timestamp: -1 }),
       safeIndex("auth_events", { clientId: 1, timestamp: -1 }),
       safeIndex("auth_events", { userId: 1, timestamp: -1 }),
+      safeIndex("auth_events", { sessionId: 1, timestamp: -1 }),
       safeIndex("app_admin_revoked_tokens", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("user_app_registrations", { clientId: 1, userId: 1 }, { unique: true }),
       safeIndex("oauthClient", { allowedOrigins: 1, disabled: 1 }),
@@ -141,6 +142,7 @@ export type AuthEventType =
   | "sign_up"
   | "oauth_authorize"
   | "oauth_token"
+  | "two_factor_challenge"
   | "two_factor_verify"
   | "recovery_code_verify"
   | "sign_out"
@@ -152,6 +154,7 @@ export interface AuthAuditEvent {
   timestamp: Date;
   eventType: AuthEventType;
   outcome: AuthEventOutcome;
+  sessionId?: string | null;
   userId?: string | null;
   targetIdentifier?: string | null;
   clientId?: string | null;
@@ -196,6 +199,7 @@ export function sanitizeAuthEvent(event: Partial<AuthAuditEvent>): AuthAuditEven
     "sign_up",
     "oauth_authorize",
     "oauth_token",
+    "two_factor_challenge",
     "two_factor_verify",
     "recovery_code_verify",
     "sign_out",
@@ -205,6 +209,14 @@ export function sanitizeAuthEvent(event: Partial<AuthAuditEvent>): AuthAuditEven
   const eventType: AuthEventType = validTypes.includes(event.eventType as any)
     ? (event.eventType as AuthEventType)
     : "sign_in";
+
+  let safeSessionId: string | null = null;
+  if (typeof event.sessionId === "string") {
+    const trimmed = event.sessionId.trim();
+    if (trimmed.length > 0 && trimmed.length <= 128 && !trimmed.startsWith("$")) {
+      safeSessionId = trimmed;
+    }
+  }
 
   let safeTarget: string | null = null;
   if (typeof event.targetIdentifier === "string") {
@@ -277,6 +289,7 @@ export function sanitizeAuthEvent(event: Partial<AuthAuditEvent>): AuthAuditEven
     timestamp,
     eventType,
     outcome,
+    sessionId: safeSessionId,
     userId: safeUserId,
     targetIdentifier: safeTarget,
     clientId: safeClientId,
