@@ -68,16 +68,16 @@ export const AdminLayout: React.FC = () => {
           className="p-2 sm:p-3 min-h-screen flex-1 w-full"
         >
           <AppSidebar />
-          <SidebarInset className="bg-card md:rounded-[24px] border border-border/70 shadow-xs min-h-[calc(100vh-24px)] flex flex-col overflow-clip">
+          <SidebarInset className="bg-card md:rounded-[24px] border border-border shadow-xs min-h-[calc(100vh-24px)] flex flex-col overflow-hidden isolate">
             <header
               className={cn(
-                "sticky top-0 z-40 flex h-16 shrink-0 items-center justify-between gap-4 px-4 sm:px-8 border-b border-border/60 transition-colors duration-200 md:rounded-t-[23px]",
+                "sticky top-0 z-40 flex h-16 shrink-0 items-center justify-between gap-4 px-4 sm:px-8 border-b border-border/60 transition-colors duration-200 md:rounded-t-[23px] overflow-hidden",
                 scrolled ? "glass shadow-xs" : "bg-card/90 backdrop-blur-sm"
               )}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <SidebarTrigger className="-ml-1 text-muted-foreground hover:text-foreground transition-colors shrink-0" />
-                <Separator orientation="vertical" className="h-4 self-center my-auto bg-border/80 shrink-0" />
+                <Separator orientation="vertical" className="h-4 bg-border/80 shrink-0" />
                 <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 font-sans text-xs sm:text-sm min-w-0 truncate">
                   <span className="text-muted-foreground shrink-0">Console</span>
                   <span className="text-muted-foreground/60 shrink-0">/</span>
@@ -87,7 +87,7 @@ export const AdminLayout: React.FC = () => {
 
               <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
                 <ThemeToggle />
-                <Separator orientation="vertical" className="h-4 self-center my-auto bg-border/80 hidden sm:block shrink-0" />
+                <Separator orientation="vertical" className="h-4 bg-border/80 hidden sm:block shrink-0" />
                 
                 <div className="flex items-center gap-2.5 pl-1">
                   <div className="text-right hidden xl:block">

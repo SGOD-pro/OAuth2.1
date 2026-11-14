@@ -26,11 +26,21 @@ export const TwoFactor: React.FC = () => {
 
   useEffect(() => {
     const focusInput = () => {
-      inputRef.current?.focus();
+      if (inputRef.current) {
+        inputRef.current.focus({ preventScroll: true });
+      }
     };
     focusInput();
-    const timer = setTimeout(focusInput, 60);
-    return () => clearTimeout(timer);
+    const rafId = requestAnimationFrame(focusInput);
+    const t1 = setTimeout(focusInput, 50);
+    const t2 = setTimeout(focusInput, 150);
+    const t3 = setTimeout(focusInput, 300);
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
   }, [mode]);
 
   const getAuthRedirect = (errorVal: string) => {

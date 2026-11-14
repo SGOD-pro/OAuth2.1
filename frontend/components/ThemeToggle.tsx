@@ -33,17 +33,17 @@ export const ThemeToggle: React.FC = () => {
       type="button"
       onClick={toggleTheme}
       aria-label="Toggle theme"
-      className="group relative h-8 w-14 rounded-full bg-secondary/80 hover:bg-secondary border border-border/70 transition-all duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-pointer active:scale-95 shrink-0"
+      className="group relative h-8 w-14 rounded-full bg-secondary hover:bg-secondary/90 border border-border transition-colors duration-200 ease-standard focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background cursor-pointer active:scale-95 shrink-0"
     >
       <span
-        className={`absolute left-1 top-1 flex size-6 items-center justify-center rounded-full bg-background shadow-xs transition-transform duration-260 ease-emphasis ${
+        className={`absolute left-1 top-1 flex size-6 items-center justify-center rounded-full bg-card border border-border/60 shadow-xs transition-transform duration-220 ease-emphasis motion-reduce:transition-none ${
           isDark ? 'translate-x-6' : 'translate-x-0'
         }`}
       >
         {/* Sun Icon */}
         <span
-          className={`absolute inset-0 flex items-center justify-center transition-all duration-260 ease-emphasis text-amber-500 dark:text-amber-400 ${
-            isDark ? 'opacity-0 rotate-90 scale-0 pointer-events-none' : 'opacity-100 rotate-0 scale-100'
+          className={`absolute inset-0 flex items-center justify-center transition-all duration-220 ease-emphasis motion-reduce:transition-none text-amber-500 dark:text-amber-400 ${
+            isDark ? 'opacity-0 rotate-90 scale-50 pointer-events-none' : 'opacity-100 rotate-0 scale-100'
           }`}
           aria-hidden="true"
         >
@@ -62,8 +62,8 @@ export const ThemeToggle: React.FC = () => {
 
         {/* Moon Icon */}
         <span
-          className={`absolute inset-0 flex items-center justify-center transition-all duration-260 ease-emphasis text-sky-400 ${
-            isDark ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 -rotate-90 scale-0 pointer-events-none'
+          className={`absolute inset-0 flex items-center justify-center transition-all duration-220 ease-emphasis motion-reduce:transition-none text-sky-400 ${
+            isDark ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 -rotate-90 scale-50 pointer-events-none'
           }`}
           aria-hidden="true"
         >

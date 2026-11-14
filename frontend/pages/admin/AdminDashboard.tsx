@@ -183,7 +183,7 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       {/* Cockpit Layout: Left Main Column & Right Architecture Column */}
-      <div className="grid gap-6 grid-cols-1 lg:grid-cols-12 items-stretch">
+      <div className="grid gap-6 grid-cols-1 lg:grid-cols-12 items-start">
         {/* Left Column (7 cols): Recent Authentication Activity & Registered Apps */}
         <div className="lg:col-span-7 flex flex-col gap-6">
           {/* Recent Sign-Ins Ledger */}
@@ -324,8 +324,8 @@ export const AdminDashboard: React.FC = () => {
         {/* Right Column (5 cols): Protocol & Cryptographic Architecture */}
         <div className="lg:col-span-5 flex flex-col gap-6">
           {/* OAuth 2.1 Specification Cockpit Card */}
-          <Card className="flex flex-col flex-1">
-            <CardContent className="p-5 sm:p-6 flex flex-col justify-between flex-1">
+          <Card className="flex flex-col">
+            <CardContent className="p-5 sm:p-6 flex flex-col gap-3">
               <div>
                 <div className="flex items-center gap-3 pb-3.5 border-b border-border/60">
                   <div className="size-8 rounded-lg border border-border bg-secondary flex items-center justify-center text-primary shrink-0">
@@ -367,8 +367,8 @@ export const AdminDashboard: React.FC = () => {
           </Card>
 
           {/* Keys & Discovery Cockpit Card */}
-          <Card className="flex flex-col flex-1">
-            <CardContent className="p-5 sm:p-6 flex flex-col justify-between flex-1">
+          <Card className="flex flex-col">
+            <CardContent className="p-5 sm:p-6 flex flex-col gap-3">
               <div>
                 <div className="flex items-center gap-3 pb-3.5 border-b border-border/60">
                   <div className="size-8 rounded-lg border border-border bg-secondary flex items-center justify-center text-primary shrink-0">

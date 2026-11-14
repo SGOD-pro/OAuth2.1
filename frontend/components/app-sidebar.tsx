@@ -1,5 +1,5 @@
 import * as React from "react"
-import { NavLink } from "react-router-dom"
+import { NavLink, useLocation } from "react-router-dom"
 import { useSession } from "@/lib/auth-client"
 import {
   Sidebar,
@@ -66,8 +66,46 @@ const navItems = [
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: session } = useSession();
+  const location = useLocation();
   const user = session?.user as { twoFactorEnabled?: boolean } | undefined;
   const isTwoFactorOff = Boolean(user && user.twoFactorEnabled !== true);
+
+  const activeIndex = React.useMemo(() => {
+    const path = location.pathname.toLowerCase();
+    if (path.includes('/clients')) return 1;
+    if (path.includes('/logs')) return 2;
+    if (path.includes('/security')) return 3;
+    return 0;
+  }, [location.pathname]);
+
+  const menuRef = React.useRef<HTMLUListElement>(null);
+  const itemRefs = React.useRef<(HTMLAnchorElement | null)[]>([]);
+  const [indicatorStyle, setIndicatorStyle] = React.useState<{ top: number; height: number; ready: boolean }>({
+    top: 0,
+    height: 44,
+    ready: false,
+  });
+
+  const updateIndicator = React.useCallback(() => {
+    const menuEl = menuRef.current;
+    const targetEl = itemRefs.current[activeIndex];
+    if (menuEl && targetEl) {
+      const menuRect = menuEl.getBoundingClientRect();
+      const targetRect = targetEl.getBoundingClientRect();
+      setIndicatorStyle({
+        top: targetRect.top - menuRect.top,
+        height: targetRect.height,
+        ready: true,
+      });
+    }
+  }, [activeIndex]);
+
+  React.useLayoutEffect(() => {
+    updateIndicator();
+    const handleResize = () => updateIndicator();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [updateIndicator]);
 
   return (
     <Sidebar variant="inset" className="w-[264px] p-2 sm:p-3 bg-sidebar" {...props}>
@@ -80,34 +118,41 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <div className="px-3 pb-2 pt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80 font-medium">
             Management
           </div>
-          <SidebarMenu className="gap-1.5">
-            {navItems.map(({ to, label, end, icon }) => (
-              <SidebarMenuItem key={to}>
+          <SidebarMenu ref={menuRef} className="relative gap-1.5">
+            {/* Traveling Active Indicator Pill (220ms duration with ease-emphasis) */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute left-0 right-0 rounded-lg bg-sidebar-accent shadow-2xs transition-[top,height,opacity] duration-220 ease-emphasis motion-reduce:transition-none"
+              style={{
+                top: `${indicatorStyle.top}px`,
+                height: `${indicatorStyle.height}px`,
+                opacity: indicatorStyle.ready ? 1 : 0,
+              }}
+            >
+              {/* Vertical brand mark pill */}
+              <div className="absolute left-1.5 top-1/2 -translate-y-1/2 w-1 h-5 rounded-full bg-primary" />
+            </div>
+
+            {navItems.map(({ to, label, end, icon }, idx) => (
+              <SidebarMenuItem key={to} className="relative z-10">
                 <NavLink
+                  ref={(el) => {
+                    itemRefs.current[idx] = el;
+                  }}
                   to={to}
                   end={end}
                   className={({ isActive }) =>
-                    `group relative flex items-center gap-3 px-3.5 h-11 rounded-lg text-sm font-sans transition-[color,background-color,transform] duration-140 ease-standard active:scale-[0.99] outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
+                    `group relative flex items-center gap-3 px-3.5 h-11 rounded-lg text-sm font-sans transition-colors duration-140 ease-standard active:scale-[0.99] outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
                       isActive
-                        ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-2xs'
-                        : 'text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground'
+                        ? 'text-sidebar-accent-foreground font-medium'
+                        : 'text-sidebar-foreground/75 hover:text-sidebar-foreground'
                     }`
                   }
                 >
-                  {({ isActive }) => (
-                    <>
-                      {isActive && (
-                        <div
-                          aria-hidden="true"
-                          className="absolute left-1.5 top-1/2 -translate-y-1/2 w-1 h-5 rounded-full bg-primary animate-in fade-in-0 duration-180 transition-transform"
-                        />
-                      )}
-                      <span className="shrink-0 opacity-80 group-hover:opacity-100 transition-opacity pl-1">
-                        {icon}
-                      </span>
-                      <span>{label}</span>
-                    </>
-                  )}
+                  <span className="shrink-0 opacity-80 group-hover:opacity-100 transition-opacity pl-1">
+                    {icon}
+                  </span>
+                  <span>{label}</span>
                 </NavLink>
               </SidebarMenuItem>
             ))}
