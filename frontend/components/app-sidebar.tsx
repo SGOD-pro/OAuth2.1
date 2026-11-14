@@ -9,6 +9,7 @@ import {
   SidebarHeader,
   SidebarMenu,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { BrandMark } from "@/components/BrandMark"
 
@@ -67,15 +68,16 @@ const navItems = [
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: session } = useSession();
   const location = useLocation();
+  const { state: sidebarState, openMobile } = useSidebar();
   const user = session?.user as { twoFactorEnabled?: boolean } | undefined;
   const isTwoFactorOff = Boolean(user && user.twoFactorEnabled !== true);
 
   const activeIndex = React.useMemo(() => {
     const path = location.pathname.toLowerCase();
-    if (path.includes('/clients')) return 1;
-    if (path.includes('/logs')) return 2;
-    if (path.includes('/security')) return 3;
-    return 0;
+    const idx = navItems.findIndex((item) =>
+      item.end ? path === item.to.toLowerCase() : path.startsWith(item.to.toLowerCase())
+    );
+    return idx >= 0 ? idx : 0;
   }, [location.pathname]);
 
   const menuRef = React.useRef<HTMLUListElement>(null);
@@ -102,10 +104,24 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   React.useLayoutEffect(() => {
     updateIndicator();
+
+    const menuEl = menuRef.current;
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && menuEl) {
+      observer = new ResizeObserver(() => {
+        updateIndicator();
+      });
+      observer.observe(menuEl);
+    }
+
     const handleResize = () => updateIndicator();
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [updateIndicator]);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [updateIndicator, sidebarState, openMobile]);
 
   return (
     <Sidebar variant="inset" className="w-[264px] p-2 sm:p-3 bg-sidebar" {...props}>
@@ -119,12 +135,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             Management
           </div>
           <SidebarMenu ref={menuRef} className="relative gap-1.5">
-            {/* Traveling Active Indicator Pill (220ms duration with ease-emphasis) */}
+            {/* Traveling Active Indicator Pill (220ms duration with ease-emphasis GPU transform) */}
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute left-0 right-0 rounded-lg bg-sidebar-accent shadow-2xs transition-[top,height,opacity] duration-220 ease-emphasis motion-reduce:transition-none"
+              className="pointer-events-none absolute left-0 right-0 top-0 rounded-lg bg-sidebar-accent shadow-2xs transition-[transform,height,opacity] duration-220 ease-emphasis will-change-transform motion-reduce:transition-none motion-reduce:transform-none"
               style={{
-                top: `${indicatorStyle.top}px`,
+                transform: `translateY(${indicatorStyle.top}px) translateZ(0)`,
                 height: `${indicatorStyle.height}px`,
                 opacity: indicatorStyle.ready ? 1 : 0,
               }}
@@ -142,7 +158,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   to={to}
                   end={end}
                   className={({ isActive }) =>
-                    `group relative flex items-center gap-3 px-3.5 h-11 rounded-lg text-sm font-sans transition-colors duration-140 ease-standard active:scale-[0.99] outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
+                    `group relative flex items-center gap-3 px-3.5 h-11 rounded-lg text-sm font-sans transition-colors duration-140 ease-standard active:scale-[0.99] outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar ${
                       isActive
                         ? 'text-sidebar-accent-foreground font-medium'
                         : 'text-sidebar-foreground/75 hover:text-sidebar-foreground'

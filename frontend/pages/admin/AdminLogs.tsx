@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,9 +11,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useAdminStore, type LogEntry } from '@/lib/adminStore';
+import { useAdminStore, type LogEntry, type LogsQuery } from '@/lib/adminStore';
 import { usePageTitle } from '@/hooks/usePageTitle';
-import { RotateCcw, Search, X } from 'lucide-react';
+import { AlertCircle, RotateCcw, Search, X } from 'lucide-react';
 
 function formatDate(iso: string | null | undefined): { local: string; utc: string } {
   if (!iso) return { local: 'Unknown', utc: '' };
@@ -45,26 +45,42 @@ function getActionVariant(action: string): 'destructive' | 'secondary' {
 }
 
 function formatActionLabel(action: string): string {
-  return action
-    .replace(/_/g, ' ')
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  switch (action) {
+    case 'two_factor_challenge':
+      return 'MFA Challenge';
+    case 'two_factor_verify':
+      return 'MFA Verification';
+    case 'recovery_code_verify':
+      return 'Recovery Code Verification';
+    case 'sign_in':
+      return 'Sign In';
+    case 'user_sign_in':
+      return 'Session Created';
+    case 'session_revoked':
+      return 'Session Revoked';
+    case 'token_family_revoked_on_replay':
+      return 'Token Replay Revoked';
+    default:
+      return action
+        .replace(/_/g, ' ')
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
 }
 
 function getEventOutcome(log: LogEntry): { label: string; variant: 'success' | 'destructive' | 'outline' } {
   if (log.outcome) {
-    const lower = log.outcome.toLowerCase();
-    if (lower.includes('fail') || lower.includes('denied') || lower.includes('error')) {
+    const lower = log.outcome.toLowerCase().trim();
+    if (lower === 'success') {
+      return { label: 'Success', variant: 'success' };
+    }
+    if (lower === 'denied') {
+      return { label: 'Denied', variant: 'destructive' };
+    }
+    if (lower === 'failed' || lower === 'failure' || lower === 'error') {
       return { label: 'Failed', variant: 'destructive' };
     }
-    return { label: 'Success', variant: 'success' };
-  }
-  const actionLower = log.action.toLowerCase();
-  if (actionLower.includes('fail') || actionLower.includes('denied') || actionLower.includes('error')) {
-    return { label: 'Failed', variant: 'destructive' };
-  }
-  if (actionLower.includes('sign_in') || actionLower.includes('session') || actionLower.includes('client') || actionLower.includes('admin')) {
-    return { label: 'Success', variant: 'success' };
+    return { label: 'Unknown', variant: 'outline' };
   }
   return { label: 'Unknown', variant: 'outline' };
 }
@@ -73,57 +89,77 @@ function getEventContext(log: LogEntry, isSystem: boolean): string {
   if (log.appName) return log.appName;
   if (log.applicationName) return log.applicationName;
   if (log.clientId) return log.clientId;
-  if (log.action.includes('admin') || isSystem) {
-    return 'Console';
+  if (isSystem || log.action.includes('admin') || log.action.includes('system')) {
+    return 'Platform Console';
   }
-  return 'Unknown';
+  return 'Unknown application';
 }
+
+const COMMON_ACTIONS = [
+  'all',
+  'sign_in',
+  'two_factor_challenge',
+  'two_factor_verify',
+  'recovery_code_verify',
+  'user_sign_in',
+  'session_revoked',
+  'token_family_revoked_on_replay',
+  'admin_login',
+];
 
 export const AdminLogs: React.FC = () => {
   usePageTitle('Audit logs');
 
-  const { data, loading } = useAdminStore((state) => state.logs);
+  const { data, loading, error, totalCount, totalPages } = useAdminStore((state) => state.logs);
   const fetchLogs = useAdminStore((state) => state.fetchLogs);
   
   const logs: LogEntry[] = useMemo(() => {
     if (Array.isArray(data)) return data;
-    if (data && typeof data === 'object') {
-      const d = data as unknown as { logs?: LogEntry[]; sessions?: LogEntry[]; audits?: LogEntry[] };
-      if (Array.isArray(d.logs)) return d.logs;
-      if (Array.isArray(d.sessions) || Array.isArray(d.audits)) {
-        return [...(d.sessions || []), ...(d.audits || [])];
-      }
-    }
     return [];
   }, [data]);
   
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [actionFilter, setActionFilter] = useState('all');
+  const [outcomeFilter, setOutcomeFilter] = useState('all');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(searchTerm), 200);
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setPage(1);
+    }, 250);
     return () => clearTimeout(t);
   }, [searchTerm]);
 
+  const loadData = useCallback((force = false) => {
+    const query: LogsQuery = {
+      page,
+      limit: pageSize,
+      search: debouncedSearch.trim() || undefined,
+      action: actionFilter !== 'all' ? actionFilter : undefined,
+      outcome: outcomeFilter !== 'all' ? outcomeFilter : undefined,
+    };
+    void fetchLogs(query, force);
+  }, [page, pageSize, debouncedSearch, actionFilter, outcomeFilter, fetchLogs]);
+
   useEffect(() => {
-    void fetchLogs();
+    loadData();
 
     const startInterval = () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
       intervalRef.current = setInterval(() => {
         if (document.visibilityState !== 'hidden') {
-          void fetchLogs(true);
+          loadData(true);
         }
       }, 30_000);
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void fetchLogs(true);
+        loadData(true);
         startInterval();
       } else if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -137,42 +173,15 @@ export const AdminLogs: React.FC = () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [fetchLogs]);
+  }, [loadData]);
 
-  const filtered = useMemo(() => {
-    return logs.filter((log) => {
-      if (actionFilter !== 'all' && log.action !== actionFilter) {
-        return false;
-      }
-      if (debouncedSearch.trim()) {
-        const query = debouncedSearch.trim().toLowerCase();
-        const emailMatch = log.userEmail?.toLowerCase().includes(query);
-        const userMatch = log.userId?.toLowerCase().includes(query);
-        const actionMatch = log.action?.toLowerCase().includes(query);
-        const ipMatch = log.ipAddress?.toLowerCase().includes(query);
-        if (!emailMatch && !userMatch && !actionMatch && !ipMatch) {
-          return false;
-        }
-      }
-      return true;
-    });
-  }, [logs, actionFilter, debouncedSearch]);
+  const actionTypes = useMemo(() => {
+    const dynamicActions = logs.map((l) => l.action).filter(Boolean);
+    return Array.from(new Set([...COMMON_ACTIONS, ...dynamicActions]));
+  }, [logs]);
 
-  useEffect(() => {
-    setPage(0);
-  }, [actionFilter, debouncedSearch, pageSize]);
-
-  const actionTypes = useMemo(
-    () => ['all', ...Array.from(new Set(logs.map((l) => l.action)))],
-    [logs]
-  );
-  const pageCount = useMemo(() => Math.ceil(filtered.length / pageSize) || 1, [filtered.length, pageSize]);
-  const pageRows = useMemo(
-    () => filtered.slice(page * pageSize, (page + 1) * pageSize),
-    [filtered, page, pageSize]
-  );
-  const startEntry = filtered.length === 0 ? 0 : page * pageSize + 1;
-  const endEntry = Math.min((page + 1) * pageSize, filtered.length);
+  const startEntry = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endEntry = Math.min(page * pageSize, totalCount);
 
   return (
     <div className="flex flex-col flex-1">
@@ -195,7 +204,7 @@ export const AdminLogs: React.FC = () => {
           <Button 
             variant="outline" 
             size="icon" 
-            onClick={() => void fetchLogs(true)} 
+            onClick={() => loadData(true)} 
             disabled={loading} 
             className="h-9 w-9 rounded-md shrink-0"
             aria-label="Refresh logs"
@@ -208,6 +217,26 @@ export const AdminLogs: React.FC = () => {
         </div>
       </div>
 
+      {/* Visible Error & Retry Banner */}
+      {error && (
+        <div className="mb-4 p-4 rounded-xl border border-destructive/30 bg-destructive/10 flex items-center justify-between gap-3 text-destructive">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <AlertCircle className="size-5 shrink-0" />
+            <p className="font-sans text-xs sm:text-sm font-medium truncate">
+              {error}
+            </p>
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => loadData(true)}
+            className="shrink-0 h-8 text-xs border-destructive/40 hover:bg-destructive/15 text-destructive"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Filter and Search Bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3 rounded-xl bg-card border border-border shadow-2xs mb-4">
         <div className="flex flex-1 flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
@@ -215,7 +244,7 @@ export const AdminLogs: React.FC = () => {
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
             <Input
               type="text"
-              placeholder="Search by user, action, IP..."
+              placeholder="Search user, client, application, IP..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-8.5 pr-8 h-9 text-xs"
@@ -233,7 +262,7 @@ export const AdminLogs: React.FC = () => {
             )}
           </div>
 
-          <Select value={actionFilter} onValueChange={(val) => setActionFilter(val)}>
+          <Select value={actionFilter} onValueChange={(val) => { setActionFilter(val); setPage(1); }}>
             <SelectTrigger className="w-full sm:w-[180px] h-9 text-xs">
               <SelectValue placeholder="All actions" />
             </SelectTrigger>
@@ -246,7 +275,20 @@ export const AdminLogs: React.FC = () => {
             </SelectContent>
           </Select>
 
-          <Select value={String(pageSize)} onValueChange={(val) => setPageSize(Number(val))}>
+          <Select value={outcomeFilter} onValueChange={(val) => { setOutcomeFilter(val); setPage(1); }}>
+            <SelectTrigger className="w-full sm:w-[130px] h-9 text-xs">
+              <SelectValue placeholder="All outcomes" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" className="text-xs">All outcomes</SelectItem>
+              <SelectItem value="success" className="text-xs">Success</SelectItem>
+              <SelectItem value="denied" className="text-xs">Denied</SelectItem>
+              <SelectItem value="failed" className="text-xs">Failed</SelectItem>
+              <SelectItem value="unknown" className="text-xs">Unknown</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={String(pageSize)} onValueChange={(val) => { setPageSize(Number(val)); setPage(1); }}>
             <SelectTrigger className="w-full sm:w-[110px] h-9 text-xs">
               <SelectValue placeholder="Page size" />
             </SelectTrigger>
@@ -254,12 +296,13 @@ export const AdminLogs: React.FC = () => {
               <SelectItem value="10" className="text-xs">10 rows</SelectItem>
               <SelectItem value="20" className="text-xs">20 rows</SelectItem>
               <SelectItem value="50" className="text-xs">50 rows</SelectItem>
+              <SelectItem value="100" className="text-xs">100 rows</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
         <span className="font-mono text-xs text-muted-foreground text-right shrink-0">
-          {filtered.length} event{filtered.length === 1 ? '' : 's'}
+          {totalCount} event{totalCount === 1 ? '' : 's'}
         </span>
       </div>
 
@@ -268,7 +311,7 @@ export const AdminLogs: React.FC = () => {
           <div className="size-7 animate-spin rounded-full border-2 border-primary border-t-transparent mb-3" />
           <span className="font-sans text-xs text-muted-foreground">Loading audit logs...</span>
         </div>
-      ) : filtered.length === 0 ? (
+      ) : logs.length === 0 ? (
         <Card className="w-full">
           <CardContent className="p-12 text-center flex flex-col items-center justify-center">
             <p className="font-sans text-sm text-muted-foreground">No events match this filter.</p>
@@ -278,7 +321,7 @@ export const AdminLogs: React.FC = () => {
         <div className="space-y-4">
           {/* Mobile Events List (< md) */}
           <div className="md:hidden space-y-3">
-            {pageRows.map((log, index) => {
+            {logs.map((log, index) => {
               const { local, utc } = formatDate(log.createdAt);
               const isSystemAccount = !log.userEmail || log.userEmail.toLowerCase().includes('system') || log.userEmail.toLowerCase().includes('engine');
               const outcome = getEventOutcome(log);
@@ -332,12 +375,12 @@ export const AdminLogs: React.FC = () => {
                   <TableHead className="text-xs font-medium text-muted-foreground">Subject</TableHead>
                   <TableHead className="w-[180px] text-xs font-medium text-muted-foreground">Event</TableHead>
                   <TableHead className="w-[110px] text-xs font-medium text-muted-foreground">Outcome</TableHead>
-                  <TableHead className="w-[120px] text-xs font-medium text-muted-foreground">Context</TableHead>
+                  <TableHead className="w-[140px] text-xs font-medium text-muted-foreground">Context</TableHead>
                   <TableHead className="w-[140px] text-right text-xs font-medium text-muted-foreground">IP address</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pageRows.map((log, index) => {
+                {logs.map((log, index) => {
                   const { local, utc } = formatDate(log.createdAt);
                   const isSystemAccount = !log.userEmail || log.userEmail.toLowerCase().includes('system') || log.userEmail.toLowerCase().includes('engine');
                   const outcome = getEventOutcome(log);
@@ -410,18 +453,21 @@ export const AdminLogs: React.FC = () => {
             </Table>
           </div>
 
-          {/* Pagination */}
+          {/* Server-Side Pagination */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border border-border rounded-xl bg-card px-5 py-3">
             <span className="font-sans text-xs text-muted-foreground">
-              Showing <span className="text-foreground font-medium">{startEntry}</span> to <span className="text-foreground font-medium">{endEntry}</span> of <span className="text-foreground font-medium">{filtered.length}</span> events
+              Showing <span className="text-foreground font-medium">{startEntry}</span> to <span className="text-foreground font-medium">{endEntry}</span> of <span className="text-foreground font-medium">{totalCount}</span> events
             </span>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              <span className="font-sans text-xs text-muted-foreground mr-1">
+                Page {page} of {Math.max(1, totalPages)}
+              </span>
               <Button 
                 size="sm" 
                 variant="outline" 
                 className="h-8 px-3 text-xs rounded-md"
-                disabled={page === 0} 
-                onClick={() => setPage((p) => p - 1)}
+                disabled={page <= 1 || loading} 
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
               >
                 Previous
               </Button>
@@ -429,7 +475,7 @@ export const AdminLogs: React.FC = () => {
                 size="sm" 
                 variant="outline" 
                 className="h-8 px-3 text-xs rounded-md"
-                disabled={page >= pageCount - 1} 
+                disabled={page >= totalPages || loading} 
                 onClick={() => setPage((p) => p + 1)}
               >
                 Next

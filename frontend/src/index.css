@@ -1,7 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/space-grotesk";
+@import "@fontsource-variable/geist-mono";
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -90,7 +90,7 @@
   --popover: #FFFFFF;
   --popover-foreground: #1A1D1C;
   --primary: #E54D2E;
-  --primary-foreground: #FFFFFF;
+  --primary-foreground: #121316;
   --secondary: #EEECE5;
   --secondary-foreground: #1A1D1C;
   --muted: #EEECE5;
@@ -109,7 +109,7 @@
   --sidebar: #F2F0EA;
   --sidebar-foreground: #1A1D1C;
   --sidebar-primary: #E54D2E;
-  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-primary-foreground: #121316;
   --sidebar-accent: #E7E5DE;
   --sidebar-accent-foreground: #1A1D1C;
   --sidebar-border: #E0DDD4;
@@ -127,7 +127,7 @@
   --popover: #1C1D22;
   --popover-foreground: #F0EDE6;
   --primary: #E54D2E;
-  --primary-foreground: #FFFFFF;
+  --primary-foreground: #121316;
   --secondary: #222328;
   --secondary-foreground: #F0EDE6;
   --muted: #222328;
@@ -146,7 +146,7 @@
   --sidebar: #15161A;
   --sidebar-foreground: #F0EDE6;
   --sidebar-primary: #E54D2E;
-  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-primary-foreground: #121316;
   --sidebar-accent: #202127;
   --sidebar-accent-foreground: #F0EDE6;
   --sidebar-border: #26282E;
@@ -255,26 +255,46 @@
 }
 
 /* ── Themed Custom Scrollbars ── */
-* {
+html,
+body,
+[data-scrollable],
+.overflow-auto,
+.overflow-y-auto {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-*::-webkit-scrollbar {
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+[data-scrollable]::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-*::-webkit-scrollbar-track {
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
+[data-scrollable]::-webkit-scrollbar-track,
+.overflow-auto::-webkit-scrollbar-track,
+.overflow-y-auto::-webkit-scrollbar-track {
   background: transparent;
 }
 
-*::-webkit-scrollbar-thumb {
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
+[data-scrollable]::-webkit-scrollbar-thumb,
+.overflow-auto::-webkit-scrollbar-thumb,
+.overflow-y-auto::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: var(--radius-pill);
 }
 
-*::-webkit-scrollbar-thumb:hover {
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover,
+[data-scrollable]::-webkit-scrollbar-thumb:hover,
+.overflow-auto::-webkit-scrollbar-thumb:hover,
+.overflow-y-auto::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
 }
 

@@ -65,6 +65,27 @@ export interface LogEntry {
   clientId?: string | null;
 }
 
+export interface LogsQuery {
+  page?: number;
+  limit?: number;
+  search?: string;
+  action?: string;
+  outcome?: string;
+  clientId?: string;
+}
+
+export interface LogsState {
+  data: LogEntry[] | null;
+  totalCount: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  lastFetched: number;
+  loading: boolean;
+  error: string | null;
+  activeQueryKey: string;
+}
+
 export interface User {
   _id: string;
   email: string;
@@ -82,12 +103,12 @@ interface CacheState<T> {
 interface AdminStore {
   stats: CacheState<Stats>;
   clients: CacheState<OAuthClient[]>;
-  logs: CacheState<LogEntry[]>;
+  logs: LogsState;
   users: CacheState<User[]>;
   
   fetchStats: (force?: boolean) => Promise<void>;
   fetchClients: (force?: boolean) => Promise<void>;
-  fetchLogs: (force?: boolean) => Promise<void>;
+  fetchLogs: (query?: LogsQuery, force?: boolean) => Promise<void>;
   fetchUsers: (force?: boolean) => Promise<void>;
   
   // Optimistic mutations
@@ -101,13 +122,23 @@ const CACHE_TTL = 30_000; // 30 seconds
 
 let inFlightStats: Promise<void> | null = null;
 let inFlightClients: Promise<void> | null = null;
-let inFlightLogs: Promise<void> | null = null;
+let latestLogRequestId = 0;
 let inFlightUsers: Promise<void> | null = null;
 
 export const useAdminStore = create<AdminStore>((set, get) => ({
   stats: { data: null, lastFetched: 0, loading: false },
   clients: { data: null, lastFetched: 0, loading: false },
-  logs: { data: null, lastFetched: 0, loading: false },
+  logs: {
+    data: null,
+    totalCount: 0,
+    page: 1,
+    limit: 50,
+    totalPages: 1,
+    lastFetched: 0,
+    loading: false,
+    error: null,
+    activeQueryKey: '',
+  },
   users: { data: null, lastFetched: 0, loading: false },
 
   fetchStats: async (force = false) => {
@@ -161,27 +192,73 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
     return inFlightClients;
   },
 
-  fetchLogs: async (force = false) => {
+  fetchLogs: async (query?: LogsQuery, force = false) => {
+    const page = query?.page && query.page > 0 ? query.page : 1;
+    const limit = query?.limit && query.limit > 0 ? query.limit : 50;
+    const search = query?.search?.trim() || '';
+    const action = query?.action && query.action !== 'all' ? query.action : '';
+    const outcome = query?.outcome && query.outcome !== 'all' ? query.outcome : '';
+    const clientId = query?.clientId?.trim() || '';
+
+    const queryKey = JSON.stringify({ page, limit, search, action, outcome, clientId });
     const { logs } = get();
-    if (!force && logs.data && Date.now() - logs.lastFetched < CACHE_TTL) return;
-    if (inFlightLogs) return inFlightLogs;
 
-    inFlightLogs = (async () => {
-      set({ logs: { ...get().logs, loading: true } });
-      try {
-        const res = await apiFetch('/api/admin/logs');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data: LogEntry[] = await res.json();
-        set({ logs: { data, lastFetched: Date.now(), loading: false } });
-      } catch (err) {
-        toast.error(`Failed to load logs: ${String(err)}`);
-        set({ logs: { ...get().logs, loading: false } });
-      } finally {
-        inFlightLogs = null;
+    if (!force && logs.data && logs.activeQueryKey === queryKey && Date.now() - logs.lastFetched < CACHE_TTL) {
+      return;
+    }
+
+    const currentRequestId = ++latestLogRequestId;
+    set({ logs: { ...get().logs, loading: true, error: null } });
+
+    try {
+      const params = new URLSearchParams();
+      params.set('page', String(page));
+      params.set('limit', String(limit));
+      if (search) params.set('search', search);
+      if (action) params.set('action', action);
+      if (outcome) params.set('outcome', outcome);
+      if (clientId) params.set('clientId', clientId);
+
+      const res = await apiFetch(`/api/admin/logs?${params.toString()}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: Failed to load logs`);
       }
-    })();
 
-    return inFlightLogs;
+      const totalCount = parseInt(res.headers.get('X-Total-Count') || '0', 10);
+      const resPage = parseInt(res.headers.get('X-Page') || String(page), 10);
+      const resLimit = parseInt(res.headers.get('X-Limit') || String(limit), 10);
+      const totalPages = parseInt(res.headers.get('X-Total-Pages') || '1', 10);
+      const data: LogEntry[] = await res.json();
+
+      // Guard against race conditions: do not overwrite newer search/filter results
+      if (currentRequestId === latestLogRequestId) {
+        set({
+          logs: {
+            data,
+            totalCount,
+            page: resPage,
+            limit: resLimit,
+            totalPages,
+            lastFetched: Date.now(),
+            loading: false,
+            error: null,
+            activeQueryKey: queryKey,
+          },
+        });
+      }
+    } catch (err: any) {
+      if (currentRequestId === latestLogRequestId) {
+        const errorMsg = err?.message || 'Failed to load logs';
+        toast.error(errorMsg);
+        set({
+          logs: {
+            ...get().logs,
+            loading: false,
+            error: errorMsg,
+          },
+        });
+      }
+    }
   },
 
   fetchUsers: async (force = false) => {
