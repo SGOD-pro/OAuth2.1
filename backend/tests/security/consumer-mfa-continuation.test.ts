@@ -258,6 +258,7 @@ const public2faSetup = await authProvider.api.enableTwoFactor({
 });
 const publicB32Secret = new URL(public2faSetup.totpURI).searchParams.get("secret")!;
 const publicRawSecret = new TextDecoder().decode(base32.decode(publicB32Secret));
+const publicBackupCodes = public2faSetup.backupCodes;
 
 const publicInitCode = await createOTP(publicRawSecret, { digits: 6, period: 30 }).totp();
 await authProvider.api.verifyTOTP({
@@ -782,6 +783,462 @@ await runTest("MFA-11: CORS exposed headers include pagination and rate limit me
   assert.ok(exposed.includes("X-Page"), "Exposed headers must include X-Page");
   assert.ok(exposed.includes("X-Limit"), "Exposed headers must include X-Limit");
   assert.ok(exposed.includes("X-Total-Pages"), "Exposed headers must include X-Total-Pages");
+});
+
+// =============================================================================
+// TEST 12: Public application registration via recovery backup code path
+// =============================================================================
+await runTest("MFA-12: Public application registration via recovery backup code path", async () => {
+  const clientPublicBackup = "client-public-app-backup";
+  const clientPublicBackupCb = "https://public-backup.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientPublicBackup,
+    clientId: clientPublicBackup,
+    name: "Public App Backup MFA",
+    redirectUris: [clientPublicBackupCb],
+    allowedOrigins: ["https://public-backup.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const state = "state_backup_public_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientPublicBackup, clientPublicBackupCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, {
+    method: "GET",
+    headers: getTestHeaders(),
+  });
+  assert.equal(authRes.status, 302);
+
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/);
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/);
+  const authCookies = [txMatch?.[0], clientMatch?.[0]].filter(Boolean).join("; ");
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({
+      email: publicMfaUserEmail,
+      password: publicMfaUserPass,
+      callbackURL: authUrl,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  // Before second factor: must not be registered
+  const preReg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientPublicBackup,
+  });
+  assert.equal(preReg, null);
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+  const backupCode = publicBackupCodes[0];
+
+  const verifyRes = await app.request("/api/auth/two-factor/verify-backup-code", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookies }),
+    body: JSON.stringify({ code: backupCode }),
+  });
+  assert.equal(verifyRes.status, 200);
+
+  // After second factor: must be registered exactly once
+  const postReg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientPublicBackup,
+  });
+  assert.ok(postReg);
+  assert.equal(postReg.clientId, clientPublicBackup);
+  assert.equal(postReg.userId, publicMfaUserId);
+});
+
+// =============================================================================
+// TEST 13: Failed MFA creates no application membership
+// =============================================================================
+await runTest("MFA-13: Failed MFA creates no application membership", async () => {
+  const clientFail = "client-public-fail-test";
+  const clientFailCb = "https://public-fail.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientFail,
+    clientId: clientFail,
+    name: "Public App Fail Test",
+    redirectUris: [clientFailCb],
+    allowedOrigins: ["https://public-fail.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const state = "state_fail_test_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientFail, clientFailCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, {
+    method: "GET",
+    headers: getTestHeaders(),
+  });
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/);
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/);
+  const authCookies = [txMatch?.[0], clientMatch?.[0]].filter(Boolean).join("; ");
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({
+      email: publicMfaUserEmail,
+      password: publicMfaUserPass,
+      callbackURL: authUrl,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+
+  // Provide incorrect TOTP code
+  const verifyRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookies }),
+    body: JSON.stringify({ code: "000000" }),
+  });
+  assert.equal(verifyRes.status, 401);
+
+  // Must not be registered
+  const failReg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientFail,
+  });
+  assert.equal(failReg, null);
+});
+
+// =============================================================================
+// TEST 14: Forged query client_id or forged cookie without transaction creates no membership and no audit attribution
+// =============================================================================
+await runTest("MFA-14: Forged query or cookie without transaction creates no membership or false attribution", async () => {
+  const forgedClientId = "client-public-app-mfa";
+
+  // Standalone sign-in (no OAuth authorize)
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({
+      email: publicMfaUserEmail,
+      password: publicMfaUserPass,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const totpCode = await createOTP(publicRawSecret, { digits: 6, period: 30 }).totp();
+
+  // Clean out any existing registration for this test
+  await db.collection("user_app_registrations").deleteMany({
+    userId: publicMfaUserId,
+    clientId: forgedClientId,
+  });
+
+  // Attempt to pass forged query client_id and forged current_client_id cookie
+  const verifyRes = await app.request(`/api/auth/two-factor/verify-totp?client_id=${forgedClientId}`, {
+    method: "POST",
+    headers: getTestHeaders({
+      Cookie: `${mfaCookie}; current_client_id=${forgedClientId}`,
+    }),
+    body: JSON.stringify({ code: totpCode }),
+  });
+  assert.equal(verifyRes.status, 200);
+
+  // Assert no registration was created
+  const reg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: forgedClientId,
+  });
+  assert.equal(reg, null, "Forged query or cookie must never create application membership");
+
+  // Assert audit event recorded null for clientId to prevent false attribution
+  const auditEvent = await db.collection("auth_events").findOne(
+    { eventType: "two_factor_verify", userId: publicMfaUserId },
+    { sort: { timestamp: -1 } }
+  );
+  assert.ok(auditEvent);
+  assert.equal(auditEvent.clientId, null, "Audit event must not attribute to forged client_id");
+});
+
+// =============================================================================
+// TEST 15: Conflicting query client_id against transaction creates no membership
+// =============================================================================
+await runTest("MFA-15: Conflicting query client_id against transaction creates no membership", async () => {
+  const clientPublicConflict = "client-public-app-conflict";
+  const clientPublicConflictCb = "https://public-conflict.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientPublicConflict,
+    clientId: clientPublicConflict,
+    name: "Public App Conflict",
+    redirectUris: [clientPublicConflictCb],
+    allowedOrigins: ["https://public-conflict.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const state = "state_conflict_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientPublicConflict, clientPublicConflictCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, {
+    method: "GET",
+    headers: getTestHeaders(),
+  });
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/);
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/);
+  const authCookies = [txMatch?.[0], clientMatch?.[0]].filter(Boolean).join("; ");
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({
+      email: publicMfaUserEmail,
+      password: publicMfaUserPass,
+      callbackURL: authUrl,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+  const totpCode = await createOTP(publicRawSecret, { digits: 6, period: 30 }).totp();
+
+  // Attacker injects conflicting client_id query param
+  const verifyRes = await app.request("/api/auth/two-factor/verify-totp?client_id=client-different-app", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookies }),
+    body: JSON.stringify({ code: totpCode }),
+  });
+  assert.equal(verifyRes.status, 200);
+
+  // Verify no registration was created for either client
+  const reg1 = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientPublicConflict,
+  });
+  assert.equal(reg1, null, "Conflicting context must abort membership registration");
+  const reg2 = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: "client-different-app",
+  });
+  assert.equal(reg2, null);
+});
+
+// =============================================================================
+// TEST 16: Expired OAuth transaction cannot create membership
+// =============================================================================
+await runTest("MFA-16: Expired OAuth transaction cannot create membership", async () => {
+  const clientPublicExp = "client-public-app-expired";
+  const clientPublicExpCb = "https://public-exp.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientPublicExp,
+    clientId: clientPublicExp,
+    name: "Public App Expired",
+    redirectUris: [clientPublicExpCb],
+    allowedOrigins: ["https://public-exp.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const state = "state_exp_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientPublicExp, clientPublicExpCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, {
+    method: "GET",
+    headers: getTestHeaders(),
+  });
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=([^;]+)/);
+  const rawTxId = txMatch ? txMatch[1] : "";
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/);
+  const authCookies = [txMatch?.[0], clientMatch?.[0]].filter(Boolean).join("; ");
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({
+      email: publicMfaUserEmail,
+      password: publicMfaUserPass,
+      callbackURL: authUrl,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  // Expire transaction in the database
+  await db.collection("oauth_transactions").updateOne(
+    { transactionId: rawTxId },
+    { $set: { expiresAt: new Date(Date.now() - 10000) } }
+  );
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+  const totpCode = await createOTP(publicRawSecret, { digits: 6, period: 30 }).totp();
+
+  const verifyRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookies }),
+    body: JSON.stringify({ code: totpCode }),
+  });
+  assert.equal(verifyRes.status, 200);
+
+  // Verify no registration was created
+  const reg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientPublicExp,
+  });
+  assert.equal(reg, null, "Expired transaction must not create membership");
+});
+
+// =============================================================================
+// TEST 17: Disabled client receives no new membership
+// =============================================================================
+await runTest("MFA-17: Disabled client receives no new membership", async () => {
+  const clientPublicDisabled = "client-public-disabled";
+  const clientPublicDisabledCb = "https://public-disabled.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientPublicDisabled,
+    clientId: clientPublicDisabled,
+    name: "Public App Disabled",
+    redirectUris: [clientPublicDisabledCb],
+    allowedOrigins: ["https://public-disabled.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const state = "state_dis_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientPublicDisabled, clientPublicDisabledCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, {
+    method: "GET",
+    headers: getTestHeaders(),
+  });
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/);
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/);
+  const authCookies = [txMatch?.[0], clientMatch?.[0]].filter(Boolean).join("; ");
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({
+      email: publicMfaUserEmail,
+      password: publicMfaUserPass,
+      callbackURL: authUrl,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  // Disable client in database before MFA verification
+  await db.collection("oauthClient").updateOne(
+    { clientId: clientPublicDisabled },
+    { $set: { disabled: true } }
+  );
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+  const totpCode = await createOTP(publicRawSecret, { digits: 6, period: 30 }).totp();
+
+  const verifyRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookies }),
+    body: JSON.stringify({ code: totpCode }),
+  });
+  assert.equal(verifyRes.status, 200);
+
+  // Verify no registration was created
+  const reg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientPublicDisabled,
+  });
+  assert.equal(reg, null, "Disabled client must not receive new membership");
+});
+
+// =============================================================================
+// TEST 18: Super admin with MFA does not receive application membership
+// =============================================================================
+await runTest("MFA-18: Super admin with MFA does not receive application membership", async () => {
+  const clientSuperTest = "client-public-super-test";
+  const clientSuperTestCb = "https://public-super.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientSuperTest,
+    clientId: clientSuperTest,
+    name: "Public App Super Test",
+    redirectUris: [clientSuperTestCb],
+    allowedOrigins: ["https://public-super.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const state = "state_super_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientSuperTest, clientSuperTestCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, {
+    method: "GET",
+    headers: getTestHeaders(),
+  });
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/);
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/);
+  const authCookies = [txMatch?.[0], clientMatch?.[0]].filter(Boolean).join("; ");
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({
+      email: superAdminEmail,
+      password: superAdminPass,
+      callbackURL: authUrl,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+  const superB32Secret = new URL(super2faSetup.totpURI).searchParams.get("secret")!;
+  const superRawSecret = new TextDecoder().decode(base32.decode(superB32Secret));
+  const totpCode = await createOTP(superRawSecret, { digits: 6, period: 30 }).totp();
+
+  const verifyRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookies }),
+    body: JSON.stringify({ code: totpCode }),
+  });
+  assert.equal(verifyRes.status, 200);
+
+  // Super admin must never be recorded in user_app_registrations
+  const reg = await db.collection("user_app_registrations").findOne({
+    userId: superAdminId,
+    clientId: clientSuperTest,
+  });
+  assert.equal(reg, null, "Super admin must never receive consumer app membership");
 });
 
 // -----------------------------------------------------------------------------

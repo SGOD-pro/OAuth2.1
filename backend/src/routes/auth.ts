@@ -630,6 +630,24 @@ auth.post("/sign-in/email", async (c) => {
             // CRITICAL AUTHENTICATION BOUNDARY:
             // First factor (password) verified, but authentication is NOT completed until MFA finishes!
             // Do NOT record sign_in success or mutate application registration here.
+            if (clientCtx.isBoundOAuthFlow && authUserId) {
+                const txIdCookie = getCookie(c, "oauth_transaction_id");
+                const txIdQuery = c.req.query("transaction_id");
+                const state = c.req.query("state");
+                const candidateTxId = txIdCookie || txIdQuery;
+                if (candidateTxId || state) {
+                    try {
+                        const tx = await getOAuthTransaction({ transactionId: candidateTxId || undefined, state: state || undefined });
+                        if (tx && tx.status === "pending") {
+                            await database.collection("oauth_transactions").updateOne(
+                                { transactionId: tx.transactionId, status: "pending" },
+                                { $set: { userId: authUserId } }
+                            );
+                        }
+                    } catch {}
+                }
+            }
+
             await recordAuthEvent({
                 eventType: "two_factor_challenge",
                 outcome: "success",
@@ -2370,84 +2388,187 @@ auth.all("/admin/*", async (c) => {
     return authProvider.handler(c.req.raw);
 });
 
-// 12. Two-Factor Authentication Verification Telemetry Handlers
-auth.post("/two-factor/verify-totp", async (c) => {
-    const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
-    const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
-    const userAgent = c.req.header("user-agent");
-    const safeUserAgent = userAgent ? userAgent.slice(0, 128) : null;
-    let actor: string | null = null;
-    let userId: string | null = null;
-    let clientId: string | null = null;
-    let clientName: string | null = null;
+// 12. Validated Two Factor OAuth Continuation Helpers & Telemetry Handlers
+interface ValidatedMfaOauthContext {
+    transactionId: string;
+    clientId: string;
+    clientName: string | null;
+    boundUserId?: string | null;
+}
 
+async function resolveValidatedMfaOauthContext(c: any): Promise<ValidatedMfaOauthContext | null> {
     const txIdCookie = getCookie(c, "oauth_transaction_id");
-    if (txIdCookie) {
-        try {
-            const tx = await getOAuthTransaction({ transactionId: txIdCookie });
-            if (tx?.clientId) {
-                clientId = tx.clientId;
-                const database = await getDb();
-                const clientDoc = await database.collection("oauthClient").findOne({ clientId });
-                if (clientDoc?.clientName || clientDoc?.client_name || clientDoc?.name) {
-                    clientName = clientDoc.clientName || clientDoc.client_name || clientDoc.name;
-                }
-            }
-        } catch {
-            // ignore
-        }
-    }
-    if (!clientId) {
-        clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
+    const txIdQuery = c.req.query("transaction_id");
+    const stateQuery = c.req.query("state");
+    const queryClientId = c.req.query("client_id");
+
+    const candidateTxId = txIdCookie || txIdQuery;
+    if (!candidateTxId && !stateQuery) {
+        // No server side OAuth continuation context present (e.g. standalone MFA flow)
+        return null;
     }
 
+    try {
+        const tx = await getOAuthTransaction({
+            transactionId: candidateTxId || undefined,
+            state: stateQuery || undefined,
+        });
+
+        if (!tx || tx.status !== "pending") {
+            return null;
+        }
+
+        // Context integrity: if client_id was supplied as a query hint, it must strictly match the server transaction!
+        // Tampered or conflicting hints must fail closed.
+        if (queryClientId && queryClientId !== tx.clientId) {
+            console.warn(`[MFA_OAUTH] Conflicting client_id in query hint: expected ${tx.clientId}, got ${queryClientId}`);
+            return null;
+        }
+
+        // Revalidate target client existence and active status
+        const database = await getDb();
+        const clientDoc = await database.collection("oauthClient").findOne({ clientId: tx.clientId });
+        if (!clientDoc || clientDoc.disabled === true) {
+            return null;
+        }
+
+        const clientName = clientDoc.clientName || clientDoc.client_name || clientDoc.name || null;
+
+        return {
+            transactionId: tx.transactionId,
+            clientId: tx.clientId,
+            clientName,
+            boundUserId: tx.userId || null,
+        };
+    } catch {
+        return null;
+    }
+}
+
+async function resolveCandidateMfaUser(c: any): Promise<{ id: string | null; email: string | null } | null> {
     try {
         const sessionResult = await authProvider.api.getSession({
             headers: getHeaders(c),
         });
         if (sessionResult?.user) {
-            userId = (sessionResult.user.id || (sessionResult.user as any)._id)?.toString() || null;
-            actor = sessionResult.user.email || null;
+            return {
+                id: (sessionResult.user.id || (sessionResult.user as any)._id)?.toString() || null,
+                email: sessionResult.user.email || null,
+            };
         }
     } catch {
-        // no active session yet
+        // no active session
     }
 
-    if (!userId) {
-        try {
-            const twoFactorCookie = getCookie(c, "better-auth.two_factor");
-            if (twoFactorCookie) {
-                const database = await getDb();
-                const parts = twoFactorCookie.split(".");
-                const tokenVal = parts[0];
-                const record = await database.collection("verification").findOne({
-                    $or: [
-                        { identifier: twoFactorCookie },
-                        { identifier: tokenVal },
-                        { value: twoFactorCookie },
-                        { value: tokenVal },
-                    ],
+    try {
+        const twoFactorCookie = getCookie(c, "better-auth.two_factor");
+        if (twoFactorCookie) {
+            const database = await getDb();
+            const parts = twoFactorCookie.split(".");
+            const tokenVal = parts[0];
+            const record = await database.collection("verification").findOne({
+                $or: [
+                    { identifier: twoFactorCookie },
+                    { identifier: tokenVal },
+                    { value: twoFactorCookie },
+                    { value: tokenVal },
+                ],
+            });
+            if (record?.value) {
+                const candidateUserId = record.value;
+                const userConditions: any[] = [{ id: candidateUserId }, { _id: candidateUserId }];
+                if (ObjectId.isValid(candidateUserId)) {
+                    userConditions.push({ _id: new ObjectId(candidateUserId) });
+                }
+                const u = await database.collection("user").findOne({
+                    $or: userConditions,
                 });
-                if (record?.value) {
-                    const candidateUserId = record.value;
-                    const u = await database.collection("user").findOne({
-                        $or: [{ id: candidateUserId }, { _id: candidateUserId }],
-                    });
-                    if (u) {
-                        userId = (u.id || u._id)?.toString() || null;
-                        actor = u.email || null;
-                    }
+                if (u) {
+                    return {
+                        id: (u.id || u._id)?.toString() || null,
+                        email: u.email || null,
+                    };
                 }
             }
-        } catch {
-            // ignore
         }
+    } catch {
+        // ignore
     }
+
+    return null;
+}
+
+async function recordMfaPublicAppMembership(
+    database: any,
+    completedUserId: string,
+    validatedContext: ValidatedMfaOauthContext | null
+): Promise<void> {
+    if (!completedUserId || !validatedContext) {
+        // Standalone MFA or unvalidated context: never create application membership
+        return;
+    }
+
+    // Identity binding: if the OAuth transaction was bound to a specific user identity during first factor,
+    // verify the successfully authenticated session matches that exact user.
+    if (validatedContext.boundUserId && validatedContext.boundUserId !== completedUserId) {
+        console.warn(`[MFA_OAUTH] User mismatch in MFA completion: bound ${validatedContext.boundUserId} vs completed ${completedUserId}`);
+        return;
+    }
+
+    // Retrieve user document to verify existence and check super admin isolation
+    const userConditions: any[] = [{ id: completedUserId }, { _id: completedUserId }];
+    if (ObjectId.isValid(completedUserId)) {
+        userConditions.push({ _id: new ObjectId(completedUserId) });
+    }
+    const userDoc = await database.collection("user").findOne({
+        $or: userConditions,
+    });
+    if (!userDoc) {
+        return;
+    }
+
+    // Super Admin Isolation: super admins are not regular consumer app members
+    if (isSuperAdmin(userDoc)) {
+        return;
+    }
+
+    // Client verification: must exist, be active (not disabled), and be a public client
+    const clientDoc = await database.collection("oauthClient").findOne({ clientId: validatedContext.clientId });
+    if (!clientDoc || clientDoc.disabled === true || !clientDoc.isPublic) {
+        // Private clients require explicit provisioning; disabled clients receive no new registrations
+        return;
+    }
+
+    const canonicalClientId = clientDoc.clientId;
+    await database.collection("user_app_registrations").updateOne(
+        { userId: completedUserId, clientId: canonicalClientId },
+        { $setOnInsert: { userId: completedUserId, clientId: canonicalClientId, registeredAt: new Date() } },
+        { upsert: true }
+    );
+
+    // Bind completed user identity to pending OAuth transaction for downstream authorization continuity
+    await database.collection("oauth_transactions").updateOne(
+        { transactionId: validatedContext.transactionId, status: "pending" },
+        { $set: { userId: completedUserId } }
+    );
+}
+
+auth.post("/two-factor/verify-totp", async (c) => {
+    const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+    const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+    const userAgent = c.req.header("user-agent");
+    const safeUserAgent = userAgent ? userAgent.slice(0, 128) : null;
+
+    const validatedContext = await resolveValidatedMfaOauthContext(c);
+    const candidateUser = await resolveCandidateMfaUser(c);
 
     const res = await authProvider.handler(c.req.raw);
     const isSuccess = res.status < 400;
 
     let sessionId: string | null = null;
+    let completedUserId: string | null = null;
+    let actor: string | null = candidateUser?.email || null;
+
     if (isSuccess) {
         try {
             const setCookie = res.headers.get("set-cookie") || "";
@@ -2459,10 +2580,10 @@ auth.post("/two-factor/verify-totp", async (c) => {
                 const sessionDoc = await database.collection("session").findOne({ token });
                 if (sessionDoc) {
                     sessionId = String(sessionDoc._id || sessionDoc.id);
-                    if (!userId && sessionDoc.userId) {
-                        userId = sessionDoc.userId.toString();
+                    if (sessionDoc.userId) {
+                        completedUserId = sessionDoc.userId.toString();
                         const u = await database.collection("user").findOne({
-                            $or: [{ id: userId }, { _id: userId }],
+                            $or: [{ id: completedUserId }, { _id: completedUserId }],
                         });
                         if (u?.email) {
                             actor = u.email;
@@ -2474,19 +2595,14 @@ auth.post("/two-factor/verify-totp", async (c) => {
             // ignore
         }
 
-        // Public application registration upon successful two-factor verification
-        if (userId && clientId) {
+        if (!completedUserId && candidateUser?.id) {
+            completedUserId = candidateUser.id;
+        }
+
+        if (completedUserId) {
             try {
                 const database = await getDb();
-                const clientDoc = await database.collection("oauthClient").findOne({ clientId });
-                if (clientDoc && clientDoc.isPublic) {
-                    const canonicalClientId = clientDoc.clientId;
-                    await database.collection("user_app_registrations").updateOne(
-                        { userId, clientId: canonicalClientId },
-                        { $setOnInsert: { userId, clientId: canonicalClientId, registeredAt: new Date() } },
-                        { upsert: true }
-                    );
-                }
+                await recordMfaPublicAppMembership(database, completedUserId, validatedContext);
             } catch (err) {
                 console.error("[TWO_FACTOR] Failed to record public app registration:", err);
             }
@@ -2497,10 +2613,10 @@ auth.post("/two-factor/verify-totp", async (c) => {
         eventType: "two_factor_verify",
         outcome: isSuccess ? "success" : "failure",
         sessionId,
-        userId,
+        userId: isSuccess ? completedUserId : (candidateUser?.id || null),
         targetIdentifier: actor,
-        clientId,
-        clientName,
+        clientId: validatedContext?.clientId || null,
+        clientName: validatedContext?.clientName || null,
         ipAddress: safeIp,
         userAgent: safeUserAgent,
         reason: isSuccess ? null : "invalid_totp_code",
@@ -2515,78 +2631,17 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
     const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
     const userAgent = c.req.header("user-agent");
     const safeUserAgent = userAgent ? userAgent.slice(0, 128) : null;
-    let actor: string | null = null;
-    let userId: string | null = null;
-    let clientId: string | null = null;
-    let clientName: string | null = null;
 
-    const txIdCookie = getCookie(c, "oauth_transaction_id");
-    if (txIdCookie) {
-        try {
-            const tx = await getOAuthTransaction({ transactionId: txIdCookie });
-            if (tx?.clientId) {
-                clientId = tx.clientId;
-                const database = await getDb();
-                const clientDoc = await database.collection("oauthClient").findOne({ clientId });
-                if (clientDoc?.clientName || clientDoc?.client_name || clientDoc?.name) {
-                    clientName = clientDoc.clientName || clientDoc.client_name || clientDoc.name;
-                }
-            }
-        } catch {
-            // ignore
-        }
-    }
-    if (!clientId) {
-        clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
-    }
-
-    try {
-        const sessionResult = await authProvider.api.getSession({
-            headers: getHeaders(c),
-        });
-        if (sessionResult?.user) {
-            userId = (sessionResult.user.id || (sessionResult.user as any)._id)?.toString() || null;
-            actor = sessionResult.user.email || null;
-        }
-    } catch {
-        // no active session yet
-    }
-
-    if (!userId) {
-        try {
-            const twoFactorCookie = getCookie(c, "better-auth.two_factor");
-            if (twoFactorCookie) {
-                const database = await getDb();
-                const parts = twoFactorCookie.split(".");
-                const tokenVal = parts[0];
-                const record = await database.collection("verification").findOne({
-                    $or: [
-                        { identifier: twoFactorCookie },
-                        { identifier: tokenVal },
-                        { value: twoFactorCookie },
-                        { value: tokenVal },
-                    ],
-                });
-                if (record?.value) {
-                    const candidateUserId = record.value;
-                    const u = await database.collection("user").findOne({
-                        $or: [{ id: candidateUserId }, { _id: candidateUserId }],
-                    });
-                    if (u) {
-                        userId = (u.id || u._id)?.toString() || null;
-                        actor = u.email || null;
-                    }
-                }
-            }
-        } catch {
-            // ignore
-        }
-    }
+    const validatedContext = await resolveValidatedMfaOauthContext(c);
+    const candidateUser = await resolveCandidateMfaUser(c);
 
     const res = await authProvider.handler(c.req.raw);
     const isSuccess = res.status < 400;
 
     let sessionId: string | null = null;
+    let completedUserId: string | null = null;
+    let actor: string | null = candidateUser?.email || null;
+
     if (isSuccess) {
         try {
             const setCookie = res.headers.get("set-cookie") || "";
@@ -2598,10 +2653,10 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
                 const sessionDoc = await database.collection("session").findOne({ token });
                 if (sessionDoc) {
                     sessionId = String(sessionDoc._id || sessionDoc.id);
-                    if (!userId && sessionDoc.userId) {
-                        userId = sessionDoc.userId.toString();
+                    if (sessionDoc.userId) {
+                        completedUserId = sessionDoc.userId.toString();
                         const u = await database.collection("user").findOne({
-                            $or: [{ id: userId }, { _id: userId }],
+                            $or: [{ id: completedUserId }, { _id: completedUserId }],
                         });
                         if (u?.email) {
                             actor = u.email;
@@ -2613,19 +2668,14 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
             // ignore
         }
 
-        // Public application registration upon successful two-factor verification
-        if (userId && clientId) {
+        if (!completedUserId && candidateUser?.id) {
+            completedUserId = candidateUser.id;
+        }
+
+        if (completedUserId) {
             try {
                 const database = await getDb();
-                const clientDoc = await database.collection("oauthClient").findOne({ clientId });
-                if (clientDoc && clientDoc.isPublic) {
-                    const canonicalClientId = clientDoc.clientId;
-                    await database.collection("user_app_registrations").updateOne(
-                        { userId, clientId: canonicalClientId },
-                        { $setOnInsert: { userId, clientId: canonicalClientId, registeredAt: new Date() } },
-                        { upsert: true }
-                    );
-                }
+                await recordMfaPublicAppMembership(database, completedUserId, validatedContext);
             } catch (err) {
                 console.error("[TWO_FACTOR] Failed to record public app registration:", err);
             }
@@ -2636,10 +2686,10 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
         eventType: "recovery_code_verify",
         outcome: isSuccess ? "success" : "failure",
         sessionId,
-        userId,
+        userId: isSuccess ? completedUserId : (candidateUser?.id || null),
         targetIdentifier: actor,
-        clientId,
-        clientName,
+        clientId: validatedContext?.clientId || null,
+        clientName: validatedContext?.clientName || null,
         ipAddress: safeIp,
         userAgent: safeUserAgent,
         reason: isSuccess ? null : "invalid_backup_code",
