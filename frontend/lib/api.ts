@@ -2,8 +2,6 @@ const metaEnv = (typeof import.meta !== 'undefined' && (import.meta as unknown a
 const nodeProcess = typeof globalThis !== 'undefined' ? (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process : undefined;
 const nodeEnv = nodeProcess?.env || {};
 
-export const API_BASE = (metaEnv.VITE_AUTH_URL || nodeEnv.VITE_AUTH_URL)?.replace(/\/$/, '') || '';
-
 export function getApiUrl(path: string) {
   // If we are in the browser, always use relative paths so they go through the Vite/Vercel proxy.
   if (typeof window !== 'undefined') {

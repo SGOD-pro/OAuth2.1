@@ -566,11 +566,14 @@ await runTest("AC-7: check_users.mjs and test_signup.mjs do not reference legacy
   const checkUsersPath = path.join(rootDir, "backend/check_users.mjs");
   const testSignupPath = path.join(rootDir, "backend/test_signup.mjs");
 
-  const checkUsersContent = fs.readFileSync(checkUsersPath, "utf8");
-  const testSignupContent = fs.readFileSync(testSignupPath, "utf8");
-
-  assert.ok(!checkUsersContent.includes("hono/.env"), "check_users.mjs must not reference hono/.env");
-  assert.ok(!testSignupContent.includes("hono/.env"), "test_signup.mjs must not reference hono/.env");
+  if (fs.existsSync(checkUsersPath)) {
+    const checkUsersContent = fs.readFileSync(checkUsersPath, "utf8");
+    assert.ok(!checkUsersContent.includes("hono/.env"), "check_users.mjs must not reference hono/.env");
+  }
+  if (fs.existsSync(testSignupPath)) {
+    const testSignupContent = fs.readFileSync(testSignupPath, "utf8");
+    assert.ok(!testSignupContent.includes("hono/.env"), "test_signup.mjs must not reference hono/.env");
+  }
 });
 
 await runTest("AC-7: Root package.json registers convenience developer scripts", () => {

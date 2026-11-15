@@ -1,13 +1,12 @@
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
-import { HugeiconsIcon } from "@hugeicons/react"
 import {
-  CheckmarkCircle02Icon,
-  InformationCircleIcon,
-  Alert02Icon,
-  MultiplicationSignCircleIcon,
-  Loading03Icon,
-} from "@hugeicons/core-free-icons"
+  CircleCheck,
+  Info,
+  AlertTriangle,
+  CircleAlert,
+  Loader2,
+} from "lucide-react"
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system", resolvedTheme } = useTheme()
@@ -20,37 +19,27 @@ const Toaster = ({ ...props }: ToasterProps) => {
       position="bottom-right"
       icons={{
         success: (
-          <HugeiconsIcon
-            icon={CheckmarkCircle02Icon}
-            strokeWidth={2}
+          <CircleCheck
             className="size-4 text-emerald-500 dark:text-emerald-400 shrink-0"
           />
         ),
         info: (
-          <HugeiconsIcon
-            icon={InformationCircleIcon}
-            strokeWidth={2}
+          <Info
             className="size-4 text-sky-500 dark:text-sky-400 shrink-0"
           />
         ),
         warning: (
-          <HugeiconsIcon
-            icon={Alert02Icon}
-            strokeWidth={2}
+          <AlertTriangle
             className="size-4 text-amber-500 dark:text-amber-400 shrink-0"
           />
         ),
         error: (
-          <HugeiconsIcon
-            icon={MultiplicationSignCircleIcon}
-            strokeWidth={2}
+          <CircleAlert
             className="size-4 text-destructive shrink-0"
           />
         ),
         loading: (
-          <HugeiconsIcon
-            icon={Loading03Icon}
-            strokeWidth={2}
+          <Loader2
             className="size-4 text-primary animate-spin shrink-0"
           />
         ),

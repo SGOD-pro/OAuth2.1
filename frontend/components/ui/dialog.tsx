@@ -3,8 +3,7 @@ import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { Cancel01Icon } from "@hugeicons/core-free-icons"
+import { X } from "lucide-react"
 
 function Dialog({
   ...props
@@ -85,7 +84,7 @@ function DialogContent({
               className="absolute top-4 right-4 h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/60"
               size="icon-xs"
             >
-              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+              <X className="size-4" strokeWidth={2} />
               <span className="sr-only">Close</span>
             </Button>
           </DialogPrimitive.Close>

@@ -284,18 +284,6 @@ export function isAppAdmin(user: any): boolean {
     return false;
 }
 
-export async function hasAppAccessBypass(
-    databaseOrUser: any,
-    userOrClientId: any,
-    maybeClientId?: string
-): Promise<boolean> {
-    if (maybeClientId && typeof maybeClientId === "string") {
-        return checkUserHasAppAccess(databaseOrUser, userOrClientId, maybeClientId);
-    }
-    // Fail closed: in-memory evaluation without database state is strictly forbidden
-    return false;
-}
-
 interface ClientContext {
     clientId: string | null;
     isBoundOAuthFlow: boolean;

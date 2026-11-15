@@ -41,5 +41,3 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
     </TooltipProvider>
   );
 };
-
-export const Logo = BrandMark;
