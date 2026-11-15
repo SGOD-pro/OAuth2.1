@@ -24,9 +24,9 @@ function Card({
       {/* Optional BMW M-Series Motorsport Accent Top Segment */}
       {accent === "motorsport" && (
         <div aria-hidden="true" className="absolute top-0 left-0 right-0 h-[3px] flex pointer-events-none z-20">
-          <div className="w-1/3 h-full bg-motorsport-light" />
-          <div className="w-1/3 h-full bg-motorsport-dark" />
-          <div className="w-1/3 h-full bg-motorsport-red" />
+          <div className="w-1/3 h-full bg-motorsport-light" style={{ backgroundColor: 'var(--motorsport-light, oklch(50.27% 0.1425 250.05))' }} />
+          <div className="w-1/3 h-full bg-motorsport-dark" style={{ backgroundColor: 'var(--motorsport-dark, oklch(53.81% 0.1804 258.30))' }} />
+          <div className="w-1/3 h-full bg-motorsport-red" style={{ backgroundColor: 'var(--motorsport-red, oklch(58.76% 0.2212 29.82))' }} />
         </div>
       )}
 

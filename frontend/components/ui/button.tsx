@@ -10,9 +10,13 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground hover:bg-[#D03723] active:bg-[#B52D1C] dark:hover:bg-[#8A9C78] dark:active:bg-[#788A66] shadow-xs font-semibold",
+          "bg-primary text-primary-foreground hover:bg-[oklch(22.44%_0.0288_171.94)] active:bg-[oklch(18.49%_0.0228_174.75)] dark:bg-[oklch(97%_0.0082_91.48)] dark:text-[oklch(20.77%_0.0145_172.36)] dark:hover:bg-[oklch(92%_0.01_91.48)] dark:active:bg-[oklch(88%_0.015_91.48)] shadow-xs font-semibold",
+        cta:
+          "bg-tomato text-white hover:bg-tomato-hover active:bg-tomato-active shadow-xs font-semibold",
+        accent:
+          "bg-tomato text-white hover:bg-tomato-hover active:bg-tomato-active shadow-xs font-semibold",
         brand:
-          "bg-evergreen text-white hover:bg-evergreen/90 active:bg-evergreen/95 shadow-xs font-semibold",
+          "bg-evergreen text-white hover:bg-[oklch(22.44%_0.0288_171.94)] active:bg-[oklch(18.49%_0.0228_174.75)] shadow-xs font-semibold",
         supporting:
           "bg-accent text-accent-foreground hover:bg-accent/80 active:bg-accent/90 shadow-2xs font-semibold",
         outline:

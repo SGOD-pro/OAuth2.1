@@ -168,10 +168,10 @@ export const AdminLogin: React.FC = () => {
       </div>
 
       <div className="w-full max-w-[420px]">
-        <Card className="w-full border border-border bg-card shadow-xs rounded-xl overflow-hidden">
+        <Card accent="motorsport" className="w-full border border-border bg-card shadow-xs rounded-xl overflow-hidden relative">
           <CardContent className="p-6 sm:p-8">
             <div className="mb-6">
-              <BrandMark />
+              <BrandMark size="lg" showBadge />
             </div>
 
             <div className="mb-6">

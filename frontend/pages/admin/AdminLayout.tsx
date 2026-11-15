@@ -95,7 +95,7 @@ export const AdminLayout: React.FC = () => {
                       <p className="font-sans text-xs font-medium text-foreground leading-none">
                         {user?.name || 'Administrator'}
                       </p>
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold tracking-wider uppercase bg-primary/10 text-primary border border-primary/20">
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold tracking-wider uppercase bg-tomato/15 text-tomato border border-tomato/30">
                         SUPER
                       </span>
                     </div>

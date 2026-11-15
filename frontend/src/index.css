@@ -92,6 +92,27 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
+  /* BMW M-Series Motorsport Tokens (OKLCH) */
+  --color-motorsport-light: oklch(50.27% 0.1425 250.05);
+  --color-motorsport-dark: oklch(53.81% 0.1804 258.30);
+  --color-motorsport-red: oklch(58.76% 0.2212 29.82);
+
+  /* Visual Brand Anchors in OKLCH */
+  --color-ivory: oklch(97.00% 0.0082 91.48);
+  --color-sage: oklch(72.88% 0.0585 128.92);
+  --color-evergreen: oklch(27.20% 0.0383 172.83);
+  --color-evergreen-hover: oklch(22.44% 0.0288 171.94);
+  --color-evergreen-active: oklch(18.49% 0.0228 174.75);
+  --color-tomato: oklch(61.96% 0.2068 30.72);
+  --color-tomato-hover: oklch(56.83% 0.1928 30.93);
+  --color-tomato-active: oklch(51.08% 0.1752 30.78);
+  --color-white: oklch(100% 0 0);
+
+  /* Supporting Sage Subsurfaces (OKLCH) */
+  --color-sage-light: oklch(95.39% 0.0098 125.68);
+  --color-sage-panel: oklch(90.66% 0.0202 128.71);
+  --color-sage-dark: oklch(34.80% 0.0220 128.50);
+
   /* Semantic Action and Brand aliases */
   --color-action: var(--action);
   --color-on-action: var(--on-action);
@@ -99,20 +120,6 @@
   --color-on-brand: var(--on-brand);
   --color-sage-soft: var(--sage-soft);
   --color-sage-wash: var(--sage-wash);
-
-  /* 5 Fixed Brand Anchors */
-  --color-ivory: #F7F5EF;
-  --color-sage: #9CAF88;
-  --color-evergreen: #102D25;
-  --color-tomato: #E8412C;
-  --color-tomato-hover: #D03723;
-  --color-tomato-active: #B52D1C;
-  --color-white: #FFFFFF;
-
-  /* Supporting Sage Subsurfaces */
-  --color-sage-light: #EEF1EA;
-  --color-sage-panel: #DCE3D5;
-  --color-sage-dark: #313B30;
 
   /* SWENA Modern Calm Tech Semantic Tokens */
   --color-surface: var(--surface);
@@ -174,182 +181,198 @@
   --motion-slow: 320ms;
   --motion-emphasis: 450ms;
 
-  /* ── SWENA Modern Calm Tech Palette Tokens ── */
-  --surface: #fbf9f3;
-  --surface-dim: #dcdad4;
-  --surface-bright: #fbf9f3;
-  --surface-container-lowest: #ffffff;
-  --surface-container-low: #f5f3ed;
-  --surface-container: #f0eee8;
-  --surface-container-high: #eae8e2;
-  --surface-container-highest: #e4e2dd;
-  --on-surface: #1b1c18;
-  --on-surface-variant: #5b403b;
-  --inverse-surface: #30312d;
-  --inverse-on-surface: #f3f1eb;
-  --outline: #90706a;
-  --outline-variant: #e4beb7;
-  --surface-tint: #b91e0e;
-  --primary-m3: #47645a;
-  --on-primary: #ffffff;
-  --primary-container: #d93623;
-  --on-primary-container: #fffbff;
-  --inverse-primary: #ffb4a7;
-  --secondary-m3: #b51b0b;
-  --on-secondary: #ffffff;
-  --secondary-container: #c9eadd;
-  --on-secondary-container: #4d6a60;
-  --tertiary: #506140;
-  --on-tertiary: #ffffff;
-  --tertiary-container: #687a57;
-  --on-tertiary-container: #f9ffec;
-  --error: #ba1a1a;
-  --on-error: #ffffff;
-  --error-container: #ffdad6;
-  --on-error-container: #93000a;
-  --primary-fixed: #ffdad4;
-  --primary-fixed-dim: #ffb4a7;
-  --on-primary-fixed: #400100;
-  --on-primary-fixed-variant: #920700;
-  --secondary-fixed: #c9eadd;
-  --secondary-fixed-dim: #aecdc1;
-  --on-secondary-fixed: #022019;
-  --on-secondary-fixed-variant: #304c43;
-  --tertiary-fixed: #d5e9bf;
-  --tertiary-fixed-dim: #b9cda4;
-  --on-tertiary-fixed: #111f05;
-  --on-tertiary-fixed-variant: #3b4c2c;
-  --surface-variant: #e4e2dd;
+  /* ── BMW M-Series Motorsport Tokens (OKLCH) ── */
+  --motorsport-light: oklch(50.27% 0.1425 250.05); /* #0066B1 */
+  --motorsport-dark: oklch(53.81% 0.1804 258.30);  /* #1C69D4 */
+  --motorsport-red: oklch(58.76% 0.2212 29.82);    /* #E22718 */
 
-  /* ── Visual Brand Anchors & Component Tokens ── */
-  --action: #E8412C;                  /* Tomato exclusive primary action */
-  --on-action: #001811;               /* Dark high-contrast text or white */
-  --brand: #102D25;                   /* Evergreen identity and secondary brand structure */
-  --on-brand: #FFFFFF;
-  --sage-soft: #DCE3D5;               /* Soft sage supporting fill */
-  --sage-wash: #EEF1EA;               /* Sage wash chips / selected */
+  /* ── SWENA Modern Calm Tech Shade Families in OKLCH (Light Mode) ── */
+  --surface: oklch(98.20% 0.0082 91.48);            /* #FBF9F3 */
+  --surface-dim: oklch(87.50% 0.0070 88.00);        /* #DCDAD4 */
+  --surface-bright: oklch(98.20% 0.0082 91.48);     /* #FBF9F3 */
+  --surface-container-lowest: oklch(100% 0 0);      /* #FFFFFF */
+  --surface-container-low: oklch(96.40% 0.0082 91.48); /* #F5F3ED */
+  --surface-container: oklch(94.90% 0.0083 91.48);  /* #F0EEE8 */
+  --surface-container-high: oklch(93.09% 0.0083 91.49); /* #EAE8E2 */
+  --surface-container-highest: oklch(91.29% 0.0071 88.65); /* #E4E2DD */
+  --on-surface: oklch(20.77% 0.0145 172.36);        /* #111A17 Primary Ink */
+  --on-surface-variant: oklch(47.40% 0.0350 128.42);/* #56604B Supporting Ink */
+  --inverse-surface: oklch(31.20% 0.0120 100.00);   /* #30312D */
+  --inverse-on-surface: oklch(95.80% 0.0080 91.00); /* #F3F1EB */
+  --outline: oklch(53.50% 0.0350 35.00);            /* #90706A */
+  --outline-variant: oklch(82.50% 0.0300 35.00);    /* #E4BEB7 */
+  --surface-tint: oklch(50.20% 0.1800 28.00);       /* #B91E0E */
+  --primary-m3: oklch(47.20% 0.0380 172.00);        /* #47645A */
+  --on-primary: oklch(100% 0 0);
+  --primary-container: oklch(58.00% 0.1900 30.00);  /* #D93623 */
+  --on-primary-container: oklch(99.00% 0.0050 30.00);
+  --inverse-primary: oklch(81.50% 0.0750 30.00);    /* #FFB4A7 */
+  --secondary-m3: oklch(48.50% 0.1850 28.00);       /* #B51B0B */
+  --on-secondary: oklch(100% 0 0);
+  --secondary-container: oklch(91.00% 0.0350 160.00); /* #C9EADD */
+  --on-secondary-container: oklch(49.00% 0.0350 165.00); /* #4D6A60 */
+  --tertiary: oklch(47.50% 0.0520 130.00);          /* #506140 */
+  --on-tertiary: oklch(100% 0 0);
+  --tertiary-container: oklch(56.00% 0.0500 130.00);/* #687A57 */
+  --on-tertiary-container: oklch(98.00% 0.0200 120.00);
+  --error: oklch(49.50% 0.1900 28.00);              /* #BA1A1A */
+  --on-error: oklch(100% 0 0);
+  --error-container: oklch(90.50% 0.0500 25.00);    /* #FFDAD6 */
+  --on-error-container: oklch(35.00% 0.1500 28.00); /* #93000A */
+  --primary-fixed: oklch(90.50% 0.0500 28.00);
+  --primary-fixed-dim: oklch(81.50% 0.0750 30.00);
+  --on-primary-fixed: oklch(25.00% 0.0900 25.00);
+  --on-primary-fixed-variant: oklch(40.00% 0.1700 28.00);
+  --secondary-fixed: oklch(91.00% 0.0350 160.00);
+  --secondary-fixed-dim: oklch(81.00% 0.0350 165.00);
+  --on-secondary-fixed: oklch(20.00% 0.0400 165.00);
+  --on-secondary-fixed-variant: oklch(38.00% 0.0350 165.00);
+  --tertiary-fixed: oklch(90.00% 0.0550 125.00);
+  --tertiary-fixed-dim: oklch(81.00% 0.0500 125.00);
+  --on-tertiary-fixed: oklch(22.00% 0.0400 125.00);
+  --on-tertiary-fixed-variant: oklch(39.00% 0.0450 125.00);
+  --surface-variant: oklch(91.29% 0.0071 88.65);    /* #E4E2DD */
 
-  /* ── Semantic Canvas Ground & Element Roles ── */
-  --background: #fbf9f3;              /* Modern Calm Tech Canvas (Ivory #F7F5EF / #fbf9f3) */
-  --foreground: #1b1c18;              /* on-surface primary text */
-  --card: #ffffff;                    /* Pure White reading surfaces and cards */
-  --card-foreground: #1b1c18;
-  --popover: #ffffff;
-  --popover-foreground: #1b1c18;
-  --primary: #E8412C;                 /* Tomato Action CTA */
-  --primary-foreground: #FFFFFF;      /* Clean White on Tomato */
-  --secondary: #EEF1EA;               /* Light Sage Wash */
-  --secondary-foreground: #102D25;    /* Evergreen ink */
-  --muted: #f0eee8;                   /* surface-container */
-  --muted-foreground: #5b403b;        /* on-surface-variant */
-  --accent: #DCE3D5;                  /* Soft Sage Panel */
-  --accent-foreground: #102D25;       /* Evergreen text on Soft Panel */
-  --destructive: #ba1a1a;             /* Fatal/Error Red Ink */
-  --destructive-foreground: #FFFFFF;
-  --border: #e4e2dd;                  /* Subtle warm hairline */
-  --input: #ffffff;                   /* Neutral solid field */
-  --input-border: #90706a;            /* Explicit input outline */
-  --ring: #47645a;                    /* Primary focus ring */
+  /* ── Visual Brand Anchors & Component Tokens (OKLCH) ── */
+  --action: oklch(27.20% 0.0383 172.83);            /* Primary Action: Evergreen */
+  --on-action: oklch(100% 0 0);                     /* Clean White */
+  --accent-cta: oklch(61.96% 0.2068 30.72);         /* Attention-Grabbing Tomato Red */
+  --on-accent-cta: oklch(100% 0 0);                 /* White */
+  --brand: oklch(27.20% 0.0383 172.83);             /* Evergreen Brand */
+  --on-brand: oklch(100% 0 0);
+  --sage-soft: oklch(90.66% 0.0202 128.71);         /* Soft Sage #DCE3D5 */
+  --sage-wash: oklch(95.39% 0.0098 125.68);         /* Sage 200 #EEF1EA */
 
-  --success: #237644;                 /* Success green */
-  --warning: #765723;                 /* Warning amber/ochre */
-  --info: #235B76;                    /* Ephemeris window / Focus */
+  /* ── Semantic Canvas Ground & Element Roles (OKLCH) ── */
+  --background: oklch(97.00% 0.0082 91.48);         /* Ivory Canvas #F7F5EF (~60%) */
+  --foreground: oklch(20.77% 0.0145 172.36);         /* Primary Text Ink #111A17 */
+  --card: oklch(100% 0 0);                          /* Pure White #FFFFFF tactile cards */
+  --card-foreground: oklch(20.77% 0.0145 172.36);   /* Primary Text Ink */
+  --popover: oklch(100% 0 0);                       /* Pure White */
+  --popover-foreground: oklch(20.77% 0.0145 172.36);
 
-  --sidebar: #f5f3ed;                 /* surface-container-low */
-  --sidebar-foreground: #1b1c18;
-  --sidebar-primary: #E8412C;         /* Tomato active mark */
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #c9eadd;          /* secondary-container active pill */
-  --sidebar-accent-foreground: #022019;
-  --sidebar-border: #e4e2dd;
-  --sidebar-ring: #47645a;
+  /* PRIMARY BUTTON COLOR IS EVERGREEN (not tomato red) */
+  --primary: oklch(27.20% 0.0383 172.83);           /* Evergreen #102D25 */
+  --primary-foreground: oklch(100% 0 0);             /* Pure White #FFFFFF */
+
+  --secondary: oklch(95.39% 0.0098 125.68);         /* Light Sage Wash #EEF1EA */
+  --secondary-foreground: oklch(27.20% 0.0383 172.83); /* Evergreen text */
+  --muted: oklch(94.90% 0.0083 91.48);             /* Surface container #F0EEE8 */
+  --muted-foreground: oklch(47.40% 0.0350 128.42);  /* Supporting Ink #56604B */
+  --accent: oklch(90.66% 0.0202 128.71);            /* Soft Sage Panel #DCE3D5 */
+  --accent-foreground: oklch(27.20% 0.0383 172.83); /* Evergreen text on Soft Panel */
+  --destructive: oklch(39.04% 0.1157 12.21);        /* Fatal/Error Red #762334 */
+  --destructive-foreground: oklch(100% 0 0);
+  --border: oklch(91.29% 0.0071 88.65);             /* Subtle hairline #E4E2DD */
+  --input: oklch(100% 0 0);                         /* Solid white input surface */
+  --input-border: oklch(53.50% 0.0350 35.00);       /* Explicit outline #90706A */
+  --ring: oklch(27.20% 0.0383 172.83);              /* Evergreen Focus Ring */
+
+  --success: oklch(50.33% 0.1119 152.89);           /* #237644 */
+  --warning: oklch(47.86% 0.0796 77.61);            /* #765723 */
+  --info: oklch(44.67% 0.0728 232.70);              /* #235B76 */
+
+  --sidebar: oklch(96.40% 0.0082 91.48);            /* Surface container low #F5F3ED */
+  --sidebar-foreground: oklch(20.77% 0.0145 172.36);
+  --sidebar-primary: oklch(61.96% 0.2068 30.72);    /* Attention-grabbing active pip: Tomato */
+  --sidebar-primary-foreground: oklch(100% 0 0);
+  --sidebar-accent: oklch(90.66% 0.0202 128.71);    /* Soft sage active pill */
+  --sidebar-accent-foreground: oklch(27.20% 0.0383 172.83);
+  --sidebar-border: oklch(91.29% 0.0071 88.65);
+  --sidebar-ring: oklch(27.20% 0.0383 172.83);
 
   /* ── Restrained Depth Shadows ── */
-  --shadow-card: 0 1px 3px 0 rgba(27, 28, 24, 0.04), 0 6px 16px -2px rgba(27, 28, 24, 0.06);
-  --shadow-floating: 0 1px 3px 0 rgba(27, 28, 24, 0.05), 0 12px 32px -4px rgba(27, 28, 24, 0.08), 0 24px 64px -12px rgba(27, 28, 24, 0.1);
+  --shadow-card: 0 1px 3px 0 rgba(17, 26, 23, 0.04), 0 6px 16px -2px rgba(17, 26, 23, 0.06);
+  --shadow-floating: 0 1px 3px 0 rgba(17, 26, 23, 0.05), 0 12px 32px -4px rgba(17, 26, 23, 0.08), 0 24px 64px -12px rgba(17, 26, 23, 0.1);
   --shadow-float: var(--shadow-floating);
 }
 
 .dark {
-  /* ── Dark: Forest Night Reference Strip ── */
-  --surface: #0D1915;
-  --surface-dim: #09120F;
-  --surface-bright: #15271F;
-  --surface-container-lowest: #0D1915;
-  --surface-container-low: #15271F;
-  --surface-container: #1C3329;
-  --surface-container-high: #20382D;
-  --surface-container-highest: #264236;
-  --on-surface: #f3f1eb;
-  --on-surface-variant: #aecdc1;
-  --inverse-surface: #f3f1eb;
-  --inverse-on-surface: #1b1c18;
-  --outline: #727975;
-  --outline-variant: rgba(255, 255, 255, 0.12);
-  --surface-tint: #ffb4a7;
+  /* ── Dark: Forest Night Color Family (from Canvas Pair #0D1915 / #15271F) ── */
+  --surface: oklch(20.05% 0.0190 171.40);           /* #0D1915 Midnight forest floor */
+  --surface-dim: oklch(16.50% 0.0150 171.40);       /* #09120F Deep floor */
+  --surface-bright: oklch(25.41% 0.0285 164.47);    /* #15271F Raised card */
+  --surface-container-lowest: oklch(16.50% 0.0150 171.40);
+  --surface-container-low: oklch(19.20% 0.0130 168.00); /* #0F1714 Dusty evergreen */
+  --surface-container: oklch(25.41% 0.0285 164.47); /* #15271F Raised card surface */
+  --surface-container-high: oklch(29.84% 0.0346 164.81); /* #1C3329 */
+  --surface-container-highest: oklch(35.12% 0.0354 175.89); /* #26413A */
+  --on-surface: oklch(97.00% 0.0082 91.48);         /* #F7F5EF Ivory anchor text */
+  --on-surface-variant: oklch(66.72% 0.0171 176.80);/* #8A9894 Evergreen 600 */
+  --inverse-surface: oklch(97.00% 0.0082 91.48);
+  --inverse-on-surface: oklch(20.77% 0.0145 172.36);
+  --outline: oklch(55.20% 0.0210 176.00);           /* #6A7D78 */
+  --outline-variant: oklch(35.12% 0.0354 175.89 / 0.6); /* Subtle Evergreen 900 border */
+  --surface-tint: oklch(71.20% 0.1400 25.00);
 
-  --primary-m3: #aecdc1;
-  --on-primary: #022019;
-  --primary-container: #20382D;
-  --on-primary-container: #ffdad4;
-  --inverse-primary: #47645a;
-  --secondary-m3: #ffb4a7;
-  --on-secondary: #680003;
-  --secondary-container: #20382D;
-  --on-secondary-container: #c9eadd;
-  --tertiary: #b9cda4;
-  --on-tertiary: #111f05;
-  --tertiary-container: #3b4c2c;
-  --on-tertiary-container: #d5e9bf;
-  --error: #ffb4ab;
-  --on-error: #690005;
-  --error-container: #93000a;
-  --on-error-container: #ffdad6;
+  --primary-m3: oklch(81.00% 0.0350 165.00);
+  --on-primary: oklch(20.00% 0.0400 165.00);
+  --primary-container: oklch(29.84% 0.0346 164.81);
+  --on-primary-container: oklch(90.50% 0.0500 28.00);
+  --inverse-primary: oklch(47.20% 0.0380 172.00);
+  --secondary-m3: oklch(71.20% 0.1400 25.00);
+  --on-secondary: oklch(25.00% 0.0900 25.00);
+  --secondary-container: oklch(25.41% 0.0285 164.47);
+  --on-secondary-container: oklch(91.00% 0.0350 160.00);
+  --tertiary: oklch(81.00% 0.0500 125.00);
+  --on-tertiary: oklch(22.00% 0.0400 125.00);
+  --tertiary-container: oklch(35.12% 0.0354 175.89);
+  --on-tertiary-container: oklch(90.00% 0.0550 125.00);
+  --error: oklch(71.20% 0.1400 25.00);
+  --on-error: oklch(25.00% 0.0900 25.00);
+  --error-container: oklch(35.00% 0.1500 28.00);
+  --on-error-container: oklch(90.50% 0.0500 25.00);
 
   /* Brand Anchors & Component Tokens Dark Mode */
-  --action: #9CAF88;                  /* Remapped action in dark mode: Sage */
-  --on-action: #102D25;
-  --brand: #c9eadd;
-  --on-brand: #022019;
-  --sage-soft: #20382D;
-  --sage-wash: #15271F;
+  --action: oklch(97.00% 0.0082 91.48);             /* High-contrast Ivory / Light Evergreen */
+  --on-action: oklch(20.77% 0.0145 172.36);         /* Deep ink text #111A17 */
+  --accent-cta: oklch(61.96% 0.2068 30.72);         /* Attention-Grabbing Tomato Red */
+  --on-accent-cta: oklch(100% 0 0);                 /* White */
+  --brand: oklch(97.00% 0.0082 91.48);
+  --on-brand: oklch(20.77% 0.0145 172.36);
+  --sage-soft: oklch(25.41% 0.0285 164.47);
+  --sage-wash: oklch(20.05% 0.0190 171.40);
 
-  --background: #0D1915;              /* Base midnight forest floor */
-  --foreground: #f3f1eb;              /* Clean ivory text on dark */
-  --card: #20382D;                    /* Raised surface: cards & route modules */
-  --card-foreground: #f3f1eb;
-  --popover: #15271F;                 /* Subsurface card */
-  --popover-foreground: #f3f1eb;
-  --primary: #9CAF88;                 /* Remapped Primary CTA: Sage #9CAF88 */
-  --primary-foreground: #102D25;      /* With deep ink text #102D25 */
-  --secondary: #15271F;
-  --secondary-foreground: #aecdc1;
-  --muted: #15271F;
-  --muted-foreground: #aecdc1;        /* Muted telemetry */
-  --accent: #20382D;
-  --accent-foreground: #f3f1eb;
-  --destructive: #ffb4a7;             /* Night error accent */
-  --destructive-foreground: #762334;
-  --border: rgba(255, 255, 255, 0.10);/* Subtle hairline */
-  --input: #15271F;
-  --input-border: rgba(255, 255, 255, 0.15);
-  --ring: #9CAF88;
+  /* Deep Canvas Ground & True Dark Card Elevation (from Canvas Pair) */
+  --background: oklch(20.05% 0.0190 171.40);        /* #0D1915 Midnight forest floor */
+  --foreground: oklch(97.00% 0.0082 91.48);         /* #F7F5EF Ivory anchor text */
+  --card: oklch(25.41% 0.0285 164.47);              /* #15271F True Dark Card Surface */
+  --card-foreground: oklch(97.00% 0.0082 91.48);    /* #F7F5EF Ivory anchor text */
+  --popover: oklch(23.50% 0.0257 164.93);           /* #12221B Elevated subsurface */
+  --popover-foreground: oklch(97.00% 0.0082 91.48);
 
-  --success: #5BD08F;
-  --warning: #F2B24C;
-  --info: #81C4FF;
+  /* PRIMARY BUTTON COLOR IN DARK MODE */
+  --primary: oklch(97.00% 0.0082 91.48);            /* #F7F5EF Crisp Ivory primary button */
+  --primary-foreground: oklch(20.77% 0.0145 172.36);/* Deep ink text */
 
-  --sidebar: #0D1915;
-  --sidebar-foreground: #f3f1eb;
-  --sidebar-primary: #9CAF88;
-  --sidebar-primary-foreground: #102D25;
-  --sidebar-accent: #15271F;
-  --sidebar-accent-foreground: #f3f1eb;
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #9CAF88;
+  --secondary: oklch(29.84% 0.0346 164.81);         /* #1C3329 */
+  --secondary-foreground: oklch(97.00% 0.0082 91.48);
+  --muted: oklch(23.50% 0.0257 164.93);             /* #12221B */
+  --muted-foreground: oklch(66.72% 0.0171 176.80);  /* #8A9894 Evergreen 600 */
+  --accent: oklch(29.84% 0.0346 164.81);            /* #1C3329 */
+  --accent-foreground: oklch(97.00% 0.0082 91.48);
+  --destructive: oklch(71.20% 0.1400 25.00);        /* #FFB4A7 */
+  --destructive-foreground: oklch(25.00% 0.0900 25.00);
+  --border: oklch(35.12% 0.0354 175.89 / 0.7);      /* #26413A Hairline border */
+  --input: oklch(20.05% 0.0190 171.40);             /* Deep solid input floor */
+  --input-border: oklch(35.12% 0.0354 175.89);      /* #26413A */
+  --ring: oklch(72.88% 0.0585 128.92);              /* Sage ring #9CAF88 */
 
-  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.35), 0 6px 16px -2px rgba(0, 0, 0, 0.45);
-  --shadow-floating: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+  --success: oklch(70.20% 0.1450 152.00);           /* #5BD08F */
+  --warning: oklch(76.50% 0.1250 78.00);            /* #F2B24C */
+  --info: oklch(78.50% 0.0950 230.00);              /* #81C4FF */
+
+  --sidebar: oklch(19.20% 0.0130 168.00);           /* #0F1714 Dusty evergreen */
+  --sidebar-foreground: oklch(97.00% 0.0082 91.48);
+  --sidebar-primary: oklch(61.96% 0.2068 30.72);    /* Attention pip: Tomato */
+  --sidebar-primary-foreground: oklch(100% 0 0);
+  --sidebar-accent: oklch(25.41% 0.0285 164.47);    /* #15271F Active pill */
+  --sidebar-accent-foreground: oklch(97.00% 0.0082 91.48);
+  --sidebar-border: oklch(35.12% 0.0354 175.89 / 0.5);
+  --sidebar-ring: oklch(72.88% 0.0585 128.92);
+
+  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.45), 0 6px 16px -2px rgba(0, 0, 0, 0.55);
+  --shadow-floating: 0 1px 3px 0 rgba(0, 0, 0, 0.5), 0 12px 32px -4px rgba(0, 0, 0, 0.65), 0 24px 64px -12px rgba(0, 0, 0, 0.75);
   --shadow-float: var(--shadow-floating);
 }
 
