@@ -77,7 +77,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const idx = navItems.findIndex((item) =>
       item.end ? path === item.to.toLowerCase() : path.startsWith(item.to.toLowerCase())
     );
-    return idx >= 0 ? idx : 0;
+    return idx;
   }, [location.pathname]);
 
   const menuRef = React.useRef<HTMLUListElement>(null);
@@ -89,6 +89,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   });
 
   const updateIndicator = React.useCallback(() => {
+    if (activeIndex < 0) {
+      setIndicatorStyle((prev) => (prev.ready ? { ...prev, ready: false } : prev));
+      return;
+    }
     const menuEl = menuRef.current;
     const targetEl = itemRefs.current[activeIndex];
     if (menuEl && targetEl) {
@@ -142,7 +146,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               style={{
                 transform: `translateY(${indicatorStyle.top}px) translateZ(0)`,
                 height: `${indicatorStyle.height}px`,
-                opacity: indicatorStyle.ready ? 1 : 0,
+                opacity: indicatorStyle.ready && activeIndex >= 0 ? 1 : 0,
               }}
             >
               {/* Vertical brand mark pill */}

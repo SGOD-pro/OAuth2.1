@@ -175,6 +175,12 @@ export const AdminLogs: React.FC = () => {
     };
   }, [loadData]);
 
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [totalPages, page]);
+
   const actionTypes = useMemo(() => {
     const dynamicActions = logs.map((l) => l.action).filter(Boolean);
     return Array.from(new Set([...COMMON_ACTIONS, ...dynamicActions]));
