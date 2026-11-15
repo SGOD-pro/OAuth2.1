@@ -30,11 +30,12 @@ const { authProvider } = await import("../../src/utils/auth");
 
 const db = await getDb();
 
-// Seed IdP signing key in DB
+// Seed IdP signing key in DB using production jwks schema
 const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
 const jwkPublic = await exportJWK(publicKey);
 const jwkPrivate = await exportJWK(privateKey);
-const kid = "idp-expiry-test-key";
+const keyObjectId = new ObjectId();
+const kid = keyObjectId.toString();
 jwkPublic.kid = kid;
 jwkPublic.alg = "RS256";
 jwkPublic.use = "sig";
@@ -42,10 +43,19 @@ jwkPrivate.kid = kid;
 jwkPrivate.alg = "RS256";
 jwkPrivate.use = "sig";
 
-await db.collection("keys").insertOne({
-  id: "jwks-keys",
-  keys: [jwkPublic],
-  privateKey: jwkPrivate,
+const { symmetricEncrypt } = await import("better-auth/crypto");
+const enc = await symmetricEncrypt({
+  key: process.env.BETTER_AUTH_SECRET!,
+  data: JSON.stringify(jwkPrivate),
+});
+
+await db.collection("jwks").insertOne({
+  _id: keyObjectId,
+  id: kid,
+  kid,
+  alg: "RS256",
+  publicKey: JSON.stringify(jwkPublic),
+  privateKey: JSON.stringify(enc),
   createdAt: new Date(),
 });
 
@@ -136,26 +146,71 @@ await runTest("EXP-1: Expired IdP session is rejected even when uncleaned MongoD
 // TEST 2: Access Token Expiry (RS256 JWT exp claim)
 // --------------------------------------------------------------------------
 await runTest("EXP-2: Expired RS256 access token is strictly rejected (exp claim enforced offline)", async () => {
-  const email = `jwt_user_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const clientId = `test_client_${crypto.randomBytes(4).toString("hex")}`;
+  await db.collection("oauthClient").insertOne({
+    clientId,
+    clientSecret: "secret123",
+    name: "Test OAuth Client",
+    redirectUris: ["https://example.com/callback"],
+    disabled: false,
+    createdAt: new Date(),
+  });
 
-  // Mint a token that already expired 10 seconds ago
-  const expiredJwt = await new SignJWT({
-    sub: "user_expired_123",
-    email,
-    aud: "test_client_app",
+  const userEmail = `jwt_user_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const userId = new ObjectId().toString();
+  await db.collection("user").insertOne({
+    _id: new ObjectId(userId),
+    id: userId,
+    email: userEmail,
+    name: "Valid User",
+    role: "user",
+    emailVerified: true,
+    createdAt: new Date(),
+  });
+
+  // 1. Prove an otherwise valid token succeeds at the real protected endpoint
+  const validJwt = await new SignJWT({
+    sub: userId,
+    email: userEmail,
+    client_id: clientId,
+    aud: clientId,
+    scope: "openid profile email",
   })
     .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer("http://localhost:3000")
-    .setIssuedAt(Math.floor(Date.now() / 1000) - 100)
-    .setExpirationTime(Math.floor(Date.now() / 1000) - 10)
+    .setIssuedAt()
+    .setExpirationTime("1h")
     .sign(privateKey);
 
-  // Protected route call with expired token must be rejected
-  const res = await app.request("/api/auth/oauth2/userinfo", {
+  const validRes = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${validJwt}` }),
+  });
+  assert.equal(validRes.status, 200, "Valid token must succeed at protected endpoint");
+  const validData = await validRes.json();
+  assert.equal(validData.sub, userId, "Valid token must return matching subject");
+
+  // 2. Change only expiry, then assert rejection
+  const expiredJwt = await new SignJWT({
+    sub: userId,
+    email: userEmail,
+    client_id: clientId,
+    aud: clientId,
+    scope: "openid profile email",
+  })
+    .setProtectedHeader({ alg: "RS256", kid })
+    .setIssuer("http://localhost:3000")
+    .setIssuedAt(Math.floor(Date.now() / 1000) - 3600)
+    .setExpirationTime(Math.floor(Date.now() / 1000) - 60)
+    .sign(privateKey);
+
+  const expiredRes = await app.request("/api/auth/oauth2/userinfo", {
     method: "GET",
     headers: getTestHeaders({ Authorization: `Bearer ${expiredJwt}` }),
   });
-  assert.equal(res.status, 401, "Expired JWT must return 401 Unauthorized");
+  assert.equal(expiredRes.status, 401, "Expired JWT must return 401 Unauthorized");
+  const expiredBody = await expiredRes.json();
+  assert.equal(expiredBody.error, "invalid_token", "Rejection must specifically be invalid_token due to expiry");
 });
 
 // --------------------------------------------------------------------------
@@ -211,20 +266,28 @@ await runTest("EXP-4: Conflicting Cookie and Bearer identities fail closed (iden
   const userA = await authProvider.api.signUpEmail({ body: { email: userAEmail, password, name: "User A" } });
   const userB = await authProvider.api.signUpEmail({ body: { email: userBEmail, password, name: "User B" } });
 
-  // Log in as User A to get Cookie
+  const userAId = String((userA as any).user.id);
+  const userBId = String((userB as any).user.id);
+
+  // Grant super-admin role to both users in the database
+  await db.collection("user").updateOne({ email: userAEmail }, { $set: { role: "super-admin" } });
+  await db.collection("user").updateOne({ email: userBEmail }, { $set: { role: "super-admin" } });
+
+  // Log in as User A to get Session Cookie A
   const loginRes = await app.request("/api/auth/sign-in/email", {
     method: "POST",
     headers: getTestHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ email: userAEmail, password }),
   });
   const cookieUserA = loginRes.headers.get("set-cookie") || "";
+  assert.ok(cookieUserA.includes("better-auth.session_token="), "Must acquire User A session cookie");
 
-  // Mint Bearer token for User B
+  // Mint valid Bearer token for User B with correct platform audience and super-admin role
   const tokenUserB = await new SignJWT({
-    sub: String((userB as any).user.id),
+    sub: userBId,
     email: userBEmail,
-    role: "super_admin",
-    aud: "admin_console",
+    role: "super-admin",
+    aud: "http://localhost:3000",
   })
     .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer("http://localhost:3000")
@@ -232,17 +295,55 @@ await runTest("EXP-4: Conflicting Cookie and Bearer identities fail closed (iden
     .setExpirationTime("1h")
     .sign(privateKey);
 
-  // Present BOTH User A cookie and User B token to protected admin route
-  const res = await app.request("/api/admin/system/overview", {
+  // Mint valid Bearer token for User A with matching identity
+  const tokenUserA = await new SignJWT({
+    sub: userAId,
+    email: userAEmail,
+    role: "super-admin",
+    aud: "http://localhost:3000",
+  })
+    .setProtectedHeader({ alg: "RS256", kid })
+    .setIssuer("http://localhost:3000")
+    .setIssuedAt()
+    .setExpirationTime("1h")
+    .sign(privateKey);
+
+  // 1. Prove Cookie A succeeds alone
+  const resCookieOnly = await app.request("/api/admin/stats", {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: cookieUserA }),
+  });
+  assert.equal(resCookieOnly.status, 200, "Cookie A alone must succeed at protected admin route");
+
+  // 2. Prove Bearer B succeeds alone
+  const resBearerOnly = await app.request("/api/admin/stats", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${tokenUserB}` }),
+  });
+  assert.equal(resBearerOnly.status, 200, "Bearer B alone must succeed at protected admin route");
+
+  // 3. Combine Cookie A and Bearer B (conflicting identities) -> must fail closed
+  const resConflict = await app.request("/api/admin/stats", {
     method: "GET",
     headers: getTestHeaders({
       Cookie: cookieUserA,
       Authorization: `Bearer ${tokenUserB}`,
     }),
   });
+  assert.ok(
+    resConflict.status === 401 || resConflict.status === 403,
+    "Conflicting cookie and bearer identities must fail closed"
+  );
 
-  // Must fail closed due to conflicting identities
-  assert.ok(res.status === 401 || res.status === 403, "Conflicting cookie and bearer identities must fail closed");
+  // 4. Combine Cookie A and Bearer A (matching credentials) -> must succeed following policy
+  const resMatching = await app.request("/api/admin/stats", {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: cookieUserA,
+      Authorization: `Bearer ${tokenUserA}`,
+    }),
+  });
+  assert.equal(resMatching.status, 200, "Matching cookie and bearer identities must succeed");
 });
 
 // --------------------------------------------------------------------------

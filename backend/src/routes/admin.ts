@@ -355,7 +355,8 @@ async function getAggregatedLogs(
   limit: number;
   totalPages: number;
 }> {
-  const { page, limit, outcome, action, clientId, from, to, search } = params;
+  const { page, limit, outcome: rawOutcome, action, clientId, from, to, search } = params;
+  const outcome = rawOutcome === "failed" ? "failure" : rawOutcome;
 
   // Build filters for auth_events
   const authFilter: any = {};
