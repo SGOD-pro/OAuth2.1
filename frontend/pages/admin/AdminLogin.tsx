@@ -212,7 +212,7 @@ export const AdminLogin: React.FC = () => {
                 <Button
                   type="button"
                   onClick={handleSignOut}
-                  className="w-full h-11 font-medium rounded-pill"
+                  className="w-full h-11 font-semibold rounded-[10px]"
                   disabled={loading}
                 >
                   {loading ? 'Switching account...' : 'Sign in with a different account'}
@@ -289,7 +289,7 @@ export const AdminLogin: React.FC = () => {
                     )}
                   />
 
-                  <Button type="submit" className="w-full h-11 font-medium rounded-pill mt-2" disabled={loading}>
+                  <Button type="submit" className="w-full h-11 font-semibold rounded-[10px] mt-2" disabled={loading}>
                     {loading ? 'Signing in...' : 'Sign in to console'}
                   </Button>
                 </form>

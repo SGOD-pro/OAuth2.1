@@ -7,43 +7,57 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Plus Jakarta Sans", "Inter", "Geist Variable", system-ui, sans-serif;
-  --font-heading: "Plus Jakarta Sans", "Geist Variable", system-ui, sans-serif;
-  --font-mono: "Space Mono", "Geist Mono Variable", ui-monospace, monospace;
+  --font-sans: "Instrument Sans", "General Sans", "Plus Jakarta Sans", "Inter", "Geist Variable", system-ui, sans-serif;
+  --font-heading: "General Sans", "Instrument Sans", "Plus Jakarta Sans", "Geist Variable", system-ui, sans-serif;
+  --font-marketing: "General Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Space Mono", "Geist Mono Variable", ui-monospace, monospace;
 
-  /* Typographic Hierarchy matching Design Spec */
-  --font-headline-xl: "Plus Jakarta Sans", sans-serif;
-  --font-headline-lg: "Plus Jakarta Sans", sans-serif;
-  --font-headline-md: "Plus Jakarta Sans", sans-serif;
-  --font-headline-sm: "Plus Jakarta Sans", sans-serif;
-  --font-title-md: "Inter", sans-serif;
-  --font-body-lg: "Inter", sans-serif;
-  --font-body-md: "Inter", sans-serif;
-  --font-body-sm: "Inter", sans-serif;
-  --font-label-caps: "Inter", sans-serif;
-  --font-telemetry-md: "Space Mono", monospace;
-  --font-telemetry-sm: "Space Mono", monospace;
+  /* Typographic Hierarchy matching SWENA Modern Calm Tech Spec */
+  --font-marketing-hero: "General Sans", sans-serif;
+  --font-marketing-heading: "General Sans", sans-serif;
+  --font-app-page-heading: "Instrument Sans", sans-serif;
+  --font-app-section-heading: "Instrument Sans", sans-serif;
+  --font-app-card-heading: "Instrument Sans", sans-serif;
+  --font-body: "Instrument Sans", sans-serif;
+  --font-body-marketing: "General Sans", sans-serif;
+  --font-label: "Instrument Sans", sans-serif;
+  --font-metadata: "Instrument Sans", sans-serif;
+  --font-technical-mono: "IBM Plex Mono", monospace;
 
-  /* Cockpit & Geometric Radius Scale (10px / 16px geometry) */
-  --radius-xs: 4px;
-  --radius-sm: 8px;
+  /* Legacy aliases for backwards compatibility */
+  --font-headline-xl: "General Sans", "Plus Jakarta Sans", sans-serif;
+  --font-headline-lg: "General Sans", "Plus Jakarta Sans", sans-serif;
+  --font-headline-md: "General Sans", "Plus Jakarta Sans", sans-serif;
+  --font-headline-sm: "General Sans", "Plus Jakarta Sans", sans-serif;
+  --font-title-md: "Instrument Sans", "Inter", sans-serif;
+  --font-body-lg: "Instrument Sans", "Inter", sans-serif;
+  --font-body-md: "Instrument Sans", "Inter", sans-serif;
+  --font-body-sm: "Instrument Sans", "Inter", sans-serif;
+  --font-label-caps: "Instrument Sans", "Inter", sans-serif;
+  --font-telemetry-md: "IBM Plex Mono", "Space Mono", monospace;
+  --font-telemetry-sm: "IBM Plex Mono", "Space Mono", monospace;
+
+  /* Cockpit & Geometric Radius Scale */
+  --radius-sm: 0.25rem;
+  --radius-DEFAULT: 0.5rem;
   --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
   --radius-2xl: 24px;
   --radius-pill: 9999px;
+  --radius-full: 9999px;
 
-  /* Spacing Scale matching Design Token Spec */
+  /* Spacing Scale matching SWENA Spec */
+  --spacing-gutter: 1.5rem;
+  --spacing-margin: 2.5rem;
   --spacing-space-xs: 0.25rem;
   --spacing-space-sm: 0.5rem;
-  --spacing-space-md: 1rem;
-  --spacing-space-lg: 1.5rem;
-  --spacing-space-xl: 2.5rem;
-  --spacing-gutter: 1.5rem;
-  --spacing-gutter-mobile: 1rem;
-  --spacing-margin: 3rem;
-  --spacing-margin-tablet: 2rem;
-  --spacing-margin-mobile: 1rem;
+  --spacing-space-md: 0.75rem;
+  --spacing-space-lg: 1rem;
+  --spacing-space-xl: 1.5rem;
+  --spacing-space-2xl: 2rem;
+  --spacing-space-3xl: 3rem;
+  --spacing-space-4xl: 6rem;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -78,10 +92,13 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* BMW M-Series Motorsport Tokens */
-  --color-motorsport-light: #0066B1;
-  --color-motorsport-dark: #1C69D4;
-  --color-motorsport-red: #E22718;
+  /* Semantic Action and Brand aliases */
+  --color-action: var(--action);
+  --color-on-action: var(--on-action);
+  --color-brand: var(--brand);
+  --color-on-brand: var(--on-brand);
+  --color-sage-soft: var(--sage-soft);
+  --color-sage-wash: var(--sage-wash);
 
   /* 5 Fixed Brand Anchors */
   --color-ivory: #F7F5EF;
@@ -97,26 +114,48 @@
   --color-sage-panel: #DCE3D5;
   --color-sage-dark: #313B30;
 
-  /* Semantic Material Tokens */
-  --color-surface: var(--background);
-  --color-on-surface: var(--foreground);
-  --color-on-surface-variant: var(--muted-foreground);
-  --color-surface-container-lowest: var(--card);
+  /* SWENA Modern Calm Tech Semantic Tokens */
+  --color-surface: var(--surface);
+  --color-surface-dim: var(--surface-dim);
+  --color-surface-bright: var(--surface-bright);
+  --color-surface-container-lowest: var(--surface-container-lowest);
   --color-surface-container-low: var(--surface-container-low);
   --color-surface-container: var(--surface-container);
   --color-surface-container-high: var(--surface-container-high);
   --color-surface-container-highest: var(--surface-container-highest);
-  --color-surface-variant: var(--surface-variant);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-inverse-surface: var(--inverse-surface);
+  --color-inverse-on-surface: var(--inverse-on-surface);
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+  --color-surface-tint: var(--surface-tint);
+  --color-primary-container: var(--primary-container);
+  --color-on-primary-container: var(--on-primary-container);
+  --color-inverse-primary: var(--inverse-primary);
   --color-secondary-container: var(--secondary-container);
   --color-on-secondary-container: var(--on-secondary-container);
-  --color-secondary-fixed: #D5E9BF;
-  --color-secondary-fixed-dim: #B9CDA4;
-  --color-on-secondary-fixed: #111F05;
-  --color-on-secondary-fixed-variant: #3B4C2C;
-  --color-outline: #727975;
-  --color-outline-variant: #C1C8C4;
+  --color-tertiary: var(--tertiary);
+  --color-on-tertiary: var(--on-tertiary);
+  --color-tertiary-container: var(--tertiary-container);
+  --color-on-tertiary-container: var(--on-tertiary-container);
+  --color-error: var(--error);
+  --color-on-error: var(--on-error);
   --color-error-container: var(--error-container);
   --color-on-error-container: var(--on-error-container);
+  --color-primary-fixed: var(--primary-fixed);
+  --color-primary-fixed-dim: var(--primary-fixed-dim);
+  --color-on-primary-fixed: var(--on-primary-fixed);
+  --color-on-primary-fixed-variant: var(--on-primary-fixed-variant);
+  --color-secondary-fixed: var(--secondary-fixed);
+  --color-secondary-fixed-dim: var(--secondary-fixed-dim);
+  --color-on-secondary-fixed: var(--on-secondary-fixed);
+  --color-on-secondary-fixed-variant: var(--on-secondary-fixed-variant);
+  --color-tertiary-fixed: var(--tertiary-fixed);
+  --color-tertiary-fixed-dim: var(--tertiary-fixed-dim);
+  --color-on-tertiary-fixed: var(--on-tertiary-fixed);
+  --color-on-tertiary-fixed-variant: var(--on-tertiary-fixed-variant);
+  --color-surface-variant: var(--surface-variant);
 }
 
 :root {
@@ -135,101 +174,183 @@
   --motion-slow: 320ms;
   --motion-emphasis: 450ms;
 
-  /* ── Light: Warm Ivory Canvas Ground, Tomato Action Accent & Sage Framing ── */
-  --background: #F7F5EF;              /* Ivory Canvas Ground (~60%) */
-  --foreground: #111A17;              /* Primary Text Ink */
-  --card: #FFFFFF;                    /* Pure White: tactile forms, dense tabular grids, inputs */
-  --card-foreground: #111A17;
-  --popover: #FFFFFF;
-  --popover-foreground: #111A17;
-  --primary: #E8412C;                 /* Tomato Action Accent CTA */
-  --primary-foreground: #FFFFFF;      /* Clean White on Tomato (4.8:1+ contrast) */
+  /* ── SWENA Modern Calm Tech Palette Tokens ── */
+  --surface: #fbf9f3;
+  --surface-dim: #dcdad4;
+  --surface-bright: #fbf9f3;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #f5f3ed;
+  --surface-container: #f0eee8;
+  --surface-container-high: #eae8e2;
+  --surface-container-highest: #e4e2dd;
+  --on-surface: #1b1c18;
+  --on-surface-variant: #5b403b;
+  --inverse-surface: #30312d;
+  --inverse-on-surface: #f3f1eb;
+  --outline: #90706a;
+  --outline-variant: #e4beb7;
+  --surface-tint: #b91e0e;
+  --primary-m3: #47645a;
+  --on-primary: #ffffff;
+  --primary-container: #d93623;
+  --on-primary-container: #fffbff;
+  --inverse-primary: #ffb4a7;
+  --secondary-m3: #b51b0b;
+  --on-secondary: #ffffff;
+  --secondary-container: #c9eadd;
+  --on-secondary-container: #4d6a60;
+  --tertiary: #506140;
+  --on-tertiary: #ffffff;
+  --tertiary-container: #687a57;
+  --on-tertiary-container: #f9ffec;
+  --error: #ba1a1a;
+  --on-error: #ffffff;
+  --error-container: #ffdad6;
+  --on-error-container: #93000a;
+  --primary-fixed: #ffdad4;
+  --primary-fixed-dim: #ffb4a7;
+  --on-primary-fixed: #400100;
+  --on-primary-fixed-variant: #920700;
+  --secondary-fixed: #c9eadd;
+  --secondary-fixed-dim: #aecdc1;
+  --on-secondary-fixed: #022019;
+  --on-secondary-fixed-variant: #304c43;
+  --tertiary-fixed: #d5e9bf;
+  --tertiary-fixed-dim: #b9cda4;
+  --on-tertiary-fixed: #111f05;
+  --on-tertiary-fixed-variant: #3b4c2c;
+  --surface-variant: #e4e2dd;
+
+  /* ── Visual Brand Anchors & Component Tokens ── */
+  --action: #E8412C;                  /* Tomato exclusive primary action */
+  --on-action: #001811;               /* Dark high-contrast text or white */
+  --brand: #102D25;                   /* Evergreen identity and secondary brand structure */
+  --on-brand: #FFFFFF;
+  --sage-soft: #DCE3D5;               /* Soft sage supporting fill */
+  --sage-wash: #EEF1EA;               /* Sage wash chips / selected */
+
+  /* ── Semantic Canvas Ground & Element Roles ── */
+  --background: #fbf9f3;              /* Modern Calm Tech Canvas (Ivory #F7F5EF / #fbf9f3) */
+  --foreground: #1b1c18;              /* on-surface primary text */
+  --card: #ffffff;                    /* Pure White reading surfaces and cards */
+  --card-foreground: #1b1c18;
+  --popover: #ffffff;
+  --popover-foreground: #1b1c18;
+  --primary: #E8412C;                 /* Tomato Action CTA */
+  --primary-foreground: #FFFFFF;      /* Clean White on Tomato */
   --secondary: #EEF1EA;               /* Light Sage Wash */
   --secondary-foreground: #102D25;    /* Evergreen ink */
-  --muted: #EEF1EA;                   /* Light Sage Wash */
-  --muted-foreground: #56604B;        /* Supporting Text: Labels & Waypoint notes */
+  --muted: #f0eee8;                   /* surface-container */
+  --muted-foreground: #5b403b;        /* on-surface-variant */
   --accent: #DCE3D5;                  /* Soft Sage Panel */
   --accent-foreground: #102D25;       /* Evergreen text on Soft Panel */
-  --destructive: #762334;             /* Fatal/Error Red Ink (Distinct from Tomato action) */
+  --destructive: #ba1a1a;             /* Fatal/Error Red Ink */
   --destructive-foreground: #FFFFFF;
-  --border: #E4E2DD;                  /* Subtle warm hairline */
-  --input: #E4E2DD;
-  --ring: #235B76;                    /* Info / Focus Ring (2px offset) */
+  --border: #e4e2dd;                  /* Subtle warm hairline */
+  --input: #ffffff;                   /* Neutral solid field */
+  --input-border: #90706a;            /* Explicit input outline */
+  --ring: #47645a;                    /* Primary focus ring */
 
   --success: #237644;                 /* Success green */
   --warning: #765723;                 /* Warning amber/ochre */
   --info: #235B76;                    /* Ephemeris window / Focus */
 
-  --surface-container-lowest: #FFFFFF;
-  --surface-container-low: #F5F3ED;
-  --surface-container: #F0EEE8;
-  --surface-container-high: #EAE8E2;
-  --surface-container-highest: #E4E2DD;
-  --surface-variant: #E4E2DD;
-  --secondary-container: #D2E6BC;
-  --on-secondary-container: #576846;
-  --error-container: #FFDAD6;
-  --on-error-container: #93000A;
-
-  --sidebar: #F5F3ED;                 /* Soft Ivory surface */
-  --sidebar-foreground: #111A17;
+  --sidebar: #f5f3ed;                 /* surface-container-low */
+  --sidebar-foreground: #1b1c18;
   --sidebar-primary: #E8412C;         /* Tomato active mark */
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #EEF1EA;          /* Light Wash active pill */
-  --sidebar-accent-foreground: #102D25;
-  --sidebar-border: #E4E2DD;
-  --sidebar-ring: #235B76;
+  --sidebar-accent: #c9eadd;          /* secondary-container active pill */
+  --sidebar-accent-foreground: #022019;
+  --sidebar-border: #e4e2dd;
+  --sidebar-ring: #47645a;
 
-  --shadow-float: 0 1px 3px 0 rgba(16, 45, 37, 0.04), 0 8px 24px -4px rgba(16, 45, 37, 0.06), 0 20px 48px -12px rgba(16, 45, 37, 0.08);
+  /* ── Restrained Depth Shadows ── */
+  --shadow-card: 0 1px 3px 0 rgba(27, 28, 24, 0.04), 0 6px 16px -2px rgba(27, 28, 24, 0.06);
+  --shadow-floating: 0 1px 3px 0 rgba(27, 28, 24, 0.05), 0 12px 32px -4px rgba(27, 28, 24, 0.08), 0 24px 64px -12px rgba(27, 28, 24, 0.1);
+  --shadow-float: var(--shadow-floating);
 }
 
 .dark {
-  /* ── Dark: Forest Night Reference Strip (Dark Mode Pairing) ── */
-  --background: #0D1915;              /* Base midnight forest floor */
-  --foreground: #F3F1EB;              /* Clean ivory text on dark */
-  --card: #20382D;                    /* Raised surface: cards & route modules */
-  --card-foreground: #F3F1EB;
-  --popover: #15271F;                 /* Subsurface card */
-  --popover-foreground: #F3F1EB;
-  --primary: #9CAF88;                 /* Remapped Primary CTA: Sage #9CAF88 */
-  --primary-foreground: #102D25;      /* With deep ink text #102D25 */
-  --secondary: #15271F;
-  --secondary-foreground: #AECDC1;
-  --muted: #15271F;
-  --muted-foreground: #AECDC1;        /* Muted telemetry */
-  --accent: #20382D;
-  --accent-foreground: #F3F1EB;
-  --destructive: #FFB4A7;             /* Night error accent */
-  --destructive-foreground: #762334;
-  --border: rgba(255, 255, 255, 0.10);/* Subtle hairline */
-  --input: #15271F;
-  --ring: #235B76;
-
-  --success: #5BD08F;
-  --warning: #F2B24C;
-  --info: #81C4FF;
-
+  /* ── Dark: Forest Night Reference Strip ── */
+  --surface: #0D1915;
+  --surface-dim: #09120F;
+  --surface-bright: #15271F;
   --surface-container-lowest: #0D1915;
   --surface-container-low: #15271F;
   --surface-container: #1C3329;
   --surface-container-high: #20382D;
   --surface-container-highest: #264236;
-  --surface-variant: #1F382E;
+  --on-surface: #f3f1eb;
+  --on-surface-variant: #aecdc1;
+  --inverse-surface: #f3f1eb;
+  --inverse-on-surface: #1b1c18;
+  --outline: #727975;
+  --outline-variant: rgba(255, 255, 255, 0.12);
+  --surface-tint: #ffb4a7;
+
+  --primary-m3: #aecdc1;
+  --on-primary: #022019;
+  --primary-container: #20382D;
+  --on-primary-container: #ffdad4;
+  --inverse-primary: #47645a;
+  --secondary-m3: #ffb4a7;
+  --on-secondary: #680003;
   --secondary-container: #20382D;
-  --on-secondary-container: #D5E9BF;
-  --error-container: #580200;
-  --on-error-container: #FFDAD6;
+  --on-secondary-container: #c9eadd;
+  --tertiary: #b9cda4;
+  --on-tertiary: #111f05;
+  --tertiary-container: #3b4c2c;
+  --on-tertiary-container: #d5e9bf;
+  --error: #ffb4ab;
+  --on-error: #690005;
+  --error-container: #93000a;
+  --on-error-container: #ffdad6;
+
+  /* Brand Anchors & Component Tokens Dark Mode */
+  --action: #9CAF88;                  /* Remapped action in dark mode: Sage */
+  --on-action: #102D25;
+  --brand: #c9eadd;
+  --on-brand: #022019;
+  --sage-soft: #20382D;
+  --sage-wash: #15271F;
+
+  --background: #0D1915;              /* Base midnight forest floor */
+  --foreground: #f3f1eb;              /* Clean ivory text on dark */
+  --card: #20382D;                    /* Raised surface: cards & route modules */
+  --card-foreground: #f3f1eb;
+  --popover: #15271F;                 /* Subsurface card */
+  --popover-foreground: #f3f1eb;
+  --primary: #9CAF88;                 /* Remapped Primary CTA: Sage #9CAF88 */
+  --primary-foreground: #102D25;      /* With deep ink text #102D25 */
+  --secondary: #15271F;
+  --secondary-foreground: #aecdc1;
+  --muted: #15271F;
+  --muted-foreground: #aecdc1;        /* Muted telemetry */
+  --accent: #20382D;
+  --accent-foreground: #f3f1eb;
+  --destructive: #ffb4a7;             /* Night error accent */
+  --destructive-foreground: #762334;
+  --border: rgba(255, 255, 255, 0.10);/* Subtle hairline */
+  --input: #15271F;
+  --input-border: rgba(255, 255, 255, 0.15);
+  --ring: #9CAF88;
+
+  --success: #5BD08F;
+  --warning: #F2B24C;
+  --info: #81C4FF;
 
   --sidebar: #0D1915;
-  --sidebar-foreground: #F3F1EB;
+  --sidebar-foreground: #f3f1eb;
   --sidebar-primary: #9CAF88;
   --sidebar-primary-foreground: #102D25;
   --sidebar-accent: #15271F;
-  --sidebar-accent-foreground: #F3F1EB;
+  --sidebar-accent-foreground: #f3f1eb;
   --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: #235B76;
+  --sidebar-ring: #9CAF88;
 
-  --shadow-float: 0 1px 3px 0 rgba(0, 0, 0, 0.35), 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.35), 0 6px 16px -2px rgba(0, 0, 0, 0.45);
+  --shadow-floating: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 24px 64px -12px rgba(0, 0, 0, 0.6);
+  --shadow-float: var(--shadow-floating);
 }
 
 @layer base {
@@ -462,4 +583,87 @@ body::-webkit-scrollbar-thumb:hover,
   ::view-transition-new(*) {
     animation: none !important;
   }
+}
+
+/* ── SWENA Modern Calm Tech Typography Utilities ── */
+.font-marketing-hero {
+  font-family: var(--font-marketing-hero);
+  font-size: 64px;
+  font-weight: 500;
+  line-height: 68px;
+}
+@media (max-width: 640px) {
+  .font-marketing-hero {
+    font-size: 40px;
+    line-height: 44px;
+  }
+}
+
+.font-marketing-heading {
+  font-family: var(--font-marketing-heading);
+  font-size: 36px;
+  font-weight: 500;
+  line-height: 42px;
+}
+@media (max-width: 640px) {
+  .font-marketing-heading {
+    font-size: 28px;
+    line-height: 34px;
+  }
+}
+
+.font-app-page-heading {
+  font-family: var(--font-app-page-heading);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 34px;
+}
+
+.font-app-section-heading {
+  font-family: var(--font-app-section-heading);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.font-app-card-heading {
+  font-family: var(--font-app-card-heading);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.font-body {
+  font-family: var(--font-body);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 24px;
+}
+
+.font-body-marketing {
+  font-family: var(--font-body-marketing);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 28px;
+}
+
+.font-label {
+  font-family: var(--font-label);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.font-metadata {
+  font-family: var(--font-metadata);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.font-technical-mono {
+  font-family: var(--font-technical-mono);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
 }
