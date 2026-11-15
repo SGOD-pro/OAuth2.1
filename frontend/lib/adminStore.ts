@@ -137,6 +137,7 @@ const inFlightLogs = new Map<string, Promise<{
   limit: number;
   totalPages: number;
 }>>();
+const queryGenerations = new Map<string, number>();
 
 let inFlightStats: Promise<void> | null = null;
 let inFlightClients: Promise<void> | null = null;
@@ -146,6 +147,7 @@ let inFlightUsers: Promise<void> | null = null;
 export function _resetAdminLogsCacheForTesting() {
   logsCache.clear();
   inFlightLogs.clear();
+  queryGenerations.clear();
   latestLogRequestId = 0;
 }
 
@@ -272,12 +274,15 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
     const currentRequestId = ++latestLogRequestId;
     set({ logs: { ...get().logs, loading: true, error: null } });
 
-    try {
-      // 3. In-flight Deduplication:
-      // Reuse in-flight network request for identical query parameters unless forced
-      let fetchPromise = inFlightLogs.get(queryKey);
+    // 3. In-flight Deduplication & Generation Tracking:
+    // Reuse in-flight network request for identical query parameters unless forced
+    let fetchPromise = inFlightLogs.get(queryKey);
 
+    try {
       if (!fetchPromise || force) {
+        const queryGen = (queryGenerations.get(queryKey) || 0) + 1;
+        queryGenerations.set(queryKey, queryGen);
+
         fetchPromise = (async () => {
           const params = new URLSearchParams();
           params.set('page', String(page));
@@ -306,15 +311,20 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
             totalPages,
           };
 
-          // Cache the successful query result (bounded to 100 entries)
-          if (logsCache.size >= 100) {
-            const oldestKey = logsCache.keys().next().value;
-            if (oldestKey) logsCache.delete(oldestKey);
+          // Only the current generation may publish that query's cached result
+          if (queryGenerations.get(queryKey) === queryGen) {
+            if (logsCache.size >= 100) {
+              const oldestKey = logsCache.keys().next().value;
+              if (oldestKey) {
+                logsCache.delete(oldestKey);
+                queryGenerations.delete(oldestKey);
+              }
+            }
+            logsCache.set(queryKey, {
+              ...result,
+              lastFetched: Date.now(),
+            });
           }
-          logsCache.set(queryKey, {
-            ...result,
-            lastFetched: Date.now(),
-          });
 
           return result;
         })();
@@ -358,7 +368,10 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
         });
       }
     } finally {
-      inFlightLogs.delete(queryKey);
+      // Delete in-flight entry only when it still belongs to the completing request
+      if (fetchPromise && inFlightLogs.get(queryKey) === fetchPromise) {
+        inFlightLogs.delete(queryKey);
+      }
     }
   },
 
