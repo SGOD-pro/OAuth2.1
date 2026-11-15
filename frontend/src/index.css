@@ -7,18 +7,43 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Geist Variable", system-ui, sans-serif;
-  --font-heading: "Geist Variable", system-ui, sans-serif;
-  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --font-sans: "Plus Jakarta Sans", "Inter", "Geist Variable", system-ui, sans-serif;
+  --font-heading: "Plus Jakarta Sans", "Geist Variable", system-ui, sans-serif;
+  --font-mono: "Space Mono", "Geist Mono Variable", ui-monospace, monospace;
 
-  /* Evergreen Cockpit Radius Scale */
+  /* Typographic Hierarchy matching Design Spec */
+  --font-headline-xl: "Plus Jakarta Sans", sans-serif;
+  --font-headline-lg: "Plus Jakarta Sans", sans-serif;
+  --font-headline-md: "Plus Jakarta Sans", sans-serif;
+  --font-headline-sm: "Plus Jakarta Sans", sans-serif;
+  --font-title-md: "Inter", sans-serif;
+  --font-body-lg: "Inter", sans-serif;
+  --font-body-md: "Inter", sans-serif;
+  --font-body-sm: "Inter", sans-serif;
+  --font-label-caps: "Inter", sans-serif;
+  --font-telemetry-md: "Space Mono", monospace;
+  --font-telemetry-sm: "Space Mono", monospace;
+
+  /* Cockpit & Geometric Radius Scale (10px / 16px geometry) */
   --radius-xs: 4px;
   --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 20px;
-  --radius-xl: 24px;
-  --radius-2xl: 28px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
   --radius-pill: 9999px;
+
+  /* Spacing Scale matching Design Token Spec */
+  --spacing-space-xs: 0.25rem;
+  --spacing-space-sm: 0.5rem;
+  --spacing-space-md: 1rem;
+  --spacing-space-lg: 1.5rem;
+  --spacing-space-xl: 2.5rem;
+  --spacing-gutter: 1.5rem;
+  --spacing-gutter-mobile: 1rem;
+  --spacing-margin: 3rem;
+  --spacing-margin-tablet: 2rem;
+  --spacing-margin-mobile: 1rem;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -58,12 +83,40 @@
   --color-motorsport-dark: #1C69D4;
   --color-motorsport-red: #E22718;
 
-  /* Brand Palette Extension */
-  --color-tomato: #E54D2E;
-  --color-tomato-hover: #F16A50;
-  --color-sage: #8A9A86;
-  --color-sage-dark: #313B30;
+  /* 5 Fixed Brand Anchors */
+  --color-ivory: #F7F5EF;
+  --color-sage: #9CAF88;
   --color-evergreen: #102D25;
+  --color-tomato: #E8412C;
+  --color-tomato-hover: #D03723;
+  --color-tomato-active: #B52D1C;
+  --color-white: #FFFFFF;
+
+  /* Supporting Sage Subsurfaces */
+  --color-sage-light: #EEF1EA;
+  --color-sage-panel: #DCE3D5;
+  --color-sage-dark: #313B30;
+
+  /* Semantic Material Tokens */
+  --color-surface: var(--background);
+  --color-on-surface: var(--foreground);
+  --color-on-surface-variant: var(--muted-foreground);
+  --color-surface-container-lowest: var(--card);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-surface-variant: var(--surface-variant);
+  --color-secondary-container: var(--secondary-container);
+  --color-on-secondary-container: var(--on-secondary-container);
+  --color-secondary-fixed: #D5E9BF;
+  --color-secondary-fixed-dim: #B9CDA4;
+  --color-on-secondary-fixed: #111F05;
+  --color-on-secondary-fixed-variant: #3B4C2C;
+  --color-outline: #727975;
+  --color-outline-variant: #C1C8C4;
+  --color-error-container: var(--error-container);
+  --color-on-error-container: var(--on-error-container);
 }
 
 :root {
@@ -82,75 +135,99 @@
   --motion-slow: 320ms;
   --motion-emphasis: 450ms;
 
-  /* ── Light: Warm Neutral Craft & Tomato Primary ── */
-  --background: #F7F6F2;
-  --foreground: #1A1D1C;
-  --card: #FFFFFF;
-  --card-foreground: #1A1D1C;
+  /* ── Light: Warm Ivory Canvas Ground, Tomato Action Accent & Sage Framing ── */
+  --background: #F7F5EF;              /* Ivory Canvas Ground (~60%) */
+  --foreground: #111A17;              /* Primary Text Ink */
+  --card: #FFFFFF;                    /* Pure White: tactile forms, dense tabular grids, inputs */
+  --card-foreground: #111A17;
   --popover: #FFFFFF;
-  --popover-foreground: #1A1D1C;
-  --primary: #E54D2E;
-  --primary-foreground: #121316;
-  --secondary: #EEECE5;
-  --secondary-foreground: #1A1D1C;
-  --muted: #EEECE5;
-  --muted-foreground: #686C66;
-  --accent: #8A9A86;
-  --accent-foreground: #18221B;
-  --destructive: #E5484D;
+  --popover-foreground: #111A17;
+  --primary: #E8412C;                 /* Tomato Action Accent CTA */
+  --primary-foreground: #FFFFFF;      /* Clean White on Tomato (4.8:1+ contrast) */
+  --secondary: #EEF1EA;               /* Light Sage Wash */
+  --secondary-foreground: #102D25;    /* Evergreen ink */
+  --muted: #EEF1EA;                   /* Light Sage Wash */
+  --muted-foreground: #56604B;        /* Supporting Text: Labels & Waypoint notes */
+  --accent: #DCE3D5;                  /* Soft Sage Panel */
+  --accent-foreground: #102D25;       /* Evergreen text on Soft Panel */
+  --destructive: #762334;             /* Fatal/Error Red Ink (Distinct from Tomato action) */
   --destructive-foreground: #FFFFFF;
-  --border: #E5E3DC;
-  --input: #D8D5CC;
-  --ring: #E54D2E;
-  --success: #30A46C;
-  --warning: #F59E0B;
-  --info: #0284C7;
+  --border: #E4E2DD;                  /* Subtle warm hairline */
+  --input: #E4E2DD;
+  --ring: #235B76;                    /* Info / Focus Ring (2px offset) */
 
-  --sidebar: #F2F0EA;
-  --sidebar-foreground: #1A1D1C;
-  --sidebar-primary: #E54D2E;
-  --sidebar-primary-foreground: #121316;
-  --sidebar-accent: #E7E5DE;
-  --sidebar-accent-foreground: #1A1D1C;
-  --sidebar-border: #E0DDD4;
-  --sidebar-ring: #E54D2E;
+  --success: #237644;                 /* Success green */
+  --warning: #765723;                 /* Warning amber/ochre */
+  --info: #235B76;                    /* Ephemeris window / Focus */
 
-  --shadow-float: 0 1px 3px 0 rgba(26, 29, 28, 0.04), 0 8px 24px -4px rgba(26, 29, 28, 0.06), 0 20px 48px -12px rgba(26, 29, 28, 0.08);
+  --surface-container-lowest: #FFFFFF;
+  --surface-container-low: #F5F3ED;
+  --surface-container: #F0EEE8;
+  --surface-container-high: #EAE8E2;
+  --surface-container-highest: #E4E2DD;
+  --surface-variant: #E4E2DD;
+  --secondary-container: #D2E6BC;
+  --on-secondary-container: #576846;
+  --error-container: #FFDAD6;
+  --on-error-container: #93000A;
+
+  --sidebar: #F5F3ED;                 /* Soft Ivory surface */
+  --sidebar-foreground: #111A17;
+  --sidebar-primary: #E8412C;         /* Tomato active mark */
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #EEF1EA;          /* Light Wash active pill */
+  --sidebar-accent-foreground: #102D25;
+  --sidebar-border: #E4E2DD;
+  --sidebar-ring: #235B76;
+
+  --shadow-float: 0 1px 3px 0 rgba(16, 45, 37, 0.04), 0 8px 24px -4px rgba(16, 45, 37, 0.06), 0 20px 48px -12px rgba(16, 45, 37, 0.08);
 }
 
 .dark {
-  /* ── Dark: Warm Charcoal Dark & Tomato Primary with Sage Selection ── */
-  --background: #121316;
-  --foreground: #F0EDE6;
-  --card: #18191D;
-  --card-foreground: #F0EDE6;
-  --popover: #1C1D22;
-  --popover-foreground: #F0EDE6;
-  --primary: #E54D2E;
-  --primary-foreground: #121316;
-  --secondary: #222328;
-  --secondary-foreground: #F0EDE6;
-  --muted: #222328;
-  --muted-foreground: #94969C;
-  --accent: #313B30;
-  --accent-foreground: #F0EDE6;
-  --destructive: #FF6B75;
-  --destructive-foreground: #121316;
-  --border: #26282E;
-  --input: #2E3038;
-  --ring: #E54D2E;
+  /* ── Dark: Forest Night Reference Strip (Dark Mode Pairing) ── */
+  --background: #0D1915;              /* Base midnight forest floor */
+  --foreground: #F3F1EB;              /* Clean ivory text on dark */
+  --card: #20382D;                    /* Raised surface: cards & route modules */
+  --card-foreground: #F3F1EB;
+  --popover: #15271F;                 /* Subsurface card */
+  --popover-foreground: #F3F1EB;
+  --primary: #9CAF88;                 /* Remapped Primary CTA: Sage #9CAF88 */
+  --primary-foreground: #102D25;      /* With deep ink text #102D25 */
+  --secondary: #15271F;
+  --secondary-foreground: #AECDC1;
+  --muted: #15271F;
+  --muted-foreground: #AECDC1;        /* Muted telemetry */
+  --accent: #20382D;
+  --accent-foreground: #F3F1EB;
+  --destructive: #FFB4A7;             /* Night error accent */
+  --destructive-foreground: #762334;
+  --border: rgba(255, 255, 255, 0.10);/* Subtle hairline */
+  --input: #15271F;
+  --ring: #235B76;
+
   --success: #5BD08F;
   --warning: #F2B24C;
   --info: #81C4FF;
 
-  --sidebar: #15161A;
-  --sidebar-foreground: #F0EDE6;
-  --sidebar-primary: #E54D2E;
-  --sidebar-primary-foreground: #121316;
-  --sidebar-accent: #202127;
-  --sidebar-accent-foreground: #F0EDE6;
-  --sidebar-border: #26282E;
-  --sidebar-ring: #E54D2E;
+  --surface-container-lowest: #0D1915;
+  --surface-container-low: #15271F;
+  --surface-container: #1C3329;
+  --surface-container-high: #20382D;
+  --surface-container-highest: #264236;
+  --surface-variant: #1F382E;
+  --secondary-container: #20382D;
+  --on-secondary-container: #D5E9BF;
+  --error-container: #580200;
+  --on-error-container: #FFDAD6;
+
+  --sidebar: #0D1915;
+  --sidebar-foreground: #F3F1EB;
+  --sidebar-primary: #9CAF88;
+  --sidebar-primary-foreground: #102D25;
+  --sidebar-accent: #15271F;
+  --sidebar-accent-foreground: #F3F1EB;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: #235B76;
 
   --shadow-float: 0 1px 3px 0 rgba(0, 0, 0, 0.35), 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 24px 64px -12px rgba(0, 0, 0, 0.6);
 }
@@ -165,7 +242,7 @@
   }
 }
 
-/* ── Restrained Glass Utility (Admin Header Only) ── */
+/* ── Restrained Glass Utility (Admin Header / Floating HUD Only) ── */
 .glass {
   background: var(--card);
   border-bottom: 1px solid var(--border);
@@ -173,7 +250,22 @@
 
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
   .glass {
-    background: color-mix(in oklab, var(--card) 78%, transparent);
+    background: rgba(247, 245, 239, 0.85);
+    border-bottom: 1px solid var(--border);
+    -webkit-backdrop-filter: blur(16px) saturate(1.15);
+    backdrop-filter: blur(16px) saturate(1.15);
+  }
+}
+
+.dark .glass {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .dark .glass {
+    background: rgba(13, 25, 21, 0.85);
+    border-bottom: 1px solid var(--border);
     -webkit-backdrop-filter: blur(16px) saturate(1.15);
     backdrop-filter: blur(16px) saturate(1.15);
   }
