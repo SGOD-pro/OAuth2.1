@@ -120,10 +120,34 @@ interface AdminStore {
 
 const CACHE_TTL = 30_000; // 30 seconds
 
+interface CachedQueryResult {
+  data: LogEntry[];
+  totalCount: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  lastFetched: number;
+}
+
+const logsCache = new Map<string, CachedQueryResult>();
+const inFlightLogs = new Map<string, Promise<{
+  data: LogEntry[];
+  totalCount: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}>>();
+
 let inFlightStats: Promise<void> | null = null;
 let inFlightClients: Promise<void> | null = null;
 let latestLogRequestId = 0;
 let inFlightUsers: Promise<void> | null = null;
+
+export function _resetAdminLogsCacheForTesting() {
+  logsCache.clear();
+  inFlightLogs.clear();
+  latestLogRequestId = 0;
+}
 
 export const useAdminStore = create<AdminStore>((set, get) => ({
   stats: { data: null, lastFetched: 0, loading: false },
@@ -201,44 +225,114 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
     const clientId = query?.clientId?.trim() || '';
 
     const queryKey = JSON.stringify({ page, limit, search, action, outcome, clientId });
-    const { logs } = get();
+    const now = Date.now();
 
-    if (!force && logs.data && logs.activeQueryKey === queryKey && Date.now() - logs.lastFetched < CACHE_TTL) {
+    // 1. Cached Query Return:
+    // If unexpired cached data exists for this query, return it immediately.
+    // Crucially, increment request identity before returning so any obsolete in-flight
+    // request cannot update results, totals, loading, or errors.
+    const cached = logsCache.get(queryKey);
+    const activeMatch = get().logs.activeQueryKey === queryKey && get().logs.data !== null;
+    const isCachedValid = Boolean(cached && now - cached.lastFetched < CACHE_TTL);
+    const isActiveValid = Boolean(activeMatch && now - get().logs.lastFetched < CACHE_TTL);
+
+    if (!force && (isCachedValid || isActiveValid)) {
+      const validCache: CachedQueryResult = isCachedValid && cached
+        ? cached
+        : {
+            data: get().logs.data!,
+            totalCount: get().logs.totalCount,
+            page: get().logs.page,
+            limit: get().logs.limit,
+            totalPages: get().logs.totalPages,
+            lastFetched: get().logs.lastFetched,
+          };
+
+      // Invalidate any older in-flight requests by updating request identity
+      ++latestLogRequestId;
+
+      set({
+        logs: {
+          data: validCache.data,
+          totalCount: validCache.totalCount,
+          page: validCache.page,
+          limit: validCache.limit,
+          totalPages: validCache.totalPages,
+          lastFetched: validCache.lastFetched,
+          loading: false,
+          error: null,
+          activeQueryKey: queryKey,
+        },
+      });
       return;
     }
 
+    // 2. Fresh Request:
+    // Update request identity and mark store as loading for this query
     const currentRequestId = ++latestLogRequestId;
     set({ logs: { ...get().logs, loading: true, error: null } });
 
     try {
-      const params = new URLSearchParams();
-      params.set('page', String(page));
-      params.set('limit', String(limit));
-      if (search) params.set('search', search);
-      if (action) params.set('action', action);
-      if (outcome) params.set('outcome', outcome);
-      if (clientId) params.set('clientId', clientId);
+      // 3. In-flight Deduplication:
+      // Reuse in-flight network request for identical query parameters unless forced
+      let fetchPromise = inFlightLogs.get(queryKey);
 
-      const res = await apiFetch(`/api/admin/logs?${params.toString()}`);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: Failed to load logs`);
-      }
+      if (!fetchPromise || force) {
+        fetchPromise = (async () => {
+          const params = new URLSearchParams();
+          params.set('page', String(page));
+          params.set('limit', String(limit));
+          if (search) params.set('search', search);
+          if (action) params.set('action', action);
+          if (outcome) params.set('outcome', outcome);
+          if (clientId) params.set('clientId', clientId);
 
-      const totalCount = parseInt(res.headers.get('X-Total-Count') || '0', 10);
-      const resPage = parseInt(res.headers.get('X-Page') || String(page), 10);
-      const resLimit = parseInt(res.headers.get('X-Limit') || String(limit), 10);
-      const totalPages = parseInt(res.headers.get('X-Total-Pages') || '1', 10);
-      const data: LogEntry[] = await res.json();
+          const res = await apiFetch(`/api/admin/logs?${params.toString()}`);
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: Failed to load logs`);
+          }
 
-      // Guard against race conditions: do not overwrite newer search/filter results
-      if (currentRequestId === latestLogRequestId) {
-        set({
-          logs: {
+          const totalCount = parseInt(res.headers.get('X-Total-Count') || '0', 10);
+          const resPage = parseInt(res.headers.get('X-Page') || String(page), 10);
+          const resLimit = parseInt(res.headers.get('X-Limit') || String(limit), 10);
+          const totalPages = parseInt(res.headers.get('X-Total-Pages') || '1', 10);
+          const data: LogEntry[] = await res.json();
+
+          const result = {
             data,
             totalCount,
             page: resPage,
             limit: resLimit,
             totalPages,
+          };
+
+          // Cache the successful query result (bounded to 100 entries)
+          if (logsCache.size >= 100) {
+            const oldestKey = logsCache.keys().next().value;
+            if (oldestKey) logsCache.delete(oldestKey);
+          }
+          logsCache.set(queryKey, {
+            ...result,
+            lastFetched: Date.now(),
+          });
+
+          return result;
+        })();
+
+        inFlightLogs.set(queryKey, fetchPromise);
+      }
+
+      const result = await fetchPromise;
+
+      // Guard against race conditions: do not overwrite newer search/filter results
+      if (currentRequestId === latestLogRequestId) {
+        set({
+          logs: {
+            data: result.data,
+            totalCount: result.totalCount,
+            page: result.page,
+            limit: result.limit,
+            totalPages: result.totalPages,
             lastFetched: Date.now(),
             loading: false,
             error: null,
@@ -246,9 +340,14 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
           },
         });
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (currentRequestId === latestLogRequestId) {
-        const errorMsg = err?.message || 'Failed to load logs';
+        const errorMsg =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'string'
+            ? err
+            : 'Failed to load logs';
         toast.error(errorMsg);
         set({
           logs: {
@@ -258,6 +357,8 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
           },
         });
       }
+    } finally {
+      inFlightLogs.delete(queryKey);
     }
   },
 

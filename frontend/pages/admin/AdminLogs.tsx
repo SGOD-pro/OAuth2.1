@@ -283,7 +283,7 @@ export const AdminLogs: React.FC = () => {
               <SelectItem value="all" className="text-xs">All outcomes</SelectItem>
               <SelectItem value="success" className="text-xs">Success</SelectItem>
               <SelectItem value="denied" className="text-xs">Denied</SelectItem>
-              <SelectItem value="failed" className="text-xs">Failed</SelectItem>
+              <SelectItem value="failure" className="text-xs">Failed</SelectItem>
               <SelectItem value="unknown" className="text-xs">Unknown</SelectItem>
             </SelectContent>
           </Select>
