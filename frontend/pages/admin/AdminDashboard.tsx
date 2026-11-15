@@ -241,7 +241,7 @@ export const AdminDashboard: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-3 shrink-0">
-                          <span className="hidden sm:inline-flex px-2 py-0.5 rounded-pill text-[10px] font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                          <span className="hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-sans font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                             session_created
                           </span>
                           <time 

@@ -303,11 +303,11 @@ export const AdminClients: React.FC = () => {
         ) : (
           <div className="w-full space-y-4">
             {/* Quick Segmented Filter Pills */}
-            <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-pill bg-secondary/60 border border-border/80 w-fit">
+            <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-full bg-secondary/60 border border-border/80 w-fit">
               <button
                 type="button"
                 onClick={() => { setEnvFilter('all'); setAccessFilter('all'); }}
-                className={`px-3 py-1 rounded-pill text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   envFilter === 'all' && accessFilter === 'all'
                     ? 'bg-card text-foreground font-medium shadow-2xs'
                     : 'text-muted-foreground hover:text-foreground'
@@ -318,7 +318,7 @@ export const AdminClients: React.FC = () => {
               <button
                 type="button"
                 onClick={() => { setEnvFilter('prod'); setAccessFilter('all'); }}
-                className={`px-3 py-1 rounded-pill text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   envFilter === 'prod' && accessFilter === 'all'
                     ? 'bg-card text-foreground font-medium shadow-2xs'
                     : 'text-muted-foreground hover:text-foreground'
@@ -329,7 +329,7 @@ export const AdminClients: React.FC = () => {
               <button
                 type="button"
                 onClick={() => { setEnvFilter('dev'); setAccessFilter('all'); }}
-                className={`px-3 py-1 rounded-pill text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   envFilter === 'dev' && accessFilter === 'all'
                     ? 'bg-card text-foreground font-medium shadow-2xs'
                     : 'text-muted-foreground hover:text-foreground'
@@ -340,7 +340,7 @@ export const AdminClients: React.FC = () => {
               <button
                 type="button"
                 onClick={() => { setAccessFilter('public'); setEnvFilter('all'); }}
-                className={`px-3 py-1 rounded-pill text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   accessFilter === 'public' && envFilter === 'all'
                     ? 'bg-card text-foreground font-medium shadow-2xs'
                     : 'text-muted-foreground hover:text-foreground'
@@ -351,7 +351,7 @@ export const AdminClients: React.FC = () => {
               <button
                 type="button"
                 onClick={() => { setAccessFilter('private'); setEnvFilter('all'); }}
-                className={`px-3 py-1 rounded-pill text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   accessFilter === 'private' && envFilter === 'all'
                     ? 'bg-card text-foreground font-medium shadow-2xs'
                     : 'text-muted-foreground hover:text-foreground'

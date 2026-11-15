@@ -202,7 +202,7 @@ export const AdminLogs: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
-          <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-pill text-[11px] font-sans text-muted-foreground bg-secondary/40 border border-border">
+          <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-sans text-muted-foreground bg-secondary/40 border border-border">
             <RotateCcw className="size-3 text-muted-foreground" />
             30s auto refresh
           </span>

@@ -1,64 +1,18 @@
+/* M Auth | Evergreen design system | Tailwind CSS v4 + shadcn/ui */
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist-mono";
 @import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-@theme {
-  --font-sans: "Instrument Sans", "General Sans", "Plus Jakarta Sans", "Inter", "Geist Variable", system-ui, sans-serif;
-  --font-heading: "General Sans", "Instrument Sans", "Plus Jakarta Sans", "Geist Variable", system-ui, sans-serif;
-  --font-marketing: "General Sans", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Space Mono", "Geist Mono Variable", ui-monospace, monospace;
-
-  /* Typographic Hierarchy matching SWENA Modern Calm Tech Spec */
-  --font-marketing-hero: "General Sans", sans-serif;
-  --font-marketing-heading: "General Sans", sans-serif;
-  --font-app-page-heading: "Instrument Sans", sans-serif;
-  --font-app-section-heading: "Instrument Sans", sans-serif;
-  --font-app-card-heading: "Instrument Sans", sans-serif;
-  --font-body: "Instrument Sans", sans-serif;
-  --font-body-marketing: "General Sans", sans-serif;
-  --font-label: "Instrument Sans", sans-serif;
-  --font-metadata: "Instrument Sans", sans-serif;
-  --font-technical-mono: "IBM Plex Mono", monospace;
-
-  /* Legacy aliases for backwards compatibility */
-  --font-headline-xl: "General Sans", "Plus Jakarta Sans", sans-serif;
-  --font-headline-lg: "General Sans", "Plus Jakarta Sans", sans-serif;
-  --font-headline-md: "General Sans", "Plus Jakarta Sans", sans-serif;
-  --font-headline-sm: "General Sans", "Plus Jakarta Sans", sans-serif;
-  --font-title-md: "Instrument Sans", "Inter", sans-serif;
-  --font-body-lg: "Instrument Sans", "Inter", sans-serif;
-  --font-body-md: "Instrument Sans", "Inter", sans-serif;
-  --font-body-sm: "Instrument Sans", "Inter", sans-serif;
-  --font-label-caps: "Instrument Sans", "Inter", sans-serif;
-  --font-telemetry-md: "IBM Plex Mono", "Space Mono", monospace;
-  --font-telemetry-sm: "IBM Plex Mono", "Space Mono", monospace;
-
-  /* Cockpit & Geometric Radius Scale */
-  --radius-sm: 0.25rem;
-  --radius-DEFAULT: 0.5rem;
-  --radius-md: 10px;
-  --radius-lg: 1rem;
-  --radius-xl: 1.5rem;
-  --radius-2xl: 24px;
-  --radius-pill: 9999px;
-  --radius-full: 9999px;
-
-  /* Spacing Scale matching SWENA Spec */
-  --spacing-gutter: 1.5rem;
-  --spacing-margin: 2.5rem;
-  --spacing-space-xs: 0.25rem;
-  --spacing-space-sm: 0.5rem;
-  --spacing-space-md: 0.75rem;
-  --spacing-space-lg: 1rem;
-  --spacing-space-xl: 1.5rem;
-  --spacing-space-2xl: 2rem;
-  --spacing-space-3xl: 3rem;
-  --spacing-space-4xl: 6rem;
-
+/* Map runtime semantic tokens to Tailwind utilities. Keep these inline so
+   light/dark variables resolve on the element, not at build time. */
+@theme inline {
+  --font-sans: "Geist Variable", "Instrument Sans", system-ui, sans-serif;
+  --font-heading: "Geist Variable", "Instrument Sans", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -78,11 +32,6 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-
-  --color-success: var(--success);
-  --color-warning: var(--warning);
-  --color-info: var(--info);
-
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -91,88 +40,71 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-
-  /* BMW M-Series Motorsport Tokens (OKLCH) */
-  --color-motorsport-light: oklch(50.27% 0.1425 250.05);
-  --color-motorsport-dark: oklch(53.81% 0.1804 258.30);
-  --color-motorsport-red: oklch(58.76% 0.2212 29.82);
-
-  /* Visual Brand Anchors in OKLCH */
-  --color-ivory: oklch(97.00% 0.0082 91.48);
-  --color-sage: oklch(72.88% 0.0585 128.92);
-  --color-evergreen: oklch(27.20% 0.0383 172.83);
-  --color-evergreen-hover: oklch(22.44% 0.0288 171.94);
-  --color-evergreen-active: oklch(18.49% 0.0228 174.75);
-  --color-tomato: oklch(61.96% 0.2068 30.72);
-  --color-tomato-hover: oklch(56.83% 0.1928 30.93);
-  --color-tomato-active: oklch(51.08% 0.1752 30.78);
-  --color-white: oklch(100% 0 0);
-
-  /* Supporting Sage Subsurfaces (OKLCH) */
-  --color-sage-light: oklch(95.39% 0.0098 125.68);
-  --color-sage-panel: oklch(90.66% 0.0202 128.71);
-  --color-sage-dark: oklch(34.80% 0.0220 128.50);
-
-  /* Semantic Action and Brand aliases */
-  --color-action: var(--action);
-  --color-on-action: var(--on-action);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-evergreen: #102d25;
+  --color-sage: #9caf88;
+  --color-tomato: var(--accent-cta);
+  --color-tomato-indicator: var(--accent-cta);
+  --color-motorsport-light: #0066B1;
+  --color-motorsport-dark: #1C69D4;
+  --color-motorsport-red: #E22718;
+  --color-ivory: #f7f5ef;
   --color-brand: var(--brand);
   --color-on-brand: var(--on-brand);
+  --color-action: var(--action);
+  --color-on-action: var(--on-action);
+  --color-accent-cta: var(--accent-cta);
+  --color-on-accent-cta: var(--on-accent-cta);
   --color-sage-soft: var(--sage-soft);
   --color-sage-wash: var(--sage-wash);
-
-  /* SWENA Modern Calm Tech Semantic Tokens */
   --color-surface: var(--surface);
-  --color-surface-dim: var(--surface-dim);
-  --color-surface-bright: var(--surface-bright);
-  --color-surface-container-lowest: var(--surface-container-lowest);
-  --color-surface-container-low: var(--surface-container-low);
   --color-surface-container: var(--surface-container);
+  --color-surface-container-low: var(--surface-container-low);
   --color-surface-container-high: var(--surface-container-high);
-  --color-surface-container-highest: var(--surface-container-highest);
   --color-on-surface: var(--on-surface);
   --color-on-surface-variant: var(--on-surface-variant);
-  --color-inverse-surface: var(--inverse-surface);
-  --color-inverse-on-surface: var(--inverse-on-surface);
   --color-outline: var(--outline);
   --color-outline-variant: var(--outline-variant);
-  --color-surface-tint: var(--surface-tint);
-  --color-primary-container: var(--primary-container);
-  --color-on-primary-container: var(--on-primary-container);
-  --color-inverse-primary: var(--inverse-primary);
-  --color-secondary-container: var(--secondary-container);
-  --color-on-secondary-container: var(--on-secondary-container);
-  --color-tertiary: var(--tertiary);
-  --color-on-tertiary: var(--on-tertiary);
-  --color-tertiary-container: var(--tertiary-container);
-  --color-on-tertiary-container: var(--on-tertiary-container);
-  --color-error: var(--error);
-  --color-on-error: var(--on-error);
-  --color-error-container: var(--error-container);
-  --color-on-error-container: var(--on-error-container);
-  --color-primary-fixed: var(--primary-fixed);
-  --color-primary-fixed-dim: var(--primary-fixed-dim);
-  --color-on-primary-fixed: var(--on-primary-fixed);
-  --color-on-primary-fixed-variant: var(--on-primary-fixed-variant);
-  --color-secondary-fixed: var(--secondary-fixed);
-  --color-secondary-fixed-dim: var(--secondary-fixed-dim);
-  --color-on-secondary-fixed: var(--on-secondary-fixed);
-  --color-on-secondary-fixed-variant: var(--on-secondary-fixed-variant);
-  --color-tertiary-fixed: var(--tertiary-fixed);
-  --color-tertiary-fixed-dim: var(--tertiary-fixed-dim);
-  --color-on-tertiary-fixed: var(--on-tertiary-fixed);
-  --color-on-tertiary-fixed-variant: var(--on-tertiary-fixed-variant);
-  --color-surface-variant: var(--surface-variant);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-pill: 9999px;
+  --radius-full: 9999px;
 }
 
 :root {
+  color-scheme: light;
+  --radius: 0.75rem;
+  --radius-pill: 9999px;
+  --radius-full: 9999px;
+  --font-marketing-hero: "Geist Variable", system-ui, sans-serif;
+  --font-marketing-heading: "Geist Variable", system-ui, sans-serif;
+  --font-app-page-heading: "Geist Variable", system-ui, sans-serif;
+  --font-app-section-heading: "Geist Variable", system-ui, sans-serif;
+  --font-app-card-heading: "Geist Variable", system-ui, sans-serif;
+  --font-body: "Geist Variable", system-ui, sans-serif;
+  --font-body-marketing: "Geist Variable", system-ui, sans-serif;
+  --font-label: "Geist Variable", system-ui, sans-serif;
+  --font-metadata: "Geist Variable", system-ui, sans-serif;
+  --font-technical-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --brand-evergreen: #102d25;
+  --brand-tomato: #e8412c;
+  --brand-sage: #9caf88;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --ease-emphasis: cubic-bezier(0.22, 1, 0.36, 1);
-  --expo-out: cubic-bezier(0.16, 1, 0.3, 1);
-
-  /* ── Universal Motion Tokens ── */
+  --expo-out: var(--ease-enter);
   --motion-instant: 80ms;
   --motion-fast: 120ms;
   --motion-hover: 140ms;
@@ -181,360 +113,237 @@
   --motion-slow: 320ms;
   --motion-emphasis: 450ms;
 
-  /* ── BMW M-Series Motorsport Tokens (OKLCH) ── */
-  --motorsport-light: oklch(50.27% 0.1425 250.05); /* #0066B1 */
-  --motorsport-dark: oklch(53.81% 0.1804 258.30);  /* #1C69D4 */
-  --motorsport-red: oklch(58.76% 0.2212 29.82);    /* #E22718 */
+  /* Neutral surfaces create depth; green is for identity and selection. */
+  --background: #f7f5ef;
+  --foreground: #111a17;
+  --card: #ffffff;
+  --card-foreground: #111a17;
+  --popover: #ffffff;
+  --popover-foreground: #111a17;
+  --primary: #102d25;
+  --primary-foreground: #ffffff;
+  --secondary: #eef1ea;
+  --secondary-foreground: #263c31;
+  --muted: #f1f0eb;
+  --muted-foreground: #59665f;
+  --accent: #e8eee4;
+  --accent-foreground: #102d25;
+  --destructive: #a52f3f;
+  --destructive-foreground: #ffffff;
+  --border: #e2e5de;
+  --input: #d7ded4; /* shadcn input BORDER, not input fill */
+  --input-background: #ffffff;
+  --ring: #557965;
 
-  /* ── SWENA Modern Calm Tech Shade Families in OKLCH (Light Mode) ── */
-  --surface: oklch(98.20% 0.0082 91.48);            /* #FBF9F3 */
-  --surface-dim: oklch(87.50% 0.0070 88.00);        /* #DCDAD4 */
-  --surface-bright: oklch(98.20% 0.0082 91.48);     /* #FBF9F3 */
-  --surface-container-lowest: oklch(100% 0 0);      /* #FFFFFF */
-  --surface-container-low: oklch(96.40% 0.0082 91.48); /* #F5F3ED */
-  --surface-container: oklch(94.90% 0.0083 91.48);  /* #F0EEE8 */
-  --surface-container-high: oklch(93.09% 0.0083 91.49); /* #EAE8E2 */
-  --surface-container-highest: oklch(91.29% 0.0071 88.65); /* #E4E2DD */
-  --on-surface: oklch(20.77% 0.0145 172.36);        /* #111A17 Primary Ink */
-  --on-surface-variant: oklch(47.40% 0.0350 128.42);/* #56604B Supporting Ink */
-  --inverse-surface: oklch(31.20% 0.0120 100.00);   /* #30312D */
-  --inverse-on-surface: oklch(95.80% 0.0080 91.00); /* #F3F1EB */
-  --outline: oklch(53.50% 0.0350 35.00);            /* #90706A */
-  --outline-variant: oklch(82.50% 0.0300 35.00);    /* #E4BEB7 */
-  --surface-tint: oklch(50.20% 0.1800 28.00);       /* #B91E0E */
-  --primary-m3: oklch(47.20% 0.0380 172.00);        /* #47645A */
-  --on-primary: oklch(100% 0 0);
-  --primary-container: oklch(58.00% 0.1900 30.00);  /* #D93623 */
-  --on-primary-container: oklch(99.00% 0.0050 30.00);
-  --inverse-primary: oklch(81.50% 0.0750 30.00);    /* #FFB4A7 */
-  --secondary-m3: oklch(48.50% 0.1850 28.00);       /* #B51B0B */
-  --on-secondary: oklch(100% 0 0);
-  --secondary-container: oklch(91.00% 0.0350 160.00); /* #C9EADD */
-  --on-secondary-container: oklch(49.00% 0.0350 165.00); /* #4D6A60 */
-  --tertiary: oklch(47.50% 0.0520 130.00);          /* #506140 */
-  --on-tertiary: oklch(100% 0 0);
-  --tertiary-container: oklch(56.00% 0.0500 130.00);/* #687A57 */
-  --on-tertiary-container: oklch(98.00% 0.0200 120.00);
-  --error: oklch(49.50% 0.1900 28.00);              /* #BA1A1A */
-  --on-error: oklch(100% 0 0);
-  --error-container: oklch(90.50% 0.0500 25.00);    /* #FFDAD6 */
-  --on-error-container: oklch(35.00% 0.1500 28.00); /* #93000A */
-  --primary-fixed: oklch(90.50% 0.0500 28.00);
-  --primary-fixed-dim: oklch(81.50% 0.0750 30.00);
-  --on-primary-fixed: oklch(25.00% 0.0900 25.00);
-  --on-primary-fixed-variant: oklch(40.00% 0.1700 28.00);
-  --secondary-fixed: oklch(91.00% 0.0350 160.00);
-  --secondary-fixed-dim: oklch(81.00% 0.0350 165.00);
-  --on-secondary-fixed: oklch(20.00% 0.0400 165.00);
-  --on-secondary-fixed-variant: oklch(38.00% 0.0350 165.00);
-  --tertiary-fixed: oklch(90.00% 0.0550 125.00);
-  --tertiary-fixed-dim: oklch(81.00% 0.0500 125.00);
-  --on-tertiary-fixed: oklch(22.00% 0.0400 125.00);
-  --on-tertiary-fixed-variant: oklch(39.00% 0.0450 125.00);
-  --surface-variant: oklch(91.29% 0.0071 88.65);    /* #E4E2DD */
+  --sidebar: #f4f3ee;
+  --sidebar-foreground: #34443b;
+  --sidebar-primary: #102d25;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #dfe8da;
+  --sidebar-accent-foreground: #102d25;
+  --sidebar-border: #e2e5de;
+  --sidebar-ring: #557965;
 
-  /* ── Visual Brand Anchors & Component Tokens (OKLCH) ── */
-  --action: oklch(27.20% 0.0383 172.83);            /* Primary Action: Evergreen */
-  --on-action: oklch(100% 0 0);                     /* Clean White */
-  --accent-cta: oklch(61.96% 0.2068 30.72);         /* Attention-Grabbing Tomato Red */
-  --on-accent-cta: oklch(100% 0 0);                 /* White */
-  --brand: oklch(27.20% 0.0383 172.83);             /* Evergreen Brand */
-  --on-brand: oklch(100% 0 0);
-  --sage-soft: oklch(90.66% 0.0202 128.71);         /* Soft Sage #DCE3D5 */
-  --sage-wash: oklch(95.39% 0.0098 125.68);         /* Sage 200 #EEF1EA */
+  --brand: var(--brand-evergreen);
+  --on-brand: #ffffff;
+  --action: var(--primary);
+  --on-action: var(--primary-foreground);
+  --accent-cta: var(--brand-tomato);
+  --on-accent-cta: #ffffff;
+  --sage-soft: #dfe8da;
+  --sage-wash: #f0f3ed;
+  --success: #237644;
+  --warning: #765723;
+  --info: #235b76;
+  --chart-1: #287f70;
+  --chart-2: #416cc4;
+  --chart-3: #a17a25;
+  --chart-4: #8956a2;
+  --chart-5: #c24f3c;
 
-  /* ── Semantic Canvas Ground & Element Roles (OKLCH) ── */
-  --background: oklch(97.00% 0.0082 91.48);         /* Ivory Canvas #F7F5EF (~60%) */
-  --foreground: oklch(20.77% 0.0145 172.36);         /* Primary Text Ink #111A17 */
-  --card: oklch(100% 0 0);                          /* Pure White #FFFFFF tactile cards */
-  --card-foreground: oklch(20.77% 0.0145 172.36);   /* Primary Text Ink */
-  --popover: oklch(100% 0 0);                       /* Pure White */
-  --popover-foreground: oklch(20.77% 0.0145 172.36);
-
-  /* PRIMARY BUTTON COLOR IS EVERGREEN (not tomato red) */
-  --primary: oklch(27.20% 0.0383 172.83);           /* Evergreen #102D25 */
-  --primary-foreground: oklch(100% 0 0);             /* Pure White #FFFFFF */
-
-  --secondary: oklch(95.39% 0.0098 125.68);         /* Light Sage Wash #EEF1EA */
-  --secondary-foreground: oklch(27.20% 0.0383 172.83); /* Evergreen text */
-  --muted: oklch(94.90% 0.0083 91.48);             /* Surface container #F0EEE8 */
-  --muted-foreground: oklch(47.40% 0.0350 128.42);  /* Supporting Ink #56604B */
-  --accent: oklch(90.66% 0.0202 128.71);            /* Soft Sage Panel #DCE3D5 */
-  --accent-foreground: oklch(27.20% 0.0383 172.83); /* Evergreen text on Soft Panel */
-  --destructive: oklch(39.04% 0.1157 12.21);        /* Fatal/Error Red #762334 */
-  --destructive-foreground: oklch(100% 0 0);
-  --border: oklch(91.29% 0.0071 88.65);             /* Subtle hairline #E4E2DD */
-  --input: oklch(100% 0 0);                         /* Solid white input surface */
-  --input-border: oklch(53.50% 0.0350 35.00);       /* Explicit outline #90706A */
-  --ring: oklch(27.20% 0.0383 172.83);              /* Evergreen Focus Ring */
-
-  --success: oklch(50.33% 0.1119 152.89);           /* #237644 */
-  --warning: oklch(47.86% 0.0796 77.61);            /* #765723 */
-  --info: oklch(44.67% 0.0728 232.70);              /* #235B76 */
-
-  --sidebar: oklch(96.40% 0.0082 91.48);            /* Surface container low #F5F3ED */
-  --sidebar-foreground: oklch(20.77% 0.0145 172.36);
-  --sidebar-primary: oklch(61.96% 0.2068 30.72);    /* Attention-grabbing active pip: Tomato */
-  --sidebar-primary-foreground: oklch(100% 0 0);
-  --sidebar-accent: oklch(90.66% 0.0202 128.71);    /* Soft sage active pill */
-  --sidebar-accent-foreground: oklch(27.20% 0.0383 172.83);
-  --sidebar-border: oklch(91.29% 0.0071 88.65);
-  --sidebar-ring: oklch(27.20% 0.0383 172.83);
-
-  /* ── Restrained Depth Shadows ── */
-  --shadow-card: 0 1px 3px 0 rgba(17, 26, 23, 0.04), 0 6px 16px -2px rgba(17, 26, 23, 0.06);
-  --shadow-floating: 0 1px 3px 0 rgba(17, 26, 23, 0.05), 0 12px 32px -4px rgba(17, 26, 23, 0.08), 0 24px 64px -12px rgba(17, 26, 23, 0.1);
+  /* Compatibility aliases for existing SWENA/M Auth class names. */
+  --surface: var(--background);
+  --surface-dim: #e6e6de;
+  --surface-bright: #ffffff;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #f5f4f0;
+  --surface-container: #efeee8;
+  --surface-container-high: #e8e9e2;
+  --surface-container-highest: #dee2d9;
+  --on-surface: var(--foreground);
+  --on-surface-variant: var(--muted-foreground);
+  --outline: #849189;
+  --outline-variant: var(--border);
+  --shadow-card:
+    0 1px 2px rgb(16 45 37 / 3%), 0 8px 24px -12px rgb(16 45 37 / 10%);
+  --shadow-floating: 0 12px 40px -16px rgb(16 45 37 / 22%);
   --shadow-float: var(--shadow-floating);
 }
 
 .dark {
-  /* ── Dark: Forest Night Color Family (from Canvas Pair #0D1915 / #15271F) ── */
-  --surface: oklch(20.05% 0.0190 171.40);           /* #0D1915 Midnight forest floor */
-  --surface-dim: oklch(16.50% 0.0150 171.40);       /* #09120F Deep floor */
-  --surface-bright: oklch(25.41% 0.0285 164.47);    /* #15271F Raised card */
-  --surface-container-lowest: oklch(16.50% 0.0150 171.40);
-  --surface-container-low: oklch(19.20% 0.0130 168.00); /* #0F1714 Dusty evergreen */
-  --surface-container: oklch(25.41% 0.0285 164.47); /* #15271F Raised card surface */
-  --surface-container-high: oklch(29.84% 0.0346 164.81); /* #1C3329 */
-  --surface-container-highest: oklch(35.12% 0.0354 175.89); /* #26413A */
-  --on-surface: oklch(97.00% 0.0082 91.48);         /* #F7F5EF Ivory anchor text */
-  --on-surface-variant: oklch(66.72% 0.0171 176.80);/* #8A9894 Evergreen 600 */
-  --inverse-surface: oklch(97.00% 0.0082 91.48);
-  --inverse-on-surface: oklch(20.77% 0.0145 172.36);
-  --outline: oklch(55.20% 0.0210 176.00);           /* #6A7D78 */
-  --outline-variant: oklch(35.12% 0.0354 175.89 / 0.6); /* Subtle Evergreen 900 border */
-  --surface-tint: oklch(71.20% 0.1400 25.00);
+  color-scheme: dark;
+  /* Neutral charcoal layers. Color belongs to interactions, not every surface. */
+  --background: #0d1010;
+  --foreground: #f2f3ef;
+  --card: #181c1b;
+  --card-foreground: #f2f3ef;
+  --popover: #202523;
+  --popover-foreground: #f2f3ef;
+  /* Accessible Sage on charcoal. Evergreen remains the brand anchor. */
+  --primary: #b2c9a8;
+  --primary-foreground: #10251b;
+  --secondary: #262b29;
+  --secondary-foreground: #e6e9e5;
+  --muted: #222725;
+  --muted-foreground: #aab3ac;
+  --accent: #2c3530;
+  --accent-foreground: #f1f3ee;
+  --destructive: #ef8f9b;
+  --destructive-foreground: #32151b;
+  --border: #333a36;
+  --input: #424b45;
+  --input-background: #141817;
+  --ring: #b2c9a8;
 
-  --primary-m3: oklch(81.00% 0.0350 165.00);
-  --on-primary: oklch(20.00% 0.0400 165.00);
-  --primary-container: oklch(29.84% 0.0346 164.81);
-  --on-primary-container: oklch(90.50% 0.0500 28.00);
-  --inverse-primary: oklch(47.20% 0.0380 172.00);
-  --secondary-m3: oklch(71.20% 0.1400 25.00);
-  --on-secondary: oklch(25.00% 0.0900 25.00);
-  --secondary-container: oklch(25.41% 0.0285 164.47);
-  --on-secondary-container: oklch(91.00% 0.0350 160.00);
-  --tertiary: oklch(81.00% 0.0500 125.00);
-  --on-tertiary: oklch(22.00% 0.0400 125.00);
-  --tertiary-container: oklch(35.12% 0.0354 175.89);
-  --on-tertiary-container: oklch(90.00% 0.0550 125.00);
-  --error: oklch(71.20% 0.1400 25.00);
-  --on-error: oklch(25.00% 0.0900 25.00);
-  --error-container: oklch(35.00% 0.1500 28.00);
-  --on-error-container: oklch(90.50% 0.0500 25.00);
+  --sidebar: #111514;
+  --sidebar-foreground: #dce2dc;
+  --sidebar-primary: #b2c9a8;
+  --sidebar-primary-foreground: #10251b;
+  --sidebar-accent: #29342e;
+  --sidebar-accent-foreground: #f1f3ee;
+  --sidebar-border: #2e3531;
+  --sidebar-ring: #b2c9a8;
 
-  /* Brand Anchors & Component Tokens Dark Mode */
-  --action: oklch(97.00% 0.0082 91.48);             /* High-contrast Ivory / Light Evergreen */
-  --on-action: oklch(20.77% 0.0145 172.36);         /* Deep ink text #111A17 */
-  --accent-cta: oklch(61.96% 0.2068 30.72);         /* Attention-Grabbing Tomato Red */
-  --on-accent-cta: oklch(100% 0 0);                 /* White */
-  --brand: oklch(97.00% 0.0082 91.48);
-  --on-brand: oklch(20.77% 0.0145 172.36);
-  --sage-soft: oklch(25.41% 0.0285 164.47);
-  --sage-wash: oklch(20.05% 0.0190 171.40);
+  --brand: #102d25;
+  --on-brand: #ffffff;
+  --action: var(--primary);
+  --on-action: var(--primary-foreground);
+  --accent-cta: #f26b56;
+  --on-accent-cta: #241511;
+  --sage-soft: #303d32;
+  --sage-wash: #242c26;
+  --success: #78c99a;
+  --warning: #e4bc78;
+  --info: #8bbde2;
+  --chart-1: #75c4b1;
+  --chart-2: #8daef2;
+  --chart-3: #d7b56b;
+  --chart-4: #c09adb;
+  --chart-5: #f08c77;
 
-  /* Deep Canvas Ground & True Dark Card Elevation (from Canvas Pair) */
-  --background: oklch(20.05% 0.0190 171.40);        /* #0D1915 Midnight forest floor */
-  --foreground: oklch(97.00% 0.0082 91.48);         /* #F7F5EF Ivory anchor text */
-  --card: oklch(25.41% 0.0285 164.47);              /* #15271F True Dark Card Surface */
-  --card-foreground: oklch(97.00% 0.0082 91.48);    /* #F7F5EF Ivory anchor text */
-  --popover: oklch(23.50% 0.0257 164.93);           /* #12221B Elevated subsurface */
-  --popover-foreground: oklch(97.00% 0.0082 91.48);
-
-  /* PRIMARY BUTTON COLOR IN DARK MODE */
-  --primary: oklch(97.00% 0.0082 91.48);            /* #F7F5EF Crisp Ivory primary button */
-  --primary-foreground: oklch(20.77% 0.0145 172.36);/* Deep ink text */
-
-  --secondary: oklch(29.84% 0.0346 164.81);         /* #1C3329 */
-  --secondary-foreground: oklch(97.00% 0.0082 91.48);
-  --muted: oklch(23.50% 0.0257 164.93);             /* #12221B */
-  --muted-foreground: oklch(66.72% 0.0171 176.80);  /* #8A9894 Evergreen 600 */
-  --accent: oklch(29.84% 0.0346 164.81);            /* #1C3329 */
-  --accent-foreground: oklch(97.00% 0.0082 91.48);
-  --destructive: oklch(71.20% 0.1400 25.00);        /* #FFB4A7 */
-  --destructive-foreground: oklch(25.00% 0.0900 25.00);
-  --border: oklch(35.12% 0.0354 175.89 / 0.7);      /* #26413A Hairline border */
-  --input: oklch(20.05% 0.0190 171.40);             /* Deep solid input floor */
-  --input-border: oklch(35.12% 0.0354 175.89);      /* #26413A */
-  --ring: oklch(72.88% 0.0585 128.92);              /* Sage ring #9CAF88 */
-
-  --success: oklch(70.20% 0.1450 152.00);           /* #5BD08F */
-  --warning: oklch(76.50% 0.1250 78.00);            /* #F2B24C */
-  --info: oklch(78.50% 0.0950 230.00);              /* #81C4FF */
-
-  --sidebar: oklch(19.20% 0.0130 168.00);           /* #0F1714 Dusty evergreen */
-  --sidebar-foreground: oklch(97.00% 0.0082 91.48);
-  --sidebar-primary: oklch(61.96% 0.2068 30.72);    /* Attention pip: Tomato */
-  --sidebar-primary-foreground: oklch(100% 0 0);
-  --sidebar-accent: oklch(25.41% 0.0285 164.47);    /* #15271F Active pill */
-  --sidebar-accent-foreground: oklch(97.00% 0.0082 91.48);
-  --sidebar-border: oklch(35.12% 0.0354 175.89 / 0.5);
-  --sidebar-ring: oklch(72.88% 0.0585 128.92);
-
-  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.45), 0 6px 16px -2px rgba(0, 0, 0, 0.55);
-  --shadow-floating: 0 1px 3px 0 rgba(0, 0, 0, 0.5), 0 12px 32px -4px rgba(0, 0, 0, 0.65), 0 24px 64px -12px rgba(0, 0, 0, 0.75);
+  /* Compatibility surfaces follow the same charcoal elevation ramp. */
+  --surface: var(--background);
+  --surface-dim: #090b0b;
+  --surface-bright: #282e2a;
+  --surface-container-lowest: #090b0b;
+  --surface-container-low: #121615;
+  --surface-container: #181c1b;
+  --surface-container-high: #242a27;
+  --surface-container-highest: #303833;
+  --on-surface: var(--foreground);
+  --on-surface-variant: var(--muted-foreground);
+  --outline: #737f77;
+  --outline-variant: var(--border);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 12%), 0 10px 30px -16px rgb(0 0 0 / 25%);
+  --shadow-floating: 0 16px 48px -16px rgb(0 0 0 / 45%);
   --shadow-float: var(--shadow-floating);
 }
 
 @layer base {
+  .rounded-pill {
+    border-radius: 9999px !important;
+  }
   * {
-    @apply border-border;
+    @apply border-border outline-ring/50;
   }
-
+  html {
+    scrollbar-color: var(--border) transparent;
+    scrollbar-width: thin;
+  }
   body {
-    @apply bg-background text-foreground font-sans antialiased selection:bg-accent selection:text-accent-foreground;
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-foreground);
   }
 }
 
-/* ── Restrained Glass Utility (Admin Header / Floating HUD Only) ── */
-.glass {
-  background: var(--card);
-  border-bottom: 1px solid var(--border);
-}
-
-@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+/* Intentional layout helpers, not blanket overrides of shadcn components. */
+@layer components {
+  .app-surface {
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-card);
+  }
+  .app-field {
+    background: var(--input-background);
+    border: 1px solid var(--input);
+    color: var(--foreground);
+  }
+  .app-field:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  .brand-mark {
+    background: var(--brand-evergreen);
+    color: #ffffff;
+  }
+  .tomato-accent {
+    color: var(--accent-cta);
+  }
   .glass {
-    background: rgba(247, 245, 239, 0.85);
+    background: var(--card);
     border-bottom: 1px solid var(--border);
-    -webkit-backdrop-filter: blur(16px) saturate(1.15);
-    backdrop-filter: blur(16px) saturate(1.15);
   }
 }
 
-.dark .glass {
-  background: var(--card);
-  border-bottom: 1px solid var(--border);
-}
-
-@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-  .dark .glass {
-    background: rgba(13, 25, 21, 0.85);
-    border-bottom: 1px solid var(--border);
-    -webkit-backdrop-filter: blur(16px) saturate(1.15);
-    backdrop-filter: blur(16px) saturate(1.15);
+@supports (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  .glass {
+    background: color-mix(in srgb, var(--card) 88%, transparent);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
   }
 }
-
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .glass {
     background: var(--card);
-    -webkit-backdrop-filter: none;
     backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
-
 @media (forced-colors: active) {
   .glass {
     background: Canvas;
-    -webkit-backdrop-filter: none;
     backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 
-/* ── Route Loader Animations ── */
 @keyframes m-line-expand {
-  0% {
+  from {
     transform: scaleX(0);
     opacity: 0;
   }
-  100% {
+  to {
     transform: scaleX(1);
     opacity: 1;
   }
 }
-
-.animate-m-line-1 {
-  transform-origin: left;
-  transform: scaleX(0);
-  animation: m-line-expand 600ms cubic-bezier(0.16, 1, 0.3, 1) 0s 1 normal both;
-}
-
-.animate-m-line-2 {
-  transform-origin: left;
-  transform: scaleX(0);
-  animation: m-line-expand 600ms cubic-bezier(0.16, 1, 0.3, 1) 0.08s 1 normal both;
-}
-
+.animate-m-line-1,
+.animate-m-line-2,
 .animate-m-line-3 {
   transform-origin: left;
-  transform: scaleX(0);
-  animation: m-line-expand 600ms cubic-bezier(0.16, 1, 0.3, 1) 0.16s 1 normal both;
+  animation: m-line-expand 600ms var(--ease-enter) both;
 }
-
-/* ── View Transitions Theme Animation (<= 400ms) ── */
-::view-transition-group(root) {
-  animation-timing-function: var(--expo-out);
+.animate-m-line-2 {
+  animation-delay: 80ms;
 }
-
-::view-transition-new(root) {
-  mask: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MCA0MCI+PGRlZnM+PGZpbHRlciBpZD0iYmx1ciI+PGZlR2F1c3NpYW5CbHVyIHN0ZERldmlhdGlvbj0iMiIvPjwvZmlsdGVyPjwvZGVmcz48Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSIxOCIgZmlsbD0id2hpdGUiIGZpbHRlcj0idXJsKCNibHVyKSIvPjwvc3ZnPg==') center / 0 no-repeat;
-  animation: scale 350ms var(--expo-out);
-  animation-fill-mode: both;
+.animate-m-line-3 {
+  animation-delay: 160ms;
 }
-
-::view-transition-old(root),
-.dark::view-transition-old(root) {
-  animation: none;
-  animation-fill-mode: both;
-  z-index: -1;
-}
-
-.dark::view-transition-new(root) {
-  animation: scale 350ms var(--expo-out);
-  animation-fill-mode: both;
-}
-
-@keyframes scale {
-  to {
-    mask-size: 200vmax;
-  }
-}
-
-/* ── Themed Custom Scrollbars ── */
-html,
-body,
-[data-scrollable],
-.overflow-auto,
-.overflow-y-auto {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-
-html::-webkit-scrollbar,
-body::-webkit-scrollbar,
-[data-scrollable]::-webkit-scrollbar,
-.overflow-auto::-webkit-scrollbar,
-.overflow-y-auto::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-html::-webkit-scrollbar-track,
-body::-webkit-scrollbar-track,
-[data-scrollable]::-webkit-scrollbar-track,
-.overflow-auto::-webkit-scrollbar-track,
-.overflow-y-auto::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-html::-webkit-scrollbar-thumb,
-body::-webkit-scrollbar-thumb,
-[data-scrollable]::-webkit-scrollbar-thumb,
-.overflow-auto::-webkit-scrollbar-thumb,
-.overflow-y-auto::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: var(--radius-pill);
-}
-
-html::-webkit-scrollbar-thumb:hover,
-body::-webkit-scrollbar-thumb:hover,
-[data-scrollable]::-webkit-scrollbar-thumb:hover,
-.overflow-auto::-webkit-scrollbar-thumb:hover,
-.overflow-y-auto::-webkit-scrollbar-thumb:hover {
-  background: var(--muted-foreground);
-}
-
-/* ── Content View Transitions (Spatial & Subtle) ── */
 @keyframes content-reveal {
   from {
     opacity: 0;
@@ -545,148 +354,86 @@ body::-webkit-scrollbar-thumb:hover,
     transform: translateY(0);
   }
 }
-
 .animate-content-reveal {
   animation: content-reveal 160ms var(--ease-enter) both;
 }
 
-/* ── Sonner Toaster Premium Motion & Theming ── */
+/* Existing typography class compatibility. Prefer Tailwind utilities for new UI. */
+.font-marketing-hero {
+  font-family: var(--font-heading);
+  font-size: clamp(2.5rem, 5vw, 4rem);
+  font-weight: 550;
+  line-height: 1.06;
+}
+.font-marketing-heading {
+  font-family: var(--font-heading);
+  font-size: clamp(1.75rem, 3vw, 2.25rem);
+  font-weight: 550;
+  line-height: 1.17;
+}
+.font-app-page-heading {
+  font-family: var(--font-heading);
+  font-size: 1.75rem;
+  font-weight: 650;
+  line-height: 1.22;
+  letter-spacing: -0.025em;
+}
+.font-app-section-heading {
+  font-family: var(--font-heading);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.font-app-card-heading {
+  font-family: var(--font-heading);
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.font-body {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+.font-body-marketing {
+  font-family: var(--font-sans);
+  font-size: 1.125rem;
+  line-height: 1.55;
+}
+.font-label {
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+.font-metadata {
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.font-technical-mono {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sonner: let library handle state colors, only harmonize typography/depth. */
 [data-sonner-toaster] {
   font-family: var(--font-sans);
 }
-
-[data-sonner-toast] {
-  transition: transform var(--motion-normal) var(--ease-enter),
-              opacity var(--motion-normal) var(--ease-enter),
-              height var(--motion-normal) var(--ease-enter),
-              box-shadow var(--motion-hover) var(--ease-standard) !important;
-}
-
 [data-sonner-toast][data-styled="true"] {
-  border-radius: var(--radius-lg, 16px) !important;
-  box-shadow: var(--shadow-float) !important;
-  font-family: var(--font-sans) !important;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-floating);
 }
 
-[data-sonner-toast] [data-title] {
-  font-family: var(--font-sans) !important;
-  font-weight: 500 !important;
-  color: var(--card-foreground) !important;
-}
-
-[data-sonner-toast] [data-description] {
-  font-family: var(--font-sans) !important;
-  color: var(--muted-foreground) !important;
-}
-
-[data-sonner-toast] [data-close-button] {
-  border-radius: var(--radius-pill) !important;
-  border-color: var(--border) !important;
-  background: var(--card) !important;
-  color: var(--muted-foreground) !important;
-  transition: color var(--motion-fast) var(--ease-standard),
-              background-color var(--motion-fast) var(--ease-standard) !important;
-}
-
-[data-sonner-toast] [data-close-button]:hover {
-  color: var(--foreground) !important;
-  background: var(--secondary) !important;
-}
-
-/* ── Accessibility: Reduced Motion ── */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) {
-    animation: none !important;
-  }
-}
-
-/* ── SWENA Modern Calm Tech Typography Utilities ── */
-.font-marketing-hero {
-  font-family: var(--font-marketing-hero);
-  font-size: 64px;
-  font-weight: 500;
-  line-height: 68px;
-}
-@media (max-width: 640px) {
-  .font-marketing-hero {
-    font-size: 40px;
-    line-height: 44px;
-  }
-}
-
-.font-marketing-heading {
-  font-family: var(--font-marketing-heading);
-  font-size: 36px;
-  font-weight: 500;
-  line-height: 42px;
-}
-@media (max-width: 640px) {
-  .font-marketing-heading {
-    font-size: 28px;
-    line-height: 34px;
-  }
-}
-
-.font-app-page-heading {
-  font-family: var(--font-app-page-heading);
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 34px;
-}
-
-.font-app-section-heading {
-  font-family: var(--font-app-section-heading);
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 28px;
-}
-
-.font-app-card-heading {
-  font-family: var(--font-app-card-heading);
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 24px;
-}
-
-.font-body {
-  font-family: var(--font-body);
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 24px;
-}
-
-.font-body-marketing {
-  font-family: var(--font-body-marketing);
-  font-size: 18px;
-  font-weight: 400;
-  line-height: 28px;
-}
-
-.font-label {
-  font-family: var(--font-label);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 20px;
-}
-
-.font-metadata {
-  font-family: var(--font-metadata);
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 18px;
-}
-
-.font-technical-mono {
-  font-family: var(--font-technical-mono);
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 18px;
 }

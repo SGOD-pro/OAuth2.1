@@ -150,7 +150,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               }}
             >
               {/* Vertical brand mark pill */}
-              <div className="absolute left-1.5 top-1/2 -translate-y-1/2 w-1 h-5 rounded-full bg-tomato" />
+              <div className="absolute left-1.5 top-1/2 -translate-y-1/2 w-1 h-5 rounded-full bg-sidebar-primary transition-colors duration-140" />
             </div>
 
             {navItems.map(({ to, label, end, icon }, idx) => (
@@ -182,10 +182,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
       {isTwoFactorOff && (
         <SidebarFooter className="p-3 mt-auto">
-          <div className="relative overflow-hidden rounded-xl border border-primary/20 bg-[#102D25] p-3.5 text-white shadow-xs">
+          <div className="relative overflow-hidden rounded-xl border border-sidebar-border bg-card p-3.5 text-card-foreground shadow-2xs transition-colors duration-140 dark:bg-card/70 dark:border-sidebar-border/80">
             <svg
               aria-hidden="true"
-              className="absolute inset-0 w-full h-full opacity-[0.08] pointer-events-none"
+              className="absolute inset-0 w-full h-full opacity-[0.04] dark:opacity-[0.07] pointer-events-none text-foreground"
               viewBox="0 0 200 120"
               preserveAspectRatio="none"
             >
@@ -197,20 +197,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               />
             </svg>
             <div className="relative z-10 flex flex-col gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-[#B7C9AD]">
-                <svg className="size-3.5 text-[#B7C9AD]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <svg className="size-3.5 text-warning shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                   <line x1="12" y1="8" x2="12" y2="12" />
                   <line x1="12" y1="16" x2="12.01" y2="16" />
                 </svg>
                 <span>Security notice</span>
               </div>
-              <p className="text-xs text-[#EEECE5]/90 leading-snug">
+              <p className="text-xs text-muted-foreground leading-snug">
                 Two-factor is off. This account can change credentials for every application.
               </p>
               <NavLink
                 to="/admin/security"
-                className="mt-1 inline-flex items-center justify-center h-8 px-3 rounded-pill bg-[#B7C9AD] text-[#0A1310] text-xs font-medium hover:bg-[#B7C9AD]/90 transition-colors"
+                className="mt-1 inline-flex items-center justify-center h-8 px-4 rounded-full bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 active:scale-[0.99] transition-all shadow-2xs"
               >
                 Turn on two-factor
               </NavLink>

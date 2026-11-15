@@ -95,7 +95,7 @@ export const AdminLayout: React.FC = () => {
                       <p className="font-sans text-xs font-medium text-foreground leading-none">
                         {user?.name || 'Administrator'}
                       </p>
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold tracking-wider uppercase bg-tomato/15 text-tomato border border-tomato/30">
+                      <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-semibold tracking-wider uppercase bg-tomato/15 text-tomato border border-tomato/30">
                         SUPER
                       </span>
                     </div>
@@ -124,7 +124,7 @@ export const AdminLayout: React.FC = () => {
                     <Button 
                       variant="ghost" 
                       size="icon" 
-                      className="size-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-pill transition-colors" 
+                      className="size-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-full transition-colors" 
                       onClick={handleSignOut} 
                       aria-label="Sign out"
                     >
