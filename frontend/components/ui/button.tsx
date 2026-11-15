@@ -16,7 +16,7 @@ const buttonVariants = cva(
         accent:
           "bg-accent-cta text-on-accent-cta hover:bg-accent-cta-hover active:bg-accent-cta-active shadow-xs font-semibold",
         brand:
-          "bg-evergreen text-white hover:bg-primary-hover active:bg-primary-active shadow-xs font-semibold",
+          "bg-brand text-on-brand hover:bg-brand-hover active:bg-brand-active shadow-xs font-semibold",
         supporting:
           "bg-accent text-accent-foreground hover:bg-accent/80 active:bg-accent/90 shadow-2xs font-semibold",
         outline:
