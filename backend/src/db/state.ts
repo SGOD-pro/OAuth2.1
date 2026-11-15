@@ -106,6 +106,7 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("user", { email: 1 }),
       safeIndex("session", { token: 1 }),
       safeIndex("session", { userId: 1 }),
+      safeIndex("session", { createdAt: -1 }),
       safeIndex("oauth_transactions", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("oauth_transactions", { transactionId: 1 }, { unique: true }),
       safeIndex("oauth_transactions", { state: 1 }),

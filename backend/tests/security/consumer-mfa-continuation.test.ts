@@ -90,6 +90,9 @@ const clientBSecret = "secret-app-b-1234567890";
 const clientBHash = crypto.createHash("sha256").update(clientBSecret).digest("base64url");
 const clientBCallback = "https://app-b.example.com/oauth/callback";
 
+const clientPublic = "client-public-app-mfa";
+const clientPublicCallback = "https://public-app.example.com/oauth/callback";
+
 await db.collection("oauthClient").insertMany([
   {
     id: clientA,
@@ -112,6 +115,18 @@ await db.collection("oauthClient").insertMany([
     redirectUris: [clientBCallback],
     allowedOrigins: ["https://app-b.example.com"],
     isPublic: false,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  },
+  {
+    id: clientPublic,
+    clientId: clientPublic,
+    name: "Public App MFA",
+    redirectUris: [clientPublicCallback],
+    allowedOrigins: ["https://public-app.example.com"],
+    isPublic: true,
     skipConsent: true,
     skip_consent: true,
     disabled: false,
@@ -219,6 +234,36 @@ await db.collection("user_app_registrations").insertOne({
   appRole: "admin",
   status: "active",
   registeredAt: new Date(),
+});
+
+// -----------------------------------------------------------------------------
+// Seed User with MFA for Public App
+// -----------------------------------------------------------------------------
+const publicMfaUserEmail = "public_mfa_user@example.com";
+const publicMfaUserPass = "PublicMfaPass123!Aa";
+const publicMfaSignUp = await authProvider.api.signUpEmail({
+  body: { email: publicMfaUserEmail, password: publicMfaUserPass, name: "Public MFA User" },
+});
+const publicMfaUserId = String(publicMfaSignUp.user.id);
+
+const publicPreSignIn = await authProvider.api.signInEmail({
+  body: { email: publicMfaUserEmail, password: publicMfaUserPass },
+  asResponse: true,
+});
+const publicPreCookie = (publicPreSignIn.headers.get("set-cookie") || "").split(";")[0];
+
+const public2faSetup = await authProvider.api.enableTwoFactor({
+  body: { password: publicMfaUserPass, method: "totp" },
+  headers: new Headers({ cookie: publicPreCookie }),
+});
+const publicB32Secret = new URL(public2faSetup.totpURI).searchParams.get("secret")!;
+const publicRawSecret = new TextDecoder().decode(base32.decode(publicB32Secret));
+
+const publicInitCode = await createOTP(publicRawSecret, { digits: 6, period: 30 }).totp();
+await authProvider.api.verifyTOTP({
+  body: { code: publicInitCode },
+  headers: new Headers({ cookie: publicPreCookie }),
+  asResponse: true,
 });
 
 // =============================================================================
@@ -636,6 +681,107 @@ await runTest("MFA-9: MFA retry resilience allows retry on incorrect code and re
     errCookie.code === "INVALID_TWO_FACTOR_COOKIE" || (errCookie.message && errCookie.message.toLowerCase().includes("cookie")),
     "Missing/tampered challenge cookie must return INVALID_TWO_FACTOR_COOKIE"
   );
+});
+
+// =============================================================================
+// TEST 10: Public application registration upon successful two-factor verification
+// =============================================================================
+await runTest("MFA-10: Public application registration is recorded upon successful 2FA verification", async () => {
+  // 1. Confirm user is NOT registered for clientPublic initially
+  const initialReg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientPublic,
+  });
+  assert.equal(initialReg, null, "User must not have a registration record for public client initially");
+
+  // 2. Initiate authorization flow for clientPublic
+  const state = "state_public_mfa_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientPublic, clientPublicCallback, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, {
+    method: "GET",
+    headers: getTestHeaders(),
+  });
+  assert.equal(authRes.status, 302);
+
+  // Extract transaction cookie from authorize response
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/);
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/);
+  const authCookies = [txMatch?.[0], clientMatch?.[0]].filter(Boolean).join("; ");
+
+  // 3. User submits password; 2FA is required
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({
+      email: publicMfaUserEmail,
+      password: publicMfaUserPass,
+      callbackURL: authUrl,
+    }),
+  });
+  assert.equal(loginRes.status, 200);
+  const loginData = await loginRes.json();
+  assert.equal(loginData.twoFactorRedirect, true);
+
+  // Still not registered because second factor has not succeeded yet
+  const midReg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientPublic,
+  });
+  assert.equal(midReg, null, "User must not be registered before 2FA verification");
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  assert.ok(mfaCookie);
+
+  // 4. Complete second factor verification with TOTP code
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+  const totpCode = await createOTP(publicRawSecret, { digits: 6, period: 30 }).totp();
+
+  const verifyRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookies }),
+    body: JSON.stringify({ code: totpCode }),
+  });
+  assert.equal(verifyRes.status, 200, "TOTP verification must succeed");
+  const sessionCookie = extractSessionCookie(verifyRes);
+  assert.ok(sessionCookie);
+
+  // 5. Assert user_app_registrations record was created upon 2FA success
+  const postReg = await db.collection("user_app_registrations").findOne({
+    userId: publicMfaUserId,
+    clientId: clientPublic,
+  });
+  assert.ok(postReg, "user_app_registrations record must be created upon successful 2FA verification for public client");
+  assert.equal(postReg.clientId, clientPublic);
+  assert.equal(postReg.userId, publicMfaUserId);
+
+  // 6. Complete OAuth authorization with session cookie
+  const resumeRes = await app.request(authUrl, {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: sessionCookie }),
+  });
+  assert.equal(resumeRes.status, 302);
+  const loc = resumeRes.headers.get("location")!;
+  assert.ok(loc.startsWith(clientPublicCallback));
+  assert.ok(loc.includes("code="));
+});
+
+// =============================================================================
+// TEST 11: CORS exposed headers include pagination and rate-limit metadata
+// =============================================================================
+await runTest("MFA-11: CORS exposed headers include pagination and rate limit metadata", async () => {
+  const optionsRes = await app.request("/api/admin/logs", {
+    method: "OPTIONS",
+    headers: getTestHeaders({ origin: "http://localhost:5174" }),
+  });
+  assert.equal(optionsRes.status, 204);
+  const exposed = optionsRes.headers.get("access-control-expose-headers") || "";
+  assert.ok(exposed.includes("X-Total-Count"), "Exposed headers must include X-Total-Count");
+  assert.ok(exposed.includes("X-Page"), "Exposed headers must include X-Page");
+  assert.ok(exposed.includes("X-Limit"), "Exposed headers must include X-Limit");
+  assert.ok(exposed.includes("X-Total-Pages"), "Exposed headers must include X-Total-Pages");
 });
 
 // -----------------------------------------------------------------------------

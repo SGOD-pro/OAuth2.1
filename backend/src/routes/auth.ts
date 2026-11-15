@@ -2409,6 +2409,9 @@ auth.post("/two-factor/verify-totp", async (c) => {
             // ignore
         }
     }
+    if (!clientId) {
+        clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
+    }
 
     try {
         const sessionResult = await authProvider.api.getSession({
@@ -2481,6 +2484,24 @@ auth.post("/two-factor/verify-totp", async (c) => {
             }
         } catch {
             // ignore
+        }
+
+        // Public application registration upon successful two-factor verification
+        if (userId && clientId) {
+            try {
+                const database = await getDb();
+                const clientDoc = await database.collection("oauthClient").findOne({ clientId });
+                if (clientDoc && clientDoc.isPublic) {
+                    const canonicalClientId = clientDoc.clientId;
+                    await database.collection("user_app_registrations").updateOne(
+                        { userId, clientId: canonicalClientId },
+                        { $setOnInsert: { userId, clientId: canonicalClientId, registeredAt: new Date() } },
+                        { upsert: true }
+                    );
+                }
+            } catch (err) {
+                console.error("[TWO_FACTOR] Failed to record public app registration:", err);
+            }
         }
     }
 
@@ -2527,6 +2548,9 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
             // ignore
         }
     }
+    if (!clientId) {
+        clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
+    }
 
     try {
         const sessionResult = await authProvider.api.getSession({
@@ -2599,6 +2623,24 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
             }
         } catch {
             // ignore
+        }
+
+        // Public application registration upon successful two-factor verification
+        if (userId && clientId) {
+            try {
+                const database = await getDb();
+                const clientDoc = await database.collection("oauthClient").findOne({ clientId });
+                if (clientDoc && clientDoc.isPublic) {
+                    const canonicalClientId = clientDoc.clientId;
+                    await database.collection("user_app_registrations").updateOne(
+                        { userId, clientId: canonicalClientId },
+                        { $setOnInsert: { userId, clientId: canonicalClientId, registeredAt: new Date() } },
+                        { upsert: true }
+                    );
+                }
+            } catch (err) {
+                console.error("[TWO_FACTOR] Failed to record public app registration:", err);
+            }
         }
     }
 

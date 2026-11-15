@@ -12,6 +12,9 @@ import { isLoopbackHost, normalizeOrigin, originMatchesRedirectUri, getTrustedCl
 const CORS_ALLOW_HEADERS =
   "Content-Type,Authorization,X-CSRF-Token,x-csrf-token";
 
+const CORS_EXPOSE_HEADERS =
+  "X-Total-Count, X-Page, X-Limit, X-Total-Pages, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset";
+
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -102,6 +105,7 @@ function applyCorsHeaders(c: Context, origin: string) {
     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
   );
   c.header("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
+  c.header("Access-Control-Expose-Headers", CORS_EXPOSE_HEADERS);
 }
 
 function applyCorsHeadersToResponse(c: Context, origin: string) {
@@ -112,6 +116,7 @@ function applyCorsHeadersToResponse(c: Context, origin: string) {
     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
   );
   c.res.headers.set("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
+  c.res.headers.set("Access-Control-Expose-Headers", CORS_EXPOSE_HEADERS);
 }
 
 // P1-8: In-memory rate limit for novel CORS origin DB lookups.
