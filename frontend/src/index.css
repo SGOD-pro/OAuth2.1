@@ -80,6 +80,13 @@
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-pill: 9999px;
   --radius-full: 9999px;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-emphasis: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-140: 140ms;
+  --duration-180: 180ms;
+  --duration-220: 220ms;
 }
 
 :root {

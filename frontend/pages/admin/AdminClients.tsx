@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef, useLayoutEffect } from 'react';
 import { RegisterAppModal } from './RegisterAppModal';
 import { EditAppModal } from './EditAppModal';
 import { AppAdminManager } from './ProvisionAdminModal';
@@ -110,6 +110,91 @@ export const AdminClients: React.FC = () => {
     setHasAdminsOnly(false);
     setCurrentPage(1);
   }, []);
+
+  // Quick segmented filter pill options
+  const filterSegments = useMemo(() => [
+    {
+      key: 'all',
+      label: `All (${clients.length})`,
+      onClick: () => { setEnvFilter('all'); setAccessFilter('all'); setCurrentPage(1); },
+    },
+    {
+      key: 'prod',
+      label: `Production (${clients.filter((c) => !c.is_dev && !c.isDev).length})`,
+      onClick: () => { setEnvFilter('prod'); setAccessFilter('all'); setCurrentPage(1); },
+    },
+    {
+      key: 'dev',
+      label: `Development (${clients.filter((c) => c.is_dev || c.isDev).length})`,
+      onClick: () => { setEnvFilter('dev'); setAccessFilter('all'); setCurrentPage(1); },
+    },
+    {
+      key: 'public',
+      label: `Public (${clients.filter((c) => c.is_public !== false && c.isPublic !== false).length})`,
+      onClick: () => { setAccessFilter('public'); setEnvFilter('all'); setCurrentPage(1); },
+    },
+    {
+      key: 'private',
+      label: `Private (${clients.filter((c) => c.is_public === false || c.isPublic === false).length})`,
+      onClick: () => { setAccessFilter('private'); setEnvFilter('all'); setCurrentPage(1); },
+    },
+  ], [clients]);
+
+  // Active key for the traveling indicator pill
+  const activeSegmentKey = useMemo(() => {
+    if (envFilter === 'all' && accessFilter === 'all') return 'all';
+    if (envFilter === 'prod' && accessFilter === 'all') return 'prod';
+    if (envFilter === 'dev' && accessFilter === 'all') return 'dev';
+    if (accessFilter === 'public' && envFilter === 'all') return 'public';
+    if (accessFilter === 'private' && envFilter === 'all') return 'private';
+    return null;
+  }, [envFilter, accessFilter]);
+
+  const filterContainerRef = useRef<HTMLDivElement>(null);
+  const filterBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [filterIndicatorStyle, setFilterIndicatorStyle] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    ready: boolean;
+  }>({ left: 0, top: 0, width: 0, height: 0, ready: false });
+
+  const updateFilterIndicator = useCallback(() => {
+    if (!activeSegmentKey) {
+      setFilterIndicatorStyle((prev) => (prev.ready ? { ...prev, ready: false } : prev));
+      return;
+    }
+    const container = filterContainerRef.current;
+    const target = filterBtnRefs.current[activeSegmentKey];
+    if (container && target) {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      setFilterIndicatorStyle({
+        left: targetRect.left - containerRect.left,
+        top: targetRect.top - containerRect.top,
+        width: targetRect.width,
+        height: targetRect.height,
+        ready: true,
+      });
+    }
+  }, [activeSegmentKey]);
+
+  useLayoutEffect(() => {
+    updateFilterIndicator();
+    const container = filterContainerRef.current;
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && container) {
+      observer = new ResizeObserver(() => updateFilterIndicator());
+      observer.observe(container);
+    }
+    const handleResize = () => updateFilterIndicator();
+    window.addEventListener('resize', handleResize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [updateFilterIndicator, clients.length]);
 
   // Compute filtered clients based on debounced search and active filters
   const filteredClients = useMemo(() => {
@@ -302,63 +387,43 @@ export const AdminClients: React.FC = () => {
           </Card>
         ) : (
           <div className="w-full space-y-4">
-            {/* Quick Segmented Filter Pills */}
-            <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-full bg-secondary/60 border border-border/80 w-fit">
-              <button
-                type="button"
-                onClick={() => { setEnvFilter('all'); setAccessFilter('all'); }}
-                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  envFilter === 'all' && accessFilter === 'all'
-                    ? 'bg-card text-foreground font-medium shadow-2xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                All ({clients.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => { setEnvFilter('prod'); setAccessFilter('all'); }}
-                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  envFilter === 'prod' && accessFilter === 'all'
-                    ? 'bg-card text-foreground font-medium shadow-2xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Production ({clients.filter((c) => !c.is_dev && !c.isDev).length})
-              </button>
-              <button
-                type="button"
-                onClick={() => { setEnvFilter('dev'); setAccessFilter('all'); }}
-                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  envFilter === 'dev' && accessFilter === 'all'
-                    ? 'bg-card text-foreground font-medium shadow-2xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Development ({clients.filter((c) => c.is_dev || c.isDev).length})
-              </button>
-              <button
-                type="button"
-                onClick={() => { setAccessFilter('public'); setEnvFilter('all'); }}
-                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  accessFilter === 'public' && envFilter === 'all'
-                    ? 'bg-card text-foreground font-medium shadow-2xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Public ({clients.filter((c) => c.is_public !== false && c.isPublic !== false).length})
-              </button>
-              <button
-                type="button"
-                onClick={() => { setAccessFilter('private'); setEnvFilter('all'); }}
-                className={`px-3 py-1 rounded-full text-xs font-sans transition-[color,background-color,box-shadow,transform] duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  accessFilter === 'private' && envFilter === 'all'
-                    ? 'bg-card text-foreground font-medium shadow-2xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Private ({clients.filter((c) => c.is_public === false || c.isPublic === false).length})
-              </button>
+            {/* Quick Segmented Filter Pills with Traveling Active Pill */}
+            <div
+              ref={filterContainerRef}
+              className="relative flex flex-wrap items-center gap-1.5 p-1 rounded-full bg-secondary/60 border border-border/80 w-fit"
+            >
+              {/* Traveling Active Indicator Pill (220ms GPU transform) */}
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute left-0 top-0 rounded-full bg-card shadow-2xs transition-[transform,width,height,opacity] duration-220 ease-emphasis will-change-transform motion-reduce:transition-none motion-reduce:transform-none"
+                style={{
+                  transform: `translateX(${filterIndicatorStyle.left}px) translateY(${filterIndicatorStyle.top}px) translateZ(0)`,
+                  width: `${filterIndicatorStyle.width}px`,
+                  height: `${filterIndicatorStyle.height}px`,
+                  opacity: filterIndicatorStyle.ready && activeSegmentKey ? 1 : 0,
+                }}
+              />
+
+              {filterSegments.map((segment) => {
+                const isActive = activeSegmentKey === segment.key;
+                return (
+                  <button
+                    key={segment.key}
+                    ref={(el) => {
+                      filterBtnRefs.current[segment.key] = el;
+                    }}
+                    type="button"
+                    onClick={segment.onClick}
+                    className={`relative z-10 px-3 py-1 rounded-full text-xs font-sans transition-colors duration-140 cursor-pointer active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                      isActive
+                        ? 'text-foreground font-medium'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {segment.label}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Search and Filter Toolbar */}
