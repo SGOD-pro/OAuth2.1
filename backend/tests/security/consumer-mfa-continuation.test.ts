@@ -1241,6 +1241,496 @@ await runTest("MFA-18: Super admin with MFA does not receive application members
   assert.equal(reg, null, "Super admin must never receive consumer app membership");
 });
 
+// Helper for focused tests
+async function createTestMfaUser(email: string, pass: string, name: string) {
+  const signUp = await authProvider.api.signUpEmail({
+    body: { email, password: pass, name },
+  });
+  const userId = String(signUp.user.id);
+  const preSignIn = await authProvider.api.signInEmail({
+    body: { email, password: pass },
+    asResponse: true,
+  });
+  const preCookie = (preSignIn.headers.get("set-cookie") || "").split(";")[0];
+  const setup = await authProvider.api.enableTwoFactor({
+    body: { password: pass, method: "totp" },
+    headers: new Headers({ cookie: preCookie }),
+  });
+  const b32Secret = new URL(setup.totpURI).searchParams.get("secret")!;
+  const rawSecret = new TextDecoder().decode(base32.decode(b32Secret));
+  const backupCodes = setup.backupCodes;
+  const initCode = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
+  await authProvider.api.verifyTOTP({
+    body: { code: initCode },
+    headers: new Headers({ cookie: preCookie }),
+    asResponse: true,
+  });
+  return { userId, email, pass, rawSecret, backupCodes };
+}
+
+// =============================================================================
+// TEST 19: Valid TOTP and recovery-code flows register the correct user once
+// =============================================================================
+await runTest("MFA-19: Valid TOTP and recovery-code flows register the correct user once", async () => {
+  const clientRegOnce = "client-public-reg-once";
+  const clientRegOnceCb = "https://public-reg-once.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientRegOnce,
+    clientId: clientRegOnce,
+    name: "Public App Reg Once",
+    redirectUris: [clientRegOnceCb],
+    allowedOrigins: ["https://public-reg-once.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const uTotp = await createTestMfaUser("totp_once@example.com", "TotpOnce123!Aa", "TOTP Once User");
+  const stateTotp = "state_totp_once_" + crypto.randomBytes(6).toString("hex");
+  const pkceTotp = makePKCE();
+  const authUrlTotp = makeAuthorizeUrl(clientRegOnce, clientRegOnceCb, stateTotp, pkceTotp.challenge);
+
+  const authResTotp = await app.request(authUrlTotp, { method: "GET", headers: getTestHeaders() });
+  const setCookieTotp = authResTotp.headers.get("set-cookie") || "";
+  const txTotp = setCookieTotp.match(/oauth_transaction_id=[^;]+/)?.[0];
+  const clientTotp = setCookieTotp.match(/current_client_id=[^;]+/)?.[0];
+  const authCookiesTotp = [txTotp, clientTotp].filter(Boolean).join("; ");
+
+  const loginResTotp = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookiesTotp }),
+    body: JSON.stringify({ email: uTotp.email, password: uTotp.pass, callbackURL: authUrlTotp }),
+  });
+  assert.equal(loginResTotp.status, 200);
+
+  const mfaCookieTotp = extractMfaCookie(loginResTotp);
+  const combinedCookiesTotp = [mfaCookieTotp, authCookiesTotp].filter(Boolean).join("; ");
+  const totpCode = await createOTP(uTotp.rawSecret, { digits: 6, period: 30 }).totp();
+
+  const verifyResTotp = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookiesTotp }),
+    body: JSON.stringify({ code: totpCode }),
+  });
+  assert.equal(verifyResTotp.status, 200);
+
+  const countTotp = await db.collection("user_app_registrations").countDocuments({
+    userId: uTotp.userId,
+    clientId: clientRegOnce,
+  });
+  assert.equal(countTotp, 1, "TOTP flow must register user exactly once");
+
+  // Recovery code flow registration
+  const clientRecOnce = "client-public-rec-once";
+  const clientRecOnceCb = "https://public-rec-once.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientRecOnce,
+    clientId: clientRecOnce,
+    name: "Public App Recovery Once",
+    redirectUris: [clientRecOnceCb],
+    allowedOrigins: ["https://public-rec-once.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const uRec = await createTestMfaUser("rec_once@example.com", "RecOnce123!Aa", "Rec Once User");
+  const stateRec = "state_rec_once_" + crypto.randomBytes(6).toString("hex");
+  const pkceRec = makePKCE();
+  const authUrlRec = makeAuthorizeUrl(clientRecOnce, clientRecOnceCb, stateRec, pkceRec.challenge);
+
+  const authResRec = await app.request(authUrlRec, { method: "GET", headers: getTestHeaders() });
+  const setCookieRec = authResRec.headers.get("set-cookie") || "";
+  const txRec = setCookieRec.match(/oauth_transaction_id=[^;]+/)?.[0];
+  const clientRec = setCookieRec.match(/current_client_id=[^;]+/)?.[0];
+  const authCookiesRec = [txRec, clientRec].filter(Boolean).join("; ");
+
+  const loginResRec = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookiesRec }),
+    body: JSON.stringify({ email: uRec.email, password: uRec.pass, callbackURL: authUrlRec }),
+  });
+  assert.equal(loginResRec.status, 200);
+
+  const mfaCookieRec = extractMfaCookie(loginResRec);
+  const combinedCookiesRec = [mfaCookieRec, authCookiesRec].filter(Boolean).join("; ");
+
+  const verifyResRec = await app.request("/api/auth/two-factor/verify-backup-code", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookiesRec }),
+    body: JSON.stringify({ code: uRec.backupCodes[0] }),
+  });
+  assert.equal(verifyResRec.status, 200);
+
+  const countRec = await db.collection("user_app_registrations").countDocuments({
+    userId: uRec.userId,
+    clientId: clientRecOnce,
+  });
+  assert.equal(countRec, 1, "Recovery code flow must register user exactly once");
+});
+
+// =============================================================================
+// TEST 20: Completed-session lookup failure creates no membership
+// =============================================================================
+await runTest("MFA-20: Completed-session lookup failure creates no membership", async () => {
+  const clientLookupFail = "client-public-lookup-fail";
+  const clientLookupFailCb = "https://public-lookup-fail.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientLookupFail,
+    clientId: clientLookupFail,
+    name: "Public App Lookup Fail",
+    redirectUris: [clientLookupFailCb],
+    allowedOrigins: ["https://public-lookup-fail.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const uFail = await createTestMfaUser("lookup_fail_u@example.com", "LookupFail123!Aa", "Lookup Fail User");
+  const state = "state_lookup_fail_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientLookupFail, clientLookupFailCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, { method: "GET", headers: getTestHeaders() });
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/)?.[0];
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/)?.[0];
+  const authCookies = [txMatch, clientMatch].filter(Boolean).join("; ");
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({ email: uFail.email, password: uFail.pass, callbackURL: authUrl }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+  const totpCode = await createOTP(uFail.rawSecret, { digits: 6, period: 30 }).totp();
+
+  // Intercept session lookup to simulate completed-session lookup failure
+  const origCollection = db.collection.bind(db);
+  db.collection = ((name: string, ...args: any[]) => {
+    const coll = origCollection(name, ...args);
+    if (name === "session") {
+      coll.findOne = (async () => null) as any;
+    }
+    return coll;
+  }) as any;
+
+  try {
+    const verifyRes = await app.request("/api/auth/two-factor/verify-totp", {
+      method: "POST",
+      headers: getTestHeaders({ Cookie: combinedCookies }),
+      body: JSON.stringify({ code: totpCode }),
+    });
+    assert.equal(verifyRes.status, 200);
+  } finally {
+    db.collection = origCollection;
+  }
+
+  // Verify that no membership was created and candidate fallback did NOT occur
+  const reg = await db.collection("user_app_registrations").findOne({
+    clientId: clientLookupFail,
+  });
+  assert.equal(reg, null, "Completed-session lookup failure must create no membership");
+});
+
+// =============================================================================
+// TEST 21: Existing session for User A plus MFA continuation for User B never registers User A
+// =============================================================================
+await runTest("MFA-21: Existing session for User A plus MFA continuation for User B never registers User A as User B completed identity", async () => {
+  const clientSwitch = "client-public-switch-isolation";
+  const clientSwitchCb = "https://public-switch.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientSwitch,
+    clientId: clientSwitch,
+    name: "Public App Switch Isolation",
+    redirectUris: [clientSwitchCb],
+    allowedOrigins: ["https://public-switch.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  // User A: existing logged-in user with MFA enabled
+  const userA = await createTestMfaUser("user_a_active@example.com", "UserAPass123!Aa", "User A Active");
+  const userAPre = await authProvider.api.signInEmail({
+    body: { email: userA.email, password: userA.pass },
+    asResponse: true,
+  });
+  const userAMfaCookie = extractMfaCookie(userAPre);
+  const codeA = await createOTP(userA.rawSecret, { digits: 6, period: 30 }).totp();
+  const userAFull = await authProvider.api.verifyTOTP({
+    body: { code: codeA },
+    headers: new Headers({ cookie: userAMfaCookie }),
+    asResponse: true,
+  });
+  const userACookie = extractSessionCookie(userAFull);
+  assert.ok(userACookie, "User A must have active session cookie");
+
+  // User B: MFA user starting OAuth continuation
+  const userB = await createTestMfaUser("user_b_mfa@example.com", "UserBPass123!Aa", "User B MFA");
+  const state = "state_user_b_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientSwitch, clientSwitchCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, { method: "GET", headers: getTestHeaders() });
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/)?.[0];
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/)?.[0];
+  const authCookies = [txMatch, clientMatch].filter(Boolean).join("; ");
+
+  const loginResB = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({ email: userB.email, password: userB.pass, callbackURL: authUrl }),
+  });
+  assert.equal(loginResB.status, 200);
+
+  const mfaCookieB = extractMfaCookie(loginResB);
+
+  // Scenario 1: User A's session token sent with User B's OAuth continuation and User A's TOTP
+  // Better Auth authenticates User A, but handler must reject membership due to bound identity mismatch
+  const mixedCookiesA = [userACookie, mfaCookieB, authCookies].filter(Boolean).join("; ");
+  const totpCodeA = await createOTP(userA.rawSecret, { digits: 6, period: 30 }).totp();
+
+  const verifyResA = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: mixedCookiesA }),
+    body: JSON.stringify({ code: totpCodeA }),
+  });
+  assert.equal(verifyResA.status, 200);
+
+  // User A must NEVER be registered for User B's OAuth client
+  const regA = await db.collection("user_app_registrations").findOne({
+    userId: userA.userId,
+    clientId: clientSwitch,
+  });
+  assert.equal(regA, null, "User A must never be registered as User B completed identity");
+
+  // Scenario 2: Valid completion by User B with their continuation
+  const validCookiesB = [mfaCookieB, authCookies].filter(Boolean).join("; ");
+  const totpCodeB = await createOTP(userB.rawSecret, { digits: 6, period: 30 }).totp();
+
+  const verifyResB = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: validCookiesB }),
+    body: JSON.stringify({ code: totpCodeB }),
+  });
+  assert.equal(verifyResB.status, 200);
+
+  // User B must be registered
+  const regB = await db.collection("user_app_registrations").findOne({
+    userId: userB.userId,
+    clientId: clientSwitch,
+  });
+  assert.ok(regB, "User B must be registered as completed identity");
+});
+
+// =============================================================================
+// TEST 22: Missing or mismatched identity binding cannot create membership
+// =============================================================================
+await runTest("MFA-22: Missing or mismatched identity binding cannot create membership", async () => {
+  const clientNobind = "client-public-nobind";
+  const clientNobindCb = "https://public-nobind.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientNobind,
+    clientId: clientNobind,
+    name: "Public App No Bind",
+    redirectUris: [clientNobindCb],
+    allowedOrigins: ["https://public-nobind.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const uBinding = await createTestMfaUser("binding_test_u@example.com", "BindingPass123!Aa", "Binding User");
+
+  // Part A: Missing boundUserId in pending transaction
+  const txIdNoBind = "tx_nobind_" + crypto.randomBytes(8).toString("hex");
+  await db.collection("oauth_transactions").insertOne({
+    transactionId: txIdNoBind,
+    clientId: clientNobind,
+    redirectUri: clientNobindCb,
+    state: "state_nobind",
+    codeChallenge: "challenge_nobind",
+    codeChallengeMethod: "S256",
+    status: "pending",
+    // No userId bound
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + 600000),
+  });
+
+  // User logs in to get two_factor cookie
+  const loginResA = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: uBinding.email, password: uBinding.pass }),
+  });
+  assert.equal(loginResA.status, 200);
+  const mfaCookieA = extractMfaCookie(loginResA);
+  const cookiesNoBind = [mfaCookieA, `oauth_transaction_id=${txIdNoBind}`].join("; ");
+
+  const totpCodeA = await createOTP(uBinding.rawSecret, { digits: 6, period: 30 }).totp();
+  const verifyResNoBind = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: cookiesNoBind }),
+    body: JSON.stringify({ code: totpCodeA }),
+  });
+  assert.equal(verifyResNoBind.status, 200);
+
+  const regNoBind = await db.collection("user_app_registrations").findOne({
+    clientId: clientNobind,
+  });
+  assert.equal(regNoBind, null, "Missing identity binding must not create application membership");
+
+  // Part B: Mismatched boundUserId in pending transaction
+  const clientMismatch = "client-public-mismatch";
+  const clientMismatchCb = "https://public-mismatch.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientMismatch,
+    clientId: clientMismatch,
+    name: "Public App Mismatch",
+    redirectUris: [clientMismatchCb],
+    allowedOrigins: ["https://public-mismatch.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const txIdMismatch = "tx_mismatch_" + crypto.randomBytes(8).toString("hex");
+  await db.collection("oauth_transactions").insertOne({
+    transactionId: txIdMismatch,
+    clientId: clientMismatch,
+    redirectUri: clientMismatchCb,
+    state: "state_mismatch",
+    codeChallenge: "challenge_mismatch",
+    codeChallengeMethod: "S256",
+    status: "pending",
+    userId: "completely-different-user-id", // bound to someone else
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + 600000),
+  });
+
+  const loginResB = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: uBinding.email, password: uBinding.pass }),
+  });
+  assert.equal(loginResB.status, 200);
+  const mfaCookieB = extractMfaCookie(loginResB);
+  const cookiesMismatch = [mfaCookieB, `oauth_transaction_id=${txIdMismatch}`].join("; ");
+
+  const totpCodeB = await createOTP(uBinding.rawSecret, { digits: 6, period: 30 }).totp();
+  const verifyResMismatch = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: cookiesMismatch }),
+    body: JSON.stringify({ code: totpCodeB }),
+  });
+  assert.equal(verifyResMismatch.status, 200);
+
+  const regMismatch = await db.collection("user_app_registrations").findOne({
+    clientId: clientMismatch,
+  });
+  assert.equal(regMismatch, null, "Mismatched identity binding must not create application membership");
+});
+
+// =============================================================================
+// TEST 23: Failed verification creates no membership (recovery code path)
+// =============================================================================
+await runTest("MFA-23: Failed verification creates no membership on recovery code path", async () => {
+  const clientFailRec = "client-public-fail-rec";
+  const clientFailRecCb = "https://public-fail-rec.example.com/oauth/callback";
+  await db.collection("oauthClient").insertOne({
+    id: clientFailRec,
+    clientId: clientFailRec,
+    name: "Public App Fail Recovery",
+    redirectUris: [clientFailRecCb],
+    allowedOrigins: ["https://public-fail-rec.example.com"],
+    isPublic: true,
+    skipConsent: true,
+    skip_consent: true,
+    disabled: false,
+    createdAt: new Date(),
+  });
+
+  const uFailRec = await createTestMfaUser("fail_rec_u@example.com", "FailRec123!Aa", "Fail Rec User");
+  const state = "state_fail_rec_" + crypto.randomBytes(6).toString("hex");
+  const pkce = makePKCE();
+  const authUrl = makeAuthorizeUrl(clientFailRec, clientFailRecCb, state, pkce.challenge);
+
+  const authRes = await app.request(authUrl, { method: "GET", headers: getTestHeaders() });
+  const setCookie = authRes.headers.get("set-cookie") || "";
+  const txMatch = setCookie.match(/oauth_transaction_id=[^;]+/)?.[0];
+  const clientMatch = setCookie.match(/current_client_id=[^;]+/)?.[0];
+  const authCookies = [txMatch, clientMatch].filter(Boolean).join("; ");
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: authCookies }),
+    body: JSON.stringify({ email: uFailRec.email, password: uFailRec.pass, callbackURL: authUrl }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const combinedCookies = [mfaCookie, authCookies].filter(Boolean).join("; ");
+
+  const verifyRes = await app.request("/api/auth/two-factor/verify-backup-code", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: combinedCookies }),
+    body: JSON.stringify({ code: "invalid-backup-code-xyz" }),
+  });
+  assert.equal(verifyRes.status >= 400, true);
+
+  const reg = await db.collection("user_app_registrations").findOne({
+    clientId: clientFailRec,
+  });
+  assert.equal(reg, null, "Failed backup code verification must create no membership");
+});
+
+// =============================================================================
+// TEST 24: Standalone MFA verification creates no unrelated app membership
+// =============================================================================
+await runTest("MFA-24: Standalone MFA verification creates no unrelated app membership", async () => {
+  const uStandalone = await createTestMfaUser("standalone_u@example.com", "Standalone123!Aa", "Standalone User");
+
+  // Sign in to initiate two factor challenge without any OAuth transaction or context
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders(),
+    body: JSON.stringify({ email: uStandalone.email, password: uStandalone.pass }),
+  });
+  assert.equal(loginRes.status, 200);
+
+  const mfaCookie = extractMfaCookie(loginRes);
+  const totpCode = await createOTP(uStandalone.rawSecret, { digits: 6, period: 30 }).totp();
+
+  const verifyRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: mfaCookie }),
+    body: JSON.stringify({ code: totpCode }),
+  });
+  assert.equal(verifyRes.status, 200);
+
+  const regCount = await db.collection("user_app_registrations").countDocuments({
+    userId: uStandalone.userId,
+  });
+  assert.equal(regCount, 0, "Standalone MFA verification must create no app memberships");
+});
+
 // -----------------------------------------------------------------------------
 // Teardown
 // -----------------------------------------------------------------------------

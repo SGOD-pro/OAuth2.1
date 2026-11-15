@@ -2508,10 +2508,10 @@ async function recordMfaPublicAppMembership(
         return;
     }
 
-    // Identity binding: if the OAuth transaction was bound to a specific user identity during first factor,
-    // verify the successfully authenticated session matches that exact user.
-    if (validatedContext.boundUserId && validatedContext.boundUserId !== completedUserId) {
-        console.warn(`[MFA_OAUTH] User mismatch in MFA completion: bound ${validatedContext.boundUserId} vs completed ${completedUserId}`);
+    // Identity binding: completed identity must match the validated OAuth continuation binding.
+    // Missing or mismatched identity binding cannot create membership.
+    if (!validatedContext.boundUserId || validatedContext.boundUserId !== completedUserId) {
+        console.warn(`[MFA_OAUTH] Identity binding mismatch or missing: bound ${validatedContext.boundUserId} vs completed ${completedUserId}`);
         return;
     }
 
@@ -2553,6 +2553,45 @@ async function recordMfaPublicAppMembership(
     );
 }
 
+interface VerifiedMfaSession {
+    sessionId: string | null;
+    completedUserId: string | null;
+    actor: string | null;
+}
+
+async function resolveVerifiedMfaSession(res: Response): Promise<VerifiedMfaSession> {
+    if (res.status >= 400) {
+        return { sessionId: null, completedUserId: null, actor: null };
+    }
+
+    try {
+        const setCookie = res.headers.get("set-cookie") || "";
+        const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
+        if (match) {
+            const rawToken = decodeURIComponent(match[1]);
+            const token = rawToken.split(".")[0];
+            const database = await getDb();
+            const sessionDoc = await database.collection("session").findOne({ token });
+            if (sessionDoc && sessionDoc.userId) {
+                const sessionId = String(sessionDoc._id || sessionDoc.id);
+                const completedUserId = sessionDoc.userId.toString();
+                let actor: string | null = null;
+                const u = await database.collection("user").findOne({
+                    $or: [{ id: completedUserId }, { _id: completedUserId }],
+                });
+                if (u?.email) {
+                    actor = u.email;
+                }
+                return { sessionId, completedUserId, actor };
+            }
+        }
+    } catch {
+        // ignore
+    }
+
+    return { sessionId: null, completedUserId: null, actor: null };
+}
+
 auth.post("/two-factor/verify-totp", async (c) => {
     const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
     const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
@@ -2567,37 +2606,13 @@ auth.post("/two-factor/verify-totp", async (c) => {
 
     let sessionId: string | null = null;
     let completedUserId: string | null = null;
-    let actor: string | null = candidateUser?.email || null;
+    let actor: string | null = null;
 
     if (isSuccess) {
-        try {
-            const setCookie = res.headers.get("set-cookie") || "";
-            const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
-            if (match) {
-                const rawToken = decodeURIComponent(match[1]);
-                const token = rawToken.split(".")[0];
-                const database = await getDb();
-                const sessionDoc = await database.collection("session").findOne({ token });
-                if (sessionDoc) {
-                    sessionId = String(sessionDoc._id || sessionDoc.id);
-                    if (sessionDoc.userId) {
-                        completedUserId = sessionDoc.userId.toString();
-                        const u = await database.collection("user").findOne({
-                            $or: [{ id: completedUserId }, { _id: completedUserId }],
-                        });
-                        if (u?.email) {
-                            actor = u.email;
-                        }
-                    }
-                }
-            }
-        } catch {
-            // ignore
-        }
-
-        if (!completedUserId && candidateUser?.id) {
-            completedUserId = candidateUser.id;
-        }
+        const verified = await resolveVerifiedMfaSession(res);
+        sessionId = verified.sessionId;
+        completedUserId = verified.completedUserId;
+        actor = verified.actor;
 
         if (completedUserId) {
             try {
@@ -2614,7 +2629,7 @@ auth.post("/two-factor/verify-totp", async (c) => {
         outcome: isSuccess ? "success" : "failure",
         sessionId,
         userId: isSuccess ? completedUserId : (candidateUser?.id || null),
-        targetIdentifier: actor,
+        targetIdentifier: actor || candidateUser?.email || null,
         clientId: validatedContext?.clientId || null,
         clientName: validatedContext?.clientName || null,
         ipAddress: safeIp,
@@ -2640,37 +2655,13 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
 
     let sessionId: string | null = null;
     let completedUserId: string | null = null;
-    let actor: string | null = candidateUser?.email || null;
+    let actor: string | null = null;
 
     if (isSuccess) {
-        try {
-            const setCookie = res.headers.get("set-cookie") || "";
-            const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
-            if (match) {
-                const rawToken = decodeURIComponent(match[1]);
-                const token = rawToken.split(".")[0];
-                const database = await getDb();
-                const sessionDoc = await database.collection("session").findOne({ token });
-                if (sessionDoc) {
-                    sessionId = String(sessionDoc._id || sessionDoc.id);
-                    if (sessionDoc.userId) {
-                        completedUserId = sessionDoc.userId.toString();
-                        const u = await database.collection("user").findOne({
-                            $or: [{ id: completedUserId }, { _id: completedUserId }],
-                        });
-                        if (u?.email) {
-                            actor = u.email;
-                        }
-                    }
-                }
-            }
-        } catch {
-            // ignore
-        }
-
-        if (!completedUserId && candidateUser?.id) {
-            completedUserId = candidateUser.id;
-        }
+        const verified = await resolveVerifiedMfaSession(res);
+        sessionId = verified.sessionId;
+        completedUserId = verified.completedUserId;
+        actor = verified.actor;
 
         if (completedUserId) {
             try {
@@ -2687,7 +2678,7 @@ auth.post("/two-factor/verify-backup-code", async (c) => {
         outcome: isSuccess ? "success" : "failure",
         sessionId,
         userId: isSuccess ? completedUserId : (candidateUser?.id || null),
-        targetIdentifier: actor,
+        targetIdentifier: actor || candidateUser?.email || null,
         clientId: validatedContext?.clientId || null,
         clientName: validatedContext?.clientName || null,
         ipAddress: safeIp,
