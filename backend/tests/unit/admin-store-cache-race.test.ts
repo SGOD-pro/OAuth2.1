@@ -572,6 +572,94 @@ await runTest(
   }
 );
 
+// --------------------------------------------------------------------------
+// TEST 10: Request ownership cannot be reused after cache eviction
+// --------------------------------------------------------------------------
+await runTest(
+  "RACE-10: Request ownership sequence cannot be reused after cache eviction to overwrite fresh data",
+  async () => {
+    _resetAdminLogsCacheForTesting();
+
+    const originalFetch = globalThis.fetch;
+    const queryA = { page: 1, limit: 10, search: "eviction_target" };
+
+    const oldData = [{ userId: "old_a", action: "sign_in", createdAt: new Date().toISOString() }];
+    const refreshData = [{ userId: "refresh_a", action: "sign_in", createdAt: new Date().toISOString() }];
+    const freshData = [{ userId: "fresh_a", action: "sign_in", createdAt: new Date().toISOString() }];
+
+    let resolveOldA: ((res: Response) => void) | null = null;
+    let resolveRefreshA: ((res: Response) => void) | null = null;
+    let resolveNewA: ((res: Response) => void) | null = null;
+
+    let targetCallIndex = 0;
+
+    globalThis.fetch = (async (url: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes("search=eviction_target")) {
+        targetCallIndex++;
+        if (targetCallIndex === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveOldA = resolve;
+          });
+        }
+        if (targetCallIndex === 2) {
+          return new Promise<Response>((resolve) => {
+            resolveRefreshA = resolve;
+          });
+        }
+        return new Promise<Response>((resolve) => {
+          resolveNewA = resolve;
+        });
+      }
+
+      // For fill queries (e.g. search=fill_0 ... search=fill_100)
+      const match = urlStr.match(/search=fill_(\d+)/);
+      const id = match ? match[1] : "other";
+      return makeResponse([{ userId: `fill_${id}`, action: "sign_in", createdAt: new Date().toISOString() }]);
+    }) as any;
+
+    try {
+      // 1. Keep an old request A pending
+      const promiseOldA = useAdminStore.getState().fetchLogs(queryA, false);
+      assert.ok(resolveOldA, "Old request A fetch must be initiated");
+
+      // 2. Complete a forced refresh A
+      const promiseRefreshA = useAdminStore.getState().fetchLogs(queryA, true);
+      assert.ok(resolveRefreshA, "Forced refresh A fetch must be initiated");
+      resolveRefreshA!(makeResponse(refreshData, 1, 1, 10, 1));
+      await promiseRefreshA;
+      assert.deepEqual(useAdminStore.getState().logs.data, refreshData, "Store must show refresh data");
+
+      // 3. Fill the cache until A is evicted (logsCache capacity is 100)
+      for (let i = 0; i < 101; i++) {
+        await useAdminStore.getState().fetchLogs({ page: 1, limit: 10, search: `fill_${i}` }, false);
+      }
+
+      // 4. Complete a new request A with fresh data
+      const promiseNewA = useAdminStore.getState().fetchLogs(queryA, false);
+      assert.ok(resolveNewA, "New request A fetch must be initiated (cache was evicted)");
+      resolveNewA!(makeResponse(freshData, 1, 1, 10, 1));
+      await promiseNewA;
+      assert.deepEqual(useAdminStore.getState().logs.data, freshData, "Store must show fresh data");
+
+      // 5. Resolve the original old A
+      resolveOldA!(makeResponse(oldData, 1, 1, 10, 1));
+      await promiseOldA;
+
+      // 6. Read A from cache and assert fresh data remains
+      await useAdminStore.getState().fetchLogs(queryA, false);
+      const finalState = useAdminStore.getState().logs;
+      assert.deepEqual(
+        finalState.data,
+        freshData,
+        "Fresh data must remain in cache; old request must not overwrite cache even after eviction"
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+);
+
 console.log("\n================================================================");
 console.log(`  ADMIN STORE RACE SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");

@@ -137,18 +137,20 @@ const inFlightLogs = new Map<string, Promise<{
   limit: number;
   totalPages: number;
 }>>();
-const queryGenerations = new Map<string, number>();
+const queryOwnership = new Map<string, number>();
 
 let inFlightStats: Promise<void> | null = null;
 let inFlightClients: Promise<void> | null = null;
 let latestLogRequestId = 0;
+let latestLogQuerySequence = 0;
 let inFlightUsers: Promise<void> | null = null;
 
 export function _resetAdminLogsCacheForTesting() {
   logsCache.clear();
   inFlightLogs.clear();
-  queryGenerations.clear();
+  queryOwnership.clear();
   latestLogRequestId = 0;
+  latestLogQuerySequence = 0;
 }
 
 export const useAdminStore = create<AdminStore>((set, get) => ({
@@ -274,14 +276,18 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
     const currentRequestId = ++latestLogRequestId;
     set({ logs: { ...get().logs, loading: true, error: null } });
 
-    // 3. In-flight Deduplication & Generation Tracking:
+    // 3. In-flight Deduplication & Ownership Tracking:
     // Reuse in-flight network request for identical query parameters unless forced
     let fetchPromise = inFlightLogs.get(queryKey);
 
     try {
       if (!fetchPromise || force) {
-        const queryGen = (queryGenerations.get(queryKey) || 0) + 1;
-        queryGenerations.set(queryKey, queryGen);
+        const queryToken = ++latestLogQuerySequence;
+        if (queryOwnership.size >= 100 && !queryOwnership.has(queryKey)) {
+          const oldestKey = queryOwnership.keys().next().value;
+          if (oldestKey) queryOwnership.delete(oldestKey);
+        }
+        queryOwnership.set(queryKey, queryToken);
 
         fetchPromise = (async () => {
           const params = new URLSearchParams();
@@ -311,13 +317,13 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
             totalPages,
           };
 
-          // Only the current generation may publish that query's cached result
-          if (queryGenerations.get(queryKey) === queryGen) {
+          // Only the current sequence owner may publish that query's cached result
+          if (queryOwnership.get(queryKey) === queryToken) {
             if (logsCache.size >= 100) {
               const oldestKey = logsCache.keys().next().value;
               if (oldestKey) {
                 logsCache.delete(oldestKey);
-                queryGenerations.delete(oldestKey);
+                queryOwnership.delete(oldestKey);
               }
             }
             logsCache.set(queryKey, {
