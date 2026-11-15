@@ -2,7 +2,7 @@
 
 Rules for AI coding agents (Antigravity, Claude Code, Copilot, Cursor) working **inside `frontend/`** of M Auth by SWYRA.
 
-Scope: **UI only.** The root `AGENTS.md` (IdP / consumer-integration contract), `rules.md` and `boundaries.md` still apply. This file adds frontend-specific rules and wins for anything under `frontend/`. The design source of truth is **`../ui-ux.md`**: read it before any UI task.
+Scope: **UI only.** The root [AGENTS.md](../AGENTS.md) (IdP and consumer integration contract), [docs/SECURITY.md](../docs/SECURITY.md), and [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) are authoritative. This file adds frontend-specific rules and governs everything under `frontend/`. Approved design tokens and rules are recorded below; historical design research is archived in [docs/archive/legacy/ui-ux.md](../docs/archive/legacy/ui-ux.md).
 
 **Tradeoff:** these rules favor caution over speed. For a trivial one-line fix, use judgment.
 
@@ -17,7 +17,7 @@ Scope: **UI only.** The root `AGENTS.md` (IdP / consumer-integration contract), 
 ## 2. Simplicity first
 - Minimum code that solves the task. No speculative features, props, abstractions or "flexibility".
 - Reuse before writing: existing component, `components/ui/*` primitive, token, hook, util. Then the platform/CSS. Then an installed dependency. Only then new code.
-- **No new dependency** unless `../ui-ux.md` names it (currently only the font packages, and only after its Decision 9 is resolved). No motion library, chart library, command-palette library, icon pack.
+- **No new dependency** without explicit architectural alignment. Fonts are self-hosted via `@fontsource-variable/geist` and `@fontsource-variable/geist-mono`. No motion library, chart library, command-palette library, or external icon pack.
 - Deletion over addition. If 200 lines could be 50, rewrite.
 
 ## 3. Surgical changes
@@ -54,7 +54,7 @@ You **may** change: `src/index.css`, markup/classNames in presentational compone
 - **Build with `npm run build:ui`** (or `npx vite build`), **not `npm run build`**: the latter runs `prepare-vercel-config` and can rewrite deployment config.
 - Dev server: `npm run dev` (port 5174, proxies `/api` and `/.well-known` to the backend on 3000).
 
-## 6. Design rules (details in `../ui-ux.md`)
+## 6. Design rules (authoritative UI standards)
 - Solid surfaces for content. Glass **only** on the sticky admin header. Never on cards, tables, forms, login/2FA/consent, dialogs, errors.
 - Max **3** BMW-derived elements per screen. M red is for graphics only; danger **text** uses `--destructive`.
 - Sentence case labels. No ALL-CAPS tracked labels. No jargon ("telemetry", "pilot", "engine").
@@ -63,7 +63,7 @@ You **may** change: `src/index.css`, markup/classNames in presentational compone
 - Status/meaning is never color-only (icon or text too). Targets >= 44 px. Keyboard parity for every hover reveal.
 - Both themes must pass. Dark is the default theme; light is fully supported.
 
-## 7. Performance rules (measured baseline in `../ui-ux.md` 0.5)
+## 7. Performance rules (measured baseline)
 - Re-measure the baseline yourself before the first edit (`npm run build:ui`, gzip the entry + route chunks).
 - **No route may grow > 5%** over baseline JS without a written reason in the PR. CSS <= 20 KB gz.
 - No new request, no new route-level import of a heavy lib. Lazy-load only when measured to save >= 10 KB gz on that route.
@@ -90,9 +90,9 @@ Frontend has no unit-test suite; the verification is the gate below plus the man
 - [ ] No frozen file changed (`git diff --stat` reviewed)
 
 ## 10. Workflow
-- One concern per PR, following the order in `../ui-ux.md` Section 11 (PR 1 Foundation, 2 Shell, 3 Auth pages, 4 Admin pages, 5 Polish). Never mix a redesign with a logic change.
+- One concern per PR (PR 1 Foundation, 2 Shell, 3 Auth pages, 4 Admin pages, 5 Polish). Never mix a redesign with a logic change.
 - Rollback = `git revert`. Do not add feature flags.
-- Docs discipline (`../rules.md`): update `../CHANGELOG.md` per PR and `../memory.md` at the end of each session. If you change a documented decision, update that doc in the same change.
+- Docs discipline: update `../CHANGELOG.md` per PR and session summaries. If you change a documented decision, update that doc in the same change.
 
 ## 11. Report format (end of every task)
 ```

@@ -10,8 +10,8 @@
 /* Map runtime semantic tokens to Tailwind utilities. Keep these inline so
    light/dark variables resolve on the element, not at build time. */
 @theme inline {
-  --font-sans: "Geist Variable", "Instrument Sans", system-ui, sans-serif;
-  --font-heading: "Geist Variable", "Instrument Sans", system-ui, sans-serif;
+  --font-sans: "Geist Variable", system-ui, sans-serif;
+  --font-heading: "Geist Variable", system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -21,6 +21,8 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-active: var(--primary-active);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -29,6 +31,8 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-hover: var(--destructive-hover);
+  --color-destructive-active: var(--destructive-active);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -62,6 +66,8 @@
   --color-on-action: var(--on-action);
   --color-accent-cta: var(--accent-cta);
   --color-on-accent-cta: var(--on-accent-cta);
+  --color-accent-cta-hover: var(--accent-cta-hover);
+  --color-accent-cta-active: var(--accent-cta-active);
   --color-sage-soft: var(--sage-soft);
   --color-sage-wash: var(--sage-wash);
   --color-surface: var(--surface);
@@ -119,6 +125,8 @@
   --popover-foreground: #111a17;
   --primary: #102d25;
   --primary-foreground: #ffffff;
+  --primary-hover: #1a3f34;
+  --primary-active: #0c221c;
   --secondary: #eef1ea;
   --secondary-foreground: #263c31;
   --muted: #f1f0eb;
@@ -127,6 +135,8 @@
   --accent-foreground: #102d25;
   --destructive: #a52f3f;
   --destructive-foreground: #ffffff;
+  --destructive-hover: #8e2836;
+  --destructive-active: #761f2c;
   --border: #e2e5de;
   --input: #d7ded4; /* shadcn input BORDER, not input fill */
   --input-background: #ffffff;
@@ -145,8 +155,10 @@
   --on-brand: #ffffff;
   --action: var(--primary);
   --on-action: var(--primary-foreground);
-  --accent-cta: var(--brand-tomato);
+  --accent-cta: #d93623;
   --on-accent-cta: #ffffff;
+  --accent-cta-hover: #c42f1d;
+  --accent-cta-active: #b22918;
   --sage-soft: #dfe8da;
   --sage-wash: #f0f3ed;
   --success: #237644;
@@ -189,6 +201,8 @@
   /* Accessible Sage on charcoal. Evergreen remains the brand anchor. */
   --primary: #b2c9a8;
   --primary-foreground: #10251b;
+  --primary-hover: #c1d5b9;
+  --primary-active: #a3bb98;
   --secondary: #262b29;
   --secondary-foreground: #e6e9e5;
   --muted: #222725;
@@ -197,6 +211,8 @@
   --accent-foreground: #f1f3ee;
   --destructive: #ef8f9b;
   --destructive-foreground: #32151b;
+  --destructive-hover: #f4a6b0;
+  --destructive-active: #e77785;
   --border: #333a36;
   --input: #424b45;
   --input-background: #141817;
@@ -217,6 +233,8 @@
   --on-action: var(--primary-foreground);
   --accent-cta: #f26b56;
   --on-accent-cta: #241511;
+  --accent-cta-hover: #f58270;
+  --accent-cta-active: #ea5740;
   --sage-soft: #303d32;
   --sage-wash: #242c26;
   --success: #78c99a;

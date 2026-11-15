@@ -33,7 +33,7 @@ export function isLoopbackHost(hostname: string): boolean {
 /**
  * Validate an OAuth redirect URI (or allowed origin URL) before persistence.
  * Rejects non-http(s), wildcards, credentials-in-URL, and private-network
- * hosts in production (see boundaries.md / projectrequirement.md).
+ * hosts in production (see docs/SECURITY.md and docs/ARCHITECTURE.md).
  *
  * If isDev is true in production, loopback addresses (localhost/127.0.0.1)
  * are permitted per RFC 8252, while intranet/private IPs remain blocked.

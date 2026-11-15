@@ -184,6 +184,66 @@ check("Environment variables in documentation match backend schema", () => {
   }
 });
 
+// 6. Active Documentation Broken Link Check
+check("Active markdown documentation contains no broken file links", () => {
+  const markdownFiles: string[] = [];
+
+  function scanDir(dir: string, depth = 0) {
+    if (depth > 4) return;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (
+          entry.name === "node_modules" ||
+          entry.name === ".git" ||
+          entry.name === "dist" ||
+          entry.name === "archive" ||
+          entry.name === ".agents" ||
+          entry.name === ".gemini"
+        ) {
+          continue;
+        }
+        scanDir(fullPath, depth + 1);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        markdownFiles.push(fullPath);
+      }
+    }
+  }
+
+  scanDir(repoRoot);
+
+  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+
+  for (const file of markdownFiles) {
+    const content = fs.readFileSync(file, "utf-8");
+    let match;
+    while ((match = linkRegex.exec(content)) !== null) {
+      const rawTarget = match[2].trim();
+      // Ignore web URLs, mailto, anchor only (#section), file URI scheme
+      if (
+        rawTarget.startsWith("http://") ||
+        rawTarget.startsWith("https://") ||
+        rawTarget.startsWith("mailto:") ||
+        rawTarget.startsWith("#") ||
+        rawTarget.startsWith("file://")
+      ) {
+        continue;
+      }
+
+      // Strip anchor hash if present
+      const targetPathNoAnchor = rawTarget.split("#")[0];
+      if (!targetPathNoAnchor) continue;
+
+      const resolvedPath = path.resolve(path.dirname(file), targetPathNoAnchor);
+      assert.ok(
+        fs.existsSync(resolvedPath),
+        `Broken link in ${path.relative(repoRoot, file)}: target "${rawTarget}" not found at ${path.relative(repoRoot, resolvedPath)}`
+      );
+    }
+  }
+});
+
 console.log("================================================================");
 if (errors.length > 0) {
   console.error(`  CONSISTENCY CHECK FAILED: ${errors.length} error(s) found`);

@@ -10,13 +10,13 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground hover:bg-[oklch(22.44%_0.0288_171.94)] active:bg-[oklch(18.49%_0.0228_174.75)] dark:bg-[oklch(97%_0.0082_91.48)] dark:text-[oklch(20.77%_0.0145_172.36)] dark:hover:bg-[oklch(92%_0.01_91.48)] dark:active:bg-[oklch(88%_0.015_91.48)] shadow-xs font-semibold",
+          "bg-primary text-primary-foreground hover:bg-primary-hover active:bg-primary-active shadow-xs font-semibold",
         cta:
-          "bg-tomato text-white hover:bg-tomato-hover active:bg-tomato-active shadow-xs font-semibold",
+          "bg-accent-cta text-on-accent-cta hover:bg-accent-cta-hover active:bg-accent-cta-active shadow-xs font-semibold",
         accent:
-          "bg-tomato text-white hover:bg-tomato-hover active:bg-tomato-active shadow-xs font-semibold",
+          "bg-accent-cta text-on-accent-cta hover:bg-accent-cta-hover active:bg-accent-cta-active shadow-xs font-semibold",
         brand:
-          "bg-evergreen text-white hover:bg-[oklch(22.44%_0.0288_171.94)] active:bg-[oklch(18.49%_0.0228_174.75)] shadow-xs font-semibold",
+          "bg-evergreen text-white hover:bg-primary-hover active:bg-primary-active shadow-xs font-semibold",
         supporting:
           "bg-accent text-accent-foreground hover:bg-accent/80 active:bg-accent/90 shadow-2xs font-semibold",
         outline:
@@ -26,7 +26,7 @@ const buttonVariants = cva(
         ghost:
           "bg-transparent text-foreground hover:bg-secondary/60 active:bg-secondary/80 hover:-translate-y-0",
         destructive:
-          "bg-error-container text-destructive dark:bg-destructive dark:text-destructive-foreground hover:bg-[#FFC9C2] dark:hover:bg-destructive/90 active:bg-destructive/80 font-semibold",
+          "bg-destructive text-destructive-foreground hover:bg-destructive-hover active:bg-destructive-active shadow-xs font-semibold",
         link: "text-accent underline-offset-4 hover:underline p-0 h-auto rounded-none hover:-translate-y-0 active:scale-100",
       },
       size: {

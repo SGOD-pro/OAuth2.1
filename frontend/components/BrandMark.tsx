@@ -39,7 +39,7 @@ export const BrandMark: React.FC<BrandMarkProps> = ({ size = 'default', classNam
             M Auth
           </span>
           {showBadge && (
-            <span className="px-1.5 py-0.5 rounded-full font-mono text-[9px] font-semibold text-white bg-tomato border border-tomato/30 leading-none">
+            <span className="px-1.5 py-0.5 rounded-full font-mono text-[9px] font-semibold text-on-accent-cta bg-accent-cta border border-accent-cta/30 leading-none">
               IDP 2.1
             </span>
           )}
