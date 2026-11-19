@@ -1,223 +1,179 @@
-# SWYRA Auth -- System Architecture (ARCHITECTURE.md)
+# SWYRA Auth: system architecture
 
-**Authority:** Normative Technical Architecture & System Design Specification  
-**Scope:** SWYRA Auth Core IdP, Security Boundaries, and Multi-Tenant Topology  
+**Authority:** Normative design. Updated 2026-11-19.
+**Baseline inspected:** `161ad99ca4ba0de88cff1267b33807db61da306c` on `main`.
+**Delivery status:** V2 is planned, not implemented by this documentation change.
 
----
+Read [SECURITY.md](SECURITY.md), [INTEGRATION.md](INTEGRATION.md),
+[DATA_LIFECYCLE.md](DATA_LIFECYCLE.md), [PHASES.md](PHASES.md), and
+[specification 0008](specs/0008-multi-account-identity-platform/index.md).
+The existing runtime remains the compatibility baseline until each migration gate passes.
+This document does not certify protocol conformance or production readiness.
 
-## 1. System Topology & Infrastructure Layout
+## 1. Current system and target
 
-SWYRA Auth is structured as a resilient, multi-tier cloud-native identity service:
+| Area | Inspected runtime | V2 target |
+|---|---|---|
+| Hosting | Vercel frontend/proxy, Hono on Node.js/AWS Lambda | Retain; add measured edge abuse controls |
+| Storage | MongoDB identities, sessions, clients, token families; Redis limits/cache | Retain; add registration intents, browser session sets, privacy and deletion jobs |
+| Login | One active Better Auth session cookie | Multiple independently authenticated accounts in one browser profile |
+| Signup | Password signup; email verification defaults off | Mailbox OTP must succeed before durable identity/credential creation |
+| Open apps | `isPublic=true`, automatic registration bookkeeping | Any eligible platform account can consent; no per-app membership prerequisite |
+| Private apps | Explicit assigned membership | Preserve membership and invite/provisioning restrictions |
+| Administration | Explicit platform and app roles; optional TOTP enrollment | Mandatory TOTP and recent MFA for every administrative authority |
+| Privacy | Full email in several API/log/token paths | Minimized admin projections, scoped claims, user-owned privacy dashboard |
+| Erasure | No per-account cryptographic erasure design | Per-account data keys plus durable revocation and cleanup workflow |
 
-```
-[ User Browser / Consumer Application ]
-                 │
-                 ▼ HTTPS
-┌─────────────────────────────────────────────────────────┐
-│              Vercel Edge & Reverse Proxy                │
-│  - Static Asset Delivery (React SPA frontend)           │
-│  - Edge Rewrites (/api/* -> AWS Lambda Function URL)   │
-│  - Gateway Trust Header Injection (x-gateway-secret)    │
-└────────────────────────┬────────────────────────────────┘
-                         │ HTTPS + x-gateway-secret
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│               AWS Lambda (Node.js 24)                   │
-│  - Hono Framework HTTP Router                           │
-│  - Gateway Trust Perimeter Middleware                   │
-│  - Better-Auth Core + OAuth 2.1 / OIDC Plugin Engine    │
-│  - RS256 JWT Token Minting & JWKS Engine                │
-│  - Token Family CAS Rotation Engine                     │
-└──────────────┬───────────────────────────┬──────────────┘
-               │                           │
-               ▼ MongoDB Driver            ▼ HTTP REST
-┌─────────────────────────────┐  ┌────────────────────────┐
-│      MongoDB Atlas          │  │     Upstash Redis      │
-│  - Replica Set              │  │  - Sliding Window      │
-│  - user & oauthClient docs  │  │    Rate Limiters       │
-│  - user_app_registrations   │  │  - Origin Caching      │
-│  - oauth_token_families     │  │                        │
-└─────────────────────────────┘  └────────────────────────┘
-```
-
----
-
-## 2. Centralized Authentication Boundary
-
-### The Single IdP Model
-All consumer applications—regardless of their ownership, framework, or internal authorization model—rely on SWYRA Auth as the authoritative Identity Provider.
-
-1. **Credentials Terminate at IdP:** User email and password pairs are submitted exclusively to the IdP login interface (`/auth`).
-2. **Stateless Authorization Tokens:** Consumer backends receive standard OpenID Connect tokens (`id_token`, `access_token`, `refresh_token`).
-3. **No Credential Relay:** Consumer applications never collect or transmit user credentials. The previous architecture of relaying credentials through `/api/auth/app-admin/login` has been retired.
-
----
-
-## 3. Tenancy Model: Public vs Private Applications
-
-SWYRA Auth implements multi-tenant isolation via the `isPublic` property on the `oauthClient` record:
-
-```
-                          OAuth /authorize Request
-                                     │
-                                     ▼
-                        Is user authenticated at IdP?
-                                     │
-                         ┌───────────┴───────────┐
-                        NO                       YES
-                         │                        │
-                         ▼                        ▼
-                Redirect to IdP Login       Is client isPublic?
-               (Sign-Up disabled if               │
-                client.isPublic=false)   ┌────────┴────────┐
-                         │              YES                NO
-                         ▼               │                 │
-                User authenticates       │                 ▼
-                         │               │       Is user in user_app_registrations?
-                         └───────────────┘                 │
-                                                   ┌───────┴───────┐
-                                                  YES              NO
-                                                   │               │
-                                                   ▼               ▼
-                                            Issue Code       302 access_denied
-```
-
-### 3.1 Public Applications (`isPublic: true`)
-- Open to all authenticated users of the SWYRA platform.
-- When an authenticated user authorizes a public application, the IdP automatically records membership in `user_app_registrations` and issues the authorization code.
-- Public self-registration is enabled on the IdP login page for public clients.
-
-### 3.2 Private Applications (`isPublic: false`)
-- Access is restricted exclusively to pre-authorized organizational users.
-- An unauthenticated user hitting `/api/auth/oauth2/authorize` is redirected to the IdP login page (`/auth?is_public=false`), where the **Sign-Up tab is hidden and disabled**.
-- Upon authenticating with their IdP account, the OAuth boundary queries `user_app_registrations`:
-  - If registered (or user possesses app-admin bypass): OAuth authorization code is issued.
-  - If NOT registered: Authorization is immediately denied with HTTP 302 to the consumer callback: `error=access_denied&error_description=Access restricted: Your account is not authorized for this private application`.
-- Self-registration API (`POST /api/auth/sign-up/email?client_id=...`) strictly returns HTTP 403 `registration_disabled`.
-
----
-
-## 4. Administrative Role Hierarchy
-
-SWYRA Auth enforces explicit separation between platform level and application level administrators:
+## 2. Service boundaries
 
 ```mermaid
-classDiagram
-    class User {
-        +String id
-        +String email
-        +String role
-        +String scopedClientId
-    }
-
-    class GlobalSuperAdmin {
-        +role = "super-admin"
-        +scopedClientId = null
-        +Can create/delete clients
-        +Can provision global users
-        +Can manage platform config
-        +CANNOT enter consumer admin portals
-    }
-
-    class ApplicationAdmin {
-        +role = "app-admin"
-        +scopedClientId = "client-123"
-        +Can update own client-123
-        +Can view client-123 users
-        +CANNOT manage client-456
-        +CANNOT access super admin APIs
-        +CANNOT access MAuth dashboard
-    }
-
-    class EndUser {
-        +role = "user"
-        +scopedClientId = null
-        +Can authenticate to authorized apps
-    }
-
-    User <|-- GlobalSuperAdmin
-    User <|-- ApplicationAdmin
-    User <|-- EndUser
+flowchart TD
+    Browser["Browser and consumer apps"] --> Edge["TLS edge, WAF and quotas"]
+    Edge --> IdP["Hono and Better Auth IdP"]
+    IdP --> Mongo["MongoDB identity and authorization state"]
+    IdP --> Redis["Redis quotas and bounded caches"]
+    IdP --> Keys["Account key service"]
+    IdP --> Mail["Bounded mail delivery queue"]
+    IdP --> Jobs["Deletion and migration workers"]
 ```
 
-### Administrative Claims in Tokens
-When an administrator completes the OAuth 2.1 flow for an application:
-1. An explicitly assigned application admin receives their scope in the RS256 JWT ID token and UserInfo endpoint:
-```json
-{
-  "sub": "6ac2611c1878f531c3f91a05",
-  "email": "admin@tenant.com",
-  "role": "admin",
-  "scoped_client_id": "client-123"
-}
-```
-2. A super admin signing in to a consumer application receives standard user claims (`role: "user"`, `scoped_client_id: null`) to prevent consumer admin portal access using platform credentials.
+Keep the Better Auth engine and its TOTP implementation. Add reviewed adapters and
+transaction boundaries rather than a second credential system. Prove compatibility
+with the installed dependency versions before selecting a multi-session plugin or
+storage adapter. No bespoke TOTP or unreviewed cryptographic algorithm.
 
----
+Credentials terminate only at the IdP. Consumer apps use
+`/api/auth/oauth2/authorize` and existing standard token endpoints. Consumers never
+receive IdP database credentials, browser session sets, TOTP seeds, or encryption keys.
 
-## 5. Token Lifecycle & Family Revocation Engine
+## 3. Client policy has three independent dimensions
 
-SWYRA Auth implements RFC 6749 Section 10.4 and RFC 6819 refresh token rotation with an atomic Compare-and-Swap (CAS) state machine:
+| Dimension | Target field | Values | Meaning |
+|---|---|---|---|
+| Client authentication | `clientType` | `public`, `confidential` | Whether a backend can keep a client secret |
+| User access | `accessPolicy` | `open`, `private` | Whether explicit membership is required |
+| Callback environment | `isDev` | Boolean | Whether explicitly registered loopback callbacks are allowed |
 
-```
-[ Active Refresh Token R0 ]
-          │
-          │ POST /oauth2/token (grant_type=refresh_token)
-          ▼
-   CAS State Machine:
-   - Validates client ownership
-   - Marks R0 as consumed
-   - Issues new Access Token A1 + new Refresh Token R1
-          │
-          ├─────────────────────────────────────────────────┐
-          ▼                                                 ▼
-[ Legitimate Client holds R1 ]                    [ Attacker replays R0 ]
-          │                                                 │
-          ▼                                                 ▼
-Normal subsequent rotation                      REPLAY THEFT DETECTED:
-                                                - CAS detects consumed R0
-                                                - Cascade Revocation triggers
-                                                - Family marked status: "revoked"
-                                                - Active tokens A1, R1 purged
-                                                - Returns 401 invalid_grant
-```
+These are proposed schema fields. Today `isPublic` is an overloaded legacy field;
+it must not be used as evidence that a client can or cannot retain a secret.
+An open application can be confidential. A private application can be a public
+OAuth client. Preserve exact callbacks, PKCE S256, state, consent, client status,
+audience, scopes, and app-admin assignments for all combinations.
 
-### Invariants:
-1. **Per-Client Scoping:** A token family is permanently bound to the `clientId` that created it. Replaying or presenting a token family across client boundaries is rejected (400 `invalid_grant`).
-2. **Grace Window:** A strict 2000ms grace window accommodates concurrent in-flight network retries without false-positive family revocation.
-3. **Private Tenant Eviction:** When a user is removed from a private application, subsequent refresh token exchanges fail immediately (401 `invalid_grant`), and all active access tokens for that client are invalidated.
+Migrate `isPublic=true` to `accessPolicy=open` and `false` to `private`. Determine
+`clientType` using audited client authentication metadata, never that Boolean.
+Ambiguous clients require explicit classification. Keep compatibility reads and
+controlled writes until consumer migration passes. Reject conflicting old/new fields.
+No private client becomes open implicitly. Super admins retain client registration.
+External developer self-service registration remains a later separate feature.
 
----
+For open apps, historical `user_app_registrations` may remain as connection history,
+but must not grant or deny ordinary authentication. Consent grants and app-admin
+assignments remain independent, authoritative records. Private memberships remain
+checked at authorization, exchange, refresh, and online token validation.
 
-## 6. Cryptographic Infrastructure (JWKS & PKI)
+## 4. Identity and verified account creation
 
-- **Algorithm:** Strictly `RS256` (RSA Signature with SHA-256). Algorithms `HS256`, `none`, or unpinned algorithms are rejected.
-- **Key Storage:** RSA 2048-bit keypairs generated and stored securely in MongoDB collection `oauthKey`.
-- **Public Metadata:** JWKS keys published at `/.well-known/jwks.json` and OpenID Discovery at `/.well-known/openid-configuration`.
-- **Consumer Offline Verification:** Consumer applications never make per-request network calls to verify tokens. They cache JWKS keys and perform cryptographic verification locally.
+An account has an immutable random `userId`, a unique verified mailbox, and a chosen
+username. One person can own multiple accounts with distinct verified mailboxes.
+Creating several identities for the same normalized mailbox is outside V2 scope.
+No ownership or linking inference from a shared device, email prefix, or fingerprint.
 
----
+Proposed username policy: 3 to 30 lowercase ASCII letters, digits, and underscore;
+normalize case, reserve system names, and use a database unique index. Username is
+mutable display/login metadata, never the token subject or authorization key.
+Do not globally strip dots or plus tags from mailboxes. Record an explicit email
+normalization policy and collision audit before migration.
 
-## 7. Portal Isolation and Session Context Separation
+Registration starts with an expiring `registration_intent`, not a `user` or `account`
+record. Issue a cryptographically random mailbox code, store a server-keyed verifier,
+and bind it to purpose, intent, normalized email, and browser registration transaction.
+Wrong, expired, exhausted, superseded, or replayed OTPs create no identity, credentials,
+session, app membership, consent, or token family. Successful verification returns
+short-lived single-use proof. Finalization atomically consumes proof, reserves unique
+email/username, and creates the identity and password hash. A duplicate or race creates
+at most one account. Do not retain plaintext passwords in intents or the mail queue.
 
-SWYRA Auth cleanly separates the central identity provider console from consumer application sessions:
+Email OTP proves mailbox control for enrollment. It does not replace password/TOTP
+login or establish phishing-resistant MFA. Administrative invitations require verified
+claiming and TOTP setup before authority becomes active. Imported `emailVerified=true`
+values are not automatically accepted as evidence of mailbox ownership.
 
-1. **Independent Consumer App Sessions:**
-   Consumer applications run on separate domain origins (such as `app.example.com` or local ports). Each consumer application establishes its own local session cookies or tokens using the OAuth 2.1 code exchange. Logging out of or switching accounts on the central identity provider does not clear unrelated consumer application cookies.
-2. **Single Active Identity Provider Context:**
-   The central management console on `${AUTH_ISSUER}` maintains exactly one active identity context per browser origin. If a user signed in to a consumer application navigates to `/admin/login`, the interface detects the consumer identity and presents a frictionless account switching banner.
-3. **Explicit Account Switching Without Loops:**
-   Clicking the account switch action invalidates the current identity provider session and clears form state without redirect loops, allowing the platform Global Super Administrator to sign in cleanly.
-4. **Mutually Exclusive Role Boundary:**
-   Verified `super-admin` identities hold exclusive platform management access. Application administrators can only manage their explicitly assigned applications through application portal routes, and standard end users possess zero administrative access.
+## 5. Browser session set and account chooser
 
----
+A browser profile is not a physical-device identity. The IdP stores an opaque random
+browser-set handle in a host-only Secure HttpOnly cookie. Server-side session-set
+entries reference independent per-account session IDs, authentication times, expiry,
+revocation versions, and assurance. Store token digests where supported. No account
+list or bearer tokens in browser storage. Initial maximum: 10 accounts per profile.
 
-## 8. Offline Token Verification and Revocation Latency
+An account entry cannot authenticate by itself. At chooser render, account selection,
+authorization-code issuance, exchange, and refresh, validate the selected account's
+session, expiry, status, revocation version, and required authentication strength.
+Expired entries may be displayed as signed out but require credentials to continue.
+Never expose remembered account lists through consumer-origin APIs or CORS.
 
-1. **Short Lifespan Tokens:**
-   Access tokens are signed RS256 JWTs with a maximum lifespan of 15 minutes (900 seconds).
-2. **Offline Verification Window:**
-   Consumer resource servers verify tokens locally against the cached public key set at `/.well-known/jwks.json`. If you revoke or demote an administrator, downstream resource servers will accept the cryptographically valid token until its 15 minute lifespan expires.
-3. **Real Time Mitigation:**
-   When high security workflows require immediate revocation, resource servers must query the real time introspection endpoint at `/api/auth/oauth2/introspect`. Central identity provider administrative endpoints query database state and token revocation timestamps on every request, enforcing zero delay revocation.
+Selection is an authenticated CSRF-protected POST bound to an unguessable server-side
+OAuth transaction. Bind selected `userId` and session ID to that transaction, alongside
+client ID, exact redirect URI, state, nonce, scopes, PKCE, expiry, and consent.
+A browser-wide active-account preference is only a UI hint. Concurrent tabs cannot
+change the subject of each other's transactions. Rotate handles at login and security
+changes; prevent session fixation. Guessing a user/session ID cannot add an account.
+
+A valid session can authorize without another password, subject to consent and
+reauthentication policy. Support OIDC `prompt=select_account`, `login`, `consent`,
+`none`, and `max_age` only after tested. `none` cannot silently choose among ambiguous
+accounts; use OIDC errors. `login_hint` never proves identity. Include `auth_time` when
+required. Retain accurate `amr`/`acr` assurance semantics, never invent achieved MFA.
+
+## 6. Administration and account isolation
+
+| Identity | Authority | Authentication requirement |
+|---|---|---|
+| `user` | Own account/privacy dashboard and consented app access | Account login; recent reauthentication for sensitive changes |
+| `app-admin` | Assigned clients only | Password plus enrolled TOTP, recent MFA for admin actions |
+| `super-admin` | Platform dashboard and client registration | Password plus enrolled TOTP, recent MFA for admin actions |
+
+One account never holds both administrator roles. Separate accounts may coexist in
+one browser, superseding the old single-active-IdP-account rule after migration.
+A selected consumer account cannot switch the platform admin principal. Administrative
+sessions have a separate audience/purpose and explicit account binding; account chooser
+SSO cannot grant admin assurance. Super admins continue to receive ordinary user
+claims at consumer apps, not consumer administration privileges.
+
+Admin enrollment without TOTP allows only a restricted setup flow. Promotion, recovery,
+TOTP removal, role changes, and password resets revoke prior elevated sessions.
+Backup codes are one-use recovery credentials, never an invisible bypass. Prevent
+self-promotion, impersonation, and plugin admin APIs from bypassing these checks.
+
+## 7. Privacy, keys, and account deletion
+
+The account dashboard exposes only the authenticated account's profile, chosen username,
+connected apps/scopes, consent revocation, devices/sessions, privacy choices, data export,
+and deletion. APIs enforce ownership server-side; selectors cannot substitute a subject.
+App admins see a username or email local-part label plus an opaque subject, not a full
+email. The local part is still personal data and need not be unique. Super-admin user
+lists also use minimized projections. Full contact data is limited to the owner,
+necessary delivery services, and explicitly consented claims or separately audited
+exceptional access. Hiding columns in the UI is insufficient.
+
+See [DATA_LIFECYCLE.md](DATA_LIFECYCLE.md) for field protection, per-account key
+hierarchy, deletion states, backup handling, and why destroying a key does not revoke
+a session or erase data already held by a consumer app.
+
+## 8. Availability and abuse
+
+Use edge traffic filtering, endpoint/IP/account/client/browser budgets, bounded queues,
+mail-send budgets, request limits, database deadlines, concurrency ceilings, and
+load shedding. Auth-sensitive operations fail closed when durable quota enforcement
+is unavailable; a process-local fallback is not a global serverless budget.
+
+Use a resettable first-party browser identifier and coarse, short-lived risk signals.
+Fingerprint mismatch may trigger reauthentication; it never grants or revokes authority
+alone. Do not require stable fingerprints across browser upgrades, VPNs, or accessibility
+settings. Avoid persistent canvas/audio fingerprinting and cross-app tracking.
+
+Bloom filters are optional performance hints after measured need. They never decide
+email uniqueness, username availability, session validity, membership, revocation, or
+account existence. Stale filters and false positives fall back to authoritative
+storage. No externally visible filter membership oracle. See [PHASES.md](PHASES.md).

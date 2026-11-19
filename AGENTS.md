@@ -2,7 +2,19 @@
 
 Welcome, AI coding agent (e.g., Google Antigravity, Claude Code, GitHub Copilot, Cursor, Devin).
 
-This repository contains **SWYRA Auth**, a production-grade, multi-tenant **OAuth 2.1 and OpenID Connect (OIDC)** Identity Provider.
+This repository contains **SWYRA Auth**, a centralized **OAuth / OpenID Connect (OIDC)** identity provider.
+Production readiness and conformance must be established with evidence, not inferred from this description.
+
+## V2 planning boundary (2026-11-19)
+
+Read [docs/PHASES.md](docs/PHASES.md),
+[docs/DATA_LIFECYCLE.md](docs/DATA_LIFECYCLE.md), and
+[0008](docs/specs/0008-multi-account-identity-platform/index.md) before identity changes.
+V2 is planned, not implemented. Existing app/private/admin behavior remains the
+compatibility baseline until its own migration passes. The next runtime slice is
+shared account eligibility in token issuance and validation. Do not bundle the entire
+redesign into one implementation. Preserve earlier verification history without
+marking unimplemented V2 work complete.
 
 ---
 
@@ -36,7 +48,7 @@ Before writing, modifying, or reviewing any integration code for consumer applic
 7. **NEVER treat NODE_ENV=production as "all OAuth clients are production".**  
    The IdP server runtime environment (`NODE_ENV`) is distinct from the client mode (`isDev`). A production IdP hosts both production and development clients.
 8. **NEVER treat isDev as isPublic.**  
-   `isDev` governs loopback URI permissions; `isPublic` governs whether the client possesses a secret or has open tenant access. They are independent dimensions.
+   `isDev` governs loopback URI permissions. Legacy `isPublic` describes open/private user access and does not prove OAuth client authentication type. V2 separates `clientType`, `accessPolicy`, and `isDev`.
 9. **NEVER treat authentication as application authorization.**  
    OAuth authentication identifies "Who is this user?" via `sub`. The consumer application owns its own business roles and permissions.
 10. **NEVER bypass the IdP's redirect URI / PKCE / state validation.**  
@@ -60,7 +72,7 @@ Base URL: `${AUTH_ISSUER}` (e.g. `https://oauth21.vercel.app`)
 
 ---
 
-## 🌳 Supported Application Configurations
+## 🌳 Current Runtime Application Configurations
 
 All applications authenticate users via the **centralized OAuth 2.1 Authorization Code Flow with PKCE (`S256`)**:
 
@@ -126,3 +138,20 @@ Before declaring your integration task complete, verify every item:
 - [ ] `aud` and `iss` claims in JWT match consumer `CLIENT_ID` and `AUTH_ISSUER`.
 - [ ] Consumer application builds cleanly and tests pass.
 - [ ] Linter gate passes: `npm run security:integration-check`.
+
+## Required V2 review invariants
+
+- No account/credential creation before a verified one-use mailbox proof is consumed.
+- One person may hold multiple distinct verified-email accounts. Immutable user IDs,
+  not email prefixes, chosen usernames or fingerprints, identify authorization subjects.
+- Chooser selection binds account/session to a specific OAuth transaction across tabs.
+- Separate accounts can coexist; their roles, sessions, expiry and logout never merge.
+- Both admin roles require TOTP and recent MFA on backend and plugin paths.
+- Open-app ordinary membership gates are removed only in the policy migration slice.
+  Private memberships, consent, registered clients and app-admin assignments remain.
+- Ordinary admin API/search/export/log projections omit full emails. Token claims
+  respect granted scopes; local-part labels remain personal data.
+- Account key destruction does not replace immediate revocation or residual cleanup.
+  Do not claim erasure if old backups can recover keys or plaintext.
+- Fingerprints and Bloom filters never decide authentication, uniqueness or access.
+- Record source inspection, mocked probes, integration tests and blocked checks separately.

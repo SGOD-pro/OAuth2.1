@@ -3,6 +3,11 @@
 **Authority:** Normative Environment and Configuration Reference for SWYRA Auth and Consumers  
 **Target:** System Administrators, DevOps Engineers, and Integrating Applications  
 
+**Version boundary (2026-11-19):** This file documents current settings at
+`161ad99`. V2 policy is specified in [ARCHITECTURE.md](ARCHITECTURE.md),
+[SECURITY.md](SECURITY.md), and [0008](specs/0008-multi-account-identity-platform/index.md).
+New policy values below are proposals, not implemented environment variables.
+
 ---
 
 ## 1. Architectural Philosophy: Fail-Closed Configuration
@@ -28,6 +33,8 @@ The IdP server runs on Node.js / AWS Lambda and requires the following configura
 | `BETTER_AUTH_SECRET` | String | **Yes** | High-entropy cryptographic secret for Better-Auth signing (min 32 chars). | `<min-32-char-random-secret>` |
 | `BETTER_AUTH_URL` | String (URL) | **Yes** | Canonical base URL of the IdP service (OIDC Issuer). | `https://oauth21.vercel.app` |
 | `FRONTEND_URL` | String (URL) | **Yes** | Canonical base URL of the IdP frontend UI. | `https://oauth21.vercel.app` |
+| `GOOGLE_CLIENT_ID` | String | **Yes in current schema** | Upstream Google provider client ID. Never infer verification/assurance for another provider from its existence. | `<configured-provider-id>` |
+| `GOOGLE_CLIENT_SECRET` | String | **Yes in current schema** | Upstream Google provider secret, backend only. | `<configured-provider-secret>` |
 
 ### 2.2 Security Perimeter & Gateway Settings
 
@@ -42,7 +49,7 @@ The IdP server runs on Node.js / AWS Lambda and requires the following configura
 | Variable | Type | Required | Description | Default |
 |---|---|---|---|---|
 | `AUTH_PUBLIC_SIGNUP_ENABLED` | Boolean | No | Enables self-registration globally on the IdP for public applications. | `true` |
-| `AUTH_EMAIL_VERIFICATION_ENABLED` | Boolean | No | Enforces email verification before issuing OAuth authorization codes. | `false` |
+| `AUTH_EMAIL_VERIFICATION_ENABLED` | Boolean | No | Passed to Better Auth email verification requirements. Defaults off; no delivery callback is configured in the inspected auth instance. Does not implement verification-before-account-creation or mailbox OTP. | `false` |
 
 ### 2.4 Distributed Cache & Rate Limiting
 
@@ -60,11 +67,11 @@ Every client application registered in SWYRA Auth possesses a document in the `o
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `clientId` | String | Generated | Unique, URL-safe client identifier. Publicly visible. |
-| `clientSecret` | String | Generated | SHA-256 base64url hash of client secret. Omitted for Public clients. |
+| `clientSecret` | String | Engine managed | Confidential client credential material, handled by the engine. Confirm registered token authentication method; legacy isPublic does not determine secret handling. |
 | `name` | String | Required | Human-readable application name displayed on login/consent screens. |
 | `redirectUris` | Array&lt;String&gt; | `[]` | Exact registered HTTPS callback URLs where authorization codes may be sent. |
 | `allowedOrigins` | Array&lt;String&gt; | `[]` | Origins permitted for CORS requests to `/oauth2/token` and `/oauth2/userinfo`. |
-| `isPublic` | Boolean | `true` | **Tenancy Mode:** `true` = open to all platform users; `false` = restricted to pre-assigned users. |
+| `isPublic` | Boolean | `true` | **Legacy access policy, not OAuth client type:** `true` = open to all platform users; `false` = restricted to pre-assigned users. |
 | `isDev` | Boolean | `false` | **Client Mode:** `true` = loopback (`http://localhost:*`) permitted; `false` = strict HTTPS only. |
 | `disabled` | Boolean | `false` | Administrative kill switch. When `true`, all authentication requests are blocked (403). |
 | `skipConsent` | Boolean | `false` | When `true`, trusted first-party clients bypass the interactive consent prompt. |
@@ -140,3 +147,26 @@ VITE_AUTH_CALLBACK_URL=https://your-spa-domain.com/callback
 ### Immutability Rules
 - Scoped Application Administrators CANNOT modify `isDev` or `isPublic`. These trust boundary flags can only be configured by Global Super Administrators.
 - A development client transitioning to production (`isDev: true` &rarr; `isDev: false`) must remove all localhost redirect URIs in the same atomic operation.
+
+## 6. Planned V2 policy, not current configuration
+
+| Setting or policy | Proposed value | Activation requirement |
+|---|---|---|
+| Client authentication type | `clientType=public/confidential` | Audited metadata backfill and compatible engine mapping |
+| User access policy | `accessPolicy=open/private` | Preserve private membership; remove only open-app ordinary membership gating |
+| Mailbox enrollment verification | Mandatory before creating account | Registration intent, queue/provider, one-use proof and atomic finalization |
+| Username | 3 to 30 lowercase ASCII letters/digits/underscore | Unique index, reserved names, collision migration |
+| Browser session set | Maximum 10 independently authenticated accounts | Engine compatibility, CSRF and multi-tab tests |
+| Administrative MFA | Mandatory TOTP, 5-minute elevated freshness | Backend enforcement and restricted enrollment/recovery flows |
+| OTP | 6 digits, 5-minute expiry, 5 guesses | Distributed budgets, keyed verifier, resend rules |
+| Mailbox sends | 60-second cooldown, 3 per 15 minutes, 10 per day | Atomic distributed limits and bounded delivery queue |
+| Account key service | Provider/retention/cost unresolved | Separately destroyable account key paths and restore proof |
+| Device risk collection | Resettable browser ID and coarse signals | Purpose, retention, data minimization and accessible fallback |
+| Bloom filter | Disabled/deferred | Measured need and authoritative-storage fallback |
+
+Do not invent runtime flags for these proposals or add unvalidated environment variables.
+Each implementation slice must add typed schema, templates, deployment wiring, safe
+startup failure, operator docs and tests together. V2 verification and admin MFA cannot
+be disabled in production by development-only settings. Email sending, OTP verifier
+keys, data wrapping keys and JWT signing keys require separate key purposes and rotation.
+Retention proposals are in [DATA_LIFECYCLE.md](DATA_LIFECYCLE.md).
