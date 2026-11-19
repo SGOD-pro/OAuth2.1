@@ -1,10 +1,25 @@
-# SWYRA Auth — Self-Hosted OAuth 2.1 / OIDC Identity Provider
+# SWYRA Auth: self-hosted OAuth / OIDC identity provider
 
-> A production-grade, centralized OAuth 2.1 / OpenID Connect identity provider you deploy once and own forever — with zero always-on infrastructure costs.
+> A centralized identity provider built with Hono, MongoDB and Better Auth. Hosting, email delivery, key management and abuse protection have operational costs.
 
 Built with **Hono**, **MongoDB Atlas**, and the **Better Auth** identity engine. Features a modern Admin Console for managing OAuth 2.1 clients, dynamic CORS whitelists, private application tenant isolation, token family rotation with atomic CAS concurrency protection, and application-scoped administration.
 
 ---
+
+## Planned next version
+
+The V2 target adds verified email enrollment before account creation, chosen usernames,
+multiple account sessions and an account chooser, mandatory administrative TOTP,
+user privacy controls, per-account encryption and deletion workflows. Ordinary open-app
+membership gates are removed; registered clients, private memberships, consent and
+admin isolation remain.
+
+**Status:** Documentation/design only. Current security findings must be addressed
+before an open identity rollout. Read [the baseline review](docs/reviews/2026-11-19-identity-platform-baseline.md),
+[the build phases](docs/PHASES.md), [the data lifecycle](docs/DATA_LIFECYCLE.md), and
+[specification 0008](docs/specs/0008-multi-account-identity-platform/index.md).
+No Google-equivalent security, formal conformance, or complete cryptographic erasure
+is claimed by these plans.
 
 ## 🤖 For AI Coding Agents & Developers
 
@@ -66,7 +81,7 @@ flowchart TD
 ## 🛡️ Core Security Architecture & Guarantees
 
 - **Zero In-App Password Handling**: Consumer applications NEVER collect, proxy, transmit, or store IdP user passwords. All credentials terminate at the centralized IdP.
-- **Strict OAuth 2.1 Compliance**: Mandatory PKCE (`code_challenge_method=S256`), cryptographically random `state`, exact redirect URI matching, and single-use authorization codes.
+- **Protocol controls, subject to verification**: Mandatory PKCE (`code_challenge_method=S256`), cryptographically random `state`, exact redirect URI matching, and single-use authorization codes.
 - **Private Tenant Isolation (`isPublic = false`)**: Unauthenticated users are sent to the centralized IdP login with sign-up disabled. Authenticated users are verified against `user_app_registrations`. Unassigned users receive HTTP 302 `error=access_denied`.
 - **Token Family Rotation with Atomic CAS**: Refresh tokens rotate atomically on every exchange. Replay attacks trigger immediate cascade revocation across the compromised token family.
 - **Scoped vs Super Administration**: Application Administrators (`role: "admin"`, `scopedClientId: "<clientId>"`) can only manage their own client; platform operations require Super Admin (`scopedClientId: null`).
@@ -80,7 +95,7 @@ The documentation for SWYRA Auth is consolidated into the following canonical sp
 
 | Canonical Document | Description |
 |---|---|
-| 🔌 **[docs/INTEGRATION.md](docs/INTEGRATION.md)** | **Authoritative Integration Contract:** The 4 app configurations, zero password relay, flow diagrams, and copy-pasteable recipes for Next.js, React SPA, FastAPI, and Express. |
+| 🔌 **[docs/INTEGRATION.md](docs/INTEGRATION.md)** | **Authoritative Integration Contract:** Current endpoints, independent client policy dimensions, zero password relay, secure framework contracts and planned account chooser behavior. |
 | 🛡️ **[docs/SECURITY.md](docs/SECURITY.md)** | **Normative Security Architecture:** Trust model, P0 invariants, fail-closed design principles, cryptographic key pinning, and automated security test matrix. |
 | 🏛️ **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | **System Design & Topology:** IdP infrastructure, OAuth 2.1 boundary, multi-tenant isolation, user identity vs app membership, and CAS token rotation engine. |
 | ⚙️ **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)** | **Configuration Reference:** Complete reference for IdP server variables, consumer client variables, public vs private flags, and fail-closed environment rules. |
@@ -113,7 +128,7 @@ cp backend/.env.example backend/.env
 
 ### 3. Running Test Suites
 ```bash
-# Execute all 15 automated security and adversarial suites
+# Execute the security suites declared in the manifest
 npm run test:all-security
 
 # Execute documentation consistency linter
@@ -127,4 +142,4 @@ npm run security:integration-check
 
 ## 📄 License
 
-MIT © SWYRA Auth Maintainers
+An explicit LICENSE file was not found in the inspected tracked tree. License selection, ownership and dependency provenance must be confirmed before an open-source release. Public visibility alone does not grant an explicit project license.

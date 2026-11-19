@@ -3,6 +3,10 @@
 **Authority:** Authoritative Triage, Error Catalog & Debugging Guide for SWYRA Auth  
 **Target:** Integrating Developers, AI Coding Agents, and Operations Teams  
 
+**Version boundary (2026-11-19):** Existing errors below describe the current
+runtime. V2 behavior is planned in [0008](specs/0008-multi-account-identity-platform/index.md).
+Do not diagnose missing account-chooser/OTP/key-deletion features as deployment errors.
+
 ---
 
 ## 1. Standard OAuth 2.1 Error Code Reference
@@ -152,3 +156,32 @@ When diagnosing authentication issues:
    - NEVER disable `state` verification.
    - NEVER change `isDev` to `true` on production clients.
    - NEVER add localhost fallback literals in configuration files.
+
+## 4. Planned V2 diagnostics
+
+Names below are proposed error categories. Exact routes and response schemas are
+published with their implementation, not by this document alone. Standard OAuth/OIDC
+errors are sent to a callback only after its redirect URI and client are validated.
+
+| Symptom/category | Required handling |
+|---|---|
+| Invalid/expired/replayed registration code | Generic verification failure; no account/credential/session creation; inspect intent expiry and budget without logging the code |
+| OTP send budget exhausted | 429 with bounded Retry-After; resending cannot reset aggregate limits |
+| Delivery provider unavailable | Bounded retry/outbox status; no verification bypass or fake successful account activation |
+| Username already reserved | Authoritative unique-index conflict, safe retry; Bloom filter cannot decide availability |
+| Signed-out chooser entry | Require fresh login; a remembered account ID is not a session |
+| `login_required` | Reauthentication needed; do not reuse an expired/revoked session |
+| `account_selection_required` | Silent request cannot pick an account; retry interactively when appropriate |
+| `consent_required` / `interaction_required` | Silent request cannot satisfy consent or policy; do not bypass consent |
+| Admin MFA enrollment required | Allow only restricted setup; no admin API/token privileges yet |
+| Recent MFA required | Prompt TOTP in a bound reauthentication flow, never downgrade to email OTP |
+| Key service unavailable | Deny decrypt; no plaintext fallback; inspect bounded queue and service health |
+| Deletion pending | Online authentication denied; do not promise keys are already destroyed |
+| Key destruction delayed/failed | Stay pending and retry idempotently; never reactivate account |
+| Old signed JWT still works offline | Expected until expiry unless consumer does online status checks; revocation cannot reach offline verifiers |
+| Device signal changed | Risk review/reauthentication if needed; never infer account ownership or block solely on fingerprint |
+
+Do not enable cross-origin access to account lists as a fix for a consumer's inability
+to see them. Consumers redirect to the IdP. Do not restore a database backup to undo
+account deletion. Follow the quarantine/tombstone procedure in
+[DATA_LIFECYCLE.md](DATA_LIFECYCLE.md).

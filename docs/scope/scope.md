@@ -1,4 +1,4 @@
-# Scope: SWYRA OAuth 2.1 Identity Provider Remediation
+# Scope: SWYRA identity platform
 
 Remediation plan to resolve post deployment authentication lockouts, decouple multi tenant administrator identities, enable zero deploy local testing, and simplify client configuration.
 
@@ -6,6 +6,35 @@ Remediation plan to resolve post deployment authentication lockouts, decouple mu
 **Workflow:** GA (after /develop, run /check verify, /test, a fresh model /check review, then /document). The project default level of rigor. /architect is the recommended first stop for a feature with a real decision, but skippable when you already know the build. Any feature can carry its own tag to do more or less.
 
 _These are recommendations to keep your build orderly, not requirements. Skip anything that does not fit: if you already know how to build a feature, use /develop and skip /architect. You decide when a feature is `done`._
+
+## Active next program: V2 verified multi-account identity platform
+
+**Updated 2026-11-19. Status: planned, documentation only.**
+Baseline `main`: `161ad99ca4ba0de88cff1267b33807db61da306c`.
+[0008](../specs/0008-multi-account-identity-platform/index.md) defines the proposed
+implementation; [PHASES.md](../PHASES.md) is the delivery order and acceptance matrix.
+The [security baseline](../reviews/2026-11-19-identity-platform-baseline.md) records
+current findings and distinguishes independent checks from reported results.
+
+| Feature | Status | Next gate |
+|---|---|---|
+| Shared account eligibility and token status hardening | planned | Phase 0, real-route and race tests |
+| Independent client type/open-private policy | planned | Audited compatibility migration |
+| OTP enrollment and chosen usernames | planned | No account before verified proof |
+| Mandatory administrator TOTP | planned | Every admin/plugin/recovery path protected |
+| Multiple sessions and chooser | planned | Real browser multi-tab account binding |
+| Own-account privacy dashboard | planned | Ownership and API minimization tests |
+| Per-account encryption | planned | Key-service selection and recovery proof |
+| Account deletion and restore safety | planned | Durable denial, key destruction and cleanup |
+| Distributed abuse and open-source release | planned | Load/cost controls, provenance and security review |
+
+- [x] Capture the target architecture and baseline source review.
+- [ ] Implement phase 0 only, shared account eligibility across issuance/validation.
+- [ ] Complete the remaining ordered gates in PHASES.md with per-slice evidence.
+
+No runtime or data migration is complete through this scope update. Existing slice 7
+status below is retained as historical workflow status, not silently reconciled from
+reported tests. Existing private-app provisioning and super/app admin boundaries remain.
 
 ## At a glance
 

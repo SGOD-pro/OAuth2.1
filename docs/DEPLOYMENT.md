@@ -3,6 +3,11 @@
 **Authority:** Authoritative Production Deployment & Operational Runbook  
 **Target:** DevOps Engineers, Platform Administrators, and Site Reliability Engineers  
 
+**V2 status (2026-11-19):** The multi-account identity platform is a planned
+migration, not deployed functionality. Follow [PHASES.md](PHASES.md) and
+[DATA_LIFECYCLE.md](DATA_LIFECYCLE.md). Current source findings are recorded in the
+[baseline review](reviews/2026-11-19-identity-platform-baseline.md).
+
 ---
 
 ## 1. Deployment Topology Overview
@@ -134,6 +139,9 @@ Before upgrading production to the mutually exclusive administrator model, execu
    The migration updates domain roles, deletes active session cookies for migrated users, and revokes refresh token families in `oauth_token_families`. Note that active RS256 access tokens remain valid until their expiration window completes (maximum fifteen minutes).
 
 5. **Rollback Procedure (if required):**
+   This legacy role-migration restore example must not restore deleted subjects,
+   revoked credentials or erased account keys. V2 restores require quarantine and
+   independent tombstone replay before traffic. Never run it as an automatic V2 rollback.
    ```bash
    mongorestore --uri="$MONGO_URI" backup_<timestamp>/
    ```
@@ -150,8 +158,40 @@ Before directing live user traffic to SWYRA Auth, verify:
 - [ ] `INTERNAL_GATEWAY_SECRET` is NOT hardcoded in git-tracked `vercel.json` or `samconfig.toml` files.
 - [ ] `TRUSTED_PROXY_CIDRS` is configured with the proxy IP ranges.
 - [ ] MongoDB connection uses TLS and connects to a replica set with transaction support.
-- [ ] All 15 security test suites pass: `npm run test:all-security`.
+- [ ] All required suites in `docs/security/security-suite-manifest.json` pass: `npm run test:all-security`. Record blocked/skipped checks explicitly.
 - [ ] Documentation consistency linter passes: `npm run security:docs-check`.
 - [ ] Integration contract linter passes: `npm run security:integration-check`.
 - [ ] Discovery metadata at `/.well-known/openid-configuration` returns HTTPS URLs.
 - [ ] Public JWKS endpoint at `/.well-known/jwks.json` returns active RSA public keys.
+
+## 5. V2 release and migration runbook requirements
+
+1. Pin the source commit and audit current client authentication methods, access
+   flags, verification provenance, identities, role assignments and secret exposure.
+   Rotate historically exposed secrets in actual deployments; git edits do not rotate them.
+2. Close phase 0 findings before enabling new public enrollment/SSO behavior.
+   Establish CI coverage for docs-only changes as well as runtime/security changes.
+3. Apply additive client-policy schema and dual-read support. Dry-run ambiguous
+   clients/duplicates; preserve current private clients and explicit app assignments.
+4. Deploy verified enrollment with a real bounded mail queue, delivery provider,
+   per-mailbox/IP/browser/global budgets and monitoring before enabling signup.
+   Do not simply set AUTH_EMAIL_VERIFICATION_ENABLED and assume OTP is implemented.
+5. Require administrative TOTP enrollment through restricted sessions. Test recovery,
+   promotion, social callback and plugin admin paths before rolling out multiple accounts.
+6. Prove multi-account tab isolation and logout semantics with real browser tests.
+   Preserve old clients and expire/reverify legacy sessions safely during cutover.
+7. Select account key infrastructure only after latency/cost/quotas, engine adapter,
+   old-key recovery and provider destruction-delay tests. Inventory and migrate every
+   plaintext copy with checkpointed verification before erasure is advertised.
+8. Deploy durable deletion/tombstone jobs and key-cache invalidation before account
+   deletion UI. Restore pre-deletion snapshots into quarantine and prove no resurrection.
+9. Exercise real distributed Redis/Mongo failures, edge quotas, worker/mail backlogs,
+   key-service outage and bounded load. Fingerprints are not the edge DDoS defense.
+10. Complete license/provenance, dependency/SBOM audit, private vulnerability reporting,
+    fresh-secret validation, self-host setup, documented limitations and independent
+    review. Public repository visibility alone is not release readiness.
+
+Roll out by bounded cohorts with recorded rollback thresholds and telemetry. Rollback
+may disable a feature or restore compatible code; it must not restore deleted accounts,
+keys, consumed proofs, old privileges, or revoked token families. Production data
+migration and deployment are separate actions from this documentation change.
