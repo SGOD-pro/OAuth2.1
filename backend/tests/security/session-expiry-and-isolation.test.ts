@@ -27,6 +27,7 @@ process.env.TRUSTED_PROXY_CIDRS = "10.0.0.0/8,172.16.0.0/12";
 const { getDb, closeDb } = await import("../../src/db/mongo");
 const { default: app } = await import("../../src/app");
 const { authProvider } = await import("../../src/utils/auth");
+const { enrollAndLoginAdminMfa } = await import("../fixtures/admin-mfa-fixture");
 
 const db = await getDb();
 
@@ -270,17 +271,14 @@ await runTest("EXP-4: Conflicting Cookie and Bearer identities fail closed (iden
   const userBId = String((userB as any).user.id);
 
   // Grant super-admin role to both users in the database
-  await db.collection("user").updateOne({ email: userAEmail }, { $set: { role: "super-admin" } });
-  await db.collection("user").updateOne({ email: userBEmail }, { $set: { role: "super-admin" } });
+  await db.collection("user").updateOne({ email: userAEmail }, { $set: { role: "super-admin", emailVerified: true } });
+  await db.collection("user").updateOne({ email: userBEmail }, { $set: { role: "super-admin", twoFactorEnabled: true, emailVerified: true } });
 
-  // Log in as User A to get Session Cookie A
-  const loginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ email: userAEmail, password }),
-  });
-  const cookieUserA = loginRes.headers.get("set-cookie") || "";
-  assert.ok(cookieUserA.includes("better-auth.session_token="), "Must acquire User A session cookie");
+  // Log in as User A with MFA to get Session Cookie A
+  const cookieUserA = await enrollAndLoginAdminMfa(app, userAEmail, password, (extra) =>
+    getTestHeaders({ "content-type": "application/json", ...extra })
+  );
+  assert.ok(cookieUserA, "Must acquire User A session cookie");
 
   // Mint valid Bearer token for User B with correct platform audience and super-admin role
   const tokenUserB = await new SignJWT({
@@ -288,6 +286,8 @@ await runTest("EXP-4: Conflicting Cookie and Bearer identities fail closed (iden
     email: userBEmail,
     role: "super-admin",
     aud: "http://localhost:3000",
+    mfa: true,
+    amr: ["mfa"],
   })
     .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer("http://localhost:3000")
@@ -301,6 +301,8 @@ await runTest("EXP-4: Conflicting Cookie and Bearer identities fail closed (iden
     email: userAEmail,
     role: "super-admin",
     aud: "http://localhost:3000",
+    mfa: true,
+    amr: ["mfa"],
   })
     .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer("http://localhost:3000")

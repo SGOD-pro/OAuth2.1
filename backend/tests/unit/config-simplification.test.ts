@@ -333,4 +333,5 @@ console.log("=== Testing Slice 5: Application Configuration Simplification ===")
 }
 
 console.log("=== All Slice 5 Unit Tests Passed Successfully! ===");
+process.exit(0);
 

@@ -60,6 +60,16 @@ export const config = {
         get emailVerificationEnabled() {
             return (process.env.AUTH_EMAIL_VERIFICATION_ENABLED || parsedEnv.AUTH_EMAIL_VERIFICATION_ENABLED) === 'true'
         },
+        get emailVerificationRolloutMode() {
+            return (process.env.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE || (parsedEnv as any).AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE || 'enforce_all') as 'enforce_new' | 'enforce_all'
+        },
+        get emailVerificationEnforcedAfter() {
+            return process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER || (parsedEnv as any).AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER
+        },
+    },
+
+    get emailDeliveryWebhookUrl() {
+        return process.env.EMAIL_DELIVERY_WEBHOOK_URL || (parsedEnv as any).EMAIL_DELIVERY_WEBHOOK_URL
     },
 
     get betterAuthSecret() {

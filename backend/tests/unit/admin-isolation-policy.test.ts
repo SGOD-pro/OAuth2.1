@@ -54,7 +54,11 @@ async function run() {
   });
 
   async function createTestJwt(claims: Record<string, any>) {
-    return new SignJWT(claims)
+    return new SignJWT({
+      mfa: true,
+      amr: ["mfa"],
+      ...claims,
+    })
       .setProtectedHeader({ alg: "RS256", kid: "test-key-id" })
       .setIssuedAt()
       .setExpirationTime("1h")
@@ -124,6 +128,7 @@ async function run() {
       role: "super-admin",
       scopedClientId: null,
       emailVerified: true,
+      twoFactorEnabled: true,
       banned: false,
     });
 
@@ -171,6 +176,7 @@ async function run() {
       role: "app-admin",
       scopedClientId: "app-alpha",
       emailVerified: true,
+      twoFactorEnabled: true,
       banned: false,
     });
 
@@ -262,6 +268,7 @@ async function run() {
       role: "app-admin",
       scopedClientId: "app-alpha",
       emailVerified: true,
+      twoFactorEnabled: true,
       banned: false,
     });
 

@@ -288,11 +288,26 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
                 }
               }
               if (!isRevoked) {
+                const tokenVal = sessResult.session.token;
+                const dbSessionDoc = tokenVal
+                  ? await database.collection("session").findOne({ token: tokenVal })
+                  : (sessResult.session.id ? await database.collection("session").findOne({ id: sessResult.session.id }) : null);
+
+                const isTwoFactorVerified = Boolean(
+                  sessResult.session.twoFactorVerified === true ||
+                  dbSessionDoc?.twoFactorVerified === true
+                );
+                const mfaVerifiedAt = dbSessionDoc?.mfaVerifiedAt || sessResult.session.mfaVerifiedAt || (isTwoFactorVerified ? sessResult.session.createdAt : null);
+
                 cookieSessionUser = {
                   ...sessResult.user,
                   ...userDoc,
                 };
-                sessionObj = sessResult.session;
+                sessionObj = {
+                  ...sessResult.session,
+                  twoFactorVerified: isTwoFactorVerified,
+                  mfaVerifiedAt,
+                };
               }
             }
           }
@@ -395,8 +410,16 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       }
 
       // Revocation timestamps check: reject replayed tokens issued before revocation or password change
-      if (payload.iat && typeof payload.iat === "number") {
-        const tokenIatMs = payload.iat * 1000;
+      const tokenIatMs = typeof payload.iat_ms === "number"
+        ? payload.iat_ms
+        : (payload.iat && typeof payload.iat === "number" ? payload.iat * 1000 : null);
+      const tokenVersion = typeof payload.token_version === "number" ? payload.token_version : undefined;
+
+      if (tokenVersion !== undefined && userDoc.tokenVersion !== undefined && tokenVersion < userDoc.tokenVersion) {
+        return null;
+      }
+
+      if (tokenIatMs !== null) {
         if (userDoc.tokensRevokedBefore) {
           const revokedMs = new Date(userDoc.tokensRevokedBefore).getTime();
           if (tokenIatMs < revokedMs) return null;
@@ -487,13 +510,28 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
         scopedClientId,
       };
 
+      const isMfaVerified = Boolean(
+        payload.mfa === true ||
+        (Array.isArray(payload.amr) && payload.amr.includes("mfa"))
+      );
+      const mfaVerifiedAt = payload.mfa_verified_at
+        ? new Date(payload.mfa_verified_at * 1000)
+        : (payload.iat ? new Date(payload.iat * 1000) : null);
+
+      const bearerSessionObj = {
+        id: `token-${sub}`,
+        userId: sub,
+        twoFactorVerified: isMfaVerified,
+        mfaVerifiedAt: isMfaVerified ? mfaVerifiedAt : null,
+      };
+
       c.set("user", fullUser);
-      c.set("session", { id: `token-${sub}`, userId: sub });
+      c.set("session", bearerSessionObj);
       c.set("authMethod", "bearer");
       c.set("tokenAudList", audList);
       c.set("hasPlatformAudience", hasPlatformAudience);
 
-      return { user: fullUser, session: { id: `token-${sub}`, userId: sub } };
+      return { user: fullUser, session: bearerSessionObj };
     } catch {
       // Invalid signature, wrong algorithm (e.g. HS256), expired token, wrong issuer, etc.
       return null;
@@ -675,6 +713,84 @@ export function extractTargetClientId(c: any): string | null {
   return null;
 }
 
+/**
+ * Authoritative Administrative MFA Policy Enforcement (Slice 3).
+ *
+ * Rules:
+ * 1. Both super-admin and app-admin roles MUST have enrolled TOTP (twoFactorEnabled === true).
+ * 2. Unenrolled administrators receive setup-only authority (can only access setup/recovery routes).
+ * 3. Enrolled administrators must have completed MFA in the current session/token.
+ * 4. Enrollment flags alone do not prove completed MFA.
+ */
+export function checkAdminMfa(c: any, user: any, session: any, reqId: string): Response | null {
+  if (!isAnyAdmin(user)) return null;
+
+  const path = c.req.path || "";
+  const isSetupRoute =
+    path.startsWith("/api/auth/two-factor") ||
+    path.startsWith("/api/admin/two-factor") ||
+    path === "/api/admin/me" ||
+    path === "/api/auth/sign-out";
+
+  // 1. Mandatory Enrollment Check
+  if (user.twoFactorEnabled !== true) {
+    if (!isSetupRoute) {
+      return c.json(
+        {
+          error: "mfa_required",
+          code: "ERR_MFA_ENROLLMENT_REQUIRED",
+          message: "MFA enrollment is required for administrative accounts. Access is restricted to setup operations until TOTP is enrolled.",
+          requestId: reqId,
+        },
+        403
+      );
+    }
+  } else {
+    // 2. Completed Verification Check for Current Session
+    const isMfaCompleted = Boolean(session?.twoFactorVerified === true);
+    if (!isMfaCompleted) {
+      if (!isSetupRoute) {
+        return c.json(
+          {
+            error: "mfa_required",
+            code: "ERR_MFA_REQUIRED",
+            message: "Two-factor authentication must be completed before accessing administrative operations.",
+            requestId: reqId,
+          },
+          403
+        );
+      }
+    }
+  }
+
+  return null;
+}
+
+export const requireRecentMfa = createMiddleware(async (c, next) => {
+  const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
+  let session = c.get("session");
+  if (!session) {
+    const auth = await getAuthenticatedUser(c);
+    session = auth?.session;
+  }
+  const mfaVerifiedAt = session?.mfaVerifiedAt ? new Date(session.mfaVerifiedAt).getTime() : 0;
+  const now = Date.now();
+  const MAX_MFA_AGE_MS = 15 * 60 * 1000; // 15 minutes
+
+  if (!mfaVerifiedAt || now - mfaVerifiedAt > MAX_MFA_AGE_MS) {
+    return c.json(
+      {
+        error: "mfa_step_up_required",
+        code: "ERR_MFA_STEP_UP_REQUIRED",
+        message: "Recent two-factor authentication (< 15 minutes) is required for sensitive administrative operations.",
+        requestId: reqId,
+      },
+      403
+    );
+  }
+  return next();
+});
+
 export const requireAdmin = createMiddleware(async (c, next) => {
   const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
   c.header("x-request-id", reqId);
@@ -719,6 +835,10 @@ export const requireAdmin = createMiddleware(async (c, next) => {
       403
     );
   }
+
+  // 3.5. Enforce Administrative MFA Policy (Slice 3)
+  const mfaCheck = checkAdminMfa(c, auth.user, auth.session, reqId);
+  if (mfaCheck) return mfaCheck;
 
   // 4. Strict Bearer-Token Audience Validation for Central Platform Management APIs:
   // Privileged central management APIs must NOT accept arbitrary registered client audiences.
@@ -791,6 +911,10 @@ export const requireSuperAdmin = createMiddleware(async (c, next) => {
       403
     );
   }
+
+  // 3.5. Enforce Administrative MFA Policy (Slice 3)
+  const mfaCheck = checkAdminMfa(c, auth.user, auth.session, reqId);
+  if (mfaCheck) return mfaCheck;
 
   // 4. Enforce Super-Admin Privilege Scope
   if (!isSuperAdmin(auth.user)) {
@@ -871,6 +995,10 @@ export const requireScopedAdmin = createMiddleware(async (c, next) => {
       403
     );
   }
+
+  // 3.5. Enforce Administrative MFA Policy (Slice 3)
+  const mfaCheck = checkAdminMfa(c, auth.user, auth.session, reqId);
+  if (mfaCheck) return mfaCheck;
 
   // 4. Enforce mandatory password change for freshly provisioned temporary accounts
   if (auth.user?.mustChangePassword === true) {

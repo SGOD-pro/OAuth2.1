@@ -357,3 +357,4 @@ console.log("[PASS] getTrustedClientIp resolves client IP safely with proxy CIDR
 console.log("\n================================================================");
 console.log("  ALL SECURITY UTILITIES UNIT TESTS PASSED!");
 console.log("================================================================\n");
+process.exit(0);

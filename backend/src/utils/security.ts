@@ -983,3 +983,41 @@ export function hashToken(
 ): string {
   return crypto.createHash("sha256").update(token).digest(encoding);
 }
+
+/**
+ * Detects whether a string is formatted like an email address.
+ * Prevents email disclosure through user-provided name or display fields.
+ */
+export function isEmailShaped(val?: string | null): boolean {
+  if (!val || typeof val !== "string") return false;
+  const trimmed = val.trim();
+  return trimmed.includes("@") && trimmed.includes(".") && !trimmed.includes(" ");
+}
+
+/**
+ * Server-side privacy projection helper (Slice 2).
+ * Formats user identifiers into approved privacy-preserving display labels.
+ * Masks full email addresses and email-shaped name fields to prevent disclosure
+ * in ordinary admin lists, search, export, and logs.
+ */
+export function toApprovedDisplayLabel(email?: string | null, name?: string | null): string {
+  // If a legitimate human name is present (non-empty, not "user", and not email-shaped), return it
+  if (name && name.trim().length > 0 && name.trim().toLowerCase() !== "user" && !isEmailShaped(name)) {
+    return name.trim();
+  }
+
+  // If name was email-shaped, treat it as candidate email to mask
+  const targetEmail = (email && isEmailShaped(email))
+    ? email.trim()
+    : (name && isEmailShaped(name) ? name.trim() : (email ? email.trim() : null));
+
+  if (!targetEmail || !targetEmail.includes("@")) {
+    return "User";
+  }
+
+  const [local, domain] = targetEmail.split("@");
+  if (local.length <= 2) {
+    return `${local[0] || "*"}***@${domain || ""}`;
+  }
+  return `${local.slice(0, 2)}***@${domain || ""}`;
+}

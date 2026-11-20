@@ -52,6 +52,10 @@ Ensure the Lambda environment variables are configured in AWS Systems Manager Pa
 - `TRUSTED_PROXY_CIDRS=127.0.0.1/32,10.0.0.0/8`
 - `ALLOW_DEV_CLIENTS_IN_PRODUCTION=false`
 - `AUTH_PUBLIC_SIGNUP_ENABLED=true`
+- `AUTH_EMAIL_VERIFICATION_ENABLED=false` (set to `true` only with valid `EMAIL_DELIVERY_WEBHOOK_URL`)
+- `EMAIL_DELIVERY_WEBHOOK_URL=https://...` (mandatory HTTPS external transport when verification is enabled)
+- `AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE=enforce_new` (or `enforce_all` once all users have migrated)
+- `AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER=<ISO-8601-date>`
 
 ---
 

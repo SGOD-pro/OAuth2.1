@@ -111,3 +111,4 @@ for (const doc of bannedRootDocs) {
 }
 
 console.log("[PASS] All repository cleanliness and lean invariants verified!");
+process.exit(0);
