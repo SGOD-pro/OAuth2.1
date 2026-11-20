@@ -243,7 +243,27 @@ await runTest("SEC-01-J: Same-second credential issuance and revocation handling
   const resLegacyNextSec = checkAccountEligibility(u4, { tokenIssuedAtSec: nowSec + 1 });
   assert.equal(resLegacyNextSec.eligible, true, "Legacy integer second token in subsequent second is accepted");
 
-  // 7. Real route verification for same-second issuance
+  // 7. Safe legacy records handling without versions
+  // 7a. User without tokenVersion is treated as effective version 1
+  const legacyUser1 = { id: "legacy-u1" };
+  const resLegacyUserV1Token = checkAccountEligibility(legacyUser1, { tokenVersion: 1 });
+  assert.equal(resLegacyUserV1Token.eligible, true, "Legacy user without tokenVersion accepts version 1 token");
+
+  const resLegacyUserV0Token = checkAccountEligibility(legacyUser1, { tokenVersion: 0 });
+  assert.equal(resLegacyUserV0Token.eligible, false, "Legacy user rejects token with version < 1");
+  assert.equal(resLegacyUserV0Token.reason, "tokens_revoked");
+
+  // 7b. Unversioned legacy token accepted when user is at version 1 (or unversioned)
+  const resLegacyTokenV1User = checkAccountEligibility(legacyUser1, {});
+  assert.equal(resLegacyTokenV1User.eligible, true, "Unversioned legacy token is accepted when user is at version 1");
+
+  // 7c. Unversioned legacy token fails closed when user version has advanced past 1 (was revoked)
+  const versionedUser2 = { id: "versioned-u2", tokenVersion: 2 };
+  const resLegacyTokenRevokedUser = checkAccountEligibility(versionedUser2, {});
+  assert.equal(resLegacyTokenRevokedUser.eligible, false, "Unversioned legacy token must fail closed when user version > 1");
+  assert.equal(resLegacyTokenRevokedUser.reason, "tokens_revoked");
+
+  // 8. Real route verification for same-second issuance
   const sameSecUserId = "same-sec-route-user-" + crypto.randomBytes(4).toString("hex");
   await db.collection("user").insertOne({
     id: sameSecUserId,
@@ -859,10 +879,10 @@ await runTest("SEC-01-G: Refresh token exchange rejects banned or disabled users
 
   const res = await app.request("/api/auth/oauth2/token", {
     method: "POST",
-    headers: {
+    headers: getTestHeaders({
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization: `Basic ${basicAuth}`,
-    },
+    }),
     body: `grant_type=refresh_token&refresh_token=${refreshToken}`,
   });
 
@@ -967,10 +987,10 @@ await runTest("SEC-01-H: Revocation wins code exchange and refresh with older cr
 
   const codeRes = await app.request("/api/auth/oauth2/token", {
     method: "POST",
-    headers: {
+    headers: getTestHeaders({
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization: `Basic ${basicAuth}`,
-    },
+    }),
     body: `grant_type=authorization_code&code=${authCode}&redirect_uri=https://example.com/callback&client_id=test-sec-client`,
   });
   assert.equal(codeRes.status, 400, "Older authorization code must be rejected when tokens were revoked prior to exchange");
@@ -1001,10 +1021,10 @@ await runTest("SEC-01-H: Revocation wins code exchange and refresh with older cr
 
   const refRes = await app.request("/api/auth/oauth2/token", {
     method: "POST",
-    headers: {
+    headers: getTestHeaders({
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization: `Basic ${basicAuth}`,
-    },
+    }),
     body: `grant_type=refresh_token&refresh_token=${refToken}`,
   });
   assert.equal(refRes.status, 401, "Older refresh token must be rejected when tokens were revoked prior to refresh");
@@ -1027,8 +1047,14 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
           const db = client.db();
           await db.collection("user").updateOne(
             { id: msg.userId },
-            { $set: { tokensRevokedBefore: new Date(), banned: true, tokenVersion: 99 } }
+            { $inc: { tokenVersion: 1 }, $set: { tokensRevokedBefore: new Date(), banned: true } }
           );
+          await db.collection("oauth_token_families").updateMany(
+            { userId: msg.userId },
+            { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+          );
+          await db.collection("oauthAccessToken").deleteMany({ userId: msg.userId });
+          await db.collection("oauthRefreshToken").deleteMany({ userId: msg.userId });
           parentPort.postMessage({ status: "revoked" });
         } else if (msg.action === "close") {
           if (client) await client.close();
@@ -1056,7 +1082,7 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
   const { authProvider } = await import("../../src/utils/auth");
 
   try {
-    // 1. Concurrent race: Overlapping Authorization Code Exchange vs Worker Account Revocation
+    // 1. Authorization Code Exchange - Ordering 1: Revocation wins before issuance commits (interval after final read)
     const raceCodeEmail = `race-code-${crypto.randomBytes(4).toString("hex")}@platform.local`;
     const raceCodePassword = "Password@1234!";
 
@@ -1115,7 +1141,7 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
 
     let codeBarrierFired = false;
     setTokenBarrierHookForTesting(async (stage, userId) => {
-      if (stage === "before_fence_code" && userId === raceCodeUserId) {
+      if ((stage === "before_issuance_commit" || stage === "before_fence_code") && userId === raceCodeUserId) {
         codeBarrierFired = true;
         await new Promise<void>((resolve, reject) => {
           worker.once("message", (m) => {
@@ -1129,18 +1155,18 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
 
     const codeRes = await app.request("/api/auth/oauth2/token", {
       method: "POST",
-      headers: {
+      headers: getTestHeaders({
         "Content-Type": "application/x-www-form-urlencoded",
         Authorization: `Basic ${basicAuth}`,
-      },
+      }),
       body: `grant_type=authorization_code&code=${raceAuthCode}&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&code_verifier=${codeVerifier}&client_id=test-sec-client`,
     });
 
-    assert.equal(codeBarrierFired, true, "Deterministic barrier must fire before atomic fence");
-    assert.equal(codeRes.status, 400, "Atomic authorization fence must reject code exchange when user revoked concurrently");
+    assert.equal(codeBarrierFired, true, "Deterministic barrier must fire before issuance commit");
+    assert.equal(codeRes.status, 400, "Conditional state transition must reject code exchange when user revoked concurrently");
     const codeBody = await codeRes.json();
     assert.equal(codeBody.error, "invalid_grant");
-    assert.ok(codeBody.error_description.includes("revoked during token exchange"), "Error description must identify concurrent revocation");
+    assert.ok(codeBody.error_description.includes("revoked or version transitioned"), "Error description must identify concurrent revocation");
 
     // Assert zero active tokens survive in database
     const survivingAccessTokens = await db.collection("oauthAccessToken").countDocuments({ userId: raceCodeUserId });
@@ -1148,7 +1174,119 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
     assert.equal(survivingAccessTokens, 0, "No access token may survive atomic authorization fence purge");
     assert.equal(survivingRefreshTokens, 0, "No refresh token may survive atomic authorization fence purge");
 
-    // 2. Concurrent race: Overlapping Refresh Token Rotation vs Worker Account Revocation
+    // 2. Authorization Code Exchange - Ordering 2: Issuance commits first, then revocation runs
+    const raceCommitCodeEmail = `race-commit-code-${crypto.randomBytes(4).toString("hex")}@platform.local`;
+    const raceCommitCodePassword = "Password@1234!";
+
+    const raceCommitCodeSignUp = await authProvider.api.signUpEmail({
+      body: { email: raceCommitCodeEmail, password: raceCommitCodePassword, name: "Race Commit Code User" },
+    });
+    const raceCommitCodeUserId = String(raceCommitCodeSignUp.user.id);
+
+    await db.collection("user").updateOne(
+      { email: raceCommitCodeEmail },
+      { $set: { id: raceCommitCodeUserId, role: "user", tokenVersion: 1 } }
+    );
+
+    await db.collection("user_app_registrations").insertOne({
+      userId: raceCommitCodeUserId,
+      clientId: "test-sec-client",
+      appRole: "member",
+      status: "active",
+      isActive: true,
+      registeredAt: new Date(),
+    });
+    await db.collection("oauthConsent").insertOne({
+      clientId: "test-sec-client",
+      userId: raceCommitCodeUserId,
+      scopes: ["openid", "offline_access"],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const commitCodeLoginRes = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: getTestHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ email: raceCommitCodeEmail, password: raceCommitCodePassword }),
+    });
+    assert.equal(commitCodeLoginRes.status, 200);
+    const commitCodeSessionCookie = (commitCodeLoginRes.headers.get("set-cookie") || "").split(";")[0];
+
+    const commitCodeVerifier = crypto.randomBytes(32).toString("base64url");
+    const commitCodeChallenge = crypto.createHash("sha256").update(commitCodeVerifier).digest("base64url");
+
+    const commitCodeAuthRes = await app.request(
+      `/api/auth/oauth2/authorize?client_id=test-sec-client&response_type=code&code_challenge=${commitCodeChallenge}&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&scope=openid%20offline_access&state=commitcodestate`,
+      {
+        method: "GET",
+        headers: getTestHeaders({ Cookie: commitCodeSessionCookie }),
+      }
+    );
+    assert.equal(commitCodeAuthRes.status, 302);
+    const commitCodeAuthUrl = new URL(commitCodeAuthRes.headers.get("location") || "");
+    const commitAuthCode = commitCodeAuthUrl.searchParams.get("code")!;
+    assert.ok(commitAuthCode);
+
+    let commitCodeBarrierFired = false;
+    setTokenBarrierHookForTesting(async (stage, userId) => {
+      if (stage === "after_issuance_commit" && userId === raceCommitCodeUserId) {
+        commitCodeBarrierFired = true;
+        await new Promise<void>((resolve, reject) => {
+          worker.once("message", (m) => {
+            if (m.status === "revoked") resolve();
+            else reject(new Error("Worker revocation failed: " + m.error));
+          });
+          worker.postMessage({ action: "revoke", userId: raceCommitCodeUserId });
+        });
+      }
+    });
+
+    const commitCodeExchangeRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: getTestHeaders({
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      }),
+      body: `grant_type=authorization_code&code=${commitAuthCode}&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&code_verifier=${commitCodeVerifier}&client_id=test-sec-client`,
+    });
+
+    assert.equal(commitCodeBarrierFired, true, "after_issuance_commit barrier must fire");
+    assert.equal(commitCodeExchangeRes.status, 200, "Issuance that committed first must return 200");
+    const commitTokens = await commitCodeExchangeRes.json();
+    assert.ok(commitTokens.access_token);
+    assert.ok(commitTokens.refresh_token);
+
+    // Online denial verification: token issued before revocation cannot be used
+    const postCommitUserInfo = await app.request("/api/auth/oauth2/userinfo", {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${commitTokens.access_token}` }),
+    });
+    assert.equal(postCommitUserInfo.status, 401, "Subsequent UserInfo access must be denied after revocation");
+
+    const postCommitIntrospect = await app.request("/api/auth/oauth2/introspect", {
+      method: "POST",
+      headers: getTestHeaders({
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      }),
+      body: `token=${commitTokens.access_token}`,
+    });
+    assert.equal(postCommitIntrospect.status, 200);
+    const postCommitIntroBody = await postCommitIntrospect.json();
+    assert.equal(postCommitIntroBody.active, false, "Subsequent introspection must return active: false");
+
+    // Attempt refresh: must be denied and prevent credential resurrection
+    const postCommitRefresh = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: getTestHeaders({
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      }),
+      body: `grant_type=refresh_token&refresh_token=${commitTokens.refresh_token}`,
+    });
+    assert.equal(postCommitRefresh.status, 401, "Subsequent refresh must fail closed without resurrecting credentials");
+
+    // 3. Refresh Token Rotation - Ordering 1: Revocation wins before issuance commits (interval after final read)
     const raceRefreshEmail = `race-ref-${crypto.randomBytes(4).toString("hex")}@platform.local`;
     const raceRefreshPassword = "Password@1234!";
 
@@ -1207,10 +1345,10 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
     setTokenBarrierHookForTesting(null);
     const initialExchangeRes = await app.request("/api/auth/oauth2/token", {
       method: "POST",
-      headers: {
+      headers: getTestHeaders({
         "Content-Type": "application/x-www-form-urlencoded",
         Authorization: `Basic ${basicAuth}`,
-      },
+      }),
       body: `grant_type=authorization_code&code=${initialCode}&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&code_verifier=${refVerifier}&client_id=test-sec-client`,
     });
     assert.equal(initialExchangeRes.status, 200, "Initial code exchange must establish genuine token family");
@@ -1220,7 +1358,7 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
 
     let refreshBarrierFired = false;
     setTokenBarrierHookForTesting(async (stage, userId) => {
-      if (stage === "before_fence_refresh" && userId === raceRefreshUserId) {
+      if ((stage === "before_issuance_commit" || stage === "before_fence_refresh") && userId === raceRefreshUserId) {
         refreshBarrierFired = true;
         await new Promise<void>((resolve, reject) => {
           worker.once("message", (m) => {
@@ -1234,18 +1372,18 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
 
     const refRes = await app.request("/api/auth/oauth2/token", {
       method: "POST",
-      headers: {
+      headers: getTestHeaders({
         "Content-Type": "application/x-www-form-urlencoded",
         Authorization: `Basic ${basicAuth}`,
-      },
+      }),
       body: `grant_type=refresh_token&refresh_token=${genuineRefreshToken}`,
     });
 
-    assert.equal(refreshBarrierFired, true, "Deterministic barrier must fire before refresh fence");
-    assert.equal(refRes.status, 401, "Atomic authorization fence must reject token refresh when user revoked concurrently");
+    assert.equal(refreshBarrierFired, true, "Deterministic barrier must fire before refresh commit");
+    assert.equal(refRes.status, 401, "Conditional state transition must reject token refresh when user revoked concurrently");
     const refBody = await refRes.json();
     assert.equal(refBody.error, "invalid_grant");
-    assert.ok(refBody.error_description.includes("revoked during token refresh"), "Error description must identify concurrent revocation");
+    assert.ok(refBody.error_description.includes("revoked or version transitioned"), "Error description must identify concurrent revocation");
 
     // Assert zero active tokens survive in database and family is marked revoked
     const survivingRefAccess = await db.collection("oauthAccessToken").countDocuments({ userId: raceRefreshUserId });
@@ -1254,6 +1392,130 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
     assert.equal(survivingRefAccess, 0, "No access token may survive atomic refresh fence purge");
     assert.equal(survivingRefTokens, 0, "No refresh token may survive atomic refresh fence purge");
     assert.equal(familyDoc?.status, "revoked", "Token family must be marked revoked");
+
+    // 4. Refresh Token Rotation - Ordering 2: Refresh token rotation commits first, then revocation runs
+    const raceCommitRefEmail = `race-commit-ref-${crypto.randomBytes(4).toString("hex")}@platform.local`;
+    const raceCommitRefPassword = "Password@1234!";
+
+    const raceCommitRefSignUp = await authProvider.api.signUpEmail({
+      body: { email: raceCommitRefEmail, password: raceCommitRefPassword, name: "Race Commit Ref User" },
+    });
+    const raceCommitRefUserId = String(raceCommitRefSignUp.user.id);
+
+    await db.collection("user").updateOne(
+      { email: raceCommitRefEmail },
+      { $set: { id: raceCommitRefUserId, role: "user", tokenVersion: 1 } }
+    );
+
+    await db.collection("user_app_registrations").insertOne({
+      userId: raceCommitRefUserId,
+      clientId: "test-sec-client",
+      appRole: "member",
+      status: "active",
+      isActive: true,
+      registeredAt: new Date(),
+    });
+    await db.collection("oauthConsent").insertOne({
+      clientId: "test-sec-client",
+      userId: raceCommitRefUserId,
+      scopes: ["openid", "offline_access"],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const commitRefLoginRes = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: getTestHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ email: raceCommitRefEmail, password: raceCommitRefPassword }),
+    });
+    assert.equal(commitRefLoginRes.status, 200);
+    const commitRefSessionCookie = (commitRefLoginRes.headers.get("set-cookie") || "").split(";")[0];
+
+    const commitRefVerifier = crypto.randomBytes(32).toString("base64url");
+    const commitRefChallenge = crypto.createHash("sha256").update(commitRefVerifier).digest("base64url");
+
+    const commitRefAuthRes = await app.request(
+      `/api/auth/oauth2/authorize?client_id=test-sec-client&response_type=code&code_challenge=${commitRefChallenge}&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&scope=openid%20offline_access&state=refstatecommit`,
+      {
+        method: "GET",
+        headers: getTestHeaders({ Cookie: commitRefSessionCookie }),
+      }
+    );
+    assert.equal(commitRefAuthRes.status, 302);
+    const commitRefAuthUrl = new URL(commitRefAuthRes.headers.get("location") || "");
+    const commitRefInitialCode = commitRefAuthUrl.searchParams.get("code")!;
+
+    setTokenBarrierHookForTesting(null);
+    const commitRefInitialExchange = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: getTestHeaders({
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      }),
+      body: `grant_type=authorization_code&code=${commitRefInitialCode}&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&code_verifier=${commitRefVerifier}&client_id=test-sec-client`,
+    });
+    assert.equal(commitRefInitialExchange.status, 200);
+    const commitRefInitialTokens = await commitRefInitialExchange.json();
+    const commitRefreshToken = commitRefInitialTokens.refresh_token;
+    assert.ok(commitRefreshToken);
+
+    let refCommitBarrierFired = false;
+    setTokenBarrierHookForTesting(async (stage, userId) => {
+      if (stage === "after_issuance_commit" && userId === raceCommitRefUserId) {
+        refCommitBarrierFired = true;
+        await new Promise<void>((resolve, reject) => {
+          worker.once("message", (m) => {
+            if (m.status === "revoked") resolve();
+            else reject(new Error("Worker revocation failed: " + m.error));
+          });
+          worker.postMessage({ action: "revoke", userId: raceCommitRefUserId });
+        });
+      }
+    });
+
+    const commitRefRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: getTestHeaders({
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      }),
+      body: `grant_type=refresh_token&refresh_token=${commitRefreshToken}`,
+    });
+
+    assert.equal(refCommitBarrierFired, true, "after_issuance_commit barrier must fire for refresh");
+    assert.equal(commitRefRes.status, 200, "Refresh rotation that committed first must return 200");
+    const rotatedCommitTokens = await commitRefRes.json();
+    assert.ok(rotatedCommitTokens.access_token);
+    assert.ok(rotatedCommitTokens.refresh_token);
+
+    // Online denial verification: rotated tokens cannot be used after subsequent revocation
+    const postRotUserInfo = await app.request("/api/auth/oauth2/userinfo", {
+      method: "GET",
+      headers: getTestHeaders({ Authorization: `Bearer ${rotatedCommitTokens.access_token}` }),
+    });
+    assert.equal(postRotUserInfo.status, 401, "Rotated access token must be denied after revocation");
+
+    const postRotIntrospect = await app.request("/api/auth/oauth2/introspect", {
+      method: "POST",
+      headers: getTestHeaders({
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      }),
+      body: `token=${rotatedCommitTokens.access_token}`,
+    });
+    assert.equal(postRotIntrospect.status, 200);
+    const postRotIntroBody = await postRotIntrospect.json();
+    assert.equal(postRotIntroBody.active, false, "Rotated token introspection must return active: false");
+
+    const postRotRefresh = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: getTestHeaders({
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      }),
+      body: `grant_type=refresh_token&refresh_token=${rotatedCommitTokens.refresh_token}`,
+    });
+    assert.equal(postRotRefresh.status, 401, "Rotated refresh token must fail closed without resurrecting credentials");
   } finally {
     setTokenBarrierHookForTesting(null);
     await new Promise<void>((resolve) => {

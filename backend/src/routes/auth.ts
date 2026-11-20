@@ -117,9 +117,54 @@ export function setSigningKeyOverrideForTesting(override: (() => Promise<{ priva
     signingKeyOverrideForTesting = override;
 }
 
-let tokenBarrierHookForTesting: ((stage: "before_fence_code" | "before_fence_refresh", userId?: string) => Promise<void>) | null = null;
-export function setTokenBarrierHookForTesting(hook: ((stage: "before_fence_code" | "before_fence_refresh", userId?: string) => Promise<void>) | null): void {
+export type TokenBarrierStage =
+    | "before_issuance_commit"
+    | "after_issuance_commit"
+    | "before_fence_code"
+    | "before_fence_refresh";
+
+let tokenBarrierHookForTesting: ((stage: TokenBarrierStage, userId?: string) => Promise<void>) | null = null;
+export function setTokenBarrierHookForTesting(hook: ((stage: TokenBarrierStage, userId?: string) => Promise<void>) | null): void {
     tokenBarrierHookForTesting = hook;
+}
+
+export async function revokeUserTokensDurable(database: any, userId: string): Promise<number> {
+    const now = new Date();
+    const user = await database.collection("user").findOne({
+        $or: [
+            { id: userId },
+            ...(ObjectId.isValid(userId) && userId.length === 24 ? [{ _id: new ObjectId(userId) }] : []),
+        ],
+    });
+    const currentVersion = typeof user?.tokenVersion === "number" ? user.tokenVersion : 1;
+    const newVersion = currentVersion + 1;
+
+    await database.collection("user").updateOne(
+        {
+            $or: [
+                { id: userId },
+                ...(ObjectId.isValid(userId) && userId.length === 24 ? [{ _id: new ObjectId(userId) }] : []),
+            ],
+        },
+        {
+            $set: {
+                tokensRevokedBefore: now,
+                tokenVersion: newVersion,
+            },
+        }
+    );
+
+    await database.collection("oauth_token_families").updateMany(
+        { userId },
+        { $set: { status: "revoked", revokedAt: now, rotating: false } }
+    );
+
+    await Promise.all([
+        database.collection("oauthAccessToken").deleteMany({ userId }),
+        database.collection("oauthRefreshToken").deleteMany({ userId }),
+    ]);
+
+    return newVersion;
 }
 
 export function clearSigningKeyCacheForTesting(): void {
@@ -222,7 +267,7 @@ export async function mintJwtAccessToken(params: {
         const nowMs = Date.now();
         const tokenIssuedAtMs = params.tokenIssuedAtMs ?? (params.tokenIssuedAtSec ? params.tokenIssuedAtSec * 1000 : nowMs);
         const tokenIssuedAtSec = params.tokenIssuedAtSec ?? Math.floor(tokenIssuedAtMs / 1000);
-        const tokenVersion = params.tokenVersion ?? userDoc?.tokenVersion;
+        const tokenVersion = params.tokenVersion ?? (typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : 1);
 
         const eligibility = checkAccountEligibility(userDoc, {
             tokenIssuedAtMs,
@@ -258,7 +303,7 @@ export async function mintJwtAccessToken(params: {
             azp: params.clientId,
             scope: params.scope || "openid profile email",
             iat_ms: tokenIssuedAtMs,
-            token_version: userDoc?.tokenVersion || 0,
+            token_version: tokenVersion,
         };
 
         if (email !== undefined) claims.email = email;
@@ -1095,6 +1140,20 @@ auth.get("/oauth2/authorize", async (c) => {
         if (location) {
             try {
                 const locUrl = new URL(location, config.auth.baseURL);
+                const code = locUrl.searchParams.get("code");
+                if (code && sessionUser) {
+                    const sessionUserId = String(sessionUser.id || sessionUser._id);
+                    const currentVersion = typeof sessionUser.tokenVersion === "number" ? sessionUser.tokenVersion : 1;
+                    await database.collection("oauthAuthorizationCode").updateOne(
+                        { code },
+                        {
+                            $set: {
+                                tokenVersion: currentVersion,
+                                userId: sessionUserId,
+                            },
+                        }
+                    ).catch(() => {});
+                }
                 if (locUrl.pathname.includes("/auth")) {
                     locUrl.searchParams.set("client_id", canonicalClientId);
                     if (!client.isPublic) {
@@ -1629,12 +1688,18 @@ auth.post("/oauth2/token", async (c) => {
                         );
                     }
 
+                    const expectedRefreshTokenVersion = typeof preRefreshTokenVersion === "number"
+                        ? preRefreshTokenVersion
+                        : (typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : 1);
+
                     const jwtAt = await mintJwtAccessToken({
                         userId: resolvedUserId,
                         clientId: canonicalClientId,
                         expiresInSeconds: tokenData.expires_in || 900,
                         scope: tokenData.scope,
+                        tokenIssuedAtMs: preRefreshIssuedAtMs,
                         tokenIssuedAtSec: preRefreshIssuedAtSec,
+                        tokenVersion: expectedRefreshTokenVersion,
                     });
 
                     if (!jwtAt) {
@@ -1689,40 +1754,108 @@ auth.post("/oauth2/token", async (c) => {
                         expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
                         createdAt: new Date(),
                         scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                        tokenVersion: expectedRefreshTokenVersion,
                     }).catch(() => {});
-                    if (tokenBarrierHookForTesting) {
+
+                    if (tokenData.refresh_token) {
+                        await database.collection("oauthRefreshToken").updateOne(
+                            { token: tokenData.refresh_token },
+                            { $set: { tokenVersion: expectedRefreshTokenVersion } }
+                        ).catch(() => {});
+                    }
+
+                    if (tokenBarrierHookForTesting && resolvedUserId) {
+                        await tokenBarrierHookForTesting("before_issuance_commit", resolvedUserId);
                         await tokenBarrierHookForTesting("before_fence_refresh", resolvedUserId);
                     }
-                    // Final Atomic Authorization Fence for Refresh Token Rotation
+
+                    // Exact Issuance/Revocation Linearization Point:
+                    // Durable Conditional State Transition coordinated with revocation.
+                    let refreshCommitSuccess = false;
                     if (resolvedUserId) {
-                        const finalUserDoc = await database.collection("user").findOne({
+                        const refreshCommitCondition: Record<string, any> = {
                             $or: [
                                 { id: resolvedUserId },
                                 ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
-                            ]
-                        });
-                        const finalEligibility = checkAccountEligibility(finalUserDoc, {
-                            tokenIssuedAtMs: preRefreshIssuedAtMs,
-                            tokenIssuedAtSec: preRefreshIssuedAtSec,
-                            tokenVersion: preRefreshTokenVersion,
-                        });
-                        if (!finalEligibility.eligible) {
-                            await Promise.all([
-                                database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
-                                database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
-                                database.collection("oauth_token_families").updateMany(
-                                    { clientId: canonicalClientId, userId: resolvedUserId },
-                                    { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
-                                ),
-                            ]);
-                            return c.json(
+                            ],
+                            $and: [
                                 {
-                                    error: "invalid_grant",
-                                    error_description: `User account was revoked during token refresh: ${finalEligibility.reason}`,
+                                    $or: [
+                                        { tokenVersion: expectedRefreshTokenVersion },
+                                        ...(expectedRefreshTokenVersion === 1 ? [{ tokenVersion: { $exists: false } }, { tokenVersion: null }] : []),
+                                    ],
                                 },
-                                401
-                            );
+                                { banned: { $ne: true } },
+                                { disabled: { $ne: true } },
+                                { isActive: { $ne: false } },
+                                { status: { $nin: ["inactive", "deleting", "deleted"] } },
+                                { deletedAt: { $exists: false } },
+                                ...(preRefreshIssuedAtMs ? [{
+                                    $or: [
+                                        { tokensRevokedBefore: { $exists: false } },
+                                        { tokensRevokedBefore: null },
+                                        { tokensRevokedBefore: { $lte: new Date(preRefreshIssuedAtMs) } },
+                                    ],
+                                }] : [{
+                                    $or: [
+                                        { tokensRevokedBefore: { $exists: false } },
+                                        { tokensRevokedBefore: null },
+                                        { tokensRevokedBefore: { $lte: new Date() } },
+                                    ],
+                                }]),
+                                ...(preRefreshIssuedAtMs ? [{
+                                    $or: [
+                                        { passwordChangedAt: { $exists: false } },
+                                        { passwordChangedAt: null },
+                                        { passwordChangedAt: { $lte: new Date(preRefreshIssuedAtMs) } },
+                                    ],
+                                }] : []),
+                            ],
+                        };
+
+                        const commitResult = await database.collection("user").findOneAndUpdate(
+                            refreshCommitCondition,
+                            {
+                                $set: {
+                                    tokenVersion: expectedRefreshTokenVersion,
+                                    lastTokenIssuedAt: new Date(),
+                                },
+                            },
+                            { returnDocument: "after" }
+                        );
+
+                        if (commitResult) {
+                            refreshCommitSuccess = true;
                         }
+                    }
+
+                    if (!refreshCommitSuccess) {
+                        await Promise.all([
+                            database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+                            database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+                            database.collection("oauth_token_families").updateMany(
+                                { clientId: canonicalClientId, userId: resolvedUserId },
+                                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+                            ),
+                        ]);
+                        return c.json(
+                            {
+                                error: "invalid_grant",
+                                error_description: "User account was revoked or version transitioned during token refresh",
+                            },
+                            401
+                        );
+                    }
+
+                    if (rotationResult.familyId) {
+                        await database.collection("oauth_token_families").updateOne(
+                            { familyId: rotationResult.familyId },
+                            { $set: { rotating: false, tokenVersion: expectedRefreshTokenVersion } }
+                        ).catch(() => {});
+                    }
+
+                    if (tokenBarrierHookForTesting && resolvedUserId) {
+                        await tokenBarrierHookForTesting("after_issuance_commit", resolvedUserId);
                     }
 
                     tokenData.access_token = jwtAt;
@@ -1816,6 +1949,7 @@ auth.post("/oauth2/token", async (c) => {
 
             // Extract authenticated userId — resolve at outer scope so JWT minting below can access it
             let resolvedUserId: string | undefined = preCodeUserId;
+            let userDoc: any = null;
             if (tokenData) {
                 if (!resolvedUserId && tokenData.id_token && typeof tokenData.id_token === "string") {
                     const parts = tokenData.id_token.split(".");
@@ -1851,7 +1985,7 @@ auth.post("/oauth2/token", async (c) => {
             }
 
             if (resolvedUserId) {
-                const userDoc = await database.collection("user").findOne({
+                userDoc = await database.collection("user").findOne({
                     $or: [
                         { id: resolvedUserId },
                         ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
@@ -1876,6 +2010,10 @@ auth.post("/oauth2/token", async (c) => {
                 }
             }
 
+            const expectedTokenVersion = typeof codeTokenVersion === "number"
+                ? codeTokenVersion
+                : (typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : 1);
+
             let initialHash: string | null = null;
             let familyId: string | null = null;
             if (tokenData && tokenData.refresh_token) {
@@ -1884,7 +2022,7 @@ auth.post("/oauth2/token", async (c) => {
 
                 // Strictly bind token family to canonicalClientId and resolvedUserId
                 try {
-                    await registerTokenFamily(familyId, canonicalClientId, resolvedUserId, initialHash);
+                    await registerTokenFamily(familyId, canonicalClientId, resolvedUserId, initialHash, expectedTokenVersion);
                 } catch (regErr) {
                     console.error("[TOKEN_FAMILY] Critical failure registering initial family; failing closed:", regErr);
                     // FAIL CLOSED: Purge issued tokens so no untracked refresh token exists in DB (Phase 10)
@@ -1928,7 +2066,7 @@ auth.post("/oauth2/token", async (c) => {
                     scope: tokenData.scope,
                     tokenIssuedAtMs: codeIssuedAtMs,
                     tokenIssuedAtSec: codeIssuedAtSec,
-                    tokenVersion: codeTokenVersion,
+                    tokenVersion: expectedTokenVersion,
                 });
 
                 if (!jwtAt) {
@@ -1977,47 +2115,108 @@ auth.post("/oauth2/token", async (c) => {
                     expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
                     createdAt: new Date(),
                     scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                    tokenVersion: expectedTokenVersion,
                 }).catch(() => {});
-                if (tokenBarrierHookForTesting) {
+
+                if (tokenData.refresh_token) {
+                    await database.collection("oauthRefreshToken").updateOne(
+                        { token: tokenData.refresh_token },
+                        { $set: { tokenVersion: expectedTokenVersion } }
+                    ).catch(() => {});
+                }
+
+                if (tokenBarrierHookForTesting && resolvedUserId) {
+                    await tokenBarrierHookForTesting("before_issuance_commit", resolvedUserId);
                     await tokenBarrierHookForTesting("before_fence_code", resolvedUserId);
                 }
-                // Final Atomic Authorization Fence for Authorization Code Exchange
+
+                // Exact Issuance/Revocation Linearization Point:
+                // Durable Conditional State Transition coordinated with revocation.
+                let commitSuccess = false;
                 if (resolvedUserId) {
-                    const finalUserDoc = await database.collection("user").findOne({
+                    const commitCondition: Record<string, any> = {
                         $or: [
                             { id: resolvedUserId },
                             ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
                         ],
-                    });
-                    const finalEligibility = checkAccountEligibility(finalUserDoc, {
-                        tokenIssuedAtMs: codeIssuedAtMs,
-                        tokenIssuedAtSec: codeIssuedAtSec,
-                        tokenVersion: codeTokenVersion,
-                    });
-                    if (!finalEligibility.eligible) {
-                        await Promise.all([
-                            database.collection("oauthAccessToken").deleteMany({
+                        $and: [
+                            {
                                 $or: [
-                                    { clientId: canonicalClientId, userId: resolvedUserId },
-                                    { token: jwtAt },
-                                    ...(tokenData.access_token ? [{ token: tokenData.access_token }] : []),
+                                    { tokenVersion: expectedTokenVersion },
+                                    ...(expectedTokenVersion === 1 ? [{ tokenVersion: { $exists: false } }, { tokenVersion: null }] : []),
                                 ],
-                            }),
-                            database.collection("oauthRefreshToken").deleteMany({
+                            },
+                            { banned: { $ne: true } },
+                            { disabled: { $ne: true } },
+                            { isActive: { $ne: false } },
+                            { status: { $nin: ["inactive", "deleting", "deleted"] } },
+                            { deletedAt: { $exists: false } },
+                            ...(codeIssuedAtMs ? [{
                                 $or: [
-                                    { clientId: canonicalClientId, userId: resolvedUserId },
-                                    ...(tokenData.refresh_token ? [{ token: tokenData.refresh_token }] : []),
+                                    { tokensRevokedBefore: { $exists: false } },
+                                    { tokensRevokedBefore: null },
+                                    { tokensRevokedBefore: { $lte: new Date(codeIssuedAtMs) } },
                                 ],
-                            }),
-                            familyId
-                                ? database.collection("oauth_token_families").deleteMany({ familyId })
-                                : database.collection("oauth_token_families").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
-                        ]);
-                        return c.json({
-                            error: "invalid_grant",
-                            error_description: `User account was revoked during token exchange: ${finalEligibility.reason}`,
-                        }, 400);
+                            }] : [{
+                                $or: [
+                                    { tokensRevokedBefore: { $exists: false } },
+                                    { tokensRevokedBefore: null },
+                                    { tokensRevokedBefore: { $lte: new Date() } },
+                                ],
+                            }]),
+                            ...(codeIssuedAtMs ? [{
+                                $or: [
+                                    { passwordChangedAt: { $exists: false } },
+                                    { passwordChangedAt: null },
+                                    { passwordChangedAt: { $lte: new Date(codeIssuedAtMs) } },
+                                ],
+                            }] : []),
+                        ],
+                    };
+
+                    const commitResult = await database.collection("user").findOneAndUpdate(
+                        commitCondition,
+                        {
+                            $set: {
+                                tokenVersion: expectedTokenVersion,
+                                lastTokenIssuedAt: new Date(),
+                            },
+                        },
+                        { returnDocument: "after" }
+                    );
+
+                    if (commitResult) {
+                        commitSuccess = true;
                     }
+                }
+
+                if (!commitSuccess) {
+                    await Promise.all([
+                        database.collection("oauthAccessToken").deleteMany({
+                            $or: [
+                                { clientId: canonicalClientId, userId: resolvedUserId },
+                                { token: jwtAt },
+                                ...(tokenData.access_token ? [{ token: tokenData.access_token }] : []),
+                            ],
+                        }),
+                        database.collection("oauthRefreshToken").deleteMany({
+                            $or: [
+                                { clientId: canonicalClientId, userId: resolvedUserId },
+                                ...(tokenData.refresh_token ? [{ token: tokenData.refresh_token }] : []),
+                            ],
+                        }),
+                        familyId
+                            ? database.collection("oauth_token_families").deleteMany({ familyId })
+                            : database.collection("oauth_token_families").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+                    ]);
+                    return c.json({
+                        error: "invalid_grant",
+                        error_description: "User account was revoked or version transitioned during token exchange",
+                    }, 400);
+                }
+
+                if (tokenBarrierHookForTesting && resolvedUserId) {
+                    await tokenBarrierHookForTesting("after_issuance_commit", resolvedUserId);
                 }
 
                 tokenData.access_token = jwtAt;
@@ -2555,6 +2754,75 @@ auth.all("/admin/list-users", async (c) => {
         } catch {}
     }
     return res;
+});
+
+// OAuth 2.1 Token Revocation (RFC 7009) with durable version advancement
+auth.post("/oauth2/revoke", async (c) => {
+    const rawBodyText = await c.req.raw.clone().text().catch(() => "");
+    const params = new URLSearchParams(rawBodyText);
+    const token = params.get("token");
+
+    const res = await authProvider.handler(c.req.raw);
+
+    if (token) {
+        try {
+            const database = await getDb();
+            const { hashToken } = await import("../utils/security");
+            const tokenHex = hashToken(token, "hex");
+            const tokenBase64 = hashToken(token, "base64url");
+
+            // Look up if token was a refresh token in families
+            const familyDoc = await database.collection("oauth_token_families").findOne({
+                $or: [
+                    { activeTokenHash: tokenHex },
+                    { activeTokenHash: tokenBase64 },
+                    { consumedTokenHashes: tokenHex },
+                    { consumedTokenHashes: tokenBase64 },
+                ],
+            });
+
+            if (familyDoc?.userId) {
+                await revokeUserTokensDurable(database, String(familyDoc.userId));
+            } else {
+                // Look up in oauthAccessToken
+                const accDoc = await database.collection("oauthAccessToken").findOne({
+                    $or: [{ token }, { token: tokenBase64 }],
+                });
+                if (accDoc?.userId) {
+                    await revokeUserTokensDurable(database, String(accDoc.userId));
+                }
+            }
+        } catch (err) {
+            console.error("[REVOCATION] Error during durable token revocation hook:", err);
+        }
+    }
+
+    return res;
+});
+
+// Wire tokenVersion through Better Auth admin revocation mutations
+const adminRevocationRoutes = [
+    "/admin/ban-user",
+    "/admin/revoke-user-sessions",
+    "/admin/set-password",
+    "/admin/remove-user",
+];
+
+adminRevocationRoutes.forEach((routePath) => {
+    auth.post(routePath, async (c) => {
+        const body = await c.req.raw.clone().json().catch(() => ({}));
+        const targetUserId = body.userId || body.id;
+        const res = await authProvider.handler(c.req.raw);
+        if (res.status < 400 && targetUserId) {
+            try {
+                const database = await getDb();
+                await revokeUserTokensDurable(database, String(targetUserId));
+            } catch (err) {
+                console.error(`[ADMIN_REVOCATION] Error syncing durable revocation for ${routePath}:`, err);
+            }
+        }
+        return res;
+    });
 });
 
 // 10. Social Login Callback App-Isolation & Registration Enforcer

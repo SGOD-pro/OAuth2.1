@@ -3,21 +3,24 @@
 **Date:** 2026-11-20  
 **Branch:** `fix/oauth-security-hardening`  
 **Base HEAD:** `161ad99ca4ba0de88cff1267b33807db61da306c` (`origin/main`)  
-**Scope:** Remediation of findings SEC-01 through SEC-06 and follow up security blockers across four bounded slices: Account Eligibility, Scope and Privacy Enforcement, Administrative MFA, and Verification and Abuse Controls.  
+**Scope:** Complete issuance and revocation atomicity, version lifecycle, and remediation of findings SEC-01 through SEC-06 across four bounded slices: Account Eligibility, Scope and Privacy Enforcement, Administrative MFA, and Verification and Abuse Controls.  
 **Verdict:** All security defects and blocker findings have been remediated with real route regression coverage and verified across passing suites. V2 feature development remains deferred until this security remediation is reviewed and integrated.
 
 ---
 
 ## 1. Remediation Summary by Slice
 
-### Slice 1: Account Eligibility and Token Lifecycle (SEC-01, SEC-02)
-* **Authoritative Account Eligibility Policy:** Implemented in [backend/src/utils/account-eligibility.ts](file:///home/swyra/projects/OAuth2.1/backend/src/utils/account-eligibility.ts) through `checkAccountEligibility(user, options)`. Uniformly rejects missing, banned (`banned === true`), disabled (`disabled === true`), inactive (`isActive === false` or `status === "inactive"`), deleting (`status === "deleting"`), and deleted (`deletedAt` or `status === "deleted"`) accounts.
-* **Rollout Grace Safety:** Removed early return in rollout verification grace. Accounts within an email verification grace window never bypass account status, password change, or revocation checks.
-* **Same Second Revocation Handling:** Enhanced `checkAccountEligibility` and token verification with millisecond timestamps (`tokenIssuedAtMs` and `revokedMs`) and monotonic account token versions (`tokenVersion`). When tokens and revocations occur in the same second, millisecond precision accurately distinguishes credentials issued before revocation from credentials issued after revocation. Integer second legacy tokens within the revocation second fail closed safely.
-* **Atomic Authorization Fences:** Added atomic authorization fences in [backend/src/routes/auth.ts](file:///home/swyra/projects/OAuth2.1/backend/src/routes/auth.ts) across both authorization code exchange and refresh token rotation. If an account is revoked concurrently while exchange or refresh is in flight, the atomic fence immediately purges all minted access tokens, refresh tokens, and token families, returning `400 invalid_grant` or `401 invalid_grant`.
-* **Token Minting and Issuance Guard:** Updated `mintJwtAccessToken` in [backend/src/routes/auth.ts](file:///home/swyra/projects/OAuth2.1/backend/src/routes/auth.ts) to verify database user eligibility, millisecond revocation timestamps, and token versions before signing or returning RS256 JWTs.
-* **Authorization Endpoint:** Added fresh database account eligibility enforcement in `GET /api/auth/oauth2/authorize`. Active sessions bound to ineligible users immediately redirect to the registered redirect URI with `302 error=access_denied`.
-* **UserInfo Endpoint:** Enforced fresh database account eligibility in `GET /api/auth/oauth2/userinfo`. Banned, disabled, or revoked account tokens immediately return `401 Unauthorized`.
+### Slice 1: Account Eligibility, Token Lifecycle, and Issuance Atomicity (SEC-01, SEC-02)
+* **Exact Issuance and Revocation Linearization Point:** Implemented in [backend/src/routes/auth.ts](file:///home/swyra/projects/OAuth2.1/backend/src/routes/auth.ts) across both authorization code exchange and refresh token rotation. The linearization point is an atomic conditional state transition executed via MongoDB `findOneAndUpdate` on the `user` collection. The transition condition strictly matches `{ id: resolvedUserId, tokenVersion: expectedVersion, banned: { $ne: true }, disabled: { $ne: true }, isActive: { $ne: false }, status: { $nin: ["inactive", "deleting", "deleted"] }, deletedAt: { $exists: false }, tokensRevokedBefore: { $lte: credentialTime } }`.
+  * When revocation commits before issuance completes: `tokenVersion` has incremented or `banned` is true, so the conditional transition fails (`commitResult === null`). The handler immediately purges the minted credentials, deletes created token family records, and returns `invalid_grant`.
+  * When issuance commits first: The conditional transition succeeds, recording `lastTokenIssuedAt` and binding the issued credentials to `tokenVersion`. Subsequent revocation atomically increments `tokenVersion` and sets `tokensRevokedBefore`, which immediately revokes online validity across `/userinfo`, `/introspect`, and `/token` refresh without credential resurrection.
+* **Production tokenVersion Lifecycle:**
+  * User Initialization: In [backend/src/utils/auth.ts](file:///home/swyra/projects/OAuth2.1/backend/src/utils/auth.ts), `tokenVersion` is registered in `user.additionalFields` with `defaultValue: 1` and initialized to 1 in `databaseHooks.user.create.before`.
+  * Revocation Advancement: In [backend/src/routes/auth.ts](file:///home/swyra/projects/OAuth2.1/backend/src/routes/auth.ts) and [backend/src/routes/admin.ts](file:///home/swyra/projects/OAuth2.1/backend/src/routes/admin.ts), helper `revokeUserTokensDurable` atomically increments `tokenVersion`, advances `tokensRevokedBefore`, marks all associated `oauth_token_families` as revoked, and purges surviving database tokens. This hook is wired into `POST /api/auth/oauth2/revoke`, `/admin/ban-user`, `/admin/revoke-user-sessions`, `/admin/set-password`, `/admin/remove-user`, and app admin deactivation and password changes.
+  * Credential Binding: Authorization codes bind `tokenVersion` and `userId` directly upon creation in `GET /api/auth/oauth2/authorize`. Token families store `tokenVersion` in `oauth_token_families`. Issued access tokens and refresh tokens embed and store `tokenVersion`.
+  * Safe Legacy Handling: Implemented in [backend/src/utils/account-eligibility.ts](file:///home/swyra/projects/OAuth2.1/backend/src/utils/account-eligibility.ts). Users without `tokenVersion` default to effective version 1. Unversioned legacy credentials presented against an account that has advanced past version 1 fail closed immediately with `tokens_revoked`.
+* **Authoritative Account Eligibility Policy:** Implemented in [backend/src/utils/account-eligibility.ts](file:///home/swyra/projects/OAuth2.1/backend/src/utils/account-eligibility.ts) through `checkAccountEligibility(user, options)`. Uniformly rejects missing, banned, disabled, inactive, deleting, and deleted accounts across authorization, token exchange, refresh, userinfo, and dual branch introspection.
+* **Same Second Revocation Handling:** Enhanced `checkAccountEligibility` and token verification with millisecond timestamps (`tokenIssuedAtMs` and `revokedMs`) and monotonic account token versions (`tokenVersion`). When tokens and revocations occur in the same second, millisecond precision accurately distinguishes credentials issued before revocation from credentials issued after revocation.
 * **Dual Branch Token Introspection:**
   * Plugin active branch: Verifies account eligibility, client active state, and revocation status even when Better Auth identifies the token as active.
   * Custom JWT fallback branch: Cryptographically verifies RS256 signature, validates expiration, checks token presence in `oauthAccessToken` revocation backstop, and verifies account eligibility via immutable subject lookup.
@@ -57,6 +60,9 @@
 | Integration Contract | `npm run security:integration-check` | **PASS** | 5 normative checks passed (0 violations) |
 | Unit Test Suite | `npm run test:unit` | **PASS** | 10 unit suites passed cleanly (0 failures) |
 | OAuth Hardening | `npm run test:oauth-hardening` | **PASS** | 23/23 comprehensive regression checks passed |
+| Consumer MFA | `npm run test:consumer-mfa` | **PASS** | 18 tests passed cleanly (0 failures) |
+| Private App Isolation | `npm run test:private-app-isolation` | **PASS** | 10 tests passed cleanly (0 failures) |
+| Membership Lifecycle | `npm run test:membership-lifecycle` | **PASS** | 23 tests passed cleanly (0 failures) |
 
 ### Test Methodology Breakdown
 
@@ -66,8 +72,10 @@ To ensure rigorous evidence, tests in [backend/tests/security/oauth-security-har
 * **Genuine MFA (SEC-04-D):** Executes genuine Better Auth flows including password authentication, 2FA challenge issuance, RFC 6238 TOTP computation and verification, session cookie issuance, and HTTP 200 privileged access. Does not rely on test signed mock bearer claims.
 * **Simulated State (SEC-04-A, SEC-04-B, SEC-04-C):** Probes access control boundaries with simulated database user states and token claims to verify middleware enforcement rules in isolation.
 
-#### B. Concurrency Tests vs Sequential Tests
-* **Multi Worker Concurrency Race (SEC-01-I):** Spawns an independent `worker_threads` worker with separate database connection against disposable MongoDB. Uses deterministic barriers (`setTokenBarrierHookForTesting`) to trigger worker account revocation while code exchange or refresh token rotation is in flight. Proves that the atomic authorization fence halts token issuance and purges all surviving tokens and token families.
+#### B. Concurrency Tests with Deterministic Workers vs Sequential Tests
+* **Multi Worker Concurrency Race (SEC-01-I):** Spawns an independent `worker_threads` worker with separate database connection against disposable MongoDB. Uses deterministic barriers (`setTokenBarrierHookForTesting`) to exercise both operational orderings:
+  * Ordering 1 (Revocation wins before issuance commits): Worker revokes user in interval after final read. Proves conditional state transition halts token issuance with `invalid_grant` and purges all surviving tokens and token families.
+  * Ordering 2 (Issuance commits first, followed by revocation): Proves issuance succeeds with HTTP 200, but subsequent revocation increments `tokenVersion` and revokes token family. Verifies online denial on `/userinfo` (`401`), `/introspect` (`active: false`), and `/token` refresh (`401`), proving absence of credential resurrection.
 * **Sequential Pre Revocation Fixtures (SEC-01-H, SEC-01-J):** Validates deterministic rejection of older credentials and same second credentials issued before revocation timestamps under sequential test execution.
 
 #### C. Infrastructure Limitations and Blocked Checks
@@ -93,7 +101,7 @@ To ensure rigorous evidence, tests in [backend/tests/security/oauth-security-har
 17. **SEC-01-G:** Refresh token exchange (`POST /oauth2/token`) rejects banned or disabled users with `401 invalid_grant`.
 18. **SEC-03-B:** Verification grace window never skips revocation, password change, or account status checks.
 19. **SEC-01-H:** Revocation wins code exchange and refresh with older credentials using credential issuance timestamps (`createdAt` or `iat`).
-20. **SEC-01-I:** Revocation wins overlapping code exchange and refresh under concurrent multi worker race with deterministic barrier, proving zero surviving tokens across access tokens, refresh tokens, and token families.
+20. **SEC-01-I:** Revocation wins overlapping code exchange and refresh under concurrent multi worker race with deterministic barrier, verifying both operation orderings, purging all surviving credentials, and proving absence of credential resurrection.
 21. **SEC-04-D:** Better Auth internal admin routes (`/api/auth/admin/*`) enforce mandatory MFA and sensitive action freshness, verified with genuine enrollment, RFC 6238 TOTP challenge verification, HTTP 200 privileged access, stale MFA step up rejection, and single use recovery codes.
 22. **SEC-03-C:** Email verification delivery transport validation, typed configuration, bounded 5000ms timeout, non 2xx handling, and secret free logging.
 23. **SEC-05-D:** Admin privacy projections across app admin listings (`GET /api/admin/clients/:clientId/app-admins`) and email shaped name fields.

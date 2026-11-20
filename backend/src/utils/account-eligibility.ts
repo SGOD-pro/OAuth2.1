@@ -97,9 +97,16 @@ export function checkAccountEligibility(
     }
   }
 
-  // Monotonic token version check
-  if (options?.tokenVersion !== undefined && user.tokenVersion !== undefined) {
-    if (options.tokenVersion < user.tokenVersion) {
+  // Monotonic token version check with safe legacy handling
+  const effectiveUserVersion = typeof user.tokenVersion === "number" ? user.tokenVersion : 1;
+  if (options?.tokenVersion !== undefined) {
+    if (options.tokenVersion < effectiveUserVersion) {
+      return { eligible: false, reason: "tokens_revoked" };
+    }
+  } else {
+    // Unversioned legacy credential:
+    // If the account has progressed past version 1, unversioned legacy credentials must fail closed.
+    if (effectiveUserVersion > 1) {
       return { eligible: false, reason: "tokens_revoked" };
     }
   }

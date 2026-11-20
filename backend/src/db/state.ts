@@ -30,6 +30,7 @@ export interface TokenFamilyDoc {
   activeTokenHash: string;
   consumedTokenHashes: string[];
   status: "active" | "revoked";
+  tokenVersion?: number;
   createdAt: Date;
   updatedAt: Date;
   revokedAt?: Date;
@@ -747,7 +748,8 @@ export async function registerTokenFamily(
   familyId: string,
   clientId: string,
   userId: string | undefined,
-  initialTokenHash: string
+  initialTokenHash: string,
+  tokenVersion?: number
 ): Promise<void> {
   const trimmedClientId = clientId?.trim();
   if (!trimmedClientId) {
@@ -763,6 +765,7 @@ export async function registerTokenFamily(
     activeTokenHash: initialTokenHash,
     consumedTokenHashes: [],
     status: "active",
+    tokenVersion: typeof tokenVersion === "number" ? tokenVersion : 1,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
@@ -773,7 +776,8 @@ export async function verifyAndRotateTokenFamily(
   newTokenHash: string,
   userId?: string,
   nowMs: number = Date.now(),
-  expectedClientId?: string
+  expectedClientId?: string,
+  tokenVersion?: number
 ): Promise<{
   valid: boolean;
   replayed: boolean;
@@ -890,6 +894,7 @@ export async function verifyAndRotateTokenFamily(
           updatedAt: new Date(),
           rotating: false,
           ...(userId && !doc.userId ? { userId } : {}),
+          ...(typeof tokenVersion === "number" ? { tokenVersion } : (typeof doc.tokenVersion === "number" ? { tokenVersion: doc.tokenVersion } : { tokenVersion: 1 })),
         },
       }
     );

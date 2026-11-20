@@ -231,6 +231,27 @@ export const authProvider = betterAuth({
                 defaultValue: false,
                 input: false,
             },
+            tokenVersion: {
+                type: "number",
+                required: false,
+                defaultValue: 1,
+                input: false,
+            },
+        },
+    },
+
+    databaseHooks: {
+        user: {
+            create: {
+                before: async (user: any) => {
+                    return {
+                        data: {
+                            ...user,
+                            tokenVersion: typeof user.tokenVersion === "number" ? user.tokenVersion : 1,
+                        },
+                    };
+                },
+            },
         },
     },
 

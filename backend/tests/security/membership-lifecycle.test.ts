@@ -569,6 +569,53 @@ await runTest("MEM-9: Real token route rejects token refresh when user is revoke
   assert.ok(tokenJson.error_description.includes("no longer authorized"));
 });
 
+const { createOTP } = await import("@better-auth/utils/otp");
+const { base32 } = await import("@better-auth/utils/base32");
+
+async function enrollAndLoginAdminMfa(email: string, pass: string): Promise<string> {
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email, password: pass }),
+  });
+  const preCookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  const enableRes = await app.request("/api/auth/two-factor/enable", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: preCookie, "content-type": "application/json" }),
+    body: JSON.stringify({ password: pass }),
+  });
+  const enableData = await enableRes.json();
+  const b32Secret = new URL(enableData.totpURI).searchParams.get("secret")!;
+  const rawSecret = Buffer.from(base32.decode(b32Secret)).toString();
+
+  const enrollOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
+  await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: preCookie, "content-type": "application/json" }),
+    body: JSON.stringify({ code: enrollOtp }),
+  });
+
+  const challengeLoginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email, password: pass }),
+  });
+  const setCookie = challengeLoginRes.headers.get("set-cookie") || "";
+  const challengePart = setCookie.split(",").find((p: string) => p.trim().startsWith("better-auth.two_factor="));
+  const challengeCookie = (challengePart || "").trim().split(";")[0];
+
+  const challengeOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
+  const verifyChallengeRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: challengeCookie, "content-type": "application/json" }),
+    body: JSON.stringify({ code: challengeOtp }),
+  });
+  const finalSetCookie = verifyChallengeRes.headers.get("set-cookie") || "";
+  const sessionPart = finalSetCookie.split(",").find((p: string) => p.trim().startsWith("better-auth.session_token="));
+  return (sessionPart || "").trim().split(";")[0];
+}
+
 // =============================================================================
 // TEST 10: Admin Routes: Revoked or removed app admin cannot manage application
 // =============================================================================
@@ -599,14 +646,8 @@ await runTest("MEM-10: Revoked or removed app admin is strictly forbidden on adm
     createdAt: new Date(),
   });
 
-  // Login as app admin
-  const loginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: adminEmail, password: adminPass }),
-  });
-  assert.equal(loginRes.status, 200);
-  const adminCookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+  // Login as app admin with required administrative MFA
+  const adminCookie = await enrollAndLoginAdminMfa(adminEmail, adminPass);
 
   // While active: can access scoped app endpoint
   const activeRes = await app.request(`/api/admin/app/${privateClientId}/config`, {
@@ -794,13 +835,7 @@ await runTest("MEM-12: App admin authorization strictly requires matching immuta
   const isAAdmin = await checkUserIsClientAdmin(db, userADoc, userAId, stableClientId);
   assert.equal(isAAdmin, true, "User A with matching userId must receive admin rights");
 
-  const loginARes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: legitimateEmail, password }),
-  });
-  assert.equal(loginARes.status, 200);
-  const cookieA = (loginARes.headers.get("set-cookie") || "").split(";")[0];
+  const cookieA = await enrollAndLoginAdminMfa(legitimateEmail, password);
   const aRouteRes = await app.request(`/api/admin/app/${stableClientId}/config`, {
     method: "GET",
     headers: getTestHeaders({ Cookie: cookieA }),

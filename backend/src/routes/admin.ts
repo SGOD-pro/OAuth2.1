@@ -1801,6 +1801,7 @@ const updateAppAdminHandler = async (c: any) => {
       updateFields.isActive = body.isActive;
       if (body.isActive === false) {
         updateFields.tokensRevokedBefore = new Date();
+        updateFields.tokenVersion = ((existing.tokenVersion as number) || 1) + 1;
       }
     }
 
@@ -1816,6 +1817,8 @@ const updateAppAdminHandler = async (c: any) => {
       }
       updateFields.password = await hashPassword(body.password);
       updateFields.passwordChangedAt = new Date();
+      updateFields.tokensRevokedBefore = new Date();
+      updateFields.tokenVersion = ((existing.tokenVersion as number) || 1) + 1;
     }
 
     await database.collection("app_admins").updateOne(
