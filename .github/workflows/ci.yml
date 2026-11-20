@@ -90,6 +90,10 @@ jobs:
         working-directory: backend
         run: npm ci
 
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
       - name: Run Integration Contract Linter
         run: npm run security:integration-check
 
@@ -114,11 +118,9 @@ jobs:
           npm ci
           npm run build
 
-      - name: Install Frontend Dependencies & Build UI
+      - name: Build Frontend SPA UI
         working-directory: frontend
-        run: |
-          npm ci
-          npm run build:ui
+        run: npm run build:ui
 
       - name: Install Playwright Chromium with OS Dependencies
         working-directory: backend
