@@ -587,3 +587,6 @@ await runTest("AC-7: Root package.json registers convenience developer scripts",
 });
 
 console.log("=== All Slice 4 Tests Passed Successfully! ===");
+const { closeDb } = await import("../../src/db/mongo");
+await closeDb().catch(() => {});
+process.exit(0);
