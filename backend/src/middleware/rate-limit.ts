@@ -155,14 +155,17 @@ export function createRateLimiter(options: {
 
     // 3. Tertiary: Classified Security Handling on Dual Store Failure
     // NEVER silently become unlimited!
-    if (sensitivity === "admin") {
-      // Administrative operations strictly fail closed when all rate limit stores fail
-      console.error(`[RATE_LIMIT_CRITICAL] Administrative rate limiting store failed. Denying request on ${key}.`);
+    // Sensitive administrative and authentication operations strictly fail closed when all backing stores fail
+    // to prevent distributed brute-force or credential stuffing across serverless/multi-worker instances.
+    if (sensitivity === "admin" || sensitivity === "auth") {
+      console.error(`[RATE_LIMIT_CRITICAL] ${sensitivity === "admin" ? "Administrative" : "Authentication"} rate limiting store failed. Denying request on ${key}.`);
       c.header("Retry-After", String(Math.ceil(windowMs / 1000)));
       return c.json(
         {
           error: "too_many_requests",
-          message: "Rate limiting unavailable for administrative operations. Request denied for security.",
+          message: sensitivity === "admin"
+            ? "Rate limiting unavailable for administrative operations. Request denied for security."
+            : "Authentication rate limiting unavailable. Request denied for security.",
         },
         429
       );

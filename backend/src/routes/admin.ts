@@ -13,10 +13,11 @@ import {
   normalizeOAuthClientFields,
   hasDangerousMongoKeys,
   validateSafePrimitiveString,
+  toApprovedDisplayLabel,
 } from "../utils/security";
 import { recordAdminAudit } from "../db/state";
 import { invalidateClientOrigins } from "../cache/origin-cache";
-import { requireSuperAdmin, requireScopedAdmin, requireConsumerAppAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
+import { requireAdmin, requireSuperAdmin, requireScopedAdmin, requireConsumerAppAdmin, isSuperAdmin, requireGatewayTrust, requireRecentMfa } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
@@ -60,6 +61,24 @@ admin.use("*", async (c, next) => {
     }
   }
   return next();
+});
+
+// 0. Admin Current Identity & MFA Status (Accessible to unenrolled admins for setup)
+admin.get("/me", requireAdmin, async (c) => {
+  const user = c.get("user") as any;
+  const session = c.get("session") as any;
+  return c.json({
+    user: {
+      id: user?.id || user?._id,
+      email: user?.email,
+      role: user?.role,
+      scopedClientId: user?.scopedClientId || null,
+      twoFactorEnabled: Boolean(user?.twoFactorEnabled),
+    },
+    session: {
+      twoFactorVerified: Boolean(session?.twoFactorVerified),
+    },
+  });
 });
 
 // -- Super-Admin Only Routes ---------------------------------------------
@@ -653,8 +672,10 @@ async function getAggregatedLogs(
       if (entry.userId && (!entry.userEmail || entry.userEmail === entry.userId || entry.userEmail === "unknown")) {
         const found = emailMap.get(entry.userId);
         if (found) {
-          entry.userEmail = found;
+          entry.userEmail = toApprovedDisplayLabel(found);
         }
+      } else if (entry.userEmail && entry.userEmail.includes("@")) {
+        entry.userEmail = toApprovedDisplayLabel(entry.userEmail);
       }
     });
   }
@@ -757,8 +778,8 @@ admin.get("/v2/logs", requireSuperAdmin, async (c) => {
   }
 });
 
-// 5. Delete OAuth Client (Super-Admin only)
-admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
+// 5. Delete OAuth Client (Super-Admin only, requires recent MFA)
+admin.delete("/clients/:id", requireSuperAdmin, requireRecentMfa, async (c) => {
   const id = c.req.param("id");
   const sessionUser = c.get("user") as any;
   let database: any;
@@ -807,8 +828,8 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
   return c.json({ success: true, message: "Client deleted successfully" });
 });
 
-// 6. Provision Scoped or Global Admin (Super-Admin only with Rate Limiting B6)
-admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
+// 6. Provision Scoped or Global Admin (Super-Admin only with Rate Limiting B6 & Recent MFA)
+admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, requireRecentMfa, async (c) => {
   const body = await c.req.json();
   const sessionUser = c.get("user") as any;
 
@@ -987,8 +1008,8 @@ admin.get("/users", requireSuperAdmin, async (c) => {
     const users = await database.collection("user").find({}).sort({ createdAt: -1 }).toArray();
     const safeUsers = users.map((u: any) => ({
       _id: u._id?.toString() || u.id,
-      email: u.email,
-      name: u.name || u.email?.split("@")[0] || "User",
+      displayLabel: toApprovedDisplayLabel(u.email, u.name),
+      name: u.name || "User",
       role: u.role || "user",
       scopedClientId: u.scopedClientId || null,
       createdAt: u.createdAt || new Date(),
@@ -1530,7 +1551,7 @@ function isRedirectUrlAllowedForClient(redirectUrl: string, client: any): { allo
 }
 
 // 11. Create Application Admin for a Client (Super-Admin or Scoped-Admin for own app)
-admin.post("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
+admin.post("/clients/:clientId/app-admins", requireScopedAdmin, requireRecentMfa, async (c) => {
   const clientId = c.req.param("clientId");
   const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
@@ -1850,11 +1871,11 @@ const updateAppAdminHandler = async (c: any) => {
     return c.json({ error: err?.message || "Failed to update administrator" }, 500);
   }
 };
-admin.put("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, updateAppAdminHandler);
-admin.patch("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, updateAppAdminHandler);
+admin.put("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, requireRecentMfa, updateAppAdminHandler);
+admin.patch("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, requireRecentMfa, updateAppAdminHandler);
 
 // 13. Delete Application Admin (Super-Admin or Scoped-Admin for own app)
-admin.delete("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, async (c) => {
+admin.delete("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, requireRecentMfa, async (c) => {
   const rawClientId = c.req.param("clientId");
   const adminId = c.req.param("adminId");
   const sessionUser = c.get("user") as any;
@@ -1983,8 +2004,8 @@ admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
       return {
         registrationId: r._id.toString(),
         userId: r.userId,
-        email: u?.email || "Unknown",
-        name: u?.name || u?.email?.split("@")[0] || "User",
+        displayLabel: toApprovedDisplayLabel(u?.email, u?.name),
+        name: u?.name || "User",
         registeredAt: r.registeredAt ? r.registeredAt.toISOString() : null,
       };
     });
@@ -2072,7 +2093,7 @@ admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
 });
 
 // 16. Remove a User from a Client
-admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, async (c) => {
+admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, requireRecentMfa, async (c) => {
   const rawClientId = c.req.param("clientId");
   const userId = c.req.param("userId");
   const sessionUser = c.get("user") as any;

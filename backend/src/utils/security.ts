@@ -983,3 +983,22 @@ export function hashToken(
 ): string {
   return crypto.createHash("sha256").update(token).digest(encoding);
 }
+
+/**
+ * Server-side privacy projection helper (Slice 2).
+ * Formats user identifiers into approved privacy-preserving display labels.
+ * Masks full email addresses to prevent disclosure in ordinary admin lists and logs.
+ */
+export function toApprovedDisplayLabel(email?: string | null, name?: string | null): string {
+  if (name && name.trim().length > 0 && name.trim().toLowerCase() !== "user") {
+    return name.trim();
+  }
+  if (!email || typeof email !== "string" || !email.includes("@")) {
+    return "User";
+  }
+  const [local, domain] = email.split("@");
+  if (local.length <= 2) {
+    return `${local[0] || "*"}***@${domain}`;
+  }
+  return `${local.slice(0, 2)}***@${domain}`;
+}

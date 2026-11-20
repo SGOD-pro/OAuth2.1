@@ -18,6 +18,7 @@ import { rateLimiters, checkRateLimit } from "../cache/redis";
 import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, checkUserHasAppAccess, hashToken, hasDangerousMongoKeys, validateSafePrimitiveString } from "../utils/security";
 import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
+import { checkAccountEligibility } from "../utils/account-eligibility";
 
 import { importJWK, SignJWT, jwtVerify, decodeJwt, decodeProtectedHeader, generateKeyPair, exportJWK } from "jose";
 import { getIdpPublicKey, checkUserIsClientAdmin } from "../middleware/admin-auth";
@@ -202,28 +203,49 @@ export async function mintJwtAccessToken(params: {
 
         const database = await getDb();
         const orConditions: any[] = [{ id: params.userId }];
-        if (ObjectId.isValid(params.userId)) {
+        if (ObjectId.isValid(params.userId) && String(params.userId).length === 24) {
             orConditions.push({ _id: new ObjectId(params.userId) });
         }
         const userDoc = await database.collection("user").findOne({
             $or: orConditions
         });
 
+        // Enforce Authoritative Account Eligibility
+        const nowSec = Math.floor(Date.now() / 1000);
+        const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: nowSec });
+        if (!eligibility.eligible) {
+            console.warn(`[MINT_JWT_ACCESS_TOKEN] Denied token minting for ineligible account ${params.userId}: ${eligibility.reason}`);
+            return null;
+        }
+
         const { role, scopedClientId } = await resolveUserRoleForClient(database, userDoc, params.clientId);
-        const email = userDoc?.email || undefined;
-        const name = userDoc?.name || undefined;
+
+        // Scope and Privacy Enforcement (Slice 2): Release claims only under granted scopes
+        const scopes = (params.scope || "openid profile email")
+            .split(" ")
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean);
+        const scopeSet = new Set(scopes);
+
+        const email = scopeSet.has("email") ? (userDoc?.email || undefined) : undefined;
+        const emailVerified = scopeSet.has("email") ? (userDoc?.emailVerified ?? undefined) : undefined;
+        const name = scopeSet.has("profile") ? (userDoc?.name || (userDoc?.email ? userDoc.email.split("@")[0] : undefined)) : undefined;
         const ttl = params.expiresInSeconds || 900;
 
-        const jwt = await new SignJWT({
+        const claims: Record<string, any> = {
             sub: params.userId,
             role,
             scoped_client_id: scopedClientId,
-            email,
-            name,
             client_id: params.clientId,
             azp: params.clientId,
             scope: params.scope || "openid profile email",
-        })
+        };
+
+        if (email !== undefined) claims.email = email;
+        if (emailVerified !== undefined) claims.email_verified = emailVerified;
+        if (name !== undefined) claims.name = name;
+
+        const jwt = await new SignJWT(claims)
             .setProtectedHeader({ alg: "RS256", kid: signingKey.kid })
             .setIssuedAt()
             .setIssuer(config.auth.baseURL)
@@ -962,13 +984,36 @@ auth.get("/oauth2/authorize", async (c) => {
                 headers: getHeaders(c),
             });
             if (sessionResult?.user) {
+                const sessionUserId = String(sessionResult.user.id || (sessionResult.user as any)._id);
                 const userDoc = await database.collection("user").findOne({
                     $or: [
-                        { id: sessionResult.user.id },
-                        { _id: (sessionResult.user as any)._id },
-                        { email: sessionResult.user.email },
+                        { id: sessionUserId },
+                        ...(ObjectId.isValid(sessionUserId) && sessionUserId.length === 24 ? [{ _id: new ObjectId(sessionUserId) }] : []),
                     ],
                 });
+
+                // Authoritative Account Eligibility Check on Authorize
+                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+                if (!eligibility.eligible) {
+                    const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+                    const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+                    await recordAuthEvent({
+                        eventType: "oauth_authorize",
+                        outcome: "denied",
+                        userId: sessionUserId,
+                        targetIdentifier: userDoc?.email || sessionResult.user.email || null,
+                        clientId: canonicalClientId,
+                        clientName: client.client_name || client.name || null,
+                        ipAddress: safeIp,
+                        reason: `account_ineligible_${eligibility.reason}`,
+                    });
+                    const errorUrl = new URL(redirectUri);
+                    errorUrl.searchParams.set("error", "access_denied");
+                    errorUrl.searchParams.set("error_description", `Account is not eligible for authorization: ${eligibility.reason}`);
+                    errorUrl.searchParams.set("state", state);
+                    return c.redirect(errorUrl.toString(), 302);
+                }
+
                 sessionUser = { ...sessionResult.user, ...userDoc };
             }
         } catch {
@@ -1159,7 +1204,12 @@ auth.post("/oauth2/token", async (c) => {
     // Prepare single authoritative request to forward to Better Auth
     let reqToForward = c.req.raw;
     params.delete("client_secret");
-    params.delete("client_id");
+    if (hasBasicAuth || bodyClientSecret) {
+        params.delete("client_id");
+    } else {
+        // Preserve canonical client_id in body for public clients
+        params.set("client_id", canonicalClientId);
+    }
     const updatedBody = params.toString();
 
     const forwardHeaders = new Headers(c.req.raw.headers);
@@ -1300,14 +1350,16 @@ auth.post("/oauth2/token", async (c) => {
         }
 
         // CRITICAL SECURITY INVARIANT:
-        // Revoked or removed user cannot refresh tokens on private applications
-        if (!clientDoc.isPublic && preRefreshUserId) {
+        // Authoritative Account Eligibility across all client types (public and private)
+        if (preRefreshUserId) {
             const userDoc = await database.collection("user").findOne({
-                $or: [{ id: preRefreshUserId }, { _id: preRefreshUserId as any }]
+                $or: [
+                    { id: preRefreshUserId },
+                    ...(ObjectId.isValid(preRefreshUserId) && preRefreshUserId.length === 24 ? [{ _id: new ObjectId(preRefreshUserId) }] : []),
+                ]
             });
-            const hasAccess = await checkUserHasAppAccess(database, userDoc || preRefreshUserId, canonicalClientId);
-
-            if (!hasAccess) {
+            const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+            if (!eligibility.eligible) {
                 // Immediately purge issued tokens and revoke family
                 await Promise.all([
                     database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: preRefreshUserId }),
@@ -1320,10 +1372,31 @@ auth.post("/oauth2/token", async (c) => {
                 return c.json(
                     {
                         error: "invalid_grant",
-                        error_description: "User is no longer authorized for this private application",
+                        error_description: `User account is not eligible for token refresh: ${eligibility.reason}`,
                     },
                     401
                 );
+            }
+
+            if (!clientDoc.isPublic) {
+                const hasAccess = await checkUserHasAppAccess(database, userDoc || preRefreshUserId, canonicalClientId);
+                if (!hasAccess) {
+                    await Promise.all([
+                        database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: preRefreshUserId }),
+                        database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: preRefreshUserId }),
+                        database.collection("oauth_token_families").updateMany(
+                            { clientId: canonicalClientId, userId: preRefreshUserId },
+                            { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+                        ),
+                    ]);
+                    return c.json(
+                        {
+                            error: "invalid_grant",
+                            error_description: "User is no longer authorized for this private application",
+                        },
+                        401
+                    );
+                }
             }
         }
 
@@ -1385,30 +1458,53 @@ auth.post("/oauth2/token", async (c) => {
                 }
 
                 // CRITICAL SECURITY INVARIANT:
-                // Removed user cannot refresh old application authorization on private applications!
-                if (!clientDoc.isPublic && resolvedUserId) {
+                // Authoritative Account Eligibility across all client types (public and private)
+                if (resolvedUserId) {
                     const userDoc = await database.collection("user").findOne({
-                        $or: [{ id: resolvedUserId }, { _id: resolvedUserId as any }]
+                        $or: [
+                            { id: resolvedUserId },
+                            ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
+                        ]
                     });
-                    const hasAccess = await checkUserHasAppAccess(database, userDoc || resolvedUserId, canonicalClientId);
-
-                    if (!hasAccess) {
+                    const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+                    if (!eligibility.eligible) {
                         // Immediately purge issued tokens and revoke family
                         await Promise.all([
                             database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
                             database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
                             database.collection("oauth_token_families").updateMany(
                                 { clientId: canonicalClientId, userId: resolvedUserId },
-                                { $set: { status: "revoked", revokedAt: new Date() } }
+                                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
                             ),
                         ]);
                         return c.json(
                             {
                                 error: "invalid_grant",
-                                error_description: "User is no longer authorized for this private application",
+                                error_description: `User account is not eligible for token refresh: ${eligibility.reason}`,
                             },
                             401
                         );
+                    }
+
+                    if (!clientDoc.isPublic) {
+                        const hasAccess = await checkUserHasAppAccess(database, userDoc || resolvedUserId, canonicalClientId);
+                        if (!hasAccess) {
+                            await Promise.all([
+                                database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+                                database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+                                database.collection("oauth_token_families").updateMany(
+                                    { clientId: canonicalClientId, userId: resolvedUserId },
+                                    { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+                                ),
+                            ]);
+                            return c.json(
+                                {
+                                    error: "invalid_grant",
+                                    error_description: "User is no longer authorized for this private application",
+                                },
+                                401
+                            );
+                        }
                     }
                 }
 
@@ -1585,6 +1681,19 @@ auth.post("/oauth2/token", async (c) => {
             const codeDoc = await database.collection("oauthAuthorizationCode").findOne({ code: incomingCode });
             if (codeDoc && codeDoc.userId) {
                 preCodeUserId = String(codeDoc.userId);
+                const userDoc = await database.collection("user").findOne({
+                    $or: [
+                        { id: preCodeUserId },
+                        ...(ObjectId.isValid(preCodeUserId) && preCodeUserId.length === 24 ? [{ _id: new ObjectId(preCodeUserId) }] : []),
+                    ],
+                });
+                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+                if (!eligibility.eligible) {
+                    return c.json({
+                        error: "invalid_grant",
+                        error_description: `User account is not eligible for token exchange: ${eligibility.reason}`,
+                    }, 400);
+                }
             }
         } catch {}
     }
@@ -1628,6 +1737,28 @@ auth.post("/oauth2/token", async (c) => {
                             break;
                         }
                     }
+                }
+            }
+
+            if (resolvedUserId) {
+                const userDoc = await database.collection("user").findOne({
+                    $or: [
+                        { id: resolvedUserId },
+                        ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
+                    ],
+                });
+                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+                if (!eligibility.eligible) {
+                    if (tokenData.refresh_token) {
+                        await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
+                    }
+                    if (tokenData.access_token) {
+                        await database.collection("oauthAccessToken").deleteMany({ token: tokenData.access_token }).catch(() => {});
+                    }
+                    return c.json({
+                        error: "invalid_grant",
+                        error_description: `User account is not eligible for token exchange: ${eligibility.reason}`,
+                    }, 400);
                 }
             }
 
@@ -1779,18 +1910,42 @@ auth.get("/oauth2/userinfo", async (c) => {
                         const userDoc = await database.collection("user").findOne({
                             $or: [
                                 { id: userId },
-                                ...(ObjectId.isValid(userId) ? [{ _id: new ObjectId(userId) }] : [])
+                                ...(ObjectId.isValid(userId) && userId.length === 24 ? [{ _id: new ObjectId(userId) }] : [])
                             ]
                         });
+
+                        // Authoritative Account Eligibility Check
+                        const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: payload.iat });
+                        if (!eligibility.eligible) {
+                            return c.json(
+                                { error: "invalid_token", error_description: `User account is ineligible or revoked: ${eligibility.reason}` },
+                                401,
+                                { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="User account is ineligible or revoked"' }
+                            );
+                        }
+
                         const targetClientId = (payload.client_id || payload.azp || (typeof payload.aud === "string" ? payload.aud : payload.aud?.[0]) || "") as string;
                         const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
-                        return c.json({
+
+                        // Scope and Privacy Enforcement (Slice 2)
+                        const scopes = ((payload.scope as string) || "openid").split(" ").map(s => s.trim().toLowerCase());
+                        const scopeSet = new Set(scopes);
+                        const responsePayload: Record<string, any> = {
                             sub: userId,
-                            email: userDoc?.email || payload.email,
-                            name: userDoc?.name || payload.name || (userDoc?.email ? userDoc.email.split("@")[0] : userId),
                             role: resolved.role,
                             scoped_client_id: resolved.scopedClientId,
-                        }, 200);
+                        };
+
+                        if (scopeSet.has("email") && (userDoc?.email || payload.email)) {
+                            responsePayload.email = userDoc?.email || payload.email;
+                            responsePayload.email_verified = userDoc?.emailVerified ?? false;
+                        }
+
+                        if (scopeSet.has("profile")) {
+                            responsePayload.name = userDoc?.name || payload.name || (userDoc?.email ? userDoc.email.split("@")[0] : userId);
+                        }
+
+                        return c.json(responsePayload, 200);
                     }
                 }
             } catch {
@@ -1818,13 +1973,22 @@ auth.get("/oauth2/userinfo", async (c) => {
                     const database = await getDb();
                     const userId = String(data.sub || data.id);
                     const orConditions: any[] = [{ id: userId }];
-                    if (data.email) orConditions.push({ email: data.email });
-                    if (ObjectId.isValid(userId)) {
+                    if (ObjectId.isValid(userId) && userId.length === 24) {
                         orConditions.push({ _id: new ObjectId(userId) });
                     }
                     const userDoc = await database.collection("user").findOne({
                         $or: orConditions
                     });
+
+                    // Authoritative Account Eligibility Check
+                    const eligibility = checkAccountEligibility(userDoc);
+                    if (!eligibility.eligible) {
+                        return c.json(
+                            { error: "invalid_token", error_description: `User account is ineligible or revoked: ${eligibility.reason}` },
+                            401,
+                            { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="User account is ineligible or revoked"' }
+                        );
+                    }
 
                     let targetClientId = c.req.query("client_id") || "";
                     if (!targetClientId && bearerToken) {
@@ -1871,8 +2035,31 @@ auth.post("/oauth2/introspect", async (c) => {
 
         const data = await res.clone().json().catch(() => null);
 
-        // If Better Auth already identified it as active, return immediately
+        // If Better Auth identified it as active, verify account and client status before returning active=true
         if (data && data.active === true) {
+            const database = await getDb();
+            const tokenSub = String(data.sub || data.userId || data.user_id || "");
+            if (tokenSub) {
+                const userDoc = await database.collection("user").findOne({
+                    $or: [
+                        { id: tokenSub },
+                        ...(ObjectId.isValid(tokenSub) && tokenSub.length === 24 ? [{ _id: new ObjectId(tokenSub) }] : [])
+                    ]
+                });
+                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: data.iat || (data.exp ? data.exp - 900 : undefined) });
+                if (!eligibility.eligible) {
+                    return c.json({ active: false }, 200);
+                }
+            }
+
+            const tokenClientId = data.client_id || data.clientId;
+            if (tokenClientId) {
+                const clientDoc = await resolveOAuthClient(database, tokenClientId);
+                if (!clientDoc || clientDoc.disabled) {
+                    return c.json({ active: false }, 200);
+                }
+            }
+
             return res;
         }
 
@@ -1917,8 +2104,16 @@ auth.post("/oauth2/introspect", async (c) => {
                         return c.json({ active: false }, 200);
                     }
 
-                    // Check active state in database (revocation check)
                     const database = await getDb();
+                    // Check client validity
+                    if (tokenClientId) {
+                        const clientDoc = await resolveOAuthClient(database, tokenClientId);
+                        if (!clientDoc || clientDoc.disabled) {
+                            return c.json({ active: false }, 200);
+                        }
+                    }
+
+                    // Check active state in database (revocation check)
                     const tokenDoc = await database.collection("oauthAccessToken").findOne({
                         token,
                         clientId: tokenClientId,
@@ -1927,16 +2122,20 @@ auth.post("/oauth2/introspect", async (c) => {
                         return c.json({ active: false }, 200);
                     }
 
-                    // Dynamically resolve user role to ensure freshly revoked or granted admin privileges reflect immediately
+                    // Immutable subject ownership: query ONLY by immutable subject ID
                     const userId = String(payload.sub || tokenDoc.userId || "");
                     const orConditions: any[] = [{ id: userId }];
-                    if (payload.email) orConditions.push({ email: payload.email });
-                    if (ObjectId.isValid(userId)) {
+                    if (ObjectId.isValid(userId) && userId.length === 24) {
                         orConditions.push({ _id: new ObjectId(userId) });
                     }
                     const userDoc = await database.collection("user").findOne({
                         $or: orConditions,
                     });
+
+                    const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: payload.iat });
+                    if (!eligibility.eligible) {
+                        return c.json({ active: false }, 200);
+                    }
 
                     const resolved = await resolveUserRoleForClient(database, userDoc, tokenClientId);
 
@@ -2575,6 +2774,11 @@ async function resolveVerifiedMfaSession(res: Response): Promise<VerifiedMfaSess
             if (sessionDoc && sessionDoc.userId) {
                 const sessionId = String(sessionDoc._id || sessionDoc.id);
                 const completedUserId = sessionDoc.userId.toString();
+                // Authoritative MFA session marking for administrative & OAuth continuation
+                await database.collection("session").updateOne(
+                    { _id: sessionDoc._id },
+                    { $set: { twoFactorVerified: true, mfaVerifiedAt: new Date() } }
+                ).catch(() => {});
                 let actor: string | null = null;
                 const u = await database.collection("user").findOne({
                     $or: [{ id: completedUserId }, { _id: completedUserId }],

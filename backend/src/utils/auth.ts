@@ -127,6 +127,22 @@ export const authProvider = betterAuth({
         sendOnSignIn:
             config.auth.emailVerificationEnabled,
         expiresIn: 3600,
+        sendVerificationEmail: async ({ user, url, token }: any) => {
+            const webhookUrl = process.env.EMAIL_DELIVERY_WEBHOOK_URL;
+            if (webhookUrl) {
+                try {
+                    await fetch(webhookUrl, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ email: user.email, url, token }),
+                    });
+                } catch (err) {
+                    console.error("[EMAIL_VERIFICATION] Delivery webhook error:", err);
+                }
+            } else {
+                console.warn(`[EMAIL_VERIFICATION] No external email delivery transport configured. Verification link for ${user.email}: ${url}`);
+            }
+        },
     },
 
     advanced: {
