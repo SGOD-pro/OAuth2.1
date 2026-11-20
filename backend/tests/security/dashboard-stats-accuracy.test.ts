@@ -60,6 +60,7 @@ await db.collection("user").insertOne({
   name: "Super Admin",
   role: "super-admin",
   scopedClientId: null,
+  twoFactorEnabled: true,
   emailVerified: true,
   createdAt: new Date(),
 });
@@ -70,6 +71,8 @@ async function mintSuperAdminToken(): Promise<string> {
     sub: superAdminId,
     role: "super-admin",
     aud: "http://localhost:3000",
+    mfa: true,
+    amr: ["mfa"],
   })
     .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer("http://localhost:3000")
@@ -261,21 +264,25 @@ await runTest(4, "GET /api/admin/logs returns null for missing IPs and timestamp
   // 4. "unknown" IP string
   await db.collection("session").insertMany([
     {
+      token: "token_loopback_" + crypto.randomUUID(),
       userId: "user_loopback",
       ipAddress: "127.0.0.1",
       createdAt: fixedHistoricTime,
     },
     {
+      token: "token_external_" + crypto.randomUUID(),
       userId: "user_external",
       ipAddress: "198.51.100.99",
       createdAt: fixedHistoricTime,
     },
     {
+      token: "token_no_ip_" + crypto.randomUUID(),
       userId: "user_no_ip_no_time",
       // ipAddress omitted
       // createdAt omitted
     },
     {
+      token: "token_unknown_" + crypto.randomUUID(),
       userId: "user_unknown_ip",
       ipAddress: "unknown",
       createdAt: fixedHistoricTime,
@@ -345,12 +352,14 @@ await runTest(5, "GET /api/admin/stats recentActivity maps missing IPs and times
 
   await db.collection("session").insertMany([
     {
+      token: "tok_real_" + crypto.randomUUID(),
       userId: "u_real",
       ipAddress: "127.0.0.1",
       createdAt: new Date("2026-01-10T10:00:00.000Z"),
       userAgent: "Mozilla/5.0 Chrome/120.0",
     },
     {
+      token: "tok_missing_" + crypto.randomUUID(),
       userId: "u_missing",
       // ipAddress omitted
       // createdAt omitted
@@ -503,7 +512,9 @@ await runTest(8, "UI helper logic correctly formats zero and unknown values", as
 await runTest(9, "Dashboard card is labeled 'New sessions (24h)' reflecting real session creation data", async () => {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
-  const dashboardPath = path.resolve(process.cwd(), "../frontend/pages/admin/AdminDashboard.tsx");
+  const { fileURLToPath } = await import("node:url");
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const dashboardPath = path.resolve(__dirname, "../../../frontend/pages/admin/AdminDashboard.tsx");
   const dashboardSrc = await fs.readFile(dashboardPath, "utf-8");
 
   assert.ok(

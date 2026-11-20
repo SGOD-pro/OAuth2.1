@@ -25,6 +25,7 @@ process.env.TRUSTED_PROXY_CIDRS = "127.0.0.1/32,10.0.0.0/8";
 const { getDb, closeDb } = await import("../../src/db/mongo");
 const { default: app } = await import("../../src/app");
 const { authProvider } = await import("../../src/utils/auth");
+const { enrollAndLoginAdminMfa, enrollAndLoginAdminMfaWithSecret, loginEnrolledAdminMfa } = await import("../fixtures/admin-mfa-fixture");
 
 let passed = 0;
 let failed = 0;
@@ -83,15 +84,13 @@ await db.collection("user").updateOne(
 // 1. Active App Admin Session Denial & Account Switch
 // ==============================================================================
 
+let appAdminSecret = "";
+
 await runTest("SWITCH-1: App Admin session is denied access to MAuth platform APIs (403)", async () => {
-  // Sign in as App Admin
-  const loginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: appAdminEmail, password: appAdminPass }),
-  });
-  assert.equal(loginRes.status, 200, "App Admin login must succeed");
-  const cookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+  // Sign in as App Admin with MFA
+  const enrolled = await enrollAndLoginAdminMfaWithSecret(app, appAdminEmail, appAdminPass, getTestHeaders);
+  appAdminSecret = enrolled.rawSecret;
+  const cookie = enrolled.cookie;
   assert.ok(cookie, "Cookie must be returned");
 
   // Attempt to call MAuth Super-Admin endpoint
@@ -106,14 +105,8 @@ await runTest("SWITCH-1: App Admin session is denied access to MAuth platform AP
 });
 
 await runTest("SWITCH-2: Explicit sign-out clears session on server and prevents restoration", async () => {
-  // Sign in as App Admin
-  const loginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: appAdminEmail, password: appAdminPass }),
-  });
-  assert.equal(loginRes.status, 200);
-  const cookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+  // Sign in as App Admin with MFA
+  const cookie = await loginEnrolledAdminMfa(app, appAdminEmail, appAdminPass, appAdminSecret, getTestHeaders);
 
   // Perform deliberate sign-out (as done when clicking "Sign in with a different account")
   const signOutRes = await app.request("/api/auth/sign-out", {
@@ -132,14 +125,8 @@ await runTest("SWITCH-2: Explicit sign-out clears session on server and prevents
 });
 
 await runTest("SWITCH-3: Account switch to Super-Admin grants MAuth console access", async () => {
-  // Sign in as Super Admin
-  const superLoginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: superAdminEmail, password: superAdminPass }),
-  });
-  assert.equal(superLoginRes.status, 200, "Super Admin login must succeed");
-  const superCookie = (superLoginRes.headers.get("set-cookie") || "").split(";")[0];
+  // Sign in as Super Admin with MFA
+  const superCookie = await enrollAndLoginAdminMfa(app, superAdminEmail, superAdminPass, getTestHeaders);
 
   // Verify access to platform console API
   const res = await app.request("/api/admin/clients", {

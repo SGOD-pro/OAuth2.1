@@ -56,6 +56,7 @@ const { getSharedRedisOutage, markSharedRedisOutage, putOriginCache, getOriginCa
 const { Redis } = await import("@upstash/redis");
 const { createMockRedisServer } = await import("../fixtures/mock-redis-server");
 const { createRealRedisServer } = await import("../fixtures/real-redis-server");
+const { enrollAndLoginAdminMfa } = await import("../fixtures/admin-mfa-fixture");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- CORS CACHE & INVALIDATION CORRECTNESS SUITE");
@@ -116,12 +117,7 @@ function getTestHeaders(extra: Record<string, string> = {}): Headers {
   return h;
 }
 
-const superLoginRes = await app.request("/api/auth/sign-in/email", {
-  method: "POST",
-  headers: getTestHeaders(),
-  body: JSON.stringify({ email: superEmail, password: superPass }),
-});
-const superCookie = (superLoginRes.headers.get("set-cookie") || "").split(";")[0];
+const superCookie = await enrollAndLoginAdminMfa(app, superEmail, superPass, getTestHeaders);
 
 function getAdminHeaders(extra: Record<string, string> = {}): Headers {
   return getTestHeaders({

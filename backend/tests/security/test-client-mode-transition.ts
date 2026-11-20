@@ -33,6 +33,7 @@ const { getDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");
 const { config } = await import("../../src/config");
 const { isRegisteredRedirectUri, validateOAuthClientConfiguration } = await import("../../src/utils/security");
+const { enrollAndLoginAdminMfa } = await import("../fixtures/admin-mfa-fixture");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- OAUTH CLIENT MODE TRANSITION & SECURITY MATRIX");
@@ -80,13 +81,7 @@ await db.collection("user").updateOne(
   { $set: { role: "admin", scopedClientId: null, emailVerified: true } }
 );
 
-const saLoginRes = await app.request("/api/auth/sign-in/email", {
-  method: "POST",
-  headers: getTestHeaders(),
-  body: JSON.stringify({ email: superAdminEmail, password: superAdminPass }),
-});
-assert.equal(saLoginRes.status, 200, "Super admin login must succeed");
-const superAdminCookie = (saLoginRes.headers.get("set-cookie") || "").split(";")[0];
+const superAdminCookie = await enrollAndLoginAdminMfa(app, superAdminEmail, superAdminPass, getTestHeaders);
 
 // --------------------------------------------------------------------------
 // TEST 1: Production Client Rejects Localhost Redirect Without Dev Mode
@@ -313,13 +308,7 @@ await runTest("TRANS-5: Scoped Admin cannot flip isDev or register localhost", a
     { $set: { role: "admin", scopedClientId: clientId, emailVerified: true } }
   );
 
-  const loginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: scopedEmail, password: scopedPass }),
-  });
-  assert.equal(loginRes.status, 200);
-  const scopedCookie = loginRes.headers.get("set-cookie") || "";
+  const scopedCookie = await enrollAndLoginAdminMfa(app, scopedEmail, scopedPass, getTestHeaders);
 
   // Scoped admin tries to send isDev: true with localhost
   const patchRes = await app.request(`/api/admin/clients/${clientId}`, {
@@ -383,12 +372,7 @@ await runTest("TRANS-6: Scoped Admin of Client A cannot modify Client B", async 
     { $set: { role: "admin", scopedClientId: clientA, emailVerified: true } }
   );
 
-  const loginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: adminEmailA, password: adminPassA }),
-  });
-  const cookieA = loginRes.headers.get("set-cookie") || "";
+  const cookieA = await enrollAndLoginAdminMfa(app, adminEmailA, adminPassA, getTestHeaders);
 
   // Admin A tries to modify Client B
   const attackRes = await app.request(`/api/admin/clients/${clientB}`, {
@@ -789,8 +773,7 @@ await runTest("TRANS-K: Scoped Admin cannot create a new global dev client", asy
   });
   await authProvider.api.signUpEmail({ body: { email: scopedEmail2, password: scopedPass2, name: "Scoped K" } });
   await db.collection("user").updateOne({ email: scopedEmail2 }, { $set: { role: "admin", scopedClientId: tempClientId, emailVerified: true } });
-  const loginRes = await app.request("/api/auth/sign-in/email", { method: "POST", headers: getTestHeaders(), body: JSON.stringify({ email: scopedEmail2, password: scopedPass2 }) });
-  const scopedCookieK = loginRes.headers.get("set-cookie") || "";
+  const scopedCookieK = await enrollAndLoginAdminMfa(app, scopedEmail2, scopedPass2, getTestHeaders);
   const res = await app.request("/api/admin/clients", {
     method: "POST",
     headers: getTestHeaders({ Cookie: scopedCookieK }),

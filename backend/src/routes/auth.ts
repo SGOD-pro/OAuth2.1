@@ -128,31 +128,38 @@ export function setTokenBarrierHookForTesting(hook: ((stage: TokenBarrierStage, 
     tokenBarrierHookForTesting = hook;
 }
 
-export async function revokeUserTokensDurable(database: any, userId: string): Promise<number> {
-    const now = new Date();
-    const user = await database.collection("user").findOne({
+export async function revokeUserTokensDurable(database: any, userId: string, revocationTime?: Date): Promise<number> {
+    const now = revocationTime || new Date();
+    const filter = {
         $or: [
             { id: userId },
             ...(ObjectId.isValid(userId) && userId.length === 24 ? [{ _id: new ObjectId(userId) }] : []),
         ],
-    });
-    const currentVersion = typeof user?.tokenVersion === "number" ? user.tokenVersion : 1;
-    const newVersion = currentVersion + 1;
+    };
 
-    await database.collection("user").updateOne(
-        {
-            $or: [
-                { id: userId },
-                ...(ObjectId.isValid(userId) && userId.length === 24 ? [{ _id: new ObjectId(userId) }] : []),
-            ],
-        },
-        {
-            $set: {
-                tokensRevokedBefore: now,
-                tokenVersion: newVersion,
+    const updateResult = await database.collection("user").findOneAndUpdate(
+        filter,
+        [
+            {
+                $set: {
+                    tokenVersion: {
+                        $add: [{ $ifNull: ["$tokenVersion", 1] }, 1],
+                    },
+                    tokensRevokedBefore: {
+                        $cond: {
+                            if: { $gt: ["$tokensRevokedBefore", now] },
+                            then: "$tokensRevokedBefore",
+                            else: now,
+                        },
+                    },
+                },
             },
-        }
+        ],
+        { returnDocument: "after" }
     );
+
+    const updatedDoc = updateResult?.value || updateResult;
+    const finalVersion = typeof updatedDoc?.tokenVersion === "number" ? updatedDoc.tokenVersion : 2;
 
     await database.collection("oauth_token_families").updateMany(
         { userId },
@@ -164,7 +171,7 @@ export async function revokeUserTokensDurable(database: any, userId: string): Pr
         database.collection("oauthRefreshToken").deleteMany({ userId }),
     ]);
 
-    return newVersion;
+    return finalVersion;
 }
 
 export function clearSigningKeyCacheForTesting(): void {
@@ -2756,23 +2763,59 @@ auth.all("/admin/list-users", async (c) => {
     return res;
 });
 
-// OAuth 2.1 Token Revocation (RFC 7009) with durable version advancement
+// OAuth 2.1 Token Revocation (RFC 7009) with authenticated client and family scoping
 auth.post("/oauth2/revoke", async (c) => {
     const rawBodyText = await c.req.raw.clone().text().catch(() => "");
     const params = new URLSearchParams(rawBodyText);
     const token = params.get("token");
 
+    // 1. Forward request to Better Auth for client authentication and provider handling
     const res = await authProvider.handler(c.req.raw);
+
+    // CRITICAL: Provider authentication failure MUST cause zero revocation mutations
+    if (res.status === 401) {
+        return res;
+    }
+
+    if (!token) {
+        return res;
+    }
 
     if (token) {
         try {
+            const authHeader = c.req.header("authorization");
+            let basicClientId: string | null = null;
+            if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
+                try {
+                    const decoded = Buffer.from(authHeader.slice(6).trim(), "base64").toString("utf-8");
+                    const colonIndex = decoded.indexOf(":");
+                    if (colonIndex !== -1) {
+                        basicClientId = decoded.slice(0, colonIndex);
+                    }
+                } catch {}
+            }
+            const bodyClientId = params.get("client_id");
+            const rawClientId = basicClientId || bodyClientId;
+
+            if (!rawClientId) {
+                return res;
+            }
+
             const database = await getDb();
+            const clientDoc = await resolveOAuthClient(database, rawClientId);
+            if (!clientDoc || clientDoc.disabled) {
+                return res;
+            }
+
+            const canonicalClientId = clientDoc.clientId;
             const { hashToken } = await import("../utils/security");
             const tokenHex = hashToken(token, "hex");
             const tokenBase64 = hashToken(token, "base64url");
+            const now = new Date();
 
-            // Look up if token was a refresh token in families
+            // 1. Look up if token was a refresh token in families scoped strictly to authenticated client
             const familyDoc = await database.collection("oauth_token_families").findOne({
+                clientId: canonicalClientId,
                 $or: [
                     { activeTokenHash: tokenHex },
                     { activeTokenHash: tokenBase64 },
@@ -2781,23 +2824,50 @@ auth.post("/oauth2/revoke", async (c) => {
                 ],
             });
 
-            if (familyDoc?.userId) {
-                await revokeUserTokensDurable(database, String(familyDoc.userId));
+            if (familyDoc) {
+                // Client-scoped family revocation: revokes only this family for this client
+                await database.collection("oauth_token_families").updateOne(
+                    { familyId: familyDoc.familyId, clientId: canonicalClientId },
+                    { $set: { status: "revoked", revokedAt: now, rotating: false } }
+                );
+
+                if (familyDoc.userId) {
+                    await Promise.all([
+                        database.collection("oauthAccessToken").deleteMany({
+                            clientId: canonicalClientId,
+                            userId: familyDoc.userId,
+                        }),
+                        database.collection("oauthRefreshToken").deleteMany({
+                            clientId: canonicalClientId,
+                            userId: familyDoc.userId,
+                        }),
+                    ]);
+                }
             } else {
-                // Look up in oauthAccessToken
+                // 2. Look up in oauthAccessToken scoped strictly to authenticated client
                 const accDoc = await database.collection("oauthAccessToken").findOne({
-                    $or: [{ token }, { token: tokenBase64 }],
+                    clientId: canonicalClientId,
+                    $or: [{ token }, { token: tokenBase64 }, { token: tokenHex }],
                 });
-                if (accDoc?.userId) {
-                    await revokeUserTokensDurable(database, String(accDoc.userId));
+                if (accDoc) {
+                    await database.collection("oauthAccessToken").deleteOne({ _id: accDoc._id });
+                } else {
+                    // 3. Look up in oauthRefreshToken scoped strictly to authenticated client
+                    const refDoc = await database.collection("oauthRefreshToken").findOne({
+                        clientId: canonicalClientId,
+                        $or: [{ token }, { token: tokenBase64 }, { token: tokenHex }],
+                    });
+                    if (refDoc) {
+                        await database.collection("oauthRefreshToken").deleteOne({ _id: refDoc._id });
+                    }
                 }
             }
         } catch (err) {
-            console.error("[REVOCATION] Error during durable token revocation hook:", err);
+            console.error("[REVOCATION] Error during client scoped token revocation hook:", err);
         }
     }
 
-    return res;
+    return c.json({}, 200);
 });
 
 // Wire tokenVersion through Better Auth admin revocation mutations

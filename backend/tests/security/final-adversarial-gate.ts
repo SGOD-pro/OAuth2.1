@@ -28,6 +28,7 @@ process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "te
 const jose = await import("jose");
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
+const { enrollAndLoginAdminMfa } = await import("../fixtures/admin-mfa-fixture");
 const { authProvider } = await import("../../src/utils/auth");
 const { registerTokenFamily, verifyAndRotateTokenFamily } = await import("../../src/db/state");
 const { isRegisteredRedirectUri, getTrustedClientIp, normalizeOrigin } = await import("../../src/utils/security");
@@ -200,41 +201,38 @@ await seedOAuthClient(disabledApp_id, "disabled_secret_12345", false, ["http://l
 // Provision Super Admin
 const superAdminEmail = `super_${testSuffix}@example.com`;
 const superAdminPass = "SuperAdminPassword@123!";
-const saRes = await authProvider.api.signUpEmail({
+await authProvider.api.signUpEmail({
   body: { email: superAdminEmail, password: superAdminPass, name: "Super Admin" },
-  asResponse: true,
 });
-const superAdminCookie = (saRes.headers.get("set-cookie") || "").split(";")[0];
 await db.collection("user").updateOne(
   { email: superAdminEmail },
   { $set: { role: "admin", scopedClientId: null, emailVerified: true } }
 );
+const superAdminCookie = await enrollAndLoginAdminMfa(app, superAdminEmail, superAdminPass, getTestHeaders);
 
 // Provision Scoped Admin for App A
 const scopedAdminAEmail = `scoped_a_${testSuffix}@example.com`;
 const scopedAdminAPass = "ScopedAdminPassword@123!";
-const scaRes = await authProvider.api.signUpEmail({
+await authProvider.api.signUpEmail({
   body: { email: scopedAdminAEmail, password: scopedAdminAPass, name: "Scoped Admin A" },
-  asResponse: true,
 });
-const scopedAdminACookie = (scaRes.headers.get("set-cookie") || "").split(";")[0];
 await db.collection("user").updateOne(
   { email: scopedAdminAEmail },
   { $set: { role: "admin", scopedClientId: appA_id, emailVerified: true } }
 );
+const scopedAdminACookie = await enrollAndLoginAdminMfa(app, scopedAdminAEmail, scopedAdminAPass, getTestHeaders);
 
 // Provision Scoped Admin for App B
 const scopedAdminBEmail = `scoped_b_${testSuffix}@example.com`;
 const scopedAdminBPass = "ScopedAdminPassword@123!";
-const scbRes = await authProvider.api.signUpEmail({
+await authProvider.api.signUpEmail({
   body: { email: scopedAdminBEmail, password: scopedAdminBPass, name: "Scoped Admin B" },
-  asResponse: true,
 });
-const scopedAdminBCookie = (scbRes.headers.get("set-cookie") || "").split(";")[0];
 await db.collection("user").updateOne(
   { email: scopedAdminBEmail },
   { $set: { role: "admin", scopedClientId: appB_id, emailVerified: true } }
 );
+const scopedAdminBCookie = await enrollAndLoginAdminMfa(app, scopedAdminBEmail, scopedAdminBPass, getTestHeaders);
 
 // Provision Normal User 1 (Assigned to App A)
 const user1Email = `user1_${testSuffix}@example.com`;

@@ -28,10 +28,12 @@ process.env.TRUSTED_PROXY_CIDRS = "127.0.0.1/32,10.0.0.0/8";
 
 const { getDb, closeDb } = await import("../../src/db/mongo");
 const { default: app } = await import("../../src/app");
+const { authProvider } = await import("../../src/utils/auth");
 const {
   mintJwtAccessToken,
   setSigningKeyOverrideForTesting,
   setTokenBarrierHookForTesting,
+  revokeUserTokensDurable,
 } = await import("../../src/routes/auth");
 const { checkAccountEligibility } = await import(
   "../../src/utils/account-eligibility"
@@ -1944,6 +1946,280 @@ await runTest("SEC-05-D: Admin privacy projections: app-admin listings and email
   assert.ok(!foundAdmin.name.includes("scoped-admin@specialist.internal"), `App admin name must be masked: ${foundAdmin.name}`);
   assert.ok(foundAdmin.displayLabel, "displayLabel must be present");
   assert.ok(!foundAdmin.displayLabel.includes("scoped-admin@specialist.internal"), `App admin displayLabel must be masked: ${foundAdmin.displayLabel}`);
+});
+
+// ==============================================================================
+// Slice 7: Revocation Authorization, Monotonicity & Client Scoping
+// ==============================================================================
+
+console.log("Running Slice 7: Revocation Authorization, Monotonicity & Client Scoping...\n");
+
+await runTest("SEC-07-A: Provider authentication failure on /oauth2/revoke causes zero revocation mutations", async () => {
+  const victimUserId = "victim-user-07-a";
+  const famId = "fam-sec-07-a";
+  const victimToken = "rt-sec-07-a-secret-value";
+
+  await db.collection("oauth_token_families").insertOne({
+    familyId: famId,
+    clientId: "test-sec-client",
+    userId: victimUserId,
+    status: "active",
+    createdAt: new Date(),
+  });
+  await db.collection("oauthRefreshToken").insertOne({
+    token: victimToken,
+    clientId: "test-sec-client",
+    userId: victimUserId,
+    familyId: famId,
+    expiresAt: new Date(Date.now() + 86400000),
+  });
+
+  // Call /oauth2/revoke with invalid Basic auth credentials
+  const badAuth = Buffer.from("test-sec-client:wrong-password").toString("base64");
+  const revokeRes = await app.request("/api/auth/oauth2/revoke", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${badAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: `token=${encodeURIComponent(victimToken)}&token_type_hint=refresh_token`,
+  });
+
+  assert.equal(revokeRes.status, 401, "Invalid client credentials must be rejected with 401");
+
+  // Verify zero mutations: family remains active, token still exists
+  const familyAfter = await db.collection("oauth_token_families").findOne({ familyId: famId });
+  assert.equal(familyAfter?.status, "active", "Token family must remain active after failed client auth");
+
+  const tokenAfter = await db.collection("oauthRefreshToken").findOne({ token: victimToken });
+  assert.ok(tokenAfter, "Refresh token document must not be deleted after failed client auth");
+});
+
+await runTest("SEC-07-B: Cross-client token substitution causes zero mutations on victim client family", async () => {
+  // Setup Client B
+  const clientBSecret = "client-b-secret-12345";
+  const hashedClientBSecret = crypto.createHash("sha256").update(clientBSecret).digest("base64url");
+  const clientB = {
+    id: "test-sec-client-b",
+    clientId: "test-sec-client-b",
+    clientSecret: hashedClientBSecret,
+    redirectUris: ["http://localhost:5174/callback-b"],
+    allowedOrigins: ["http://localhost:5174"],
+    isPublic: false,
+    isDev: true,
+    skipConsent: true,
+    tokenEndpointAuthMethod: "client_secret_basic",
+    createdAt: new Date(),
+  };
+  await db.collection("oauthClient").updateOne(
+    { clientId: "test-sec-client-b" },
+    { $set: clientB },
+    { upsert: true }
+  );
+  const basicAuthB = Buffer.from(`test-sec-client-b:${clientBSecret}`).toString("base64");
+
+  // Create victim token owned by Client A
+  const victimUserId = "victim-user-07-b";
+  const famIdA = "fam-sec-07-b-client-a";
+  const tokenA = "rt-sec-07-b-client-a-token";
+
+  await db.collection("oauth_token_families").insertOne({
+    familyId: famIdA,
+    clientId: "test-sec-client",
+    userId: victimUserId,
+    status: "active",
+    createdAt: new Date(),
+  });
+  await db.collection("oauthRefreshToken").insertOne({
+    token: tokenA,
+    clientId: "test-sec-client",
+    userId: victimUserId,
+    familyId: famIdA,
+    expiresAt: new Date(Date.now() + 86400000),
+  });
+
+  // Client B attempts to revoke Client A's token
+  const attackRes = await app.request("/api/auth/oauth2/revoke", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicAuthB}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: `token=${encodeURIComponent(tokenA)}&token_type_hint=refresh_token`,
+  });
+
+  // Per RFC 7009, server returns 200 OK so attacker cannot probe token existence
+  assert.equal(attackRes.status, 200, "Revoke endpoint must return 200 per RFC 7009");
+
+  // Verify zero mutations on Client A's token family and records
+  const famDoc = await db.collection("oauth_token_families").findOne({ familyId: famIdA });
+  assert.equal(famDoc?.status, "active", "Victim token family status must remain active");
+
+  const tokenDoc = await db.collection("oauthRefreshToken").findOne({ token: tokenA });
+  assert.ok(tokenDoc, "Victim token document must not be deleted by cross-client request");
+});
+
+await runTest("SEC-07-C: Unrelated-client session preservation: revoking Client A does not sign out Client B or IdP session cookie", async () => {
+  const multiEmail = `multi_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const multiPass = "MultiPass@1234!";
+  const signUpRes = await authProvider.api.signUpEmail({
+    body: { email: multiEmail, password: multiPass, name: "Multi Client User" },
+    asResponse: true,
+  });
+  const sessionCookie = (signUpRes.headers.get("set-cookie") || "").split(";")[0];
+  const multiUserDoc = await db.collection("user").findOne({ email: multiEmail });
+  const multiUserId = String(multiUserDoc?.id || multiUserDoc?._id);
+
+  await db.collection("user").updateOne(
+    { _id: multiUserDoc._id },
+    { $set: { tokenVersion: 2, tokensRevokedBefore: new Date(Date.now() - 60000) } }
+  );
+
+  // Client A and Client B tokens
+  const tokenA = "at-client-a-token-07-c";
+  const tokenB = "at-client-b-token-07-c";
+  const famA = "fam-07-c-a";
+  const famB = "fam-07-c-b";
+
+  await db.collection("oauth_token_families").insertMany([
+    { familyId: famA, clientId: "test-sec-client", userId: multiUserId, status: "active", createdAt: new Date() },
+    { familyId: famB, clientId: "test-sec-client-b", userId: multiUserId, status: "active", createdAt: new Date() },
+  ]);
+  await db.collection("oauthAccessToken").insertMany([
+    { token: tokenA, clientId: "test-sec-client", userId: multiUserId, expiresAt: new Date(Date.now() + 3600000) },
+    { token: tokenB, clientId: "test-sec-client-b", userId: multiUserId, expiresAt: new Date(Date.now() + 3600000) },
+  ]);
+
+  // Client A revokes Client A's token
+  const revokeRes = await app.request("/api/auth/oauth2/revoke", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: `token=${encodeURIComponent(tokenA)}&token_type_hint=access_token`,
+  });
+  assert.equal(revokeRes.status, 200, "Client A token revocation must return 200");
+
+  // Client A's token is deleted
+  const tokenADoc = await db.collection("oauthAccessToken").findOne({ token: tokenA });
+  assert.equal(tokenADoc, null, "Targeted Client A token must be deleted");
+
+  // Client B's family and token MUST remain active and untampered
+  const famBDoc = await db.collection("oauth_token_families").findOne({ familyId: famB });
+  assert.equal(famBDoc?.status, "active", "Client B token family must remain active");
+
+  const tokenBDoc = await db.collection("oauthAccessToken").findOne({ token: tokenB });
+  assert.ok(tokenBDoc, "Client B token must not be deleted");
+
+  // User's tokenVersion MUST NOT be bumped for ordinary single-token revocation
+  const userDoc = await db.collection("user").findOne({ email: multiEmail });
+  assert.equal(userDoc?.tokenVersion, 2, "User tokenVersion must remain 2 (not account-wide signout)");
+
+  // IdP session cookie MUST remain valid
+  const sessionCheck = await app.request("/api/auth/get-session", {
+    method: "GET",
+    headers: getTestHeaders({
+      Cookie: sessionCookie,
+    }),
+  });
+  assert.equal(sessionCheck.status, 200, "IdP session must remain valid after single-client revocation");
+  const sessionData = await sessionCheck.json();
+  assert.ok(sessionData?.session, "Session data must be returned");
+});
+
+await runTest("SEC-07-D: Overlapping revokers with delayed writes against real storage verify monotonic advancement and non-decreasing timestamps", async () => {
+  const raceUserId = "user-race-atomic-07-d";
+  const initialTime = new Date(Date.now() - 50000);
+  await db.collection("user").insertOne({
+    id: raceUserId,
+    email: "race-atomic@example.com",
+    role: "user",
+    tokensRevokedBefore: initialTime,
+    emailVerified: true,
+    createdAt: new Date(),
+  });
+
+  // 1. Run 5 concurrent overlapping calls to revokeUserTokensDurable
+  const concurrentCalls = Array.from({ length: 5 }, () =>
+    revokeUserTokensDurable(db, raceUserId)
+  );
+  const versions = await Promise.all(concurrentCalls);
+
+  assert.equal(versions.length, 5);
+  for (const v of versions) {
+    assert.ok(typeof v === "number" && v >= 2, `Version must be at least 2: ${v}`);
+  }
+
+  // Final document must have advanced by exactly 5 (legacy 1 + 5 = 6)
+  const userAfter = await db.collection("user").findOne({ id: raceUserId });
+  assert.equal(userAfter?.tokenVersion, 6, "Legacy account must monotonically advance to 6 with 5 revokers");
+  assert.ok(
+    new Date(userAfter.tokensRevokedBefore).getTime() >= initialTime.getTime(),
+    "Revocation timestamp must not decrease"
+  );
+
+  // 2. Call with an older timestamp: tokensRevokedBefore must NEVER decrease
+  const olderTime = new Date(Date.now() - 1000000);
+  const finalVer = await revokeUserTokensDurable(db, raceUserId, olderTime);
+  assert.equal(finalVer, 7, "Version must advance to 7");
+
+  const userFinal = await db.collection("user").findOne({ id: raceUserId });
+  assert.equal(userFinal?.tokenVersion, 7);
+  assert.ok(
+    new Date(userFinal.tokensRevokedBefore).getTime() >= initialTime.getTime(),
+    "Older timestamp must not regress tokensRevokedBefore"
+  );
+});
+
+await runTest("SEC-07-E: Concurrent revocation plus issuance: conditional state transition coordinates with revocation", async () => {
+  const coordUserId = "user-coord-07-e";
+  await db.collection("user").insertOne({
+    id: coordUserId,
+    email: "coord-issuance@example.com",
+    role: "user",
+    tokenVersion: 3,
+    emailVerified: true,
+    createdAt: new Date(),
+  });
+
+  // Ordering 1: Revocation advances tokenVersion before issuance final conditional commit
+  // Mint token before revocation: bound to tokenVersion 3
+  const tokenPreRevoke = await mintJwtAccessToken({
+    userId: coordUserId,
+    clientId: "test-sec-client",
+    scope: "openid profile",
+  });
+  assert.ok(tokenPreRevoke, "Initial minting must succeed");
+
+  // Revoke user tokens: advances tokenVersion to 4
+  const vAfterRevoke = await revokeUserTokensDurable(db, coordUserId);
+  assert.equal(vAfterRevoke, 4, "Revocation must advance version to 4");
+
+  // Verify online validation of pre-revoke token (version 3) is denied against user at version 4
+  const userinfoRes = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: getTestHeaders({
+      Authorization: `Bearer ${tokenPreRevoke}`,
+    }),
+  });
+  assert.equal(userinfoRes.status, 401, "Token with older tokenVersion must be denied at online validation (401)");
+
+  // Ordering 2: Issuance after revocation commits with the new version (version 4)
+  const tokenPostRevoke = await mintJwtAccessToken({
+    userId: coordUserId,
+    clientId: "test-sec-client",
+    scope: "openid profile",
+  });
+  assert.ok(tokenPostRevoke, "Post-revocation minting must succeed with new version");
+
+  const userinfoRes2 = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: getTestHeaders({
+      Authorization: `Bearer ${tokenPostRevoke}`,
+    }),
+  });
+  assert.equal(userinfoRes2.status, 200, "Token with matching current tokenVersion must succeed (200)");
 });
 
 await closeDb();

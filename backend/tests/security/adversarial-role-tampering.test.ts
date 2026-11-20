@@ -111,6 +111,7 @@ await db.collection("user").insertOne({
   email: "swyra@auth2.1.com",
   role: "super-admin",
   scopedClientId: null,
+  twoFactorEnabled: true,
   emailVerified: true,
   createdAt: now,
 });
@@ -123,6 +124,7 @@ await db.collection("user").insertOne({
   email: "alpha-admin@example.com",
   role: "app-admin",
   scopedClientId: "app-alpha",
+  twoFactorEnabled: true,
   emailVerified: true,
   createdAt: now,
 });
@@ -147,7 +149,12 @@ await db.collection("user").insertOne({
 
 // Helper to mint signed RS256 token
 async function mintToken(payload: Record<string, any>, customKid: string = kid, customKey = privateKey): Promise<string> {
-  return new SignJWT(payload)
+  const tokenPayload: Record<string, any> = {
+    mfa: true,
+    amr: ["mfa"],
+    ...payload,
+  };
+  return new SignJWT(tokenPayload)
     .setProtectedHeader({ alg: "RS256", kid: customKid })
     .setIssuer("http://localhost:3000")
     .setIssuedAt()
@@ -353,6 +360,7 @@ await runTest("REVOKE-1: Token replay after user deletion returns 401", async ()
     email: "ephem@example.com",
     role: "super-admin",
     scopedClientId: null,
+    twoFactorEnabled: true,
     emailVerified: true,
   });
 
@@ -500,6 +508,7 @@ await runTest("FALLBACK-1: App-admin token cannot acquire platform privileges vi
     email: "dual-role@example.com",
     role: "super-admin",
     scopedClientId: null,
+    twoFactorEnabled: true,
     emailVerified: true,
     createdAt: new Date(),
   });
@@ -641,6 +650,7 @@ await runTest("EMAIL-1: Non-swyra email with super-admin role has valid platform
     email: "platform-ops@enterprise.acme",
     role: "super-admin",
     scopedClientId: null,
+    twoFactorEnabled: true,
     emailVerified: true,
     createdAt: new Date(),
   });
