@@ -69,6 +69,7 @@
     "test:dashboard-stats": "tsx tests/security/dashboard-stats-accuracy.test.ts",
     "test:dedup": "tsx tests/security/auth-deduplication-and-attribution.test.ts",
     "test:auth-telemetry": "tsx tests/security/auth-event-telemetry.test.ts",
+    "test:oauth-hardening": "tsx tests/security/oauth-security-hardening.test.ts",
     "test:all-security": "tsx scripts/run-all-security.ts",
     "test:all-security:local": "tsx scripts/run-all-security.ts",
     "security:docs-check": "tsx scripts/check-security-doc-consistency.ts",

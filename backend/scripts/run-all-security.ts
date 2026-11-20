@@ -32,6 +32,7 @@ const securityTestFiles = [
   "tests/security/cors-cache-correctness.test.ts",
   "tests/security/redis-test-isolation.test.ts",
   "tests/security/membership-lifecycle.test.ts",
+  "tests/security/oauth-security-hardening.test.ts",
   "tests/security/dashboard-stats-accuracy.test.ts",
   "tests/security/auth-event-telemetry.test.ts",
   "tests/security/auth-deduplication-and-attribution.test.ts",

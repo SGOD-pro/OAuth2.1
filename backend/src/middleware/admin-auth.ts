@@ -760,7 +760,11 @@ export function checkAdminMfa(c: any, user: any, session: any, reqId: string): R
 
 export const requireRecentMfa = createMiddleware(async (c, next) => {
   const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
-  const session = c.get("session");
+  let session = c.get("session");
+  if (!session) {
+    const auth = await getAuthenticatedUser(c);
+    session = auth?.session;
+  }
   const mfaVerifiedAt = session?.mfaVerifiedAt ? new Date(session.mfaVerifiedAt).getTime() : 0;
   const now = Date.now();
   const MAX_MFA_AGE_MS = 15 * 60 * 1000; // 15 minutes

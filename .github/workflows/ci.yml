@@ -140,6 +140,10 @@ jobs:
         working-directory: backend
         run: npm run test:private-app-isolation
 
+      - name: Run OAuth Security Hardening Test Suite
+        working-directory: backend
+        run: npm run test:oauth-hardening
+
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine
 

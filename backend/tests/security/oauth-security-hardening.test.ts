@@ -678,6 +678,7 @@ await runTest("SEC-01-G: Refresh token exchange rejects banned or disabled users
   });
 
   await db.collection("oauth_token_families").insertOne({
+    familyId: crypto.randomUUID(),
     clientId: "test-sec-client",
     userId: refreshUserId,
     activeTokenHash: incomingHash,
@@ -698,6 +699,363 @@ await runTest("SEC-01-G: Refresh token exchange rejects banned or disabled users
   assert.equal(res.status, 401, "Refresh token for banned account must be rejected with 401");
   const body = await res.json();
   assert.ok(body.error === "invalid_grant" || body.error === "access_denied", `Expected error invalid_grant/access_denied, got: ${body.error}`);
+});
+
+await runTest("SEC-03-B: Verification grace window never skips revocation, password change, or account status", async () => {
+  const origRollout = process.env.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE;
+  const origAfter = process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER;
+
+  try {
+    process.env.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE = "enforce_new";
+    process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER = new Date(Date.now() + 1000000).toISOString();
+
+    const baseGraceUser = {
+      id: "grace-user-1",
+      email: "grace@example.com",
+      emailVerified: false,
+      createdAt: new Date(Date.now() - 500000),
+      status: "active",
+    };
+
+    // 1. In grace window, but tokensRevokedBefore is newer than token issued time
+    const revokedUser = {
+      ...baseGraceUser,
+      tokensRevokedBefore: new Date(Date.now() - 10000),
+    };
+    const resRevoked = checkAccountEligibility(revokedUser, {
+      requireEmailVerified: true,
+      tokenIssuedAtSec: Math.floor((Date.now() - 20000) / 1000),
+    });
+    assert.equal(resRevoked.eligible, false, "Grace window must NOT bypass tokensRevokedBefore check");
+    assert.equal(resRevoked.reason, "tokens_revoked");
+
+    // 2. In grace window, but passwordChangedAt is newer than token issued time
+    const pwChangedUser = {
+      ...baseGraceUser,
+      passwordChangedAt: new Date(Date.now() - 10000),
+    };
+    const resPw = checkAccountEligibility(pwChangedUser, {
+      requireEmailVerified: true,
+      tokenIssuedAtSec: Math.floor((Date.now() - 20000) / 1000),
+    });
+    assert.equal(resPw.eligible, false, "Grace window must NOT bypass passwordChangedAt check");
+    assert.equal(resPw.reason, "tokens_revoked");
+
+    // 3. In grace window, but account is banned
+    const bannedUser = {
+      ...baseGraceUser,
+      banned: true,
+    };
+    const resBanned = checkAccountEligibility(bannedUser, {
+      requireEmailVerified: true,
+    });
+    assert.equal(resBanned.eligible, false, "Grace window must NOT bypass banned check");
+    assert.equal(resBanned.reason, "account_banned");
+
+    // 4. In grace window, but account is disabled
+    const disabledUser = {
+      ...baseGraceUser,
+      disabled: true,
+    };
+    const resDisabled = checkAccountEligibility(disabledUser, {
+      requireEmailVerified: true,
+    });
+    assert.equal(resDisabled.eligible, false, "Grace window must NOT bypass disabled check");
+    assert.equal(resDisabled.reason, "account_disabled");
+  } finally {
+    if (origRollout) process.env.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE = origRollout;
+    else delete process.env.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE;
+    if (origAfter) process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER = origAfter;
+    else delete process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER;
+  }
+});
+
+await runTest("SEC-01-H: Revocation wins code exchange and refresh with older credentials", async () => {
+  const userId = "user-rev-wins-" + crypto.randomBytes(4).toString("hex");
+  const t0 = new Date(Date.now() - 15000); // Credential issued at T0
+  const t1 = new Date(Date.now() - 8000);  // Tokens revoked at T1 (T0 < T1)
+
+  await db.collection("user").insertOne({
+    id: userId,
+    email: "rev-wins@example.com",
+    role: "user",
+    tokensRevokedBefore: t1,
+    createdAt: new Date(Date.now() - 30000),
+  });
+
+  // 1. Authorization Code issued at T0 cannot be exchanged at T2
+  const authCode = "code-rev-wins-" + crypto.randomBytes(8).toString("hex");
+  await db.collection("oauthAuthorizationCode").insertOne({
+    code: authCode,
+    clientId: "test-sec-client",
+    userId: userId,
+    redirectUri: "https://example.com/callback",
+    createdAt: t0,
+    expiresAt: new Date(Date.now() + 60000),
+  });
+
+  const codeRes = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${basicAuth}`,
+    },
+    body: `grant_type=authorization_code&code=${authCode}&redirect_uri=https://example.com/callback&client_id=test-sec-client`,
+  });
+  assert.equal(codeRes.status, 400, "Older authorization code must be rejected when tokens were revoked prior to exchange");
+  const codeBody = await codeRes.json();
+  assert.equal(codeBody.error, "invalid_grant");
+
+  // 2. Refresh Token issued at T0 cannot be refreshed at T2
+  const refToken = "rt-rev-wins-" + crypto.randomBytes(16).toString("hex");
+  const { hashToken } = await import("../../src/utils/security");
+  const refHash = hashToken(refToken, "hex");
+
+  await db.collection("oauthRefreshToken").insertOne({
+    token: refToken,
+    clientId: "test-sec-client",
+    userId: userId,
+    createdAt: t0,
+    expiresAt: new Date(Date.now() + 86400000),
+  });
+
+  await db.collection("oauth_token_families").insertOne({
+    familyId: crypto.randomUUID(),
+    clientId: "test-sec-client",
+    userId: userId,
+    activeTokenHash: refHash,
+    status: "active",
+    createdAt: t0,
+  });
+
+  const refRes = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${basicAuth}`,
+    },
+    body: `grant_type=refresh_token&refresh_token=${refToken}`,
+  });
+  assert.equal(refRes.status, 401, "Older refresh token must be rejected when tokens were revoked prior to refresh");
+  const refBody = await refRes.json();
+  assert.equal(refBody.error, "invalid_grant");
+});
+
+await runTest("SEC-04-D: Better Auth admin/plugin routes enforce mandatory MFA and sensitive-action freshness", async () => {
+  const { authProvider } = await import("../../src/utils/auth");
+  const adminEmail = `super-mfa-${crypto.randomBytes(4).toString("hex")}@platform.local`;
+  const adminPassword = "Password@1234!";
+
+  await authProvider.api.signUpEmail({
+    body: { email: adminEmail, password: adminPassword, name: "Super MFA Admin" },
+  });
+
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+  });
+  assert.equal(loginRes.status, 200, "Admin login must succeed");
+  const sessionCookie = loginRes.headers.get("set-cookie") || "";
+  assert.ok(sessionCookie.includes("better-auth.session_token="), "Must set session cookie");
+
+  // Upgrade user in DB to super-admin with twoFactorEnabled: true
+  await db.collection("user").updateOne(
+    { email: adminEmail },
+    { $set: { role: "super-admin", twoFactorEnabled: true } }
+  );
+
+  const rawCookie = sessionCookie.split("better-auth.session_token=")[1].split(";")[0];
+  const tokenVal = decodeURIComponent(rawCookie.split(".")[0]);
+  const sessionFilter = {
+    $or: [
+      { token: rawCookie },
+      { token: tokenVal },
+      { token: decodeURIComponent(rawCookie) },
+    ],
+  };
+
+  // 1. Password-only session cookie (twoFactorVerified: false) must be rejected with ERR_MFA_REQUIRED
+  await db.collection("session").updateOne(sessionFilter, {
+    $set: { twoFactorVerified: false },
+    $unset: { mfaVerifiedAt: "" },
+  });
+
+  const pwHeaders = getTestHeaders({
+    Cookie: sessionCookie,
+  });
+
+  const pwRes = await app.request("/api/auth/admin/list-users", {
+    method: "GET",
+    headers: pwHeaders,
+  });
+  assert.equal(pwRes.status, 403, "Better Auth admin route must reject password-only session without completed MFA");
+  const pwBody = await pwRes.json();
+  assert.equal(pwBody.code, "ERR_MFA_REQUIRED");
+
+  // Also verify mutation route rejects password-only session
+  const pwMutationRes = await app.request("/api/auth/admin/set-role", {
+    method: "POST",
+    headers: pwHeaders,
+    body: JSON.stringify({ userId: "target-user", role: "admin" }),
+  });
+  assert.equal(pwMutationRes.status, 403, "Better Auth admin mutation must reject password-only session");
+  const pwMutationBody = await pwMutationRes.json();
+  assert.equal(pwMutationBody.code, "ERR_MFA_REQUIRED");
+
+  // 2. Completed TOTP session allows access to Better Auth admin list-users with privacy projection
+  await db.collection("session").updateOne(sessionFilter, {
+    $set: { twoFactorVerified: true, mfaVerifiedAt: new Date() },
+  });
+
+  const totpRes = await app.request("/api/auth/admin/list-users", {
+    method: "GET",
+    headers: pwHeaders,
+  });
+  assert.ok(totpRes.status === 200 || totpRes.status === 404, `Expected 200 (or handled) with completed TOTP session, got: ${totpRes.status}`);
+
+  // 3. Stale MFA session (> 15 minutes ago) is rejected with ERR_MFA_STEP_UP_REQUIRED on mutations
+  await db.collection("session").updateOne(sessionFilter, {
+    $set: { twoFactorVerified: true, mfaVerifiedAt: new Date(Date.now() - 25 * 60 * 1000) },
+  });
+
+  const staleMutationRes = await app.request("/api/auth/admin/set-role", {
+    method: "POST",
+    headers: pwHeaders,
+    body: JSON.stringify({ userId: "target-user", role: "admin" }),
+  });
+  assert.equal(staleMutationRes.status, 403, "Stale MFA session must be rejected with step-up required");
+  const staleBody = await staleMutationRes.json();
+  assert.equal(staleBody.code, "ERR_MFA_STEP_UP_REQUIRED");
+});
+
+await runTest("SEC-03-C: Email verification delivery transport validation, bounded timeout, and secret-free logging", async () => {
+  const { authProvider } = await import("../../src/utils/auth");
+  const sendVerificationEmail = (authProvider.options as any).emailVerification?.sendVerificationEmail;
+  assert.ok(typeof sendVerificationEmail === "function", "sendVerificationEmail must be configured");
+
+  // Capture console logs to prove zero secrets are leaked
+  const capturedLogs: string[] = [];
+  const origWarn = console.warn;
+  const origError = console.error;
+  const origLog = console.log;
+  console.warn = (...args: any[]) => capturedLogs.push(args.map(String).join(" "));
+  console.error = (...args: any[]) => capturedLogs.push(args.map(String).join(" "));
+  console.log = (...args: any[]) => capturedLogs.push(args.map(String).join(" "));
+
+  const secretToken = "super-secret-verification-token-xyz789";
+  const secretUrl = `https://oauth21.vercel.app/api/auth/verify-email?token=${secretToken}`;
+
+  try {
+    // 1. No webhook URL configured: must not log secret URL or token
+    const origEnv = process.env.EMAIL_DELIVERY_WEBHOOK_URL;
+    delete process.env.EMAIL_DELIVERY_WEBHOOK_URL;
+
+    await sendVerificationEmail({
+      user: { email: "test-delivery@example.com" },
+      url: secretUrl,
+      token: secretToken,
+    });
+
+    for (const log of capturedLogs) {
+      assert.ok(!log.includes(secretToken), `Verification token leaked in logs: ${log}`);
+      assert.ok(!log.includes(secretUrl), `Verification URL leaked in logs: ${log}`);
+    }
+
+    // 2. Invalid webhook URL configuration: throws controlled error
+    process.env.EMAIL_DELIVERY_WEBHOOK_URL = "not-a-valid-url";
+    await assert.rejects(
+      async () => {
+        await sendVerificationEmail({
+          user: { email: "test-delivery@example.com" },
+          url: secretUrl,
+          token: secretToken,
+        });
+      },
+      /Invalid email delivery webhook transport configuration/,
+      "Invalid transport URL must throw controlled error"
+    );
+
+    for (const log of capturedLogs) {
+      assert.ok(!log.includes(secretToken), `Verification token leaked during error in logs: ${log}`);
+      assert.ok(!log.includes(secretUrl), `Verification URL leaked during error in logs: ${log}`);
+    }
+
+    if (origEnv) process.env.EMAIL_DELIVERY_WEBHOOK_URL = origEnv;
+    else delete process.env.EMAIL_DELIVERY_WEBHOOK_URL;
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+    console.log = origLog;
+  }
+});
+
+await runTest("SEC-05-D: Admin privacy projections: app-admin listings and email-shaped name fields", async () => {
+  const { toApprovedDisplayLabel, isEmailShaped } = await import("../../src/utils/security");
+
+  // 1. Verify isEmailShaped helper
+  assert.equal(isEmailShaped("user@example.com"), true);
+  assert.equal(isEmailShaped("john.doe@sub.corp.internal"), true);
+  assert.equal(isEmailShaped("John Doe"), false);
+  assert.equal(isEmailShaped("User"), false);
+  assert.equal(isEmailShaped(null), false);
+
+  // 2. Verify toApprovedDisplayLabel masks email-shaped name
+  assert.equal(toApprovedDisplayLabel("user@example.com", "user@example.com"), "us***@example.com");
+  assert.equal(toApprovedDisplayLabel(null, "leaked.name@example.com"), "le***@example.com");
+  assert.equal(toApprovedDisplayLabel("user@example.com", "Alice Smith"), "Alice Smith");
+
+  // 3. Verify app-admin listing privacy projection in real route
+  const appAdminEmail = "scoped-admin@specialist.internal";
+  await db.collection("app_admins").insertOne({
+    clientId: "test-sec-client",
+    email: appAdminEmail,
+    name: appAdminEmail, // Email-shaped name field
+    redirectUrl: "https://example.com/admin",
+    isActive: true,
+    totpEnabled: true,
+    loginCount: 3,
+    createdAt: new Date(),
+  });
+
+  // Call GET /api/admin/clients/test-sec-client/app-admins with platform admin token
+  const testSuperAdminId = "test-super-admin-" + crypto.randomBytes(4).toString("hex");
+  await db.collection("user").insertOne({
+    id: testSuperAdminId,
+    email: "super-admin-projection@example.com",
+    role: "super-admin",
+    scopedClientId: null,
+    twoFactorEnabled: true,
+    emailVerified: true,
+    createdAt: new Date(),
+  });
+
+  const platformAdminJwt = await mintAdminBearerToken({
+    sub: testSuperAdminId,
+    role: "super-admin",
+    mfa: true,
+    amr: ["mfa"],
+    mfaVerifiedAtSec: Math.floor(Date.now() / 1000),
+  });
+
+  const res = await app.request("/api/admin/clients/test-sec-client/app-admins", {
+    method: "GET",
+    headers: getTestHeaders({
+      Authorization: `Bearer ${platformAdminJwt}`,
+    }),
+  });
+
+  assert.equal(res.status, 200, "App admin listing must return 200");
+  const data = await res.json();
+  assert.ok(Array.isArray(data.admins), "Must return admins array");
+  const foundAdmin = data.admins.find((a: any) => a.redirectUrl === "https://example.com/admin");
+  assert.ok(foundAdmin, "Created app admin must be in listing");
+
+  // Full cleartext email MUST NOT appear in email, name, or displayLabel
+  assert.ok(!foundAdmin.email.includes("scoped-admin@specialist.internal"), `App admin email must be masked: ${foundAdmin.email}`);
+  assert.ok(!foundAdmin.name.includes("scoped-admin@specialist.internal"), `App admin name must be masked: ${foundAdmin.name}`);
+  assert.ok(foundAdmin.displayLabel, "displayLabel must be present");
+  assert.ok(!foundAdmin.displayLabel.includes("scoped-admin@specialist.internal"), `App admin displayLabel must be masked: ${foundAdmin.displayLabel}`);
 });
 
 await closeDb();

@@ -14,6 +14,7 @@ import {
   hasDangerousMongoKeys,
   validateSafePrimitiveString,
   toApprovedDisplayLabel,
+  isEmailShaped,
 } from "../utils/security";
 import { recordAdminAudit } from "../db/state";
 import { invalidateClientOrigins } from "../cache/origin-cache";
@@ -1009,7 +1010,7 @@ admin.get("/users", requireSuperAdmin, async (c) => {
     const safeUsers = users.map((u: any) => ({
       _id: u._id?.toString() || u.id,
       displayLabel: toApprovedDisplayLabel(u.email, u.name),
-      name: u.name || "User",
+      name: isEmailShaped(u.name) ? toApprovedDisplayLabel(u.name) : (u.name || "User"),
       role: u.role || "user",
       scopedClientId: u.scopedClientId || null,
       createdAt: u.createdAt || new Date(),
@@ -1488,8 +1489,9 @@ admin.get("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
 
     const safeAdmins = admins.map((a: any) => ({
       id: a._id.toString(),
-      email: a.email,
-      name: a.name || a.email.split("@")[0],
+      email: toApprovedDisplayLabel(a.email),
+      displayLabel: toApprovedDisplayLabel(a.email, a.name),
+      name: isEmailShaped(a.name) ? toApprovedDisplayLabel(a.name) : (a.name || toApprovedDisplayLabel(a.email)),
       redirectUrl: a.redirectUrl || "",
       isActive: a.isActive !== false,
       totpEnabled: a.totpEnabled === true,
@@ -1753,7 +1755,7 @@ const updateAppAdminHandler = async (c: any) => {
       updateFields.name = body.name.trim();
     }
 
-    if (typeof body.email === "string" && body.email.trim()) {
+    if (typeof body.email === "string" && body.email.trim() && !body.email.includes("***")) {
       const newEmail = body.email.toLowerCase().trim();
       if (!newEmail.includes("@")) {
         return c.json({ error: "Valid email address is required" }, 400);
@@ -2005,7 +2007,7 @@ admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
         registrationId: r._id.toString(),
         userId: r.userId,
         displayLabel: toApprovedDisplayLabel(u?.email, u?.name),
-        name: u?.name || "User",
+        name: isEmailShaped(u?.name) ? toApprovedDisplayLabel(u?.name) : (u?.name || "User"),
         registeredAt: r.registeredAt ? r.registeredAt.toISOString() : null,
       };
     });

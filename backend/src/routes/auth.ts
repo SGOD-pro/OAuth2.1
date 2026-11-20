@@ -15,13 +15,13 @@ import {
     recordAuthEvent,
 } from "../db/state";
 import { rateLimiters, checkRateLimit } from "../cache/redis";
-import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, checkUserHasAppAccess, hashToken, hasDangerousMongoKeys, validateSafePrimitiveString } from "../utils/security";
+import { getTrustedClientIp, getHeaders, resolveOAuthClient, isRegisteredRedirectUri, checkUserAppRegistration, checkUserHasAppAccess, hashToken, hasDangerousMongoKeys, validateSafePrimitiveString, toApprovedDisplayLabel, isEmailShaped } from "../utils/security";
 import { config } from "../config";
 import { emergencyRateLimiter } from "../middleware/rate-limit";
 import { checkAccountEligibility } from "../utils/account-eligibility";
 
 import { importJWK, SignJWT, jwtVerify, decodeJwt, decodeProtectedHeader, generateKeyPair, exportJWK } from "jose";
-import { getIdpPublicKey, checkUserIsClientAdmin } from "../middleware/admin-auth";
+import { getIdpPublicKey, checkUserIsClientAdmin, requireAdmin, requireSuperAdmin, requireRecentMfa } from "../middleware/admin-auth";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 
 export const auth = new Hono();
@@ -196,6 +196,7 @@ export async function mintJwtAccessToken(params: {
     clientId: string;
     expiresInSeconds?: number;
     scope?: string;
+    tokenIssuedAtSec?: number;
 }): Promise<string | null> {
     try {
         const signingKey = await getIdpSigningKey();
@@ -212,7 +213,8 @@ export async function mintJwtAccessToken(params: {
 
         // Enforce Authoritative Account Eligibility
         const nowSec = Math.floor(Date.now() / 1000);
-        const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: nowSec });
+        const tokenIssuedAtSec = params.tokenIssuedAtSec ?? nowSec;
+        const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec });
         if (!eligibility.eligible) {
             console.warn(`[MINT_JWT_ACCESS_TOKEN] Denied token minting for ineligible account ${params.userId}: ${eligibility.reason}`);
             return null;
@@ -229,7 +231,9 @@ export async function mintJwtAccessToken(params: {
 
         const email = scopeSet.has("email") ? (userDoc?.email || undefined) : undefined;
         const emailVerified = scopeSet.has("email") ? (userDoc?.emailVerified ?? undefined) : undefined;
-        const name = scopeSet.has("profile") ? (userDoc?.name || (userDoc?.email ? userDoc.email.split("@")[0] : undefined)) : undefined;
+        const rawName = userDoc?.name || (userDoc?.email ? userDoc.email.split("@")[0] : undefined);
+        const safeName = isEmailShaped(rawName) ? toApprovedDisplayLabel(rawName) : rawName;
+        const name = scopeSet.has("profile") ? safeName : undefined;
         const ttl = params.expiresInSeconds || 900;
 
         const claims: Record<string, any> = {
@@ -993,7 +997,11 @@ auth.get("/oauth2/authorize", async (c) => {
                 });
 
                 // Authoritative Account Eligibility Check on Authorize
-                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+                // Bound to active session creation timestamp; older session must not survive revocation
+                const sessionCreatedAtSec = sessionResult?.session?.createdAt
+                    ? Math.floor(new Date(sessionResult.session.createdAt).getTime() / 1000)
+                    : Math.floor(Date.now() / 1000);
+                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: sessionCreatedAtSec });
                 if (!eligibility.eligible) {
                     const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
                     const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
@@ -1333,7 +1341,11 @@ auth.post("/oauth2/token", async (c) => {
             );
         }
 
+        let preRefreshIssuedAtSec: number | undefined;
         let preRefreshUserId: string | undefined = existingFamily?.userId;
+        if (existingFamily?.createdAt) {
+            preRefreshIssuedAtSec = Math.floor(new Date(existingFamily.createdAt).getTime() / 1000);
+        }
         if (!preRefreshUserId) {
             try {
                 const oldDoc = await database.collection("oauthRefreshToken").findOne({
@@ -1343,8 +1355,13 @@ auth.post("/oauth2/token", async (c) => {
                         { token: hashToken(refreshToken, "hex") }
                     ]
                 });
-                if (oldDoc && oldDoc.userId) {
-                    preRefreshUserId = String(oldDoc.userId);
+                if (oldDoc) {
+                    if (oldDoc.userId) {
+                        preRefreshUserId = String(oldDoc.userId);
+                    }
+                    if (oldDoc.createdAt) {
+                        preRefreshIssuedAtSec = Math.floor(new Date(oldDoc.createdAt).getTime() / 1000);
+                    }
                 }
             } catch {}
         }
@@ -1358,7 +1375,9 @@ auth.post("/oauth2/token", async (c) => {
                     ...(ObjectId.isValid(preRefreshUserId) && preRefreshUserId.length === 24 ? [{ _id: new ObjectId(preRefreshUserId) }] : []),
                 ]
             });
-            const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+            const eligibility = checkAccountEligibility(userDoc, {
+                tokenIssuedAtSec: preRefreshIssuedAtSec ?? Math.floor(Date.now() / 1000)
+            });
             if (!eligibility.eligible) {
                 // Immediately purge issued tokens and revoke family
                 await Promise.all([
@@ -1466,7 +1485,9 @@ auth.post("/oauth2/token", async (c) => {
                             ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
                         ]
                     });
-                    const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+                    const eligibility = checkAccountEligibility(userDoc, {
+                        tokenIssuedAtSec: preRefreshIssuedAtSec ?? Math.floor(Date.now() / 1000)
+                    });
                     if (!eligibility.eligible) {
                         // Immediately purge issued tokens and revoke family
                         await Promise.all([
@@ -1578,6 +1599,7 @@ auth.post("/oauth2/token", async (c) => {
                         clientId: canonicalClientId,
                         expiresInSeconds: tokenData.expires_in || 900,
                         scope: tokenData.scope,
+                        tokenIssuedAtSec: preRefreshIssuedAtSec,
                     });
 
                     if (!jwtAt) {
@@ -1676,23 +1698,33 @@ auth.post("/oauth2/token", async (c) => {
     // Initial Token Issuance (grant_type=authorization_code)
     const incomingCode = grantType === "authorization_code" ? params.get("code") : null;
     let preCodeUserId: string | undefined;
+    let codeIssuedAtSec: number | undefined;
     if (incomingCode) {
         try {
             const codeDoc = await database.collection("oauthAuthorizationCode").findOne({ code: incomingCode });
-            if (codeDoc && codeDoc.userId) {
-                preCodeUserId = String(codeDoc.userId);
-                const userDoc = await database.collection("user").findOne({
-                    $or: [
-                        { id: preCodeUserId },
-                        ...(ObjectId.isValid(preCodeUserId) && preCodeUserId.length === 24 ? [{ _id: new ObjectId(preCodeUserId) }] : []),
-                    ],
-                });
-                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
-                if (!eligibility.eligible) {
-                    return c.json({
-                        error: "invalid_grant",
-                        error_description: `User account is not eligible for token exchange: ${eligibility.reason}`,
-                    }, 400);
+            if (codeDoc) {
+                if (codeDoc.userId) {
+                    preCodeUserId = String(codeDoc.userId);
+                }
+                if (codeDoc.createdAt) {
+                    codeIssuedAtSec = Math.floor(new Date(codeDoc.createdAt).getTime() / 1000);
+                }
+                if (preCodeUserId) {
+                    const userDoc = await database.collection("user").findOne({
+                        $or: [
+                            { id: preCodeUserId },
+                            ...(ObjectId.isValid(preCodeUserId) && preCodeUserId.length === 24 ? [{ _id: new ObjectId(preCodeUserId) }] : []),
+                        ],
+                    });
+                    const eligibility = checkAccountEligibility(userDoc, {
+                        tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000)
+                    });
+                    if (!eligibility.eligible) {
+                        return c.json({
+                            error: "invalid_grant",
+                            error_description: `User account is not eligible for token exchange: ${eligibility.reason}`,
+                        }, 400);
+                    }
                 }
             }
         } catch {}
@@ -1747,7 +1779,9 @@ auth.post("/oauth2/token", async (c) => {
                         ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
                     ],
                 });
-                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: Math.floor(Date.now() / 1000) });
+                const eligibility = checkAccountEligibility(userDoc, {
+                    tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000)
+                });
                 if (!eligibility.eligible) {
                     if (tokenData.refresh_token) {
                         await database.collection("oauthRefreshToken").deleteMany({ token: tokenData.refresh_token }).catch(() => {});
@@ -1812,6 +1846,7 @@ auth.post("/oauth2/token", async (c) => {
                     clientId: canonicalClientId,
                     expiresInSeconds: tokenData.expires_in || 900,
                     scope: tokenData.scope,
+                    tokenIssuedAtSec: codeIssuedAtSec,
                 });
 
                 if (!jwtAt) {
@@ -1980,8 +2015,24 @@ auth.get("/oauth2/userinfo", async (c) => {
                         $or: orConditions
                     });
 
+                    let tokenIssuedAtSec: number | undefined;
+                    try {
+                        const accDoc = await database.collection("oauthAccessToken").findOne({
+                            $or: [
+                                { token: bearerToken },
+                                { token: hashToken(bearerToken, "base64url") },
+                                { token: hashToken(bearerToken, "hex") },
+                            ],
+                        });
+                        if (accDoc?.createdAt) {
+                            tokenIssuedAtSec = Math.floor(new Date(accDoc.createdAt).getTime() / 1000);
+                        }
+                    } catch {}
+
                     // Authoritative Account Eligibility Check
-                    const eligibility = checkAccountEligibility(userDoc);
+                    const eligibility = checkAccountEligibility(userDoc, {
+                        tokenIssuedAtSec: tokenIssuedAtSec ?? Math.floor(Date.now() / 1000),
+                    });
                     if (!eligibility.eligible) {
                         return c.json(
                             { error: "invalid_token", error_description: `User account is ineligible or revoked: ${eligibility.reason}` },
@@ -2323,43 +2374,36 @@ auth.post("/oauth2/continue", async (c) => {
     );
 });
 
-// 9. Super-Admin Gate for Better-Auth Internal Admin Routes
-async function checkBetterAuthAdminAccess(c: any) {
-    let sessionUser: any = null;
-    try {
-        const sessionResult = await authProvider.api.getSession({
-            headers: getHeaders(c),
-        });
-        if (sessionResult?.user) {
-            const database = await getDb();
-            const userDoc = await database.collection("user").findOne({
-                $or: [
-                    { id: sessionResult.user.id },
-                    { _id: (sessionResult.user as any)._id },
-                    { email: sessionResult.user.email },
-                ],
-            });
-            sessionUser = { ...sessionResult.user, ...userDoc };
-        }
-    } catch {
-        sessionUser = null;
+// 9. Authoritative Super-Admin Gate for Better-Auth Internal Admin Routes (Slice 3)
+auth.use("/admin", requireSuperAdmin);
+auth.use("/admin/*", requireSuperAdmin);
+auth.use("/admin/*", async (c, next) => {
+    const method = c.req.method.toUpperCase();
+    if (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") {
+        return requireRecentMfa(c, next);
     }
+    return next();
+});
 
-    if (!sessionUser || !isSuperAdmin(sessionUser)) {
-        return c.json(
-            {
-                error: "forbidden",
-                message: "Super-Admin privileges required for internal administrative routes",
-            },
-            403
-        );
+// Privacy projection for Better Auth admin list-users (Slice 2)
+auth.all("/admin/list-users", async (c) => {
+    const res = await authProvider.handler(c.req.raw);
+    if (res.status === 200) {
+        try {
+            const data = await res.clone().json();
+            if (data && Array.isArray(data.users)) {
+                data.users = data.users.map((u: any) => ({
+                    ...u,
+                    displayLabel: toApprovedDisplayLabel(u.email, u.name),
+                    email: toApprovedDisplayLabel(u.email),
+                    name: isEmailShaped(u.name) ? toApprovedDisplayLabel(u.name) : (u.name || "User"),
+                }));
+                return c.json(data, 200);
+            }
+        } catch {}
     }
-
-    return authProvider.handler(c.req.raw);
-}
-
-auth.all("/admin", checkBetterAuthAdminAccess);
-auth.all("/admin/*", checkBetterAuthAdminAccess);
+    return res;
+});
 
 // 10. Social Login Callback App-Isolation & Registration Enforcer
 async function handleSocialCallback(c: any) {
@@ -2533,59 +2577,6 @@ auth.get("/jwks", async (c) => {
     return authProvider.handler(forwardReq);
 });
 
-// Better-Auth internal admin routes (/api/auth/admin/*): strictly super-admin only
-auth.all("/admin/*", async (c) => {
-    const reqId = c.get("requestId") || c.req.header("x-request-id") || crypto.randomUUID();
-    c.header("x-request-id", reqId);
-
-    const { verifyGatewaySecret } = await import("../middleware/admin-auth");
-    if (!verifyGatewaySecret(c)) {
-        return c.json(
-            {
-                error: "forbidden",
-                code: "ERR_GATEWAY_FORBIDDEN",
-                message: "Direct access to management endpoints forbidden; gateway authentication required",
-                requestId: reqId,
-            },
-            403
-        );
-    }
-
-    const session = await authProvider.api.getSession({
-        headers: getHeaders(c),
-    });
-    if (!session || !session.user) {
-        return c.json(
-            {
-                error: "forbidden",
-                code: "ERR_UNAUTHENTICATED",
-                message: "Authentication required",
-                requestId: reqId,
-            },
-            403
-        );
-    }
-
-    const database = await getDb();
-    const userDoc = await database.collection("user").findOne({
-        $or: [{ id: session.user.id }, { _id: (session.user as any)._id }, { email: session.user.email }],
-    });
-
-    const isSuper = isSuperAdmin(userDoc) || isSuperAdmin(session.user);
-    if (!isSuper) {
-        return c.json(
-            {
-                error: "forbidden",
-                code: "ERR_SUPER_ADMIN_REQUIRED",
-                message: "Super-Admin privileges required for this global administrative operation",
-                requestId: reqId,
-            },
-            403
-        );
-    }
-
-    return authProvider.handler(c.req.raw);
-});
 
 // 12. Validated Two Factor OAuth Continuation Helpers & Telemetry Handlers
 interface ValidatedMfaOauthContext {

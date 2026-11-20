@@ -77,15 +77,20 @@ export function checkAccountEligibility(
       ? new Date(process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER).getTime()
       : null;
 
+    let inGraceWindow = false;
     if (rolloutMode === "enforce_new" && enforcedAfter && user.createdAt) {
       const userCreatedMs = new Date(user.createdAt).getTime();
       if (userCreatedMs < enforcedAfter) {
-        // Eligible under rollout grace window; preserve unverified status in DB
-        return { eligible: true };
+        // Eligible under rollout grace window for email verification only.
+        // DO NOT return early: execution MUST continue to revocation, password-change,
+        // and token-lifecycle checks below.
+        inGraceWindow = true;
       }
     }
 
-    return { eligible: false, reason: "email_not_verified" };
+    if (!inGraceWindow) {
+      return { eligible: false, reason: "email_not_verified" };
+    }
   }
 
   if (options?.tokenIssuedAtSec !== undefined) {
