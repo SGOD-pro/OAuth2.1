@@ -117,6 +117,11 @@ export function setSigningKeyOverrideForTesting(override: (() => Promise<{ priva
     signingKeyOverrideForTesting = override;
 }
 
+let tokenBarrierHookForTesting: ((stage: "before_fence_code" | "before_fence_refresh", userId?: string) => Promise<void>) | null = null;
+export function setTokenBarrierHookForTesting(hook: ((stage: "before_fence_code" | "before_fence_refresh", userId?: string) => Promise<void>) | null): void {
+    tokenBarrierHookForTesting = hook;
+}
+
 export function clearSigningKeyCacheForTesting(): void {
     cachedPrivateKey = null;
     cachedKeyId = "";
@@ -197,6 +202,8 @@ export async function mintJwtAccessToken(params: {
     expiresInSeconds?: number;
     scope?: string;
     tokenIssuedAtSec?: number;
+    tokenIssuedAtMs?: number;
+    tokenVersion?: number;
 }): Promise<string | null> {
     try {
         const signingKey = await getIdpSigningKey();
@@ -212,9 +219,16 @@ export async function mintJwtAccessToken(params: {
         });
 
         // Enforce Authoritative Account Eligibility
-        const nowSec = Math.floor(Date.now() / 1000);
-        const tokenIssuedAtSec = params.tokenIssuedAtSec ?? nowSec;
-        const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec });
+        const nowMs = Date.now();
+        const tokenIssuedAtMs = params.tokenIssuedAtMs ?? (params.tokenIssuedAtSec ? params.tokenIssuedAtSec * 1000 : nowMs);
+        const tokenIssuedAtSec = params.tokenIssuedAtSec ?? Math.floor(tokenIssuedAtMs / 1000);
+        const tokenVersion = params.tokenVersion ?? userDoc?.tokenVersion;
+
+        const eligibility = checkAccountEligibility(userDoc, {
+            tokenIssuedAtMs,
+            tokenIssuedAtSec,
+            tokenVersion,
+        });
         if (!eligibility.eligible) {
             console.warn(`[MINT_JWT_ACCESS_TOKEN] Denied token minting for ineligible account ${params.userId}: ${eligibility.reason}`);
             return null;
@@ -243,6 +257,8 @@ export async function mintJwtAccessToken(params: {
             client_id: params.clientId,
             azp: params.clientId,
             scope: params.scope || "openid profile email",
+            iat_ms: tokenIssuedAtMs,
+            token_version: userDoc?.tokenVersion || 0,
         };
 
         if (email !== undefined) claims.email = email;
@@ -998,10 +1014,15 @@ auth.get("/oauth2/authorize", async (c) => {
 
                 // Authoritative Account Eligibility Check on Authorize
                 // Bound to active session creation timestamp; older session must not survive revocation
-                const sessionCreatedAtSec = sessionResult?.session?.createdAt
-                    ? Math.floor(new Date(sessionResult.session.createdAt).getTime() / 1000)
-                    : Math.floor(Date.now() / 1000);
-                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: sessionCreatedAtSec });
+                const sessionCreatedAtMs = sessionResult?.session?.createdAt
+                    ? new Date(sessionResult.session.createdAt).getTime()
+                    : Date.now();
+                const sessionCreatedAtSec = Math.floor(sessionCreatedAtMs / 1000);
+                const eligibility = checkAccountEligibility(userDoc, {
+                    tokenIssuedAtMs: sessionCreatedAtMs,
+                    tokenIssuedAtSec: sessionCreatedAtSec,
+                    tokenVersion: userDoc?.tokenVersion,
+                });
                 if (!eligibility.eligible) {
                     const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
                     const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
@@ -1342,11 +1363,17 @@ auth.post("/oauth2/token", async (c) => {
         }
 
         let preRefreshIssuedAtSec: number | undefined;
+        let preRefreshIssuedAtMs: number | undefined;
+        let preRefreshTokenVersion: number | undefined;
         let preRefreshUserId: string | undefined = existingFamily?.userId;
         if (existingFamily?.createdAt) {
-            preRefreshIssuedAtSec = Math.floor(new Date(existingFamily.createdAt).getTime() / 1000);
+            preRefreshIssuedAtMs = new Date(existingFamily.createdAt).getTime();
+            preRefreshIssuedAtSec = Math.floor(preRefreshIssuedAtMs / 1000);
         }
-        if (!preRefreshUserId) {
+        if (existingFamily?.tokenVersion !== undefined) {
+            preRefreshTokenVersion = existingFamily.tokenVersion;
+        }
+        if (!preRefreshUserId || !preRefreshIssuedAtMs) {
             try {
                 const oldDoc = await database.collection("oauthRefreshToken").findOne({
                     $or: [
@@ -1356,11 +1383,15 @@ auth.post("/oauth2/token", async (c) => {
                     ]
                 });
                 if (oldDoc) {
-                    if (oldDoc.userId) {
+                    if (oldDoc.userId && !preRefreshUserId) {
                         preRefreshUserId = String(oldDoc.userId);
                     }
                     if (oldDoc.createdAt) {
-                        preRefreshIssuedAtSec = Math.floor(new Date(oldDoc.createdAt).getTime() / 1000);
+                        preRefreshIssuedAtMs = new Date(oldDoc.createdAt).getTime();
+                        preRefreshIssuedAtSec = Math.floor(preRefreshIssuedAtMs / 1000);
+                    }
+                    if (oldDoc.tokenVersion !== undefined) {
+                        preRefreshTokenVersion = oldDoc.tokenVersion;
                     }
                 }
             } catch {}
@@ -1376,7 +1407,9 @@ auth.post("/oauth2/token", async (c) => {
                 ]
             });
             const eligibility = checkAccountEligibility(userDoc, {
-                tokenIssuedAtSec: preRefreshIssuedAtSec ?? Math.floor(Date.now() / 1000)
+                tokenIssuedAtMs: preRefreshIssuedAtMs,
+                tokenIssuedAtSec: preRefreshIssuedAtSec ?? Math.floor(Date.now() / 1000),
+                tokenVersion: preRefreshTokenVersion,
             });
             if (!eligibility.eligible) {
                 // Immediately purge issued tokens and revoke family
@@ -1486,7 +1519,9 @@ auth.post("/oauth2/token", async (c) => {
                         ]
                     });
                     const eligibility = checkAccountEligibility(userDoc, {
-                        tokenIssuedAtSec: preRefreshIssuedAtSec ?? Math.floor(Date.now() / 1000)
+                        tokenIssuedAtMs: preRefreshIssuedAtMs,
+                        tokenIssuedAtSec: preRefreshIssuedAtSec ?? Math.floor(Date.now() / 1000),
+                        tokenVersion: preRefreshTokenVersion,
                     });
                     if (!eligibility.eligible) {
                         // Immediately purge issued tokens and revoke family
@@ -1655,6 +1690,41 @@ auth.post("/oauth2/token", async (c) => {
                         createdAt: new Date(),
                         scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
                     }).catch(() => {});
+                    if (tokenBarrierHookForTesting) {
+                        await tokenBarrierHookForTesting("before_fence_refresh", resolvedUserId);
+                    }
+                    // Final Atomic Authorization Fence for Refresh Token Rotation
+                    if (resolvedUserId) {
+                        const finalUserDoc = await database.collection("user").findOne({
+                            $or: [
+                                { id: resolvedUserId },
+                                ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
+                            ]
+                        });
+                        const finalEligibility = checkAccountEligibility(finalUserDoc, {
+                            tokenIssuedAtMs: preRefreshIssuedAtMs,
+                            tokenIssuedAtSec: preRefreshIssuedAtSec,
+                            tokenVersion: preRefreshTokenVersion,
+                        });
+                        if (!finalEligibility.eligible) {
+                            await Promise.all([
+                                database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+                                database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+                                database.collection("oauth_token_families").updateMany(
+                                    { clientId: canonicalClientId, userId: resolvedUserId },
+                                    { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+                                ),
+                            ]);
+                            return c.json(
+                                {
+                                    error: "invalid_grant",
+                                    error_description: `User account was revoked during token refresh: ${finalEligibility.reason}`,
+                                },
+                                401
+                            );
+                        }
+                    }
+
                     tokenData.access_token = jwtAt;
                     if (tokenData.id_token) {
                         tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
@@ -1699,6 +1769,8 @@ auth.post("/oauth2/token", async (c) => {
     const incomingCode = grantType === "authorization_code" ? params.get("code") : null;
     let preCodeUserId: string | undefined;
     let codeIssuedAtSec: number | undefined;
+    let codeIssuedAtMs: number | undefined;
+    let codeTokenVersion: number | undefined;
     if (incomingCode) {
         try {
             const codeDoc = await database.collection("oauthAuthorizationCode").findOne({ code: incomingCode });
@@ -1707,7 +1779,11 @@ auth.post("/oauth2/token", async (c) => {
                     preCodeUserId = String(codeDoc.userId);
                 }
                 if (codeDoc.createdAt) {
-                    codeIssuedAtSec = Math.floor(new Date(codeDoc.createdAt).getTime() / 1000);
+                    codeIssuedAtMs = new Date(codeDoc.createdAt).getTime();
+                    codeIssuedAtSec = Math.floor(codeIssuedAtMs / 1000);
+                }
+                if (codeDoc.tokenVersion !== undefined) {
+                    codeTokenVersion = codeDoc.tokenVersion;
                 }
                 if (preCodeUserId) {
                     const userDoc = await database.collection("user").findOne({
@@ -1717,7 +1793,9 @@ auth.post("/oauth2/token", async (c) => {
                         ],
                     });
                     const eligibility = checkAccountEligibility(userDoc, {
-                        tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000)
+                        tokenIssuedAtMs: codeIssuedAtMs,
+                        tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000),
+                        tokenVersion: codeTokenVersion,
                     });
                     if (!eligibility.eligible) {
                         return c.json({
@@ -1780,7 +1858,9 @@ auth.post("/oauth2/token", async (c) => {
                     ],
                 });
                 const eligibility = checkAccountEligibility(userDoc, {
-                    tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000)
+                    tokenIssuedAtMs: codeIssuedAtMs,
+                    tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000),
+                    tokenVersion: codeTokenVersion,
                 });
                 if (!eligibility.eligible) {
                     if (tokenData.refresh_token) {
@@ -1846,7 +1926,9 @@ auth.post("/oauth2/token", async (c) => {
                     clientId: canonicalClientId,
                     expiresInSeconds: tokenData.expires_in || 900,
                     scope: tokenData.scope,
+                    tokenIssuedAtMs: codeIssuedAtMs,
                     tokenIssuedAtSec: codeIssuedAtSec,
+                    tokenVersion: codeTokenVersion,
                 });
 
                 if (!jwtAt) {
@@ -1896,6 +1978,48 @@ auth.post("/oauth2/token", async (c) => {
                     createdAt: new Date(),
                     scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
                 }).catch(() => {});
+                if (tokenBarrierHookForTesting) {
+                    await tokenBarrierHookForTesting("before_fence_code", resolvedUserId);
+                }
+                // Final Atomic Authorization Fence for Authorization Code Exchange
+                if (resolvedUserId) {
+                    const finalUserDoc = await database.collection("user").findOne({
+                        $or: [
+                            { id: resolvedUserId },
+                            ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
+                        ],
+                    });
+                    const finalEligibility = checkAccountEligibility(finalUserDoc, {
+                        tokenIssuedAtMs: codeIssuedAtMs,
+                        tokenIssuedAtSec: codeIssuedAtSec,
+                        tokenVersion: codeTokenVersion,
+                    });
+                    if (!finalEligibility.eligible) {
+                        await Promise.all([
+                            database.collection("oauthAccessToken").deleteMany({
+                                $or: [
+                                    { clientId: canonicalClientId, userId: resolvedUserId },
+                                    { token: jwtAt },
+                                    ...(tokenData.access_token ? [{ token: tokenData.access_token }] : []),
+                                ],
+                            }),
+                            database.collection("oauthRefreshToken").deleteMany({
+                                $or: [
+                                    { clientId: canonicalClientId, userId: resolvedUserId },
+                                    ...(tokenData.refresh_token ? [{ token: tokenData.refresh_token }] : []),
+                                ],
+                            }),
+                            familyId
+                                ? database.collection("oauth_token_families").deleteMany({ familyId })
+                                : database.collection("oauth_token_families").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+                        ]);
+                        return c.json({
+                            error: "invalid_grant",
+                            error_description: `User account was revoked during token exchange: ${finalEligibility.reason}`,
+                        }, 400);
+                    }
+                }
+
                 tokenData.access_token = jwtAt;
                 if (tokenData.id_token) {
                     tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
@@ -1950,7 +2074,15 @@ auth.get("/oauth2/userinfo", async (c) => {
                         });
 
                         // Authoritative Account Eligibility Check
-                        const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: payload.iat });
+                        const tokenIssuedAtMs = typeof payload.iat_ms === "number"
+                            ? payload.iat_ms
+                            : (typeof payload.iat === "number" ? payload.iat * 1000 : undefined);
+                        const tokenVersion = typeof payload.token_version === "number" ? payload.token_version : undefined;
+                        const eligibility = checkAccountEligibility(userDoc, {
+                            tokenIssuedAtMs,
+                            tokenIssuedAtSec: payload.iat,
+                            tokenVersion,
+                        });
                         if (!eligibility.eligible) {
                             return c.json(
                                 { error: "invalid_token", error_description: `User account is ineligible or revoked: ${eligibility.reason}` },
@@ -2016,6 +2148,8 @@ auth.get("/oauth2/userinfo", async (c) => {
                     });
 
                     let tokenIssuedAtSec: number | undefined;
+                    let tokenIssuedAtMs: number | undefined;
+                    let tokenVersion: number | undefined;
                     try {
                         const accDoc = await database.collection("oauthAccessToken").findOne({
                             $or: [
@@ -2025,13 +2159,19 @@ auth.get("/oauth2/userinfo", async (c) => {
                             ],
                         });
                         if (accDoc?.createdAt) {
-                            tokenIssuedAtSec = Math.floor(new Date(accDoc.createdAt).getTime() / 1000);
+                            tokenIssuedAtMs = new Date(accDoc.createdAt).getTime();
+                            tokenIssuedAtSec = Math.floor(tokenIssuedAtMs / 1000);
+                        }
+                        if (accDoc?.tokenVersion !== undefined) {
+                            tokenVersion = accDoc.tokenVersion;
                         }
                     } catch {}
 
                     // Authoritative Account Eligibility Check
                     const eligibility = checkAccountEligibility(userDoc, {
+                        tokenIssuedAtMs,
                         tokenIssuedAtSec: tokenIssuedAtSec ?? Math.floor(Date.now() / 1000),
+                        tokenVersion,
                     });
                     if (!eligibility.eligible) {
                         return c.json(
@@ -2097,7 +2237,11 @@ auth.post("/oauth2/introspect", async (c) => {
                         ...(ObjectId.isValid(tokenSub) && tokenSub.length === 24 ? [{ _id: new ObjectId(tokenSub) }] : [])
                     ]
                 });
-                const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: data.iat || (data.exp ? data.exp - 900 : undefined) });
+                const eligibility = checkAccountEligibility(userDoc, {
+                    tokenIssuedAtMs: data.iat_ms || (data.iat ? data.iat * 1000 : undefined),
+                    tokenIssuedAtSec: data.iat || (data.exp ? data.exp - 900 : undefined),
+                    tokenVersion: data.token_version,
+                });
                 if (!eligibility.eligible) {
                     return c.json({ active: false }, 200);
                 }
@@ -2183,7 +2327,15 @@ auth.post("/oauth2/introspect", async (c) => {
                         $or: orConditions,
                     });
 
-                    const eligibility = checkAccountEligibility(userDoc, { tokenIssuedAtSec: payload.iat });
+                    const tokenIssuedAtMs = typeof payload.iat_ms === "number"
+                        ? payload.iat_ms
+                        : (typeof payload.iat === "number" ? payload.iat * 1000 : undefined);
+                    const tokenVersion = typeof payload.token_version === "number" ? payload.token_version : undefined;
+                    const eligibility = checkAccountEligibility(userDoc, {
+                        tokenIssuedAtMs,
+                        tokenIssuedAtSec: payload.iat,
+                        tokenVersion,
+                    });
                     if (!eligibility.eligible) {
                         return c.json({ active: false }, 200);
                     }

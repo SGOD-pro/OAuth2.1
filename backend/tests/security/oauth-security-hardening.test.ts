@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import http from "node:http";
+import { Worker } from "node:worker_threads";
+import { createRequire } from "node:module";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { generateKeyPair, SignJWT } from "jose";
+import { createOTP } from "@better-auth/utils/otp";
+
+const require = createRequire(import.meta.url);
+const mongoPkgPath = require.resolve("mongodb");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- OAUTH SECURITY HARDENING REGRESSION TEST SUITE");
@@ -24,6 +31,7 @@ const { default: app } = await import("../../src/app");
 const {
   mintJwtAccessToken,
   setSigningKeyOverrideForTesting,
+  setTokenBarrierHookForTesting,
 } = await import("../../src/routes/auth");
 const { checkAccountEligibility } = await import(
   "../../src/utils/account-eligibility"
@@ -56,6 +64,13 @@ function getTestHeaders(extra: Record<string, string> = {}): Headers {
     h.set(k, v);
   }
   return h;
+}
+
+function extractCookie(header: string | null, name: string): string {
+  if (!header) return "";
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = header.match(new RegExp(`${escaped}=([^;,\\s]+)`));
+  return match ? `${name}=${match[1]}` : "";
 }
 
 const db = await getDb();
@@ -180,6 +195,162 @@ await runTest("SEC-01-C: mintJwtAccessToken rejects tokens revoked before issue 
     scope: "openid",
   });
   assert.equal(token, null, "Must return null when tokens are revoked");
+});
+
+await runTest("SEC-01-J: Same-second credential issuance and revocation handling with millisecond precision and durable token versions", async () => {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const baseMs = nowSec * 1000;
+  const revokedDate = new Date(baseMs + 500);
+
+  // 1. Same-second token issued 300ms before revocation (rejected)
+  const u1 = { id: "same-sec-u1", tokensRevokedBefore: revokedDate, tokenVersion: 3 };
+  const resBefore = checkAccountEligibility(u1, { tokenIssuedAtMs: baseMs + 200, tokenVersion: 3 });
+  assert.equal(resBefore.eligible, false, "Token issued before revocation in same second must be rejected");
+  assert.equal(resBefore.reason, "tokens_revoked");
+
+  // 2. Same-second token issued 200ms after revocation (accepted)
+  const resAfter = checkAccountEligibility(u1, { tokenIssuedAtMs: baseMs + 700, tokenVersion: 3 });
+  assert.equal(resAfter.eligible, true, "Token issued after revocation in same second must be accepted");
+
+  // 3. Same-second token issued at exact millisecond of revocation (accepted)
+  const resExact = checkAccountEligibility(u1, { tokenIssuedAtMs: baseMs + 500, tokenVersion: 3 });
+  assert.equal(resExact.eligible, true, "Token issued at exact millisecond of revocation is accepted");
+
+  // 4. Same-second password change handling
+  const u2 = { id: "same-sec-u2", passwordChangedAt: new Date(baseMs + 500) };
+  const resPwBefore = checkAccountEligibility(u2, { tokenIssuedAtMs: baseMs + 200 });
+  assert.equal(resPwBefore.eligible, false, "Token issued before password change in same second must be rejected");
+  assert.equal(resPwBefore.reason, "tokens_revoked");
+
+  const resPwAfter = checkAccountEligibility(u2, { tokenIssuedAtMs: baseMs + 700 });
+  assert.equal(resPwAfter.eligible, true, "Token issued after password change in same second must be accepted");
+
+  // 5. Monotonic tokenVersion enforcement
+  const u3 = { id: "same-sec-u3", tokenVersion: 4 };
+  const resOldVersion = checkAccountEligibility(u3, { tokenVersion: 3 });
+  assert.equal(resOldVersion.eligible, false, "Token with older version must be rejected");
+  assert.equal(resOldVersion.reason, "tokens_revoked");
+
+  const resMatchingVersion = checkAccountEligibility(u3, { tokenVersion: 4 });
+  assert.equal(resMatchingVersion.eligible, true, "Token with matching version must be accepted");
+
+  // 6. Safe legacy handling: token with only integer second equal to revocation second fails closed
+  const u4 = { id: "same-sec-u4", tokensRevokedBefore: new Date(baseMs + 500) };
+  const resLegacySameSec = checkAccountEligibility(u4, { tokenIssuedAtSec: nowSec });
+  assert.equal(resLegacySameSec.eligible, false, "Legacy integer second token within revocation second must fail closed");
+  assert.equal(resLegacySameSec.reason, "tokens_revoked");
+
+  const resLegacyNextSec = checkAccountEligibility(u4, { tokenIssuedAtSec: nowSec + 1 });
+  assert.equal(resLegacyNextSec.eligible, true, "Legacy integer second token in subsequent second is accepted");
+
+  // 7. Real route verification for same-second issuance
+  const sameSecUserId = "same-sec-route-user-" + crypto.randomBytes(4).toString("hex");
+  await db.collection("user").insertOne({
+    id: sameSecUserId,
+    email: "samesec@example.com",
+    role: "user",
+    tokenVersion: 1,
+    createdAt: new Date(),
+  });
+
+  // Mint older version token and token issued at T0 (before revocation)
+  const tokenOldVersion = await mintJwtAccessToken({
+    userId: sameSecUserId,
+    clientId: "test-sec-client",
+    scope: "openid",
+    tokenIssuedAtMs: baseMs + 200,
+    tokenVersion: 1,
+  });
+  assert.ok(tokenOldVersion, "Token with older version must be minted");
+
+  const tokenBefore = await mintJwtAccessToken({
+    userId: sameSecUserId,
+    clientId: "test-sec-client",
+    scope: "openid",
+    tokenIssuedAtMs: baseMs + 200,
+    tokenVersion: 2,
+  });
+  assert.ok(tokenBefore, "Token before revocation must be minted");
+
+  // Revoke credentials at T1 (revokedDate = baseMs + 500) and increment tokenVersion in DB
+  await db.collection("user").updateOne(
+    { id: sameSecUserId },
+    { $set: { tokensRevokedBefore: revokedDate, tokenVersion: 2 } }
+  );
+
+  // Mint token at T2 (baseMs + 700) after revocation in the exact same second
+  const tokenAfter = await mintJwtAccessToken({
+    userId: sameSecUserId,
+    clientId: "test-sec-client",
+    scope: "openid",
+    tokenIssuedAtMs: baseMs + 700,
+    tokenVersion: 2,
+  });
+  assert.ok(tokenAfter, "Token after revocation in same second must be minted");
+
+  // Record tokens in oauthAccessToken for introspection state verification
+  await db.collection("oauthAccessToken").insertOne({
+    token: tokenBefore,
+    clientId: "test-sec-client",
+    userId: sameSecUserId,
+    createdAt: new Date(baseMs + 200),
+    expiresAt: new Date(Date.now() + 900000),
+  });
+
+  await db.collection("oauthAccessToken").insertOne({
+    token: tokenAfter,
+    clientId: "test-sec-client",
+    userId: sameSecUserId,
+    createdAt: new Date(baseMs + 700),
+    expiresAt: new Date(Date.now() + 900000),
+  });
+
+  // Userinfo with token issued before revocation in same second -> 401
+  const userInfoResBefore = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: { Authorization: `Bearer ${tokenBefore}` },
+  });
+  assert.equal(userInfoResBefore.status, 401, "Userinfo must reject token issued before revocation in same second");
+
+  // Userinfo with token issued after revocation in same second -> 200
+  const userInfoResAfter = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: { Authorization: `Bearer ${tokenAfter}` },
+  });
+  assert.equal(userInfoResAfter.status, 200, "Userinfo must accept token issued after revocation in same second");
+
+  // Userinfo with token with older version -> 401
+  const userInfoResOldVer = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: { Authorization: `Bearer ${tokenOldVersion}` },
+  });
+  assert.equal(userInfoResOldVer.status, 401, "Userinfo must reject token with older version");
+
+  // Introspection with token before revocation in same second -> active: false
+  const introResBefore = await app.request("/api/auth/oauth2/introspect", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${basicAuth}`,
+    },
+    body: `token=${tokenBefore}`,
+  });
+  assert.equal(introResBefore.status, 200);
+  const introBodyBefore = await introResBefore.json();
+  assert.equal(introBodyBefore.active, false, "Introspection must report active: false for token before revocation in same second");
+
+  // Introspection with token after revocation in same second -> active: true
+  const introResAfter = await app.request("/api/auth/oauth2/introspect", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${basicAuth}`,
+    },
+    body: `token=${tokenAfter}`,
+  });
+  assert.equal(introResAfter.status, 200);
+  const introBodyAfter = await introResAfter.json();
+  assert.equal(introBodyAfter.active, true, "Introspection must report active: true for token after revocation in same second");
 });
 
 console.log("\nRunning Slice 2: Scope & Privacy Enforcement Probes...\n");
@@ -841,95 +1012,468 @@ await runTest("SEC-01-H: Revocation wins code exchange and refresh with older cr
   assert.equal(refBody.error, "invalid_grant");
 });
 
-await runTest("SEC-04-D: Better Auth admin/plugin routes enforce mandatory MFA and sensitive-action freshness", async () => {
+await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh under concurrent multi-worker race with deterministic barrier", async () => {
+  const workerCode = `
+    const { parentPort, workerData } = require("node:worker_threads");
+    const { MongoClient } = require(workerData.mongoPkgPath);
+    let client = null;
+    parentPort.on("message", async (msg) => {
+      try {
+        if (msg.action === "connect") {
+          client = new MongoClient(workerData.mongoUri);
+          await client.connect();
+          parentPort.postMessage({ status: "connected" });
+        } else if (msg.action === "revoke") {
+          const db = client.db();
+          await db.collection("user").updateOne(
+            { id: msg.userId },
+            { $set: { tokensRevokedBefore: new Date(), banned: true, tokenVersion: 99 } }
+          );
+          parentPort.postMessage({ status: "revoked" });
+        } else if (msg.action === "close") {
+          if (client) await client.close();
+          parentPort.postMessage({ status: "closed" });
+        }
+      } catch (err) {
+        parentPort.postMessage({ status: "error", error: err.message });
+      }
+    });
+  `;
+
+  const worker = new Worker(workerCode, {
+    eval: true,
+    workerData: { mongoUri: mongod.getUri(), mongoPkgPath },
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    worker.once("message", (m) => {
+      if (m.status === "connected") resolve();
+      else reject(new Error("Worker connect failed: " + m.error));
+    });
+    worker.postMessage({ action: "connect" });
+  });
+
+  const { authProvider } = await import("../../src/utils/auth");
+
+  try {
+    // 1. Concurrent race: Overlapping Authorization Code Exchange vs Worker Account Revocation
+    const raceCodeEmail = `race-code-${crypto.randomBytes(4).toString("hex")}@platform.local`;
+    const raceCodePassword = "Password@1234!";
+
+    const raceCodeSignUp = await authProvider.api.signUpEmail({
+      body: { email: raceCodeEmail, password: raceCodePassword, name: "Race Code User" },
+    });
+    const raceCodeUserId = String(raceCodeSignUp.user.id);
+
+    await db.collection("user").updateOne(
+      { email: raceCodeEmail },
+      { $set: { id: raceCodeUserId, role: "user", tokenVersion: 1 } }
+    );
+
+    // Grant application registration and consent for private test-sec-client
+    await db.collection("user_app_registrations").insertOne({
+      userId: raceCodeUserId,
+      clientId: "test-sec-client",
+      appRole: "member",
+      status: "active",
+      isActive: true,
+      registeredAt: new Date(),
+    });
+    await db.collection("oauthConsent").insertOne({
+      clientId: "test-sec-client",
+      userId: raceCodeUserId,
+      scopes: ["openid"],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Sign in to get session cookie for authorize
+    const codeLoginRes = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: getTestHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ email: raceCodeEmail, password: raceCodePassword }),
+    });
+    assert.equal(codeLoginRes.status, 200);
+    const codeSessionCookie = (codeLoginRes.headers.get("set-cookie") || "").split(";")[0];
+
+    // Authorize to get genuine authorization code
+    const codeVerifier = crypto.randomBytes(32).toString("base64url");
+    const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+
+    const authRes = await app.request(
+      `/api/auth/oauth2/authorize?client_id=test-sec-client&response_type=code&code_challenge=${codeChallenge}&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&scope=openid&state=teststate123`,
+      {
+        method: "GET",
+        headers: getTestHeaders({ Cookie: codeSessionCookie }),
+      }
+    );
+    assert.equal(authRes.status, 302, "Authorize must redirect with authorization code");
+    const authLocation = authRes.headers.get("location") || "";
+    const authUrl = new URL(authLocation);
+    const raceAuthCode = authUrl.searchParams.get("code")!;
+    assert.ok(raceAuthCode, "Must extract genuine authorization code");
+
+    let codeBarrierFired = false;
+    setTokenBarrierHookForTesting(async (stage, userId) => {
+      if (stage === "before_fence_code" && userId === raceCodeUserId) {
+        codeBarrierFired = true;
+        await new Promise<void>((resolve, reject) => {
+          worker.once("message", (m) => {
+            if (m.status === "revoked") resolve();
+            else reject(new Error("Worker revocation failed: " + m.error));
+          });
+          worker.postMessage({ action: "revoke", userId: raceCodeUserId });
+        });
+      }
+    });
+
+    const codeRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      },
+      body: `grant_type=authorization_code&code=${raceAuthCode}&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&code_verifier=${codeVerifier}&client_id=test-sec-client`,
+    });
+
+    assert.equal(codeBarrierFired, true, "Deterministic barrier must fire before atomic fence");
+    assert.equal(codeRes.status, 400, "Atomic authorization fence must reject code exchange when user revoked concurrently");
+    const codeBody = await codeRes.json();
+    assert.equal(codeBody.error, "invalid_grant");
+    assert.ok(codeBody.error_description.includes("revoked during token exchange"), "Error description must identify concurrent revocation");
+
+    // Assert zero active tokens survive in database
+    const survivingAccessTokens = await db.collection("oauthAccessToken").countDocuments({ userId: raceCodeUserId });
+    const survivingRefreshTokens = await db.collection("oauthRefreshToken").countDocuments({ userId: raceCodeUserId });
+    assert.equal(survivingAccessTokens, 0, "No access token may survive atomic authorization fence purge");
+    assert.equal(survivingRefreshTokens, 0, "No refresh token may survive atomic authorization fence purge");
+
+    // 2. Concurrent race: Overlapping Refresh Token Rotation vs Worker Account Revocation
+    const raceRefreshEmail = `race-ref-${crypto.randomBytes(4).toString("hex")}@platform.local`;
+    const raceRefreshPassword = "Password@1234!";
+
+    const raceRefreshSignUp = await authProvider.api.signUpEmail({
+      body: { email: raceRefreshEmail, password: raceRefreshPassword, name: "Race Refresh User" },
+    });
+    const raceRefreshUserId = String(raceRefreshSignUp.user.id);
+
+    await db.collection("user").updateOne(
+      { email: raceRefreshEmail },
+      { $set: { id: raceRefreshUserId, role: "user", tokenVersion: 1 } }
+    );
+
+    // Grant application registration and consent for private test-sec-client
+    await db.collection("user_app_registrations").insertOne({
+      userId: raceRefreshUserId,
+      clientId: "test-sec-client",
+      appRole: "member",
+      status: "active",
+      isActive: true,
+      registeredAt: new Date(),
+    });
+    await db.collection("oauthConsent").insertOne({
+      clientId: "test-sec-client",
+      userId: raceRefreshUserId,
+      scopes: ["openid", "offline_access"],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const refLoginRes = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: getTestHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ email: raceRefreshEmail, password: raceRefreshPassword }),
+    });
+    assert.equal(refLoginRes.status, 200);
+    const refSessionCookie = (refLoginRes.headers.get("set-cookie") || "").split(";")[0];
+
+    // Authorize & exchange code to establish initial genuine token family
+    const refVerifier = crypto.randomBytes(32).toString("base64url");
+    const refChallenge = crypto.createHash("sha256").update(refVerifier).digest("base64url");
+
+    const refAuthRes = await app.request(
+      `/api/auth/oauth2/authorize?client_id=test-sec-client&response_type=code&code_challenge=${refChallenge}&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&scope=openid%20offline_access&state=refstate123`,
+      {
+        method: "GET",
+        headers: getTestHeaders({ Cookie: refSessionCookie }),
+      }
+    );
+    assert.equal(refAuthRes.status, 302);
+    const refAuthLocation = refAuthRes.headers.get("location") || "";
+    const refAuthUrl = new URL(refAuthLocation);
+    const initialCode = refAuthUrl.searchParams.get("code")!;
+
+    // Perform initial exchange WITHOUT barrier to establish genuine token family
+    setTokenBarrierHookForTesting(null);
+    const initialExchangeRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      },
+      body: `grant_type=authorization_code&code=${initialCode}&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&code_verifier=${refVerifier}&client_id=test-sec-client`,
+    });
+    assert.equal(initialExchangeRes.status, 200, "Initial code exchange must establish genuine token family");
+    const initialTokens = await initialExchangeRes.json();
+    const genuineRefreshToken = initialTokens.refresh_token;
+    assert.ok(genuineRefreshToken, "Must obtain genuine refresh token");
+
+    let refreshBarrierFired = false;
+    setTokenBarrierHookForTesting(async (stage, userId) => {
+      if (stage === "before_fence_refresh" && userId === raceRefreshUserId) {
+        refreshBarrierFired = true;
+        await new Promise<void>((resolve, reject) => {
+          worker.once("message", (m) => {
+            if (m.status === "revoked") resolve();
+            else reject(new Error("Worker revocation failed: " + m.error));
+          });
+          worker.postMessage({ action: "revoke", userId: raceRefreshUserId });
+        });
+      }
+    });
+
+    const refRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      },
+      body: `grant_type=refresh_token&refresh_token=${genuineRefreshToken}`,
+    });
+
+    assert.equal(refreshBarrierFired, true, "Deterministic barrier must fire before refresh fence");
+    assert.equal(refRes.status, 401, "Atomic authorization fence must reject token refresh when user revoked concurrently");
+    const refBody = await refRes.json();
+    assert.equal(refBody.error, "invalid_grant");
+    assert.ok(refBody.error_description.includes("revoked during token refresh"), "Error description must identify concurrent revocation");
+
+    // Assert zero active tokens survive in database and family is marked revoked
+    const survivingRefAccess = await db.collection("oauthAccessToken").countDocuments({ userId: raceRefreshUserId });
+    const survivingRefTokens = await db.collection("oauthRefreshToken").countDocuments({ userId: raceRefreshUserId });
+    const familyDoc = await db.collection("oauth_token_families").findOne({ userId: raceRefreshUserId });
+    assert.equal(survivingRefAccess, 0, "No access token may survive atomic refresh fence purge");
+    assert.equal(survivingRefTokens, 0, "No refresh token may survive atomic refresh fence purge");
+    assert.equal(familyDoc?.status, "revoked", "Token family must be marked revoked");
+  } finally {
+    setTokenBarrierHookForTesting(null);
+    await new Promise<void>((resolve) => {
+      worker.once("message", () => resolve());
+      worker.postMessage({ action: "close" });
+    });
+    await worker.terminate();
+  }
+});
+
+await runTest("SEC-04-D: Better Auth admin/plugin routes enforce mandatory MFA and sensitive-action freshness with genuine enrollment and challenges", async () => {
   const { authProvider } = await import("../../src/utils/auth");
   const adminEmail = `super-mfa-${crypto.randomBytes(4).toString("hex")}@platform.local`;
   const adminPassword = "Password@1234!";
 
+  // 1. Initial user sign up
   await authProvider.api.signUpEmail({
     body: { email: adminEmail, password: adminPassword, name: "Super MFA Admin" },
   });
 
+  // 2. Initial password sign in
   const loginRes = await app.request("/api/auth/sign-in/email", {
     method: "POST",
     headers: getTestHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ email: adminEmail, password: adminPassword }),
   });
   assert.equal(loginRes.status, 200, "Admin login must succeed");
-  const sessionCookie = loginRes.headers.get("set-cookie") || "";
-  assert.ok(sessionCookie.includes("better-auth.session_token="), "Must set session cookie");
+  const initialSessionCookie = loginRes.headers.get("set-cookie") || "";
+  assert.ok(initialSessionCookie.includes("better-auth.session_token="), "Must set session cookie");
 
-  // Upgrade user in DB to super-admin with twoFactorEnabled: true
+  // Upgrade user in DB to super-admin (unenrolled: twoFactorEnabled is false or missing)
   await db.collection("user").updateOne(
     { email: adminEmail },
-    { $set: { role: "super-admin", twoFactorEnabled: true } }
+    { $set: { role: "super-admin" } }
   );
 
-  const rawCookie = sessionCookie.split("better-auth.session_token=")[1].split(";")[0];
-  const tokenVal = decodeURIComponent(rawCookie.split(".")[0]);
-  const sessionFilter = {
-    $or: [
-      { token: rawCookie },
-      { token: tokenVal },
-      { token: decodeURIComponent(rawCookie) },
-    ],
-  };
-
-  // 1. Password-only session cookie (twoFactorVerified: false) must be rejected with ERR_MFA_REQUIRED
-  await db.collection("session").updateOne(sessionFilter, {
-    $set: { twoFactorVerified: false },
-    $unset: { mfaVerifiedAt: "" },
-  });
-
-  const pwHeaders = getTestHeaders({
-    Cookie: sessionCookie,
-  });
-
-  const pwRes = await app.request("/api/auth/admin/list-users", {
+  // 3. Unenrolled admin cannot access privileged admin routes (setup-only authority)
+  const unenrolledHeaders = getTestHeaders({ Cookie: initialSessionCookie });
+  const unenrolledClientsRes = await app.request("/api/admin/clients", {
     method: "GET",
-    headers: pwHeaders,
+    headers: unenrolledHeaders,
   });
-  assert.equal(pwRes.status, 403, "Better Auth admin route must reject password-only session without completed MFA");
-  const pwBody = await pwRes.json();
-  assert.equal(pwBody.code, "ERR_MFA_REQUIRED");
+  assert.equal(unenrolledClientsRes.status, 403, "Unenrolled super-admin must be blocked from clients endpoint");
+  const unenrolledClientsBody = await unenrolledClientsRes.json();
+  assert.equal(unenrolledClientsBody.code, "ERR_MFA_ENROLLMENT_REQUIRED");
 
-  // Also verify mutation route rejects password-only session
-  const pwMutationRes = await app.request("/api/auth/admin/set-role", {
+  const unenrolledUsersRes = await app.request("/api/auth/admin/list-users", {
+    method: "GET",
+    headers: unenrolledHeaders,
+  });
+  assert.equal(unenrolledUsersRes.status, 403, "Unenrolled super-admin must be blocked from Better Auth admin list-users");
+  const unenrolledUsersBody = await unenrolledUsersRes.json();
+  assert.equal(unenrolledUsersBody.code, "ERR_MFA_ENROLLMENT_REQUIRED");
+
+  // 4. Real 2FA Enrollment: call POST /api/auth/two-factor/enable
+  const enableRes = await app.request("/api/auth/two-factor/enable", {
     method: "POST",
-    headers: pwHeaders,
-    body: JSON.stringify({ userId: "target-user", role: "admin" }),
+    headers: unenrolledHeaders,
+    body: JSON.stringify({ password: adminPassword }),
   });
-  assert.equal(pwMutationRes.status, 403, "Better Auth admin mutation must reject password-only session");
-  const pwMutationBody = await pwMutationRes.json();
-  assert.equal(pwMutationBody.code, "ERR_MFA_REQUIRED");
+  assert.equal(enableRes.status, 200, "2FA enable must succeed");
+  const enableData = await enableRes.json();
+  assert.ok(enableData.totpURI, "Must return totpURI");
+  assert.ok(Array.isArray(enableData.backupCodes) && enableData.backupCodes.length > 0, "Must return backupCodes");
 
-  // 2. Completed TOTP session allows access to Better Auth admin list-users with privacy projection
-  await db.collection("session").updateOne(sessionFilter, {
-    $set: { twoFactorVerified: true, mfaVerifiedAt: new Date() },
+  const totpSecretParam = new URL(enableData.totpURI).searchParams.get("secret");
+  assert.ok(totpSecretParam, "TOTP URI must contain secret");
+  const { base32 } = await import("@better-auth/utils/base32");
+  const decodedSecret = Buffer.from(base32.decode(totpSecretParam)).toString();
+
+  // Compute RFC 6238 TOTP and finalize enrollment via POST /api/auth/two-factor/verify-totp
+  const enrollOtp = await createOTP(decodedSecret, { digits: 6, period: 30 }).totp();
+  const verifyEnrollRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: unenrolledHeaders,
+    body: JSON.stringify({ code: enrollOtp }),
   });
+  assert.equal(verifyEnrollRes.status, 200, "Verify TOTP enrollment must succeed");
+  const verifyEnrollData = await verifyEnrollRes.json();
+  assert.ok(verifyEnrollData.user || verifyEnrollData.token, "Enrollment must be confirmed");
 
-  const totpRes = await app.request("/api/auth/admin/list-users", {
+  // Verify DB reflects twoFactorEnabled: true
+  const enrolledUserDoc = await db.collection("user").findOne({ email: adminEmail });
+  assert.equal(enrolledUserDoc?.twoFactorEnabled, true, "User must have twoFactorEnabled: true in DB");
+
+  // 5. Subsequent sign-in returns 2FA challenge (twoFactorRedirect: true) and challenge cookie
+  const challengeLoginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+  });
+  assert.equal(challengeLoginRes.status, 200, "Login with 2FA enabled returns 200");
+  const challengeBody = await challengeLoginRes.json();
+  assert.equal(challengeBody.twoFactorRedirect, true, "Must require 2FA redirect");
+
+  const challengeCookieHeader = challengeLoginRes.headers.get("set-cookie") || "";
+  assert.ok(challengeCookieHeader.includes("better-auth.two_factor="), "Must set two_factor challenge cookie");
+  const hasActiveSession = challengeCookieHeader.split(",").some((part: string) => {
+    const trimmed = part.trim();
+    if (!trimmed.startsWith("better-auth.session_token=")) return false;
+    const val = trimmed.split(";")[0].split("=")[1];
+    return Boolean(val && !trimmed.includes("Max-Age=0") && !trimmed.includes("Thu, 01 Jan 1970"));
+  });
+  assert.equal(hasActiveSession, false, "Must NOT set active session_token cookie on password-only stage");
+
+  const challengeCookie = extractCookie(challengeCookieHeader, "better-auth.two_factor");
+
+  // 6. Password-only stage rejection: challenge cookie alone cannot access admin endpoints
+  const pwOnlyHeaders = getTestHeaders({ Cookie: challengeCookie });
+  const pwOnlyRes = await app.request("/api/auth/admin/list-users", {
     method: "GET",
-    headers: pwHeaders,
+    headers: pwOnlyHeaders,
   });
-  assert.ok(totpRes.status === 200 || totpRes.status === 404, `Expected 200 (or handled) with completed TOTP session, got: ${totpRes.status}`);
+  assert.ok(pwOnlyRes.status === 401 || pwOnlyRes.status === 403, "Password-only stage must be rejected");
+  if (pwOnlyRes.status === 403) {
+    const pwOnlyBody = await pwOnlyRes.json();
+    assert.equal(pwOnlyBody.code, "ERR_MFA_REQUIRED");
+  }
 
-  // 3. Stale MFA session (> 15 minutes ago) is rejected with ERR_MFA_STEP_UP_REQUIRED on mutations
-  await db.collection("session").updateOne(sessionFilter, {
-    $set: { twoFactorVerified: true, mfaVerifiedAt: new Date(Date.now() - 25 * 60 * 1000) },
+  // 7. Complete genuine TOTP challenge via POST /api/auth/two-factor/verify-totp
+  const challengeOtp = await createOTP(decodedSecret, { digits: 6, period: 30 }).totp();
+  const verifyTotpRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: challengeCookie }),
+    body: JSON.stringify({ code: challengeOtp }),
   });
+  assert.equal(verifyTotpRes.status, 200, "TOTP challenge verification must succeed");
+  const verifiedCookieHeader = verifyTotpRes.headers.get("set-cookie") || "";
+  assert.ok(verifiedCookieHeader.includes("better-auth.session_token="), "Must issue session_token cookie upon successful TOTP verification");
+
+  const verifiedSessionCookie = extractCookie(verifiedCookieHeader, "better-auth.session_token");
+  const verifiedHeaders = getTestHeaders({ Cookie: verifiedSessionCookie });
+
+  // 8. Genuine completed MFA session allows privileged admin access (Strictly 200, NEVER 404)
+  const adminClientsRes = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: verifiedHeaders,
+  });
+  assert.equal(adminClientsRes.status, 200, "Completed MFA session must access admin clients with HTTP 200");
+
+  const adminUsersRes = await app.request("/api/auth/admin/list-users", {
+    method: "GET",
+    headers: verifiedHeaders,
+  });
+  assert.equal(adminUsersRes.status, 200, "Completed MFA session must access Better Auth admin list-users with HTTP 200");
+  const adminUsersData = await adminUsersRes.json();
+  assert.ok(Array.isArray(adminUsersData.users), "Must return users array with privacy projection");
+
+  // 9. Stale MFA session (> 15 minutes old) is rejected with ERR_MFA_STEP_UP_REQUIRED on mutations
+  const rawCookie = (verifiedSessionCookie.split("better-auth.session_token=")[1] || "").split(";")[0];
+  const tokenVal = decodeURIComponent(rawCookie.split(".")[0]);
+  const staleDate = new Date(Date.now() - 25 * 60 * 1000);
+  await db.collection("session").updateMany(
+    {
+      $or: [
+        { token: rawCookie },
+        { token: tokenVal },
+        { token: decodeURIComponent(rawCookie) },
+        { userId: enrolledUserDoc?.id },
+      ],
+    },
+    {
+      $set: {
+        mfaVerifiedAt: staleDate,
+        createdAt: staleDate,
+      },
+    }
+  );
 
   const staleMutationRes = await app.request("/api/auth/admin/set-role", {
     method: "POST",
-    headers: pwHeaders,
+    headers: verifiedHeaders,
     body: JSON.stringify({ userId: "target-user", role: "admin" }),
   });
   assert.equal(staleMutationRes.status, 403, "Stale MFA session must be rejected with step-up required");
   const staleBody = await staleMutationRes.json();
   assert.equal(staleBody.code, "ERR_MFA_STEP_UP_REQUIRED");
+
+  // 10. Recovery backup code challenge verification & single-use enforcement
+  const recoveryLoginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+  });
+  assert.equal(recoveryLoginRes.status, 200);
+  const recoveryChallengeCookie = extractCookie(recoveryLoginRes.headers.get("set-cookie"), "better-auth.two_factor");
+
+  const backupCodeToUse = enableData.backupCodes[0];
+  const verifyBackupRes = await app.request("/api/auth/two-factor/verify-backup-code", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: recoveryChallengeCookie }),
+    body: JSON.stringify({ code: backupCodeToUse }),
+  });
+  assert.equal(verifyBackupRes.status, 200, "Recovery code verification must succeed");
+  const recoverySessionCookie = extractCookie(verifyBackupRes.headers.get("set-cookie"), "better-auth.session_token");
+  assert.ok(recoverySessionCookie, "Must issue session cookie after recovery verification");
+
+  const recoveryClientsRes = await app.request("/api/admin/clients", {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: recoverySessionCookie }),
+  });
+  assert.equal(recoveryClientsRes.status, 200, "Session from recovery code must access admin clients with HTTP 200");
+
+  // Single-use enforcement: Attempting to reuse the exact same backup code must be rejected
+  const replayLoginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+  });
+  const replayChallengeCookie = extractCookie(replayLoginRes.headers.get("set-cookie"), "better-auth.two_factor");
+
+  const replayBackupRes = await app.request("/api/auth/two-factor/verify-backup-code", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: replayChallengeCookie }),
+    body: JSON.stringify({ code: backupCodeToUse }),
+  });
+  assert.ok(replayBackupRes.status >= 400, "Reused recovery code must be rejected");
 });
 
-await runTest("SEC-03-C: Email verification delivery transport validation, bounded timeout, and secret-free logging", async () => {
+await runTest("SEC-03-C: Email verification delivery transport validation, typed config, timeout, non-2xx, and secret-free logging", async () => {
   const { authProvider } = await import("../../src/utils/auth");
   const sendVerificationEmail = (authProvider.options as any).emailVerification?.sendVerificationEmail;
   assert.ok(typeof sendVerificationEmail === "function", "sendVerificationEmail must be configured");
@@ -946,21 +1490,26 @@ await runTest("SEC-03-C: Email verification delivery transport validation, bound
   const secretToken = "super-secret-verification-token-xyz789";
   const secretUrl = `https://oauth21.vercel.app/api/auth/verify-email?token=${secretToken}`;
 
+  const origEnv = process.env.NODE_ENV;
+  const origWebhook = process.env.EMAIL_DELIVERY_WEBHOOK_URL;
+  const origEnforce = process.env.AUTH_EMAIL_VERIFICATION_ENABLED;
+
   try {
-    // 1. No webhook URL configured: must not log secret URL or token
-    const origEnv = process.env.EMAIL_DELIVERY_WEBHOOK_URL;
+    // 1. Verification enabled but EMAIL_DELIVERY_WEBHOOK_URL is missing: throws explicit error
+    process.env.AUTH_EMAIL_VERIFICATION_ENABLED = "true";
     delete process.env.EMAIL_DELIVERY_WEBHOOK_URL;
 
-    await sendVerificationEmail({
-      user: { email: "test-delivery@example.com" },
-      url: secretUrl,
-      token: secretToken,
-    });
-
-    for (const log of capturedLogs) {
-      assert.ok(!log.includes(secretToken), `Verification token leaked in logs: ${log}`);
-      assert.ok(!log.includes(secretUrl), `Verification URL leaked in logs: ${log}`);
-    }
+    await assert.rejects(
+      async () => {
+        await sendVerificationEmail({
+          user: { email: "test-delivery@example.com" },
+          url: secretUrl,
+          token: secretToken,
+        });
+      },
+      /Email verification is enabled but EMAIL_DELIVERY_WEBHOOK_URL is not configured/,
+      "Missing webhook when verification enabled must fail explicitly"
+    );
 
     // 2. Invalid webhook URL configuration: throws controlled error
     process.env.EMAIL_DELIVERY_WEBHOOK_URL = "not-a-valid-url";
@@ -976,17 +1525,94 @@ await runTest("SEC-03-C: Email verification delivery transport validation, bound
       "Invalid transport URL must throw controlled error"
     );
 
-    for (const log of capturedLogs) {
-      assert.ok(!log.includes(secretToken), `Verification token leaked during error in logs: ${log}`);
-      assert.ok(!log.includes(secretUrl), `Verification URL leaked during error in logs: ${log}`);
-    }
+    // 3. Production transport: non-HTTPS URL must be rejected
+    process.env.NODE_ENV = "production";
+    process.env.EMAIL_DELIVERY_WEBHOOK_URL = "http://email.corp.internal/webhook";
+    await assert.rejects(
+      async () => {
+        await sendVerificationEmail({
+          user: { email: "test-delivery@example.com" },
+          url: secretUrl,
+          token: secretToken,
+        });
+      },
+      /EMAIL_DELIVERY_WEBHOOK_URL must use HTTPS in production/,
+      "Non-HTTPS transport in production must be rejected"
+    );
 
-    if (origEnv) process.env.EMAIL_DELIVERY_WEBHOOK_URL = origEnv;
-    else delete process.env.EMAIL_DELIVERY_WEBHOOK_URL;
+    // 4. Production transport: loopback address must be rejected
+    process.env.EMAIL_DELIVERY_WEBHOOK_URL = "https://127.0.0.1:8443/webhook";
+    await assert.rejects(
+      async () => {
+        await sendVerificationEmail({
+          user: { email: "test-delivery@example.com" },
+          url: secretUrl,
+          token: secretToken,
+        });
+      },
+      /EMAIL_DELIVERY_WEBHOOK_URL cannot be a loopback address in production/,
+      "Loopback address in production must be rejected"
+    );
+
+    process.env.NODE_ENV = "test";
+
+    // 5. Non-2xx response from delivery endpoint: throws controlled HTTP error without leaking secrets
+    const errorServer = http.createServer((req, res) => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal Gateway Error" }));
+    });
+    await new Promise<void>((resolve) => errorServer.listen(0, resolve));
+    const errorPort = (errorServer.address() as any).port;
+    process.env.EMAIL_DELIVERY_WEBHOOK_URL = `http://127.0.0.1:${errorPort}/webhook`;
+
+    await assert.rejects(
+      async () => {
+        await sendVerificationEmail({
+          user: { email: "test-delivery@example.com" },
+          url: secretUrl,
+          token: secretToken,
+        });
+      },
+      /Email delivery webhook failed with HTTP 500/,
+      "Non-2xx response must throw controlled error"
+    );
+    errorServer.close();
+
+    // 6. Delivery endpoint timeout (>5000ms): throws controlled timeout error without leaking secrets
+    const timeoutServer = http.createServer((_req, _res) => {
+      // Deliberately hold request open to trigger client timeout
+    });
+    await new Promise<void>((resolve) => timeoutServer.listen(0, resolve));
+    const timeoutPort = (timeoutServer.address() as any).port;
+    process.env.EMAIL_DELIVERY_WEBHOOK_URL = `http://127.0.0.1:${timeoutPort}/webhook`;
+
+    await assert.rejects(
+      async () => {
+        await sendVerificationEmail({
+          user: { email: "test-delivery@example.com" },
+          url: secretUrl,
+          token: secretToken,
+        });
+      },
+      /Email delivery timed out/,
+      "Webhook timeout after 5000ms must throw controlled error"
+    );
+    timeoutServer.close();
+
+    // Verify ZERO secrets or tokens leaked across all test cases
+    for (const log of capturedLogs) {
+      assert.ok(!log.includes(secretToken), `Verification token leaked in logs: ${log}`);
+      assert.ok(!log.includes(secretUrl), `Verification URL leaked in logs: ${log}`);
+    }
   } finally {
     console.warn = origWarn;
     console.error = origError;
     console.log = origLog;
+    if (origEnv) process.env.NODE_ENV = origEnv;
+    if (origWebhook) process.env.EMAIL_DELIVERY_WEBHOOK_URL = origWebhook;
+    else delete process.env.EMAIL_DELIVERY_WEBHOOK_URL;
+    if (origEnforce) process.env.AUTH_EMAIL_VERIFICATION_ENABLED = origEnforce;
+    else delete process.env.AUTH_EMAIL_VERIFICATION_ENABLED;
   }
 });
 

@@ -33,12 +33,16 @@ export interface AccountEligibilityResult {
  * 6. Email verification enforced when required by active policy. Existing unverified accounts cannot bypass.
  * 7. Token issuance or refresh cannot survive account revocation (tokensRevokedBefore / passwordChangedAt).
  */
+export interface AccountEligibilityOptions {
+  requireEmailVerified?: boolean;
+  tokenIssuedAtSec?: number;
+  tokenIssuedAtMs?: number;
+  tokenVersion?: number;
+}
+
 export function checkAccountEligibility(
   user: any,
-  options?: {
-    requireEmailVerified?: boolean;
-    tokenIssuedAtSec?: number;
-  }
+  options?: AccountEligibilityOptions
 ): AccountEligibilityResult {
   if (!user) {
     return { eligible: false, reason: "user_not_found" };
@@ -93,21 +97,50 @@ export function checkAccountEligibility(
     }
   }
 
-  if (options?.tokenIssuedAtSec !== undefined) {
+  // Monotonic token version check
+  if (options?.tokenVersion !== undefined && user.tokenVersion !== undefined) {
+    if (options.tokenVersion < user.tokenVersion) {
+      return { eligible: false, reason: "tokens_revoked" };
+    }
+  }
+
+  // Precise millisecond timestamp check (supports same-second issuance before and after revocation)
+  if (options?.tokenIssuedAtMs !== undefined) {
+    const tokenMs = options.tokenIssuedAtMs;
     if (user.tokensRevokedBefore) {
-      const revokedSec = Math.floor(
-        new Date(user.tokensRevokedBefore).getTime() / 1000
-      );
-      if (options.tokenIssuedAtSec < revokedSec) {
+      const revokedMs = new Date(user.tokensRevokedBefore).getTime();
+      if (tokenMs < revokedMs) {
         return { eligible: false, reason: "tokens_revoked" };
       }
     }
 
     if (user.passwordChangedAt) {
-      const pwdSec = Math.floor(
-        new Date(user.passwordChangedAt).getTime() / 1000
-      );
-      if (options.tokenIssuedAtSec < pwdSec) {
+      const passChangedMs = new Date(user.passwordChangedAt).getTime();
+      if (tokenMs < passChangedMs) {
+        return { eligible: false, reason: "tokens_revoked" };
+      }
+    }
+  } else if (options?.tokenIssuedAtSec !== undefined) {
+    // Safe legacy handling when only integer seconds are provided
+    const tokenSec = options.tokenIssuedAtSec;
+    if (user.tokensRevokedBefore) {
+      const revokedMs = new Date(user.tokensRevokedBefore).getTime();
+      const revokedSec = Math.floor(revokedMs / 1000);
+      if (tokenSec < revokedSec) {
+        return { eligible: false, reason: "tokens_revoked" };
+      }
+      if (tokenSec === revokedSec && tokenSec * 1000 <= revokedMs) {
+        return { eligible: false, reason: "tokens_revoked" };
+      }
+    }
+
+    if (user.passwordChangedAt) {
+      const passChangedMs = new Date(user.passwordChangedAt).getTime();
+      const passChangedSec = Math.floor(passChangedMs / 1000);
+      if (tokenSec < passChangedSec) {
+        return { eligible: false, reason: "tokens_revoked" };
+      }
+      if (tokenSec === passChangedSec && tokenSec * 1000 <= passChangedMs) {
         return { eligible: false, reason: "tokens_revoked" };
       }
     }

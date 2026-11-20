@@ -410,8 +410,16 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
       }
 
       // Revocation timestamps check: reject replayed tokens issued before revocation or password change
-      if (payload.iat && typeof payload.iat === "number") {
-        const tokenIatMs = payload.iat * 1000;
+      const tokenIatMs = typeof payload.iat_ms === "number"
+        ? payload.iat_ms
+        : (payload.iat && typeof payload.iat === "number" ? payload.iat * 1000 : null);
+      const tokenVersion = typeof payload.token_version === "number" ? payload.token_version : undefined;
+
+      if (tokenVersion !== undefined && userDoc.tokenVersion !== undefined && tokenVersion < userDoc.tokenVersion) {
+        return null;
+      }
+
+      if (tokenIatMs !== null) {
         if (userDoc.tokensRevokedBefore) {
           const revokedMs = new Date(userDoc.tokensRevokedBefore).getTime();
           if (tokenIatMs < revokedMs) return null;
