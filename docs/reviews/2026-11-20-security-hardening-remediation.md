@@ -51,9 +51,9 @@
 ### Slice 5: Revocation Authorization, Monotonic Versions, and Restoring CI (SEC-07)
 * **Revocation Authorization and Zero Mutation on Failure:** Updated `POST /api/auth/oauth2/revoke` in [backend/src/routes/auth.ts](file:///home/swyra/projects/OAuth2.1/backend/src/routes/auth.ts). When client authentication fails (`res.status === 401`), the endpoint immediately halts with zero database mutations.
 * **Authenticated Client Ownership and Token Scoping:** Enforced client ownership prior to token or family lookup and mutation. Revocation of refresh tokens or access tokens is strictly filtered by `clientId: canonicalClientId`. Cross client token revocation attempts return RFC 7009 compliant HTTP 200 without modifying records belonging to other clients or tenants.
-* **Client Scoped Semantics Preserved:** Ordinary token revocation deletes only the targeted token or token family. It does not advance `user.tokenVersion`, preserving unrelated client sessions and IdP session cookies without causing unexpected account wide logout.
+* **Targeted Token Family Revocation:** In [backend/src/routes/auth.ts](file:///home/swyra/projects/OAuth2.1/backend/src/routes/auth.ts), token deletion during revocation binds strictly to `familyId: familyDoc.familyId` and `clientId: canonicalClientId`. Ordinary token revocation deletes only the targeted token family, preserving unrelated client sessions, independent token families for the same user, and IdP session cookies.
 * **Genuinely Atomic Monotonic revokeUserTokensDurable:** Refactored `revokeUserTokensDurable` to use atomic MongoDB aggregation pipeline update `$add: [{ $ifNull: ["$tokenVersion", 1] }, 1]` and `$cond` ensuring `tokensRevokedBefore` never decreases. Overlapping concurrent revokers advance versions monotonically without read then set race conditions. Legacy accounts without `tokenVersion` safely advance from version 1 to version 2.
-* **Repairing 11 Security Test Suites:** Repaired all 11 failing security suites by introducing the reusable administrative MFA fixture in [backend/tests/fixtures/admin-mfa-fixture.ts](file:///home/swyra/projects/OAuth2.1/backend/tests/fixtures/admin-mfa-fixture.ts). All original positive and negative assertions were preserved without skipping suites, weakening assertions, or disabling MFA.
+* **Repairing 11 Security Test Suites:** Repaired all 11 failing security suites by introducing the reusable administrative MFA fixture in [backend/tests/fixtures/admin-mfa-fixture.ts](file:///home/swyra/projects/OAuth2.1/backend/tests/fixtures/admin-mfa-fixture.ts). Completed genuine scoped app admin MFA in [backend/tests/security/cors-cache-correctness.test.ts](file:///home/swyra/projects/OAuth2.1/backend/tests/security/cors-cache-correctness.test.ts) (CORS-7), preserving the HTTP 200 response and cache invalidation assertions without weakening production MFA.
 
 ---
 
@@ -67,7 +67,7 @@
 | Integration Contract | `npm run security:integration-check` | **PASS** | 5 normative checks passed (0 violations) |
 | Unit Test Suite | `npm run test:unit` | **PASS** | 10 unit suites passed cleanly (0 failures) |
 | Local Consumer E2E | `npm run test:local-consumer-e2e` | **PASS** | 11 protocol flows passed cleanly (0 failures) |
-| OAuth Hardening | `npm run test:oauth-hardening` | **PASS** | 28/28 comprehensive regression checks passed |
+| OAuth Hardening | `npm run test:oauth-hardening` | **PASS** | 29/29 comprehensive regression checks passed |
 | Consumer MFA | `npm run test:consumer-mfa` | **PASS** | 18 tests passed cleanly (0 failures) |
 | Private App Isolation | `npm run test:private-app-isolation` | **PASS** | 10 tests passed cleanly (0 failures) |
 | Membership Lifecycle | `npm run test:membership-lifecycle` | **PASS** | 23 tests passed cleanly (0 failures) |
@@ -87,7 +87,7 @@ All 11 previously failing security suites now execute and pass cleanly:
 8. [auth-event-telemetry.test.ts](file:///home/swyra/projects/OAuth2.1/backend/tests/security/auth-event-telemetry.test.ts): 8 passed, 0 failed.
 9. [auth-deduplication-and-attribution.test.ts](file:///home/swyra/projects/OAuth2.1/backend/tests/security/auth-deduplication-and-attribution.test.ts): 4 passed, 0 failed.
 10. [session-expiry-and-isolation.test.ts](file:///home/swyra/projects/OAuth2.1/backend/tests/security/session-expiry-and-isolation.test.ts): 5 passed, 0 failed.
-11. [cors-cache-correctness.test.ts](file:///home/swyra/projects/OAuth2.1/backend/tests/security/cors-cache-correctness.test.ts): Admin session updated with valid MFA setup to ensure cache invalidation calls succeed in CI.
+11. [cors-cache-correctness.test.ts](file:///home/swyra/projects/OAuth2.1/backend/tests/security/cors-cache-correctness.test.ts): Super admin and scoped app admin sessions updated with valid MFA setup to ensure cache invalidation calls succeed in CI.
 
 ### Test Methodology Breakdown
 
@@ -136,6 +136,7 @@ To ensure rigorous evidence, tests in [backend/tests/security/oauth-security-har
 26. **SEC-07-C:** Ordinary token revocation is strictly client scoped and family scoped; targeted token deletion preserves unrelated client sessions and IdP session cookies without account wide signout.
 27. **SEC-07-D:** Overlapping concurrent revokers advance `tokenVersion` monotonically without read then set races using MongoDB aggregation pipeline update `$add`, and revocation timestamps never decrease.
 28. **SEC-07-E:** Concurrent revocation plus conditional state transition: revocation wins race against conditional token issuance transition.
+29. **SEC-07-F:** Protocol regression with two independent token families for the SAME user and SAME client: revoking Family A rejects A's refresh token on `/oauth2/token` (401), access token on `/oauth2/userinfo` (401), and `/oauth2/introspect` (active: false), while Family B's access token and refresh token remain usable and rotate cleanly, and the user IdP session cookie remains active.
 
 ---
 

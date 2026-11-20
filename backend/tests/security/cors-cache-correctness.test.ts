@@ -423,13 +423,7 @@ await runTest("CORS-7: Scoped app config patch invalidates origins", async () =>
     createdAt: new Date(),
   });
 
-  const appAdminLoginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: appAdminEmail, password: appAdminPass }),
-  });
-  assert.equal(appAdminLoginRes.status, 200);
-  const appAdminCookie = (appAdminLoginRes.headers.get("set-cookie") || "").split(";")[0];
+  const appAdminCookie = await enrollAndLoginAdminMfa(app, appAdminEmail, appAdminPass, getTestHeaders);
 
   await setCachedOrigin(scopedOrigin, true);
   await setCachedOrigin(patchedOrigin, false);

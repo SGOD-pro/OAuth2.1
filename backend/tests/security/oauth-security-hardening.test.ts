@@ -35,6 +35,8 @@ const {
   setTokenBarrierHookForTesting,
   revokeUserTokensDurable,
 } = await import("../../src/routes/auth");
+const { hashToken } = await import("../../src/utils/security");
+const { registerTokenFamily } = await import("../../src/db/state");
 const { checkAccountEligibility } = await import(
   "../../src/utils/account-eligibility"
 ).catch(() => ({ checkAccountEligibility: null as any }));
@@ -2220,6 +2222,191 @@ await runTest("SEC-07-E: Concurrent revocation plus issuance: conditional state 
     }),
   });
   assert.equal(userinfoRes2.status, 200, "Token with matching current tokenVersion must succeed (200)");
+});
+
+await runTest("SEC-07-F: Protocol regression: two independent token families for SAME user and SAME client", async () => {
+  const userEmail = `multi_fam_${crypto.randomBytes(4).toString("hex")}@example.com`;
+  const userPass = "MultiFamPass123!Aa";
+  const signUpRes = await authProvider.api.signUpEmail({
+    body: { email: userEmail, password: userPass, name: "Multi Fam User" },
+    asResponse: true,
+  });
+  const sessionCookie = (signUpRes.headers.get("set-cookie") || "").split(";")[0];
+  const userDoc = await db.collection("user").findOne({ email: userEmail });
+  const userId = String(userDoc?.id || userDoc?._id);
+
+  // Register user for private application
+  await db.collection("user_app_registrations").insertOne({
+    userId: userId,
+    clientId: "test-sec-client",
+    appRole: "member",
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
+  });
+
+  // Verify IdP session is valid initially
+  const preCheckSession = await app.request("/api/auth/get-session", {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: sessionCookie }),
+  });
+  assert.equal(preCheckSession.status, 200, "IdP session must be active initially");
+
+  // Create Family A genuinely via authorization_code flow
+  const verifierA = crypto.randomBytes(32).toString("base64url");
+  const challengeA = crypto.createHash("sha256").update(verifierA).digest("base64url");
+  const authResA = await app.request(
+    `/api/auth/oauth2/authorize?client_id=test-sec-client&response_type=code&code_challenge=${challengeA}&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&scope=openid%20offline_access&state=state_fam_a`,
+    {
+      method: "GET",
+      headers: getTestHeaders({ Cookie: sessionCookie }),
+    }
+  );
+  assert.equal(authResA.status, 302);
+  const codeA = new URL(authResA.headers.get("location") || "").searchParams.get("code")!;
+  assert.ok(codeA, "Auth code A must be issued");
+
+  const tokenResA = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${basicAuth}`,
+    }),
+    body: `grant_type=authorization_code&code=${codeA}&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&code_verifier=${verifierA}&client_id=test-sec-client`,
+  });
+  assert.equal(tokenResA.status, 200);
+  const tokensA = await tokenResA.json();
+  const atA = tokensA.access_token;
+  const rtA = tokensA.refresh_token;
+  assert.ok(atA && rtA, "Tokens A must be returned");
+
+  // Create Family B genuinely via authorization_code flow for SAME user and SAME client
+  const verifierB = crypto.randomBytes(32).toString("base64url");
+  const challengeB = crypto.createHash("sha256").update(verifierB).digest("base64url");
+  const authResB = await app.request(
+    `/api/auth/oauth2/authorize?client_id=test-sec-client&response_type=code&code_challenge=${challengeB}&code_challenge_method=S256&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&scope=openid%20offline_access&state=state_fam_b`,
+    {
+      method: "GET",
+      headers: getTestHeaders({ Cookie: sessionCookie }),
+    }
+  );
+  assert.equal(authResB.status, 302);
+  const codeB = new URL(authResB.headers.get("location") || "").searchParams.get("code")!;
+  assert.ok(codeB, "Auth code B must be issued");
+
+  const tokenResB = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${basicAuth}`,
+    }),
+    body: `grant_type=authorization_code&code=${codeB}&redirect_uri=http%3A%2F%2Flocalhost%3A5174%2Fcallback&code_verifier=${verifierB}&client_id=test-sec-client`,
+  });
+  assert.equal(tokenResB.status, 200);
+  const tokensB = await tokenResB.json();
+  const atB = tokensB.access_token;
+  const rtB = tokensB.refresh_token;
+  assert.ok(atB && rtB, "Tokens B must be returned");
+
+  // Both families are initially valid
+  const preUserInfoA = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${atA}` }),
+  });
+  assert.equal(preUserInfoA.status, 200, "Token A must succeed at UserInfo initially");
+
+  const preUserInfoB = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${atB}` }),
+  });
+  assert.equal(preUserInfoB.status, 200, "Token B must succeed at UserInfo initially");
+
+  // Step 1: Revoke Family A
+  const revokeRes = await app.request("/api/auth/oauth2/revoke", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: `token=${encodeURIComponent(rtA)}&token_type_hint=refresh_token`,
+  });
+  assert.equal(revokeRes.status, 200, "Family A revocation must return 200");
+
+  // Step 2: A's credentials are rejected
+  // A's refresh token is rejected on /oauth2/token
+  const refreshARes = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(rtA)}`,
+  });
+  assert.equal(refreshARes.status, 401, "Revoked Family A refresh token must be rejected with 401");
+
+  // A's access token is rejected on /oauth2/userinfo
+  const userInfoARes = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${atA}` }),
+  });
+  assert.equal(userInfoARes.status, 401, "Revoked Family A access token must be rejected at UserInfo (401)");
+
+  // A's access token is rejected on /oauth2/introspect
+  const introspectARes = await app.request("/api/auth/oauth2/introspect", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: `token=${encodeURIComponent(atA)}`,
+  });
+  assert.equal(introspectARes.status, 200);
+  const introBodyA = await introspectARes.json();
+  assert.equal(introBodyA.active, false, "Revoked Family A access token must introspect as active: false");
+
+  // Step 3: B's access and refresh remain usable
+  // B's access token succeeds on /oauth2/userinfo
+  const userInfoBRes = await app.request("/api/auth/oauth2/userinfo", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${atB}` }),
+  });
+  assert.equal(userInfoBRes.status, 200, "Unrevoked Family B access token must succeed at UserInfo (200)");
+
+  // B's access token succeeds on /oauth2/introspect
+  const introspectBRes = await app.request("/api/auth/oauth2/introspect", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: `token=${encodeURIComponent(atB)}`,
+  });
+  assert.equal(introspectBRes.status, 200);
+  const introBodyB = await introspectBRes.json();
+  assert.equal(introBodyB.active, true, "Unrevoked Family B access token must introspect as active: true");
+
+  // B's refresh token succeeds on /oauth2/token
+  const refreshBRes = await app.request("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: getTestHeaders({
+      Authorization: `Basic ${basicAuth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    }),
+    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(rtB)}`,
+  });
+  assert.equal(refreshBRes.status, 200, "Unrevoked Family B refresh token must succeed (200)");
+  const rotatedTokensB = await refreshBRes.json();
+  assert.ok(rotatedTokensB.access_token, "Rotated token B must contain access_token");
+  assert.ok(rotatedTokensB.refresh_token, "Rotated token B must contain refresh_token");
+
+  // Step 4: The IdP session remains valid
+  const postCheckSession = await app.request("/api/auth/get-session", {
+    method: "GET",
+    headers: getTestHeaders({ Cookie: sessionCookie }),
+  });
+  assert.equal(postCheckSession.status, 200, "IdP session must remain valid after Family A revocation");
+  const sessionData = await postCheckSession.json();
+  assert.equal(sessionData?.user?.id, userId, "Session must match the original user");
 });
 
 await closeDb();

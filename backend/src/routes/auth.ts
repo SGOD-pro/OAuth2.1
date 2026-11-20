@@ -256,6 +256,7 @@ export async function mintJwtAccessToken(params: {
     tokenIssuedAtSec?: number;
     tokenIssuedAtMs?: number;
     tokenVersion?: number;
+    familyId?: string;
 }): Promise<string | null> {
     try {
         const signingKey = await getIdpSigningKey();
@@ -312,6 +313,10 @@ export async function mintJwtAccessToken(params: {
             iat_ms: tokenIssuedAtMs,
             token_version: tokenVersion,
         };
+
+        if (params.familyId) {
+            claims.family_id = params.familyId;
+        }
 
         if (email !== undefined) claims.email = email;
         if (emailVerified !== undefined) claims.email_verified = emailVerified;
@@ -1699,6 +1704,8 @@ auth.post("/oauth2/token", async (c) => {
                         ? preRefreshTokenVersion
                         : (typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : 1);
 
+                    const currentFamilyId = rotationResult.familyId || existingFamily?.familyId;
+
                     const jwtAt = await mintJwtAccessToken({
                         userId: resolvedUserId,
                         clientId: canonicalClientId,
@@ -1707,6 +1714,7 @@ auth.post("/oauth2/token", async (c) => {
                         tokenIssuedAtMs: preRefreshIssuedAtMs,
                         tokenIssuedAtSec: preRefreshIssuedAtSec,
                         tokenVersion: expectedRefreshTokenVersion,
+                        familyId: currentFamilyId || undefined,
                     });
 
                     if (!jwtAt) {
@@ -1758,6 +1766,7 @@ auth.post("/oauth2/token", async (c) => {
                         token: jwtAt,
                         clientId: canonicalClientId,
                         userId: resolvedUserId,
+                        familyId: currentFamilyId || undefined,
                         expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
                         createdAt: new Date(),
                         scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
@@ -1767,7 +1776,7 @@ auth.post("/oauth2/token", async (c) => {
                     if (tokenData.refresh_token) {
                         await database.collection("oauthRefreshToken").updateOne(
                             { token: tokenData.refresh_token },
-                            { $set: { tokenVersion: expectedRefreshTokenVersion } }
+                            { $set: { familyId: currentFamilyId || undefined, tokenVersion: expectedRefreshTokenVersion } }
                         ).catch(() => {});
                     }
 
@@ -2074,6 +2083,7 @@ auth.post("/oauth2/token", async (c) => {
                     tokenIssuedAtMs: codeIssuedAtMs,
                     tokenIssuedAtSec: codeIssuedAtSec,
                     tokenVersion: expectedTokenVersion,
+                    familyId: familyId || undefined,
                 });
 
                 if (!jwtAt) {
@@ -2119,6 +2129,7 @@ auth.post("/oauth2/token", async (c) => {
                     token: jwtAt,
                     clientId: canonicalClientId,
                     userId: resolvedUserId,
+                    familyId: familyId || undefined,
                     expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
                     createdAt: new Date(),
                     scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
@@ -2128,7 +2139,7 @@ auth.post("/oauth2/token", async (c) => {
                 if (tokenData.refresh_token) {
                     await database.collection("oauthRefreshToken").updateOne(
                         { token: tokenData.refresh_token },
-                        { $set: { tokenVersion: expectedTokenVersion } }
+                        { $set: { familyId: familyId || undefined, tokenVersion: expectedTokenVersion } }
                     ).catch(() => {});
                 }
 
@@ -2298,6 +2309,21 @@ auth.get("/oauth2/userinfo", async (c) => {
                         }
 
                         const targetClientId = (payload.client_id || payload.azp || (typeof payload.aud === "string" ? payload.aud : payload.aud?.[0]) || "") as string;
+
+                        if (payload && (payload as any).family_id) {
+                            const familyDoc = await database.collection("oauth_token_families").findOne({
+                                familyId: String((payload as any).family_id),
+                                ...(targetClientId ? { clientId: targetClientId } : {}),
+                            });
+                            if (!familyDoc || familyDoc.status === "revoked") {
+                                return c.json(
+                                    { error: "invalid_token", error_description: "Token family has been revoked" },
+                                    401,
+                                    { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Token family has been revoked"' }
+                                );
+                            }
+                        }
+
                         const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
 
                         // Scope and Privacy Enforcement (Slice 2)
@@ -2521,6 +2547,17 @@ auth.post("/oauth2/introspect", async (c) => {
                     });
                     if (!tokenDoc) {
                         return c.json({ active: false }, 200);
+                    }
+
+                    const activeFamilyId = (tokenDoc as any)?.familyId || (payload as any)?.family_id;
+                    if (activeFamilyId) {
+                        const fam = await database.collection("oauth_token_families").findOne({
+                            familyId: String(activeFamilyId),
+                            ...(tokenClientId ? { clientId: tokenClientId } : {}),
+                        });
+                        if (!fam || fam.status === "revoked") {
+                            return c.json({ active: false }, 200);
+                        }
                     }
 
                     // Immutable subject ownership: query ONLY by immutable subject ID
@@ -2825,24 +2862,33 @@ auth.post("/oauth2/revoke", async (c) => {
             });
 
             if (familyDoc) {
-                // Client-scoped family revocation: revokes only this family for this client
+                // Targeted client-scoped family revocation: revokes only this family for this client
                 await database.collection("oauth_token_families").updateOne(
                     { familyId: familyDoc.familyId, clientId: canonicalClientId },
                     { $set: { status: "revoked", revokedAt: now, rotating: false } }
                 );
 
-                if (familyDoc.userId) {
-                    await Promise.all([
-                        database.collection("oauthAccessToken").deleteMany({
-                            clientId: canonicalClientId,
-                            userId: familyDoc.userId,
-                        }),
-                        database.collection("oauthRefreshToken").deleteMany({
-                            clientId: canonicalClientId,
-                            userId: familyDoc.userId,
-                        }),
-                    ]);
-                }
+                const familyHashes = [
+                    familyDoc.activeTokenHash,
+                    ...(Array.isArray(familyDoc.consumedTokenHashes) ? familyDoc.consumedTokenHashes : []),
+                ].filter(Boolean);
+
+                await Promise.all([
+                    database.collection("oauthAccessToken").deleteMany({
+                        clientId: canonicalClientId,
+                        familyId: familyDoc.familyId,
+                    }),
+                    database.collection("oauthRefreshToken").deleteMany({
+                        clientId: canonicalClientId,
+                        $or: [
+                            { familyId: familyDoc.familyId },
+                            { token: token },
+                            { token: tokenBase64 },
+                            { token: tokenHex },
+                            ...(familyHashes.length > 0 ? [{ token: { $in: familyHashes } }] : []),
+                        ],
+                    }),
+                ]);
             } else {
                 // 2. Look up in oauthAccessToken scoped strictly to authenticated client
                 const accDoc = await database.collection("oauthAccessToken").findOne({
@@ -2850,7 +2896,24 @@ auth.post("/oauth2/revoke", async (c) => {
                     $or: [{ token }, { token: tokenBase64 }, { token: tokenHex }],
                 });
                 if (accDoc) {
-                    await database.collection("oauthAccessToken").deleteOne({ _id: accDoc._id });
+                    if (accDoc.familyId) {
+                        await database.collection("oauth_token_families").updateOne(
+                            { familyId: accDoc.familyId, clientId: canonicalClientId },
+                            { $set: { status: "revoked", revokedAt: now, rotating: false } }
+                        );
+                        await Promise.all([
+                            database.collection("oauthAccessToken").deleteMany({
+                                clientId: canonicalClientId,
+                                familyId: accDoc.familyId,
+                            }),
+                            database.collection("oauthRefreshToken").deleteMany({
+                                clientId: canonicalClientId,
+                                familyId: accDoc.familyId,
+                            }),
+                        ]);
+                    } else {
+                        await database.collection("oauthAccessToken").deleteOne({ _id: accDoc._id });
+                    }
                 } else {
                     // 3. Look up in oauthRefreshToken scoped strictly to authenticated client
                     const refDoc = await database.collection("oauthRefreshToken").findOne({
@@ -2858,7 +2921,27 @@ auth.post("/oauth2/revoke", async (c) => {
                         $or: [{ token }, { token: tokenBase64 }, { token: tokenHex }],
                     });
                     if (refDoc) {
-                        await database.collection("oauthRefreshToken").deleteOne({ _id: refDoc._id });
+                        if (refDoc.familyId) {
+                            await database.collection("oauth_token_families").updateOne(
+                                { familyId: refDoc.familyId, clientId: canonicalClientId },
+                                { $set: { status: "revoked", revokedAt: now, rotating: false } }
+                            );
+                            await Promise.all([
+                                database.collection("oauthAccessToken").deleteMany({
+                                    clientId: canonicalClientId,
+                                    familyId: refDoc.familyId,
+                                }),
+                                database.collection("oauthRefreshToken").deleteMany({
+                                    clientId: canonicalClientId,
+                                    $or: [
+                                        { familyId: refDoc.familyId },
+                                        { token: refDoc.token },
+                                    ],
+                                }),
+                            ]);
+                        } else {
+                            await database.collection("oauthRefreshToken").deleteOne({ _id: refDoc._id });
+                        }
                     }
                 }
             }
