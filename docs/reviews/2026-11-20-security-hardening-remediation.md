@@ -59,6 +59,7 @@
 | Doc Consistency | `npm run security:docs-check` | **PASS** | 6 checks passed cleanly (0 errors) |
 | Integration Contract | `npm run security:integration-check` | **PASS** | 5 normative checks passed (0 violations) |
 | Unit Test Suite | `npm run test:unit` | **PASS** | 10 unit suites passed cleanly (0 failures) |
+| Local Consumer E2E | `npm run test:local-consumer-e2e` | **PASS** | 11 protocol flows passed cleanly (0 failures) |
 | OAuth Hardening | `npm run test:oauth-hardening` | **PASS** | 23/23 comprehensive regression checks passed |
 | Consumer MFA | `npm run test:consumer-mfa` | **PASS** | 18 tests passed cleanly (0 failures) |
 | Private App Isolation | `npm run test:private-app-isolation` | **PASS** | 10 tests passed cleanly (0 failures) |
