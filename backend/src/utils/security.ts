@@ -391,19 +391,6 @@ export function isStrongPassword(password: string): boolean {
   );
 }
 
-export function safeCallbackURL(value: string | null): string | undefined {
-  if (!value) return undefined;
-  if (!value.startsWith("/") || value.startsWith("//")) return undefined;
-
-  try {
-    const url = new URL(value, "https://callback.invalid");
-    if (url.origin !== "https://callback.invalid") return undefined;
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return undefined;
-  }
-}
-
 /** True if hostname is loopback, link-local, or RFC1918 / unique-local. */
 export function isPrivateOrLocalHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");

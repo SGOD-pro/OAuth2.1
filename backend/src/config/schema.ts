@@ -24,9 +24,6 @@ export const envSchema = z.object({
     AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER: z.string().optional(),
     EMAIL_DELIVERY_WEBHOOK_URL: z.string().optional(),
 
-    VITE_CLIENT_ID: z.string().optional(),
-    PUBLIC_KEY: z.string().optional(),
-
     UPSTASH_REDIS_REST_URL: z.string().optional(),
     UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
     UPSTASH_REDIS_API_KEY: z.string().optional(),

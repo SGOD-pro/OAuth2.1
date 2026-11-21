@@ -98,7 +98,6 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("auth_events", { clientId: 1, timestamp: -1 }),
       safeIndex("auth_events", { userId: 1, timestamp: -1 }),
       safeIndex("auth_events", { sessionId: 1, timestamp: -1 }),
-      safeIndex("app_admin_revoked_tokens", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("user_app_registrations", { clientId: 1, userId: 1 }, { unique: true }),
       safeIndex("oauthClient", { allowedOrigins: 1, disabled: 1 }),
       safeIndex("oauthClient", { allowed_origins: 1, disabled: 1 }),

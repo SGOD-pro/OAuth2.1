@@ -14,7 +14,7 @@
     "publish": "aws lambda publish-version --function-name hello --region us-east-1",
     "deploy": "run-s build zip update publish",
     "dev": "tsx watch --env-file=.env src/dev.ts",
-    "security:self-check": "tsx --env-file=.env scripts/security-self-check.ts",
+    "security:self-check": "tsx --env-file-if-exists=.env scripts/security-self-check.ts",
     "test:local-consumer-e2e": "tsx tests/e2e/local-consumer-e2e.test.ts",
     "test:network-consumer-e2e": "tsx tests/e2e/network-consumer-e2e.test.ts",
     "test:process-restart": "tsx tests/e2e/idp-process-restart.test.ts",

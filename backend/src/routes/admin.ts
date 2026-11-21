@@ -1005,8 +1005,20 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, requireRecentMf
 // 6b. List All Users (Super-Admin only)
 admin.get("/users", requireSuperAdmin, async (c) => {
   try {
+    const rawLimit = parseInt(c.req.query("limit") || "100", 10);
+    const rawPage = parseInt(c.req.query("page") || "1", 10);
+    const limit = isNaN(rawLimit) || rawLimit < 1 ? 100 : Math.min(rawLimit, 500);
+    const page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
+    const skip = (page - 1) * limit;
+
     const database = await getDb();
-    const users = await database.collection("user").find({}).sort({ createdAt: -1 }).toArray();
+    const users = await database
+      .collection("user")
+      .find({})
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
     const safeUsers = users.map((u: any) => ({
       _id: u._id?.toString() || u.id,
       displayLabel: toApprovedDisplayLabel(u.email, u.name),
@@ -1216,7 +1228,7 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   if (!result && !updatedDoc) return c.json({ error: "Client not found" }, 404);
 
   // Invalidate CORS origin cache across Redis and MongoDB after database update (prevents races)
-  await invalidateClientOrigins(oldClient, updatedDoc || { ...oldClient, ...safeUpdate, ...dbUpdates, ...body });
+  await invalidateClientOrigins(oldClient, updatedDoc || { ...oldClient, ...dbUpdates, ...body });
 
   // Token revocation on client disable
   if (body.disabled === true || body.is_active === false) {
@@ -1611,7 +1623,7 @@ admin.post("/clients/:clientId/app-admins", requireScopedAdmin, requireRecentMfa
     // USER-REQUIRED POLICY: Reject assigning an existing super-admin identity as an app admin.
     const userInDb = await database.collection("user").findOne({ email });
     if (userInDb && (userInDb.role === "super-admin" || (userInDb.role === "admin" && userInDb.scopedClientId === null))) {
-      const reqId = c.get("requestId") || c.req.header("x-request-id");
+      const reqId = (c as any).get("requestId") || c.req.header("x-request-id");
       return c.json(
         {
           error: "Identity conflict: Global Super Admin cannot be assigned as an Application Administrator",

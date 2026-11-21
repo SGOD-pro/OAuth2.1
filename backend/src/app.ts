@@ -12,7 +12,11 @@ import { authRateLimit } from "./middleware/rate-limit";
 import { csrfProtection } from "./middleware/csrf";
 import { config } from "./config";
 
-const app = new Hono();
+const app = new Hono<{
+	Variables: {
+		requestId: string;
+	};
+}>();
 export const appBootTime = Date.now();
 
 // P0-4: Fail fast at boot in production if TRUSTED_PROXY_CIDRS is empty.
@@ -169,23 +173,6 @@ app.onError((err, c) => {
 		);
 	}
 	return c.json({ error: "server_error" }, 500);
-});
-
-app.get("/.well-known/jwks.json", async (c) => {
-	const forwardUrl = new URL("/api/auth/jwks", c.req.raw.url);
-	const forwardReq = new Request(forwardUrl.toString(), {
-		method: "GET",
-		headers: c.req.raw.headers,
-	});
-	return auth.fetch(forwardReq);
-});
-app.get("/.well-known/jwks", async (c) => {
-	const forwardUrl = new URL("/api/auth/jwks", c.req.raw.url);
-	const forwardReq = new Request(forwardUrl.toString(), {
-		method: "GET",
-		headers: c.req.raw.headers,
-	});
-	return auth.fetch(forwardReq);
 });
 
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }, 200));

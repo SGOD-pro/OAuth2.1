@@ -1,5 +1,4 @@
 import { getEnv } from './env'
-import { createHmac } from 'crypto'
 
 const parsedEnv = getEnv()
 
@@ -72,10 +71,6 @@ export const config = {
         return process.env.EMAIL_DELIVERY_WEBHOOK_URL || (parsedEnv as any).EMAIL_DELIVERY_WEBHOOK_URL
     },
 
-    get betterAuthSecret() {
-        return this.auth.secret
-    },
-
     google: {
         get clientId() {
             return process.env.GOOGLE_CLIENT_ID || parsedEnv.GOOGLE_CLIENT_ID
@@ -87,15 +82,6 @@ export const config = {
 
     get frontendUrl() {
         return process.env.FRONTEND_URL || parsedEnv.FRONTEND_URL
-    },
-
-    app: {
-        get clientId() {
-            return process.env.VITE_CLIENT_ID || parsedEnv.VITE_CLIENT_ID
-        },
-        get publicKey() {
-            return process.env.PUBLIC_KEY || parsedEnv.PUBLIC_KEY
-        },
     },
 
     get trustedProxyCidrs() {

@@ -302,10 +302,8 @@ export const authProvider = betterAuth({
             },
         }),
 
-        // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+
         // OAuth 2.1 Provider â€” full OIDC provider
-        // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-        //
         // Turns this service into a complete OAuth 2.1 / OIDC provider.
         // Handles: client registration, PKCE, consent, token exchange,
         // refresh tokens, introspection, revocation, UserInfo.
@@ -320,25 +318,16 @@ export const authProvider = betterAuth({
         oauthProvider({
             loginPage: `${config.frontendUrl}/auth`,
             consentPage: `${config.frontendUrl}/consent`,
-
-            // Supported OIDC scopes
             scopes: ["openid", "profile", "email", "offline_access"],
-
-            // Token expiration (in seconds)
-            accessTokenExpiresIn: 900,       // 15 minutes
-            refreshTokenExpiresIn: 604800,   // 7 days
-
-            // Security: Strictly disable dynamic client registration and enforce Super-Admin only privileges
+            accessTokenExpiresIn: 900,
+            refreshTokenExpiresIn: 604800,
             allowDynamicClientRegistration: false,
             clientPrivileges: async ({ user }: any) => {
                 return isSuperAdminUser(user);
             },
-
             accessToken: {
                 format: "jwt"
             },
-
-            // Per-endpoint rate limiting (per-IP)
             rateLimit: {
                 token: { window: 60, max: 20 },
                 authorize: { window: 60, max: 30 },
@@ -347,7 +336,6 @@ export const authProvider = betterAuth({
                 revoke: { window: 60, max: 30 },
                 userinfo: { window: 60, max: 60 },
             },
-
             client: {
                 fields: {
                     adminUserId: { type: "string", required: false },
@@ -358,7 +346,7 @@ export const authProvider = betterAuth({
                     updatedAt: { type: "date", required: false }
                 }
             }
-        }),
+        }) as any,
     ],
 });
 

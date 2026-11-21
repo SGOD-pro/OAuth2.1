@@ -278,7 +278,7 @@ export async function setCachedOrigin(
       const coll = db.collection("origin_cache");
       const tombstones = await coll
         .find({
-          _id: { $in: ["ORIGIN#__GLOBAL_TOMBSTONE__", `ORIGIN_INV#${normalized}`, `ORIGIN#${normalized}`] },
+          _id: { $in: ["ORIGIN#__GLOBAL_TOMBSTONE__", `ORIGIN_INV#${normalized}`, `ORIGIN#${normalized}`] as any },
         })
         .toArray();
 

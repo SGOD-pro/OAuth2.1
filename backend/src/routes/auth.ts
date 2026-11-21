@@ -21,7 +21,7 @@ import { emergencyRateLimiter } from "../middleware/rate-limit";
 import { checkAccountEligibility } from "../utils/account-eligibility";
 
 import { importJWK, SignJWT, jwtVerify, decodeJwt, decodeProtectedHeader, generateKeyPair, exportJWK } from "jose";
-import { getIdpPublicKey, checkUserIsClientAdmin, requireAdmin, requireSuperAdmin, requireRecentMfa } from "../middleware/admin-auth";
+import { getIdpPublicKey, checkUserIsClientAdmin, requireAdmin, requireSuperAdmin, requireRecentMfa, isSuperAdmin, isAppAdmin } from "../middleware/admin-auth";
 import { symmetricDecrypt, symmetricEncrypt } from "better-auth/crypto";
 
 export const auth = new Hono();
@@ -363,25 +363,7 @@ async function resignIdTokenWithNewAtHash(idToken: string, newAccessToken: strin
     }
 }
 
-export function isSuperAdmin(user: any): boolean {
-    if (!user) return false;
-    if (user.role === "super-admin") {
-        return user.scopedClientId === null;
-    }
-    if (user.role === "admin" && user.scopedClientId === null) {
-        return true;
-    }
-    return false;
-}
-
-export function isAppAdmin(user: any): boolean {
-    if (!user) return false;
-    if (user.role === "app-admin") return true;
-    if (user.role === "admin" && typeof user.scopedClientId === "string" && user.scopedClientId.trim().length > 0) {
-        return true;
-    }
-    return false;
-}
+export { isSuperAdmin, isAppAdmin };
 
 interface ClientContext {
     clientId: string | null;
@@ -765,14 +747,19 @@ auth.post("/sign-in/email", async (c) => {
         // Single-factor completed login: extract established session ID
         let sessionId: string | null = null;
         try {
-            const setCookie = res.headers.get("set-cookie") || "";
-            const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
-            if (match) {
-                const rawToken = decodeURIComponent(match[1]);
-                const token = rawToken.split(".")[0];
-                const sessionDoc = await database.collection("session").findOne({ token });
-                if (sessionDoc) {
-                    sessionId = String(sessionDoc._id || sessionDoc.id);
+            const setCookieList: string[] = (res.headers as any).getSetCookie
+                ? (res.headers as any).getSetCookie()
+                : [res.headers.get("set-cookie") || ""];
+            for (const header of setCookieList) {
+                const match = header.match(/(?:__Secure-)?better-auth\.session_token=([^;]+)/);
+                if (match) {
+                    const rawToken = decodeURIComponent(match[1]);
+                    const token = rawToken.split(".")[0];
+                    const sessionDoc = await database.collection("session").findOne({ token });
+                    if (sessionDoc) {
+                        sessionId = String(sessionDoc._id || sessionDoc.id);
+                        break;
+                    }
                 }
             }
         } catch {}
@@ -930,7 +917,7 @@ auth.post("/sign-up/email", async (c) => {
         try {
             const email = String(body.email).toLowerCase().trim();
             // Invariant: New user must NEVER possess admin or scoped privileges
-            await database.collection("user").updateOne(
+            const updatedResult = await database.collection("user").findOneAndUpdate(
                 { email },
                 {
                     $unset: {
@@ -942,10 +929,11 @@ auth.post("/sign-up/email", async (c) => {
                         clientSecret: "",
                     },
                     $set: { role: "user" },
-                }
+                },
+                { returnDocument: "after" }
             );
 
-            const createdUser = await database.collection("user").findOne({ email });
+            const createdUser = updatedResult?.value || updatedResult;
             if (createdUser) {
                 createdUserId = String(createdUser.id || createdUser._id);
                 if (canonicalClientId && clientDoc?.isPublic) {
@@ -1144,7 +1132,7 @@ auth.get("/oauth2/authorize", async (c) => {
                 const json = await resClone.json();
                 if (json && json.redirect === true && typeof json.url === "string") {
                     location = json.url;
-                    headers.set("location", location);
+                    headers.set("location", json.url);
                 }
             } catch {}
         }
@@ -1582,8 +1570,9 @@ auth.post("/oauth2/token", async (c) => {
 
                 // CRITICAL SECURITY INVARIANT:
                 // Authoritative Account Eligibility across all client types (public and private)
+                let userDoc: any = null;
                 if (resolvedUserId) {
-                    const userDoc = await database.collection("user").findOne({
+                    userDoc = await database.collection("user").findOne({
                         $or: [
                             { id: resolvedUserId },
                             ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
@@ -2383,13 +2372,15 @@ auth.get("/oauth2/userinfo", async (c) => {
                     let tokenIssuedAtMs: number | undefined;
                     let tokenVersion: number | undefined;
                     try {
-                        const accDoc = await database.collection("oauthAccessToken").findOne({
-                            $or: [
-                                { token: bearerToken },
-                                { token: hashToken(bearerToken, "base64url") },
-                                { token: hashToken(bearerToken, "hex") },
-                            ],
-                        });
+                        const accDoc = bearerToken
+                            ? await database.collection("oauthAccessToken").findOne({
+                                $or: [
+                                    { token: bearerToken },
+                                    { token: hashToken(bearerToken, "base64url") },
+                                    { token: hashToken(bearerToken, "hex") },
+                                ],
+                            })
+                            : null;
                         if (accDoc?.createdAt) {
                             tokenIssuedAtMs = new Date(accDoc.createdAt).getTime();
                             tokenIssuedAtSec = Math.floor(tokenIssuedAtMs / 1000);
@@ -3328,29 +3319,33 @@ async function resolveVerifiedMfaSession(res: Response): Promise<VerifiedMfaSess
     }
 
     try {
-        const setCookie = res.headers.get("set-cookie") || "";
-        const match = setCookie.match(/better-auth\.session_token=([^;]+)/);
-        if (match) {
-            const rawToken = decodeURIComponent(match[1]);
-            const token = rawToken.split(".")[0];
-            const database = await getDb();
-            const sessionDoc = await database.collection("session").findOne({ token });
-            if (sessionDoc && sessionDoc.userId) {
-                const sessionId = String(sessionDoc._id || sessionDoc.id);
-                const completedUserId = sessionDoc.userId.toString();
-                // Authoritative MFA session marking for administrative & OAuth continuation
-                await database.collection("session").updateOne(
-                    { _id: sessionDoc._id },
-                    { $set: { twoFactorVerified: true, mfaVerifiedAt: new Date() } }
-                ).catch(() => {});
-                let actor: string | null = null;
-                const u = await database.collection("user").findOne({
-                    $or: [{ id: completedUserId }, { _id: completedUserId }],
-                });
-                if (u?.email) {
-                    actor = u.email;
+        const setCookieList: string[] = (res.headers as any).getSetCookie
+            ? (res.headers as any).getSetCookie()
+            : [res.headers.get("set-cookie") || ""];
+        for (const header of setCookieList) {
+            const match = header.match(/(?:__Secure-)?better-auth\.session_token=([^;]+)/);
+            if (match) {
+                const rawToken = decodeURIComponent(match[1]);
+                const token = rawToken.split(".")[0];
+                const database = await getDb();
+                const sessionDoc = await database.collection("session").findOne({ token });
+                if (sessionDoc && sessionDoc.userId) {
+                    const sessionId = String(sessionDoc._id || sessionDoc.id);
+                    const completedUserId = sessionDoc.userId.toString();
+                    // Authoritative MFA session marking for administrative & OAuth continuation
+                    await database.collection("session").updateOne(
+                        { _id: sessionDoc._id },
+                        { $set: { twoFactorVerified: true, mfaVerifiedAt: new Date() } }
+                    ).catch(() => {});
+                    let actor: string | null = null;
+                    const u = await database.collection("user").findOne({
+                        $or: [{ id: completedUserId }, { _id: completedUserId }],
+                    });
+                    if (u?.email) {
+                        actor = u.email;
+                    }
+                    return { sessionId, completedUserId, actor };
                 }
-                return { sessionId, completedUserId, actor };
             }
         }
     } catch {

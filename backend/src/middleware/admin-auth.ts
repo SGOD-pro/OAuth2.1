@@ -293,11 +293,12 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
                   ? await database.collection("session").findOne({ token: tokenVal })
                   : (sessResult.session.id ? await database.collection("session").findOne({ id: sessResult.session.id }) : null);
 
+                const sessSession = sessResult.session as any;
                 const isTwoFactorVerified = Boolean(
-                  sessResult.session.twoFactorVerified === true ||
+                  sessSession.twoFactorVerified === true ||
                   dbSessionDoc?.twoFactorVerified === true
                 );
-                const mfaVerifiedAt = dbSessionDoc?.mfaVerifiedAt || sessResult.session.mfaVerifiedAt || (isTwoFactorVerified ? sessResult.session.createdAt : null);
+                const mfaVerifiedAt = dbSessionDoc?.mfaVerifiedAt || sessSession.mfaVerifiedAt || (isTwoFactorVerified ? sessResult.session.createdAt : null);
 
                 cookieSessionUser = {
                   ...sessResult.user,
@@ -514,9 +515,9 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
         payload.mfa === true ||
         (Array.isArray(payload.amr) && payload.amr.includes("mfa"))
       );
-      const mfaVerifiedAt = payload.mfa_verified_at
+      const mfaVerifiedAt = typeof payload.mfa_verified_at === "number"
         ? new Date(payload.mfa_verified_at * 1000)
-        : (payload.iat ? new Date(payload.iat * 1000) : null);
+        : (typeof payload.iat === "number" ? new Date(payload.iat * 1000) : null);
 
       const bearerSessionObj = {
         id: `token-${sub}`,
