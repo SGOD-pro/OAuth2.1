@@ -15,6 +15,7 @@ import {
   validateSafePrimitiveString,
   toApprovedDisplayLabel,
   isEmailShaped,
+  escapeRegex,
 } from "../utils/security";
 import { recordAdminAudit } from "../db/state";
 import { invalidateClientOrigins } from "../cache/origin-cache";
@@ -2146,8 +2147,8 @@ admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, requireRece
       ),
       database.collection("verification").deleteMany({
         $or: [
-          { value: { $regex: `"userId":"${userId}".*"client_id":"${canonicalClientId}"` } },
-          { value: { $regex: `"client_id":"${canonicalClientId}".*"userId":"${userId}"` } },
+          { value: { $regex: `"userId":"${escapeRegex(userId)}".*"client_id":"${escapeRegex(canonicalClientId)}"` } },
+          { value: { $regex: `"client_id":"${escapeRegex(canonicalClientId)}".*"userId":"${escapeRegex(userId)}"` } },
         ]
       }).catch(() => {}),
     ]);

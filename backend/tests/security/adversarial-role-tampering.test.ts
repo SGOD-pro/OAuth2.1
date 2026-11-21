@@ -305,6 +305,60 @@ await runTest("AUDIENCE-3: Platform Super Admin token cannot access consumer app
   assert.equal(res.status, 403, "Platform token audience does not match consumer application client ID");
 });
 
+await runTest("AUDIENCE-4: App Admin token without MFA cannot access consumer app admin route (403)", async () => {
+  const unverifiedAppAdminToken = await new SignJWT({
+    sub: alphaAdminId,
+    role: "app-admin",
+    scoped_client_id: "app-alpha",
+    aud: ["app-alpha"],
+    mfa: false,
+    amr: ["pwd"],
+  })
+    .setProtectedHeader({ alg: "RS256", kid })
+    .setIssuer("http://localhost:3000")
+    .setIssuedAt()
+    .setExpirationTime("15m")
+    .sign(privateKey);
+
+  const res = await app.request("/api/admin/app/app-alpha/config", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${unverifiedAppAdminToken}` }),
+  });
+  assert.equal(res.status, 403, "Unverified MFA token must be rejected with 403");
+  const data = await res.json();
+  assert.equal(data.code, "ERR_MFA_REQUIRED", "Code must be ERR_MFA_REQUIRED");
+});
+
+await runTest("AUDIENCE-5: App Admin token with MFA can access own consumer app admin route (200)", async () => {
+  const verifiedAppAdminToken = await mintToken({
+    sub: alphaAdminId,
+    role: "app-admin",
+    scoped_client_id: "app-alpha",
+    aud: ["app-alpha"],
+  });
+
+  const res = await app.request("/api/admin/app/app-alpha/config", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${verifiedAppAdminToken}` }),
+  });
+  assert.equal(res.status, 200, "Verified MFA token must access consumer app admin route with 200");
+});
+
+await runTest("IMMUTABILITY-1: Bearer token using mutable email as sub is rejected (401)", async () => {
+  const emailSubToken = await mintToken({
+    sub: "alpha-admin@example.com",
+    role: "app-admin",
+    scoped_client_id: "app-alpha",
+    aud: ["app-alpha"],
+  });
+
+  const res = await app.request("/api/admin/app/app-alpha/config", {
+    method: "GET",
+    headers: getTestHeaders({ Authorization: `Bearer ${emailSubToken}` }),
+  });
+  assert.equal(res.status, 401, "Bearer token with mutable email as sub must be rejected (401)");
+});
+
 // ==============================================================================
 // 4. Conflicting Credentials & Authentication Boundary Defense
 // ==============================================================================

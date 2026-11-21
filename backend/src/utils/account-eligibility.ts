@@ -76,9 +76,9 @@ export function checkAccountEligibility(
     // operators can configure AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE="enforce_new" and AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER=<ISO date>.
     // Accounts created prior to that date are granted a temporary grace period, while all newly created accounts fail closed.
     // Existing accounts are NEVER marked emailVerified=true in DB to bypass migration.
-    const rolloutMode = process.env.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE || "enforce_all";
-    const enforcedAfter = process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER
-      ? new Date(process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER).getTime()
+    const rolloutMode = config.auth.emailVerificationRolloutMode || "enforce_all";
+    const enforcedAfter = config.auth.emailVerificationEnforcedAfter
+      ? new Date(config.auth.emailVerificationEnforcedAfter).getTime()
       : null;
 
     let inGraceWindow = false;

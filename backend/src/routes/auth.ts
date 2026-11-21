@@ -1818,7 +1818,7 @@ auth.post("/oauth2/token", async (c) => {
                             ],
                         };
 
-                        const commitResult = await database.collection("user").findOneAndUpdate(
+                        const commitResult: any = await database.collection("user").findOneAndUpdate(
                             refreshCommitCondition,
                             {
                                 $set: {
@@ -1829,7 +1829,8 @@ auth.post("/oauth2/token", async (c) => {
                             { returnDocument: "after" }
                         );
 
-                        if (commitResult) {
+                        const updatedDoc = commitResult && (commitResult.value !== undefined ? commitResult.value : commitResult);
+                        if (updatedDoc) {
                             refreshCommitSuccess = true;
                         }
                     }
@@ -2181,7 +2182,7 @@ auth.post("/oauth2/token", async (c) => {
                         ],
                     };
 
-                    const commitResult = await database.collection("user").findOneAndUpdate(
+                    const commitResult: any = await database.collection("user").findOneAndUpdate(
                         commitCondition,
                         {
                             $set: {
@@ -2192,7 +2193,8 @@ auth.post("/oauth2/token", async (c) => {
                         { returnDocument: "after" }
                     );
 
-                    if (commitResult) {
+                    const updatedDoc = commitResult && (commitResult.value !== undefined ? commitResult.value : commitResult);
+                    if (updatedDoc) {
                         commitSuccess = true;
                     }
                 }

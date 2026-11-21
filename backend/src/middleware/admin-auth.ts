@@ -395,7 +395,7 @@ async function getAuthenticatedUser(c: any): Promise<{ user: any; session: any }
         }
       }
 
-      const orConditions: any[] = [{ id: sub }, { email: sub }];
+      const orConditions: any[] = [{ id: sub }];
       if (ObjectId.isValid(sub) && sub.length === 24) {
         try {
           orConditions.push({ _id: new ObjectId(sub) });
@@ -1146,6 +1146,10 @@ export const requireConsumerAppAdmin = createMiddleware(async (c, next) => {
       403
     );
   }
+
+  // 4.5. Enforce Administrative MFA Policy
+  const mfaCheck = checkAdminMfa(c, auth.user, auth.session, reqId);
+  if (mfaCheck) return mfaCheck;
 
   // 5. Must change password if temporary
   if (auth.user?.mustChangePassword === true) {

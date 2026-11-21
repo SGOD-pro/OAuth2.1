@@ -1008,3 +1008,11 @@ export function toApprovedDisplayLabel(email?: string | null, name?: string | nu
   }
   return `${local.slice(0, 2)}***@${domain || ""}`;
 }
+
+/**
+ * Escapes special regular expression characters to prevent injection and catastrophic backtracking.
+ */
+export function escapeRegex(val: string): string {
+  return val.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+

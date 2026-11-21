@@ -134,8 +134,13 @@ function pruneCorsLookupBuckets(now: number): void {
     }
   }
   if (corsLookupBuckets.size >= MAX_CORS_BUCKETS) {
-    const oldestKey = corsLookupBuckets.keys().next().value;
-    if (oldestKey) corsLookupBuckets.delete(oldestKey);
+    const evictCount = Math.max(1, Math.floor(MAX_CORS_BUCKETS * 0.1));
+    let deleted = 0;
+    for (const key of corsLookupBuckets.keys()) {
+      corsLookupBuckets.delete(key);
+      deleted++;
+      if (deleted >= evictCount) break;
+    }
   }
 }
 
