@@ -9,7 +9,7 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 
 ## Active next program: V2 verified multi-account identity platform
 
-**Updated 2026-11-22. Status: planned, documentation only.**
+**Updated 2026-11-22. Status: P0 isolated proof locally verified; production V2 pending.**
 Integrated main: `828acc54ebe4a24fb87cf6dc2c55d79998a68895`, containing merged security PR #2.
 Security was independently reviewed at `66738b0` with passing CI; subsequent `0a5727e` corrects evidence wording. This docs branch incorporates that main baseline.
 
@@ -18,7 +18,7 @@ Read [the document index](../README.md), [architecture](../ARCHITECTURE.md), [im
 | Program area | Status | Next gate |
 |---|---|---|
 | Baseline account/token/MFA hardening | Merged into main, incorporated in docs branch; deployment not inferred | Preserve baseline; verify runtime refs/checks before release |
-| P0 engine/schema compatibility | Planned | Transaction-aware account creation and request-local session proof |
+| P0 engine/schema compatibility | Locally verified, [evidence](../specs/0008-multi-account-identity-platform/p0-evidence.md) | Accept isolated proof; production P2/P3 wiring remains |
 | P1 client dimensions | Planned | Audit/backfill; open ordinary access, private/admin guards retained |
 | P2 verified signup, username and mail | Planned | Proof-before-create, unique transaction and real bounded delivery |
 | P3 independent sessions and chooser | Planned | Real browser multi-tab subject and purpose isolation |
@@ -31,9 +31,9 @@ Read [the document index](../README.md), [architecture](../ARCHITECTURE.md), [im
 
 - [x] Expand architecture, page/API workflows, schemas, security and implementation map in docs.
 - [x] Incorporate main with merged security PR #2 and reconcile active V2 docs onto it.
-- [ ] P0 compatibility proof, then ordered vertical slices in PHASES.md.
+- [x] P0 isolated compatibility proof, then ordered slices after acceptance in PHASES.md.
 
-No V2 runtime/data migration is complete through this update. Historical slice states below remain history; they do not override V2 gates or establish current deployment status.
+No production V2 identity flow or data migration is complete through this update. Historical slice states below remain history; they do not override V2 gates or establish current deployment status.
 
 ## At a glance
 

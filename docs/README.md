@@ -18,3 +18,5 @@
 14. [Scope](scope/scope.md): active program rollup and preserved historical slices.
 
 Proposed file paths are written as code until implementation creates them. Existing executable route/suite manifests under [security/](security/) remain current-runtime inventories; this planning change does not add future routes as if implemented.
+
+P0 now has [locally verified engine compatibility evidence](specs/0008-multi-account-identity-platform/p0-evidence.md). This proves isolated transaction/session boundaries, not production signup, browser chooser or P1-P9 completion.

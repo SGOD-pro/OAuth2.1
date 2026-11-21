@@ -1,17 +1,18 @@
 # 0008 verification plan and evidence ledger
 
-**Status:** Planned. No V2 runtime scenario has been executed by this documentation change.
+**Status:** P0 compatibility proof locally passed; production V2 scenarios remain pending. See [P0 evidence](p0-evidence.md) for source, commands, inventory and limitations.
 Baseline security evidence is separate: [CI at 66738b0](https://github.com/SGOD-pro/OAuth2.1/actions/runs/44947156668). Later report wording correction does not add separate-worker execution evidence.
 
 ## Docs-only verification
 
 Record actual commands/results in the documentation PR: relative links/anchors, required canonical contract checks, diagram syntax, requirement-to-slice mapping and docs-only diff. A documentation check cannot mark the runtime matrix below complete.
 
-## Runtime evidence, initially all pending
+## Runtime evidence
 
 | Scenario | AC IDs | Required category | Status |
 |---|---|---|---|
-| Engine transaction rollback and writer inventory | 01-03,16 | Real engine + Mongo replica-set transaction | Pending |
+| Engine transaction rollback and writer inventory | 01-03,16 | Real engine + Mongo replica-set transaction | P0 isolated proof passed, 10 cases; production P2 pending |
+| Request-local selected engine sessions | 07-09 | In-process engine HTTP + real Mongo replica set | P0 proof passed, 6 cases; browser/workers and P3 wiring pending |
 | OTP start/verify/resend/finalize and wrong-code zero writes | 02-04,15 | Real API + disposable DB/mail sink; concurrency workers | Pending |
 | New user/profile/key/session and lost response recovery | 03,16 | Real engine finalization + idempotency | Pending |
 | Client-policy backfill and open/private matrix | 05-06,14 | Old/new schema and real consumer fixtures | Pending |

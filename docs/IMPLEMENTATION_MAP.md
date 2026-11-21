@@ -1,6 +1,6 @@
 # V2 implementation map: where, what and how
 
-**Status:** Planned work, no files below are implemented by this docs change. Updated 2026-11-22.
+**Status:** P0 isolated adapters/tests exist; remaining map is planned work. Updated 2026-11-22.
 Baseline inspected: historical main `161ad99` and security branch `0a5727e`; integrated main `828acc5` now supplies the hardened runtime. Preserve it during implementation. Source paths in code formatting are navigation targets or proposed files, not claims they already exist.
 
 ## 1. Rules for changing the existing code
@@ -28,6 +28,8 @@ Use the existing credential engine and protocol routes. Extract narrow policy/se
 | `backend/scripts/create-admin.ts`, `migrate-app-admins.ts`, `migrate-identity-roles.ts` | Verified invitation/bootstrap policy, no asserted mailbox ownership | Existing admin migration never creates unenrolled privileged authority |
 | `.github/workflows/ci.yml` | Add new suites and replica-set/mail/Redis infrastructure as slices land | Docs-only checks; real process/browser fixtures; no skipped checks labeled pass |
 | `backend/template.yaml`, `backend/deploy.sh`, `scripts/prepare-vercel-config.mjs` | Narrow worker IAM, queue/key secret wiring and route headers | No key/provider secret in browser bundle or generated tracked gateway config |
+
+P0 implemented `backend/src/identity/engine-transaction.ts` and `backend/src/identity/selected-engine-session.ts` as two narrow boundaries instead of one generic adapter. Only P0 suites exercise them. [Evidence](specs/0008-multi-account-identity-platform/p0-evidence.md) records production wiring, schema and engine limitations.
 
 ## 2. Proposed backend modules and responsibilities
 

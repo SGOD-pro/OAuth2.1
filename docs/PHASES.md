@@ -1,6 +1,6 @@
 # V2 delivery phases and migration gates
 
-**Status:** Documentation complete enough to guide bounded implementation; V2 runtime pending. Updated 2026-11-22.
+**Status:** P0 isolated compatibility proof locally verified; production V2 pending. Updated 2026-11-22.
 Read [architecture](ARCHITECTURE.md), [implementation map](IMPLEMENTATION_MAP.md) and [0008](specs/0008-multi-account-identity-platform/index.md).
 
 ## 1. Baseline and next task
@@ -9,7 +9,7 @@ Security hardening is reviewed at `66738b0`; [CI run 44947156668](https://github
 
 The old phase-0 account eligibility/MFA remediation is no longer the next V2 implementation task. The reviewed security PR is integrated; this docs branch has merged main without replacing hardened runtime. Preserve that baseline for each V2 slice.
 
-First runtime slice is P0: inventory and prove engine transaction/session integration. Follow with P1's additive policy split and P2's verified signup. Do not enable unsafe signup while postponing mail quotas, OTP replay defenses or uniqueness transactions.
+P0 engine transaction/session compatibility is locally proven in the [evidence ledger](specs/0008-multi-account-identity-platform/p0-evidence.md), including writers and limitations. After acceptance, follow with P1's additive policy split and P2's verified signup. Do not enable unsafe signup while postponing mail quotas, OTP replay defenses or uniqueness transactions.
 
 ## 2. Dependency graph
 

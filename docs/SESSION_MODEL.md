@@ -1,6 +1,6 @@
 # V2 account sessions, chooser and cache consistency
 
-**Status:** Target design. Updated 2026-11-22. No multi-account implementation in this branch.
+**Status:** Target design. Updated 2026-11-22. P0 has an isolated [request-local engine proof](specs/0008-multi-account-identity-platform/p0-evidence.md); production multi-account sessions/chooser remain unimplemented.
 Related: [flows](AUTHENTICATION_FLOWS.md), [security](SECURITY.md), [implementation map](IMPLEMENTATION_MAP.md).
 
 ## 1. Four different contexts

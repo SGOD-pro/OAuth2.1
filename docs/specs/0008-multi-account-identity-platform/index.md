@@ -1,8 +1,8 @@
 # 0008. Verified multi-account identity platform
 
-**Status:** Proposed, documentation-only. Updated 2026-11-22.
+**Status:** Proposed program; P0 compatibility proof locally verified. P1-P9 pending. Updated 2026-11-22.
 **Baseline:** integrated main `828acc5`, including security PR #2 reviewed at `66738b0` plus report correction `0a5727e`.
-**Scope:** Full V2 product/architecture plan, delivered as bounded vertical slices. No runtime, deployment or data migration in this change.
+**Scope:** Full V2 product/architecture plan, delivered as bounded vertical slices. P0 adds isolated compatibility adapters/tests, not production identity routes, deployment or data migration.
 
 ## Problem
 
@@ -50,7 +50,7 @@ This spec owns requirement IDs and acceptance, not duplicate API/schema text. [R
 ## Build plan
 
 - [x] Incorporate main with reviewed security baseline, reconcile docs without runtime downgrade.
-- [ ] P0: transaction-aware engine creation and request-local session compatibility proof.
+- [x] P0: transaction-aware engine creation and request-local session compatibility proof, [local evidence and limitations](p0-evidence.md). Production wiring belongs to P2/P3.
 - [ ] P1: additive client-policy migration and open access without membership.
 - [ ] P2a: mail budgets/outbox, intent/OTP/proof and verification pages.
 - [ ] P2b: username/password finalization transaction and all provisioning bypass closure.
