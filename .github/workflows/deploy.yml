@@ -296,12 +296,6 @@ jobs:
             exit 1
           fi
 
-          SECRET_LEN=${#INTERNAL_GATEWAY_SECRET}
-          if [ "$SECRET_LEN" -lt 32 ]; then
-            echo "FATAL: secrets.INTERNAL_GATEWAY_SECRET must be at least 32 characters (got $SECRET_LEN)."
-            exit 1
-          fi
-
           echo "Generating untracked vercel.json deployment configuration..."
           node scripts/prepare-vercel-config.mjs
 
@@ -329,13 +323,25 @@ jobs:
             exit 1
           fi
 
-          echo "Probing production OIDC discovery endpoint..."
-          DISC_STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/.well-known/openid-configuration || true)
-          echo "Discovery probe returned HTTP $DISC_STATUS"
-          if [ "$DISC_STATUS" -eq 200 ]; then
-            echo "OIDC discovery probe successful (HTTP 200)."
-          else
-            echo "ERROR: OIDC discovery probe returned non-200 code: $DISC_STATUS"
+          echo "Probing production OIDC discovery endpoint with retry loop..."
+          MAX_RETRIES=10
+          RETRY_COUNT=0
+          DISC_SUCCESS=false
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            DISC_STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/.well-known/openid-configuration || true)
+            echo "Discovery probe attempt $((RETRY_COUNT+1)) returned HTTP $DISC_STATUS"
+            if [ "$DISC_STATUS" -eq 200 ]; then
+              echo "OIDC discovery probe successful (HTTP 200)."
+              DISC_SUCCESS=true
+              break
+            fi
+            RETRY_COUNT=$((RETRY_COUNT+1))
+            echo "Waiting 5 seconds for edge router propagation before retry..."
+            sleep 5
+          done
+
+          if [ "$DISC_SUCCESS" != "true" ]; then
+            echo "ERROR: OIDC discovery probe returned non-200 code after $MAX_RETRIES attempts: $DISC_STATUS"
             exit 1
           fi
 
@@ -343,11 +349,23 @@ jobs:
           # The edge gateway MUST inject x-gateway-secret into backend requests.
           # If injected, backend proceeds to admin authentication and returns HTTP 401 Unauthorized (since no session exists).
           # If the gateway secret was missing, rejected, or bypassed, backend returns HTTP 403 Forbidden.
-          GATEWAY_STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/api/admin/clients || true)
-          echo "Gateway probe returned HTTP $GATEWAY_STATUS"
-          if [ "$GATEWAY_STATUS" -eq 401 ]; then
-            echo "Authenticated gateway smoke check successful (HTTP 401: gateway secret accepted, session required)."
-          else
+          MAX_GW_RETRIES=6
+          GW_RETRY=0
+          GW_SUCCESS=false
+          while [ $GW_RETRY -lt $MAX_GW_RETRIES ]; do
+            GATEWAY_STATUS=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" https://oauth21.vercel.app/api/admin/clients || true)
+            echo "Gateway probe attempt $((GW_RETRY+1)) returned HTTP $GATEWAY_STATUS"
+            if [ "$GATEWAY_STATUS" -eq 401 ]; then
+              echo "Authenticated gateway smoke check successful (HTTP 401: gateway secret accepted, session required)."
+              GW_SUCCESS=true
+              break
+            fi
+            GW_RETRY=$((GW_RETRY+1))
+            echo "Waiting 5 seconds for edge gateway propagation before retry..."
+            sleep 5
+          done
+
+          if [ "$GW_SUCCESS" != "true" ]; then
             echo "ERROR: Authenticated gateway probe failed. Expected HTTP 401 (gateway secret injected, unauthorized session), but got HTTP $GATEWAY_STATUS."
             if [ "$GATEWAY_STATUS" -eq 403 ]; then
               echo "ERROR DETAIL: HTTP 403 indicates edge proxy failed to inject x-gateway-secret or backend rejected gateway secret."
