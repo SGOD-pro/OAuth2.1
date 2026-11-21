@@ -3,6 +3,8 @@
 **Date:** 2026-11-20  
 **Branch:** `fix/oauth-security-hardening`  
 **Base HEAD:** `161ad99ca4ba0de88cff1267b33807db61da306c` (`origin/main`)  
+**Starting Reviewed HEAD:** `121c231d83847186dd66d68d404a303db29d78b6`  
+**Pushed HEAD:** `9f2e44d1eefa5485456cb38d10d2a5b397240e22`  
 **Scope:** Complete issuance and revocation atomicity, version lifecycle, and remediation of findings SEC-01 through SEC-07 across five bounded slices: Account Eligibility, Scope and Privacy Enforcement, Administrative MFA, Verification and Abuse Controls, and Revocation Authorization with Monotonicity.  
 **Verdict:** All security defects, blocker findings, and test suite failures have been remediated with real route regression coverage and verified across passing suites. V2 feature development remains deferred until this security remediation is reviewed and integrated.
 
@@ -65,12 +67,16 @@
 |---|---|---|---|
 | Doc Consistency | `npm run security:docs-check` | **PASS** | 6 checks passed cleanly (0 errors) |
 | Integration Contract | `npm run security:integration-check` | **PASS** | 5 normative checks passed (0 violations) |
+| TypeScript Checks | `tsc --noEmit` (backend + frontend) | **PASS** | 0 type errors across backend and frontend |
 | Unit Test Suite | `npm run test:unit` | **PASS** | 10 unit suites passed cleanly (0 failures) |
 | Local Consumer E2E | `npm run test:local-consumer-e2e` | **PASS** | 11 protocol flows passed cleanly (0 failures) |
 | OAuth Hardening | `npm run test:oauth-hardening` | **PASS** | 29/29 comprehensive regression checks passed |
-| Consumer MFA | `npm run test:consumer-mfa` | **PASS** | 18 tests passed cleanly (0 failures) |
+| Consumer MFA | `npm run test:consumer-mfa` | **PASS** | 24 tests passed cleanly (0 failures) |
 | Private App Isolation | `npm run test:private-app-isolation` | **PASS** | 10 tests passed cleanly (0 failures) |
 | Membership Lifecycle | `npm run test:membership-lifecycle` | **PASS** | 23 tests passed cleanly (0 failures) |
+| Dashboard Stats | `npm run test:dashboard-stats` | **PASS** | 9 tests passed cleanly (0 failures) |
+| Rate Limit Outage | `npm run test:rate-limit-failure` | **PASS** | 5 tests passed cleanly (0 failures) |
+| Repo Cleanliness | `npm run test:cleanliness` | **PASS** | All cleanliness and lean invariants verified |
 | Automated Security Suite | `npm run test:all-security` | **PASS (25/27 local)** | 25 passed locally; 2 Redis container suites run in CI pipeline with service container |
 
 ### Repaired Security Test Suites Summary
