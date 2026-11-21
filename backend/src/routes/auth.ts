@@ -600,12 +600,8 @@ auth.post("/sign-in/email", async (c) => {
                     targetAllowed = false;
                 }
             } catch (mongoErr) {
-                console.warn("[AUTH] Target rate limit store error, engaging emergency limiter:", mongoErr);
-                // Tertiary: Bounded in-process emergency limiter
-                const emergResult = emergencyRateLimiter.increment(targetKey, Date.now(), targetWindowMs, targetLimit);
-                if (!emergResult.allowed) {
-                    targetAllowed = false;
-                }
+                console.error("[AUTH] Target rate limit store error, failing closed:", mongoErr);
+                targetAllowed = false;
             }
         }
 

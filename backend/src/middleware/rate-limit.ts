@@ -155,21 +155,25 @@ export function createRateLimiter(options: {
 
     // 3. Tertiary: Classified Security Handling on Dual Store Failure
     // NEVER silently become unlimited!
-    // Sensitive administrative operations strictly fail closed when all backing stores fail
+    // Sensitive administrative and authentication operations strictly fail closed when all backing stores fail
     // to prevent distributed brute-force across serverless/multi-worker instances.
-    if (sensitivity === "admin") {
-      console.error(`[RATE_LIMIT_CRITICAL] Administrative rate limiting store failed. Denying request on ${key}.`);
+    if (sensitivity === "admin" || sensitivity === "auth") {
+      console.error(
+        `[RATE_LIMIT_CRITICAL] ${sensitivity === "admin" ? "Administrative" : "Authentication"} rate limiting store failed. Denying request on ${key}.`
+      );
       c.header("Retry-After", String(Math.ceil(windowMs / 1000)));
       return c.json(
         {
           error: "too_many_requests",
-          message: "Rate limiting unavailable for administrative operations. Request denied for security.",
+          message: sensitivity === "admin"
+            ? "Rate limiting unavailable for administrative operations. Request denied for security."
+            : "Rate limiting unavailable for authentication operations. Request denied for security.",
         },
         429
       );
     }
 
-    // Authentication and Public endpoints engage bounded in-process emergency limiter
+    // Public endpoints engage bounded in-process emergency limiter
     const emergResult = emergencyRateLimiter.increment(key, now, windowMs, limit);
     c.header("X-RateLimit-Limit", String(limit));
     c.header("X-RateLimit-Remaining", String(Math.max(0, limit - emergResult.count)));
@@ -180,9 +184,7 @@ export function createRateLimiter(options: {
       return c.json(
         {
           error: "too_many_requests",
-          message: sensitivity === "auth"
-            ? "Too many authentication requests (emergency rate limit exceeded). Please try again later."
-            : "Too many requests. Please try again later.",
+          message: "Too many requests. Please try again later.",
         },
         429
       );

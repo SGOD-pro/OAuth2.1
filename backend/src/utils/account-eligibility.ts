@@ -77,9 +77,15 @@ export function checkAccountEligibility(
     // Accounts created prior to that date are granted a temporary grace period, while all newly created accounts fail closed.
     // Existing accounts are NEVER marked emailVerified=true in DB to bypass migration.
     const rolloutMode = config.auth.emailVerificationRolloutMode || "enforce_all";
-    const enforcedAfter = config.auth.emailVerificationEnforcedAfter
-      ? new Date(config.auth.emailVerificationEnforcedAfter).getTime()
-      : null;
+    const rawEnforcedAfter = config.auth.emailVerificationEnforcedAfter;
+    const isoTimestampWithTimezoneRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+    const enforcedAfter =
+      rawEnforcedAfter &&
+      typeof rawEnforcedAfter === "string" &&
+      isoTimestampWithTimezoneRegex.test(rawEnforcedAfter) &&
+      !isNaN(Date.parse(rawEnforcedAfter))
+        ? new Date(rawEnforcedAfter).getTime()
+        : null;
 
     let inGraceWindow = false;
     if (rolloutMode === "enforce_new" && enforcedAfter && user.createdAt) {

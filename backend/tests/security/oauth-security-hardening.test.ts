@@ -747,12 +747,22 @@ await runTest("SEC-03-A: Email verification safe rollout policy", async () => {
   assert.equal(postCheck.eligible, false, "Post-rollout unverified account must be rejected");
   assert.equal(postCheck.reason, "email_not_verified");
 
+  // Cutoff timestamps missing explicit timezone must fail closed
+  process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER = "2026-06-01";
+  const invalidDateCheck = checkAccountEligibility(preExistingUser, { requireEmailVerified: true });
+  assert.equal(invalidDateCheck.eligible, false, "Cutoff missing explicit timezone must fail closed");
+
+  process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER = "2026-06-01T00:00:00";
+  const noTzCheck = checkAccountEligibility(preExistingUser, { requireEmailVerified: true });
+  assert.equal(noTzCheck.eligible, false, "Cutoff without timezone indicator must fail closed");
+
   delete process.env.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE;
   delete process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER;
 });
 
 await runTest("SEC-06-A: Dual-store rate limiter outage fails closed for sensitive auth operations", async () => {
   const { createRateLimiter } = await import("../../src/middleware/rate-limit");
+  const stateModule = await import("../../src/db/state");
   const authLimiter = createRateLimiter({
     windowMs: 60 * 1000,
     limit: 5,
@@ -761,18 +771,26 @@ await runTest("SEC-06-A: Dual-store rate limiter outage fails closed for sensiti
     sensitivity: "auth",
   });
 
+  let handlerExecuted = false;
   const testHono = new (await import("hono")).Hono();
   testHono.use("*", authLimiter);
-  testHono.get("/test", (c) => c.text("ok"));
-
-  // Mock mongo store failure by closing DB topology temporarily or calling on simulated broken store
-  // With Redis not configured and mongo store failing, it must return 429
-  // We can test the middleware handler directly with a mocked failing context
-  const res = await testHono.request("/test", {
-    headers: { "x-forwarded-for": "198.51.100.99, 10.0.0.1" },
+  testHono.get("/test", (c) => {
+    handlerExecuted = true;
+    return c.text("ok");
   });
-  // If mongo is running, it returns 200 via mongo fallback.
-  assert.ok([200, 429].includes(res.status));
+
+  stateModule.__simulateRateLimitStoreFailure(true);
+  try {
+    const res = await testHono.request("/test", {
+      headers: { "x-forwarded-for": "198.51.100.99, 10.0.0.1" },
+    });
+    assert.equal(res.status, 429, "Auth rate limiter must immediately fail closed (429) when backing stores fail");
+    assert.equal(handlerExecuted, false, "Protected handler must never execute under store failure");
+    const data = await res.json();
+    assert.equal(data.error, "too_many_requests");
+  } finally {
+    stateModule.__simulateRateLimitStoreFailure(false);
+  }
 });
 
 await runTest("SEC-05-C: Admin user listing enforces server-side privacy projection", async () => {

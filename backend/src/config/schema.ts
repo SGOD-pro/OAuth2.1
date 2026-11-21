@@ -114,10 +114,15 @@ export const envSchema = z.object({
     }
 
     if (data.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE === 'enforce_new') {
-        if (!data.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER || isNaN(Date.parse(data.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER))) {
+        const isoTimestampWithTimezoneRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+        if (
+            !data.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER ||
+            !isoTimestampWithTimezoneRegex.test(data.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER) ||
+            isNaN(Date.parse(data.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER))
+        ) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
-                message: 'AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER must be a valid ISO date string when rollout mode is enforce_new',
+                message: 'AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER must be a valid ISO 8601 timestamp string with explicit timezone (e.g. 2026-06-01T00:00:00.000Z or 2026-06-01T00:00:00+00:00) when rollout mode is enforce_new',
                 path: ['AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER'],
             });
         }
