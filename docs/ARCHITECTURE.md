@@ -1,9 +1,9 @@
 # V2 identity platform architecture
 
 **Status:** Proposed target design, implementation pending. Updated 2026-11-22.
-**Repository baseline:** `main` at `161ad99ca4ba0de88cff1267b33807db61da306c`.
+**Integrated repository baseline:** `main` at `828acc54ebe4a24fb87cf6dc2c55d79998a68895` (security PR #2 merged).
 **Security prerequisite:** PR #2, reviewed runtime at `66738b0198b0fdb1342dec210394ac5e09041a77`; its later documentation correction is `0a5727e96a24d947a744ee8c865af35fd5c4ccb5`.
-Neither security PR #2 nor docs PR #1 was merged at this planning snapshot. This docs branch contains no V2 runtime code. Do not run the older branch runtime as if it contains the reviewed security fixes.
+Security PR #2 is merged and its runtime is incorporated into this docs branch. Docs PR #1 remains unmerged. No V2 runtime code is added by the documentation changes. Historical main `161ad99` below identifies the pre-hardening baseline.
 
 ## 1. Product contract
 
@@ -50,7 +50,7 @@ Specification [0008](specs/0008-multi-account-identity-platform/index.md) maps r
 | App policy | Legacy `isPublic` and registrations | Same legacy policy retained | Separate client authentication type from open/private access |
 | Data protection | Engine secret handling, no per-account erasure | Same key architecture | Protected adapter, per-account key hierarchy and deletion jobs |
 
-Hardening is a prerequisite to integrate, not V2 phase work to rebuild. Preserve historical review files as history; record superseding evidence rather than deleting findings.
+Hardening is an integrated prerequisite, not V2 phase work to rebuild. Preserve historical review files as history; record superseding evidence rather than deleting findings.
 
 ## 4. Target service topology
 

@@ -1,5 +1,4 @@
 import { getEnv } from './env'
-import { createHmac } from 'crypto'
 
 const parsedEnv = getEnv()
 
@@ -60,10 +59,16 @@ export const config = {
         get emailVerificationEnabled() {
             return (process.env.AUTH_EMAIL_VERIFICATION_ENABLED || parsedEnv.AUTH_EMAIL_VERIFICATION_ENABLED) === 'true'
         },
+        get emailVerificationRolloutMode() {
+            return (process.env.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE || (parsedEnv as any).AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE || 'enforce_all') as 'enforce_new' | 'enforce_all'
+        },
+        get emailVerificationEnforcedAfter() {
+            return process.env.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER || (parsedEnv as any).AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER
+        },
     },
 
-    get betterAuthSecret() {
-        return this.auth.secret
+    get emailDeliveryWebhookUrl() {
+        return process.env.EMAIL_DELIVERY_WEBHOOK_URL || (parsedEnv as any).EMAIL_DELIVERY_WEBHOOK_URL
     },
 
     google: {
@@ -77,15 +82,6 @@ export const config = {
 
     get frontendUrl() {
         return process.env.FRONTEND_URL || parsedEnv.FRONTEND_URL
-    },
-
-    app: {
-        get clientId() {
-            return process.env.VITE_CLIENT_ID || parsedEnv.VITE_CLIENT_ID
-        },
-        get publicKey() {
-            return process.env.PUBLIC_KEY || parsedEnv.PUBLIC_KEY
-        },
     },
 
     get trustedProxyCidrs() {

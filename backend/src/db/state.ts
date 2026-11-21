@@ -30,6 +30,7 @@ export interface TokenFamilyDoc {
   activeTokenHash: string;
   consumedTokenHashes: string[];
   status: "active" | "revoked";
+  tokenVersion?: number;
   createdAt: Date;
   updatedAt: Date;
   revokedAt?: Date;
@@ -97,7 +98,6 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("auth_events", { clientId: 1, timestamp: -1 }),
       safeIndex("auth_events", { userId: 1, timestamp: -1 }),
       safeIndex("auth_events", { sessionId: 1, timestamp: -1 }),
-      safeIndex("app_admin_revoked_tokens", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("user_app_registrations", { clientId: 1, userId: 1 }, { unique: true }),
       safeIndex("oauthClient", { allowedOrigins: 1, disabled: 1 }),
       safeIndex("oauthClient", { allowed_origins: 1, disabled: 1 }),
@@ -747,7 +747,8 @@ export async function registerTokenFamily(
   familyId: string,
   clientId: string,
   userId: string | undefined,
-  initialTokenHash: string
+  initialTokenHash: string,
+  tokenVersion?: number
 ): Promise<void> {
   const trimmedClientId = clientId?.trim();
   if (!trimmedClientId) {
@@ -763,6 +764,7 @@ export async function registerTokenFamily(
     activeTokenHash: initialTokenHash,
     consumedTokenHashes: [],
     status: "active",
+    tokenVersion: typeof tokenVersion === "number" ? tokenVersion : 1,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
@@ -773,7 +775,8 @@ export async function verifyAndRotateTokenFamily(
   newTokenHash: string,
   userId?: string,
   nowMs: number = Date.now(),
-  expectedClientId?: string
+  expectedClientId?: string,
+  tokenVersion?: number
 ): Promise<{
   valid: boolean;
   replayed: boolean;
@@ -890,6 +893,7 @@ export async function verifyAndRotateTokenFamily(
           updatedAt: new Date(),
           rotating: false,
           ...(userId && !doc.userId ? { userId } : {}),
+          ...(typeof tokenVersion === "number" ? { tokenVersion } : (typeof doc.tokenVersion === "number" ? { tokenVersion: doc.tokenVersion } : { tokenVersion: 1 })),
         },
       }
     );

@@ -1,7 +1,7 @@
 # Configuration: current runtime and planned V2 policy
 
 **Authority:** Normative configuration reference. Updated 2026-11-22.
-This docs branch is based on main `161ad99`; rows marked hardened are available on reviewed security PR #2, not automatically in this branch runtime. V2 settings are proposed names/contracts, not accepted environment variables until implemented.
+This docs branch incorporates main `828acc5`, including merged security PR #2. Rows marked hardened describe that integrated runtime. V2 settings are proposed names/contracts, not accepted environment variables until implemented.
 
 ## 1. Existing and hardened configuration
 

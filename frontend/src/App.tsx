@@ -5,7 +5,6 @@ import { Layout } from '@/components/Layout';
 import { RouteLoader } from '@/components/RouteLoader';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import './index.css';
-import './App.css';
 
 const SignIn = lazy(() => import('@/pages/SignIn').then((module) => ({ default: module.SignIn })));
 const TwoFactor = lazy(() => import('@/pages/TwoFactor').then((module) => ({ default: module.TwoFactor })));

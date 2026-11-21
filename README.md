@@ -8,7 +8,7 @@ Centralized identity built with Hono, Better Auth, MongoDB and Redis, with a Rea
 
 Read [the V2 document index](docs/README.md), [architecture](docs/ARCHITECTURE.md), [authentication flows](docs/AUTHENTICATION_FLOWS.md), [page inventory](docs/USER_EXPERIENCE.md), [implementation map](docs/IMPLEMENTATION_MAP.md) and [phases](docs/PHASES.md). [Specification 0008](docs/specs/0008-multi-account-identity-platform/index.md) maps requirements to tests and build slices.
 
-Main at this planning snapshot is `161ad99`. Reviewed security hardening is on [PR #2](https://github.com/SGOD-pro/OAuth2.1/pull/2), with [passing CI at 66738b0](https://github.com/SGOD-pro/OAuth2.1/actions/runs/44947156668); later `0a5727e` corrects report wording. Integrate that baseline separately before V2 implementation. This docs branch does not contain those runtime fixes, and no deployment status is inferred from a review.
+Security hardening from [PR #2](https://github.com/SGOD-pro/OAuth2.1/pull/2) is merged into main at `828acc54ebe4a24fb87cf6dc2c55d79998a68895` and incorporated into this docs branch. Historical [CI at 66738b0](https://github.com/SGOD-pro/OAuth2.1/actions/runs/44947156668) and report correction `0a5727e` remain evidence for their exact commits, not a V2 implementation or deployment claim.
 
 ## Target topology
 

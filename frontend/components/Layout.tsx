@@ -11,10 +11,9 @@ export const Layout = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation();
   const { isValid } = useOAuthParams();
 
-  const isStrictOAuthEntry = location.pathname === '/auth';
   const isAuthPage = location.pathname === '/auth';
 
-  if (isStrictOAuthEntry && !isValid) {
+  if (isAuthPage && !isValid) {
     return <InvalidRequest reason="missing_params" />;
   }
 

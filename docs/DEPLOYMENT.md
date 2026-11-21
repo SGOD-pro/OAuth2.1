@@ -1,7 +1,7 @@
 # Deployment, migration and operating V2
 
 **Status:** Current deployment references plus planned V2 runbook. Updated 2026-11-22.
-Do not deploy V2 from this docs-only branch. Integrate reviewed security PR #2 first. [PHASES.md](PHASES.md) owns rollout gates; [CONFIGURATION.md](CONFIGURATION.md) distinguishes implemented from proposed variables.
+V2 is not implemented by this docs change. Security PR #2 is integrated into main `828acc5` and this branch; deployment is a separate operation. [PHASES.md](PHASES.md) owns rollout gates; [CONFIGURATION.md](CONFIGURATION.md) distinguishes implemented from proposed variables.
 
 ## 1. Deployment profiles
 
@@ -37,10 +37,10 @@ Use explicit approved `LAMBDA_BACKEND_URL` and fresh gateway secret for generate
 
 ## 3. Prerequisite security integration
 
-1. Record actual main/security/docs refs, PR checks and deployed SHA. Security at `66738b0` passed CI; later wording correction `0a5727e` does not mean deployed. Merge/release through normal authorization, not as a side effect of editing docs.
+1. Record actual main/security/docs refs, PR checks and deployed SHA. Security PR #2 is merged at main `828acc5`. Security at `66738b0` passed CI; later wording correction `0a5727e` and the merge do not mean deployed. Release through normal authorization, not as a side effect of editing docs.
 2. Rotate secrets ever exposed in repository history in actual services. Editing git files does not rotate credentials. Audit dependency lockfiles, licenses and source provenance.
 3. Verify real TLS, direct-origin rejection, issuer/discovery/JWKS URLs, callback rules, mandatory admin MFA and current revoke/refresh behavior in staging.
-4. Rebase/reconcile V2 docs and runtime work onto the integrated security baseline without overwriting fixes. Keep earlier reports as historical evidence.
+4. Keep V2 docs and runtime work synchronized with the integrated security baseline without overwriting fixes. Keep earlier reports as historical evidence.
 
 ## 4. Safe schema and feature rollout
 
@@ -57,6 +57,18 @@ For each P0-P9 slice: pin schema/reader/writer versions; dry-run counts and coll
 Cohort rollback disables new feature entry while preserving security, compatible reads, existing account data and denial fences. It cannot revive consumed proofs, revoked grants, deleting accounts or destroyed keys.
 
 ## 5. Mail readiness
+
+The integrated security runtime supports these existing settings, independently of future V2 mail configuration:
+
+```env
+AUTH_EMAIL_VERIFICATION_ENABLED=true
+EMAIL_DELIVERY_WEBHOOK_URL=https://mail-transport.example.com/deliver
+AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE=enforce_new
+AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER=2026-06-01T00:00:00Z
+```
+
+Use your approved authenticated transport, not the example endpoint. Verification enabled without a delivery URL fails closed at startup. Production requires HTTPS/non-loopback. The explicit-zone cutoff is required for `enforce_new`; use `enforce_all` when migration is complete. This transport does not implement V2 proof-before-account signup.
+
 
 Configure verified sending domain, DKIM/SPF/DMARC alignment, provider production access, bounce/complaint suppression, signed callbacks, queue and worker IAM, send deadline and global cost cap. Use controlled test recipients before public access. Confirm no plaintext OTP/reset payload in application/provider diagnostics.
 

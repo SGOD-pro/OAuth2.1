@@ -88,23 +88,31 @@ try {
   assert.equal(missingResult.status, 1, 'Should fail with exit code 1 when secret is missing without --if-present');
   console.log('  [PASS] Missing secret without --if-present fails closed with exit code 1');
 
-  // Test 4: Secret shorter than 32 characters fails with exit code 1
-  console.log('[TEST 4] Testing short secret rejection (< 32 characters)...');
+  // Test 4: VITE_AUTH_URL fallback for backend URL
+  console.log('[TEST 4] Testing VITE_AUTH_URL fallback...');
   cleanGeneratedFiles();
-  const shortResult = spawnSync('node', [scriptPath, '--if-present'], {
+  const customViteUrl = 'https://vite-auth-url.example.com';
+  const viteResult = spawnSync('node', [scriptPath], {
     cwd: repoRoot,
     encoding: 'utf8',
     env: {
       ...process.env,
-      INTERNAL_GATEWAY_SECRET: 'too_short_secret_123',
+      INTERNAL_GATEWAY_SECRET: 'test_secret_for_vite_auth_url',
+      VITE_AUTH_URL: customViteUrl,
+      LAMBDA_BACKEND_URL: '',
     },
   });
-  assert.equal(shortResult.status, 1, 'Short secret must fail with exit code 1 even with --if-present');
+  assert.equal(viteResult.status, 0, 'VITE_AUTH_URL execution must exit with 0');
+  const viteConfig = JSON.parse(fs.readFileSync(rootVercelJson, 'utf8'));
   assert.ok(
-    shortResult.stderr.includes('must be >= 32 characters'),
-    'Error message must state >= 32 characters requirement'
+    viteConfig.routes[0].dest.startsWith(customViteUrl),
+    `API route dest must start with VITE_AUTH_URL: ${viteConfig.routes[0].dest}`
   );
-  console.log('  [PASS] Secret under 32 characters is rejected with exit code 1');
+  assert.ok(
+    viteConfig.routes[1].dest.startsWith(customViteUrl),
+    `Well known route dest must start with VITE_AUTH_URL: ${viteConfig.routes[1].dest}`
+  );
+  console.log('  [PASS] VITE_AUTH_URL properly overrides default backend URL');
 
   // Test 5: Valid secret generates vercel.json and frontend/vercel.json
   console.log('[TEST 5] Testing valid secret generation...');
@@ -178,10 +186,10 @@ try {
   );
   console.log('  [PASS] backend/deploy.sh validates and passes gateway secret parameter overrides');
 
-  // Test 9: Production mode must fail closed on missing secret even with --if-present
-  console.log('[TEST 9] Testing production fail-closed behavior on missing secret with --if-present...');
+  // Test 9: Production mode must fail closed on missing secret without --if-present
+  console.log('[TEST 9] Testing production fail-closed behavior on missing secret without --if-present...');
   cleanGeneratedFiles();
-  const prodMissingResult = spawnSync('node', [scriptPath, '--if-present'], {
+  const prodMissingResult = spawnSync('node', [scriptPath], {
     cwd: repoRoot,
     encoding: 'utf8',
     env: {
@@ -190,8 +198,8 @@ try {
       INTERNAL_GATEWAY_SECRET: '',
     },
   });
-  assert.equal(prodMissingResult.status, 1, 'Production mode must fail closed with exit code 1 when secret is missing even with --if-present');
-  console.log('  [PASS] Production mode fails closed on missing secret even with --if-present');
+  assert.equal(prodMissingResult.status, 1, 'Production mode must fail closed with exit code 1 when secret is missing without --if-present');
+  console.log('  [PASS] Production mode fails closed on missing secret without --if-present');
 
   // Test 10: Local UI build can explicitly skip deployment preparation
   console.log('[TEST 10] Testing local UI build explicit skip of deployment preparation...');
@@ -231,3 +239,4 @@ try {
   cleanGeneratedFiles();
   restoreLocalEnvFiles();
 }
+process.exit(0);

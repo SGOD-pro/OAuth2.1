@@ -20,9 +20,9 @@ export const envSchema = z.object({
     TRUSTED_PROXY_CIDRS: z.string().default(''),
     AUTH_PUBLIC_SIGNUP_ENABLED: z.string().default('true'),
     AUTH_EMAIL_VERIFICATION_ENABLED: z.string().default('false'),
-
-    VITE_CLIENT_ID: z.string().optional(),
-    PUBLIC_KEY: z.string().optional(),
+    AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE: z.enum(['enforce_new', 'enforce_all']).optional(),
+    AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER: z.string().optional(),
+    EMAIL_DELIVERY_WEBHOOK_URL: z.string().optional(),
 
     UPSTASH_REDIS_REST_URL: z.string().optional(),
     UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
@@ -72,6 +72,58 @@ export const envSchema = z.object({
                 code: z.ZodIssueCode.custom,
                 message: 'INTERNAL_GATEWAY_SECRET is required in production and must be at least 32 characters',
                 path: ['INTERNAL_GATEWAY_SECRET'],
+            });
+        }
+    }
+
+    if (data.AUTH_EMAIL_VERIFICATION_ENABLED === 'true') {
+        if (!data.EMAIL_DELIVERY_WEBHOOK_URL || data.EMAIL_DELIVERY_WEBHOOK_URL.trim().length === 0) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'EMAIL_DELIVERY_WEBHOOK_URL is required when AUTH_EMAIL_VERIFICATION_ENABLED is true',
+                path: ['EMAIL_DELIVERY_WEBHOOK_URL'],
+            });
+        } else {
+            try {
+                const u = new URL(data.EMAIL_DELIVERY_WEBHOOK_URL);
+                if (data.NODE_ENV === 'production') {
+                    if (u.protocol !== 'https:') {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'EMAIL_DELIVERY_WEBHOOK_URL must use HTTPS in production',
+                            path: ['EMAIL_DELIVERY_WEBHOOK_URL'],
+                        });
+                    }
+                    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+                    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost')) {
+                        ctx.addIssue({
+                            code: z.ZodIssueCode.custom,
+                            message: 'EMAIL_DELIVERY_WEBHOOK_URL cannot be a loopback address in production',
+                            path: ['EMAIL_DELIVERY_WEBHOOK_URL'],
+                        });
+                    }
+                }
+            } catch {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: 'EMAIL_DELIVERY_WEBHOOK_URL must be a valid URL',
+                    path: ['EMAIL_DELIVERY_WEBHOOK_URL'],
+                });
+            }
+        }
+    }
+
+    if (data.AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE === 'enforce_new') {
+        const isoTimestampWithTimezoneRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+        if (
+            !data.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER ||
+            !isoTimestampWithTimezoneRegex.test(data.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER) ||
+            isNaN(Date.parse(data.AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER))
+        ) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER must be a valid ISO 8601 timestamp string with explicit timezone (e.g. 2026-06-01T00:00:00.000Z or 2026-06-01T00:00:00+00:00) when rollout mode is enforce_new',
+                path: ['AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER'],
             });
         }
     }

@@ -10,14 +10,14 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 ## Active next program: V2 verified multi-account identity platform
 
 **Updated 2026-11-22. Status: planned, documentation only.**
-Main at planning snapshot: `161ad99ca4ba0de88cff1267b33807db61da306c`.
-Security PR #2 is independently reviewed at `66738b0` with passing CI; subsequent `0a5727e` corrects evidence wording. Integration into main is separate from this docs PR.
+Integrated main: `828acc54ebe4a24fb87cf6dc2c55d79998a68895`, containing merged security PR #2.
+Security was independently reviewed at `66738b0` with passing CI; subsequent `0a5727e` corrects evidence wording. This docs branch incorporates that main baseline.
 
 Read [the document index](../README.md), [architecture](../ARCHITECTURE.md), [implementation map](../IMPLEMENTATION_MAP.md), [phases](../PHASES.md) and [0008](../specs/0008-multi-account-identity-platform/index.md).
 
 | Program area | Status | Next gate |
 |---|---|---|
-| Baseline account/token/MFA hardening | Reviewed on security branch, not claimed merged/deployed | Verify final refs/checks; integrate separately |
+| Baseline account/token/MFA hardening | Merged into main, incorporated in docs branch; deployment not inferred | Preserve baseline; verify runtime refs/checks before release |
 | P0 engine/schema compatibility | Planned | Transaction-aware account creation and request-local session proof |
 | P1 client dimensions | Planned | Audit/backfill; open ordinary access, private/admin guards retained |
 | P2 verified signup, username and mail | Planned | Proof-before-create, unique transaction and real bounded delivery |
@@ -30,7 +30,7 @@ Read [the document index](../README.md), [architecture](../ARCHITECTURE.md), [im
 | P9 open-source release | Planned | Provenance, disclosure, self-host/recovery and independent review |
 
 - [x] Expand architecture, page/API workflows, schemas, security and implementation map in docs.
-- [ ] Integrate reviewed security baseline and reconcile V2 docs onto it.
+- [x] Incorporate main with merged security PR #2 and reconcile active V2 docs onto it.
 - [ ] P0 compatibility proof, then ordered vertical slices in PHASES.md.
 
 No V2 runtime/data migration is complete through this update. Historical slice states below remain history; they do not override V2 gates or establish current deployment status.

@@ -5,9 +5,9 @@ Read [architecture](ARCHITECTURE.md), [implementation map](IMPLEMENTATION_MAP.md
 
 ## 1. Baseline and next task
 
-Security hardening is reviewed at `66738b0`; [CI run 44947156668](https://github.com/SGOD-pro/OAuth2.1/actions/runs/44947156668) passed backend/frontend, 29 hardening checks, 49 CORS checks and 27 security suites. Later `0a5727e` corrects the in-process dual-instance test wording. This is historical exact-commit evidence, not a claim that V2 features exist or that PR #2 is merged. Verify actual refs and CI again before integration.
+Security hardening is reviewed at `66738b0`; [CI run 44947156668](https://github.com/SGOD-pro/OAuth2.1/actions/runs/44947156668) passed backend/frontend, 29 hardening checks, 49 CORS checks and 27 security suites. Later `0a5727e` corrects the in-process dual-instance test wording. This is historical exact-commit evidence, not a claim that V2 features exist. PR #2 is now merged into main `828acc5` and incorporated into this docs branch. Verify actual refs and CI before implementation/release.
 
-The old phase-0 account eligibility/MFA remediation is no longer the next V2 implementation task. Integrate the reviewed security PR separately, then reconcile/rebase this docs-only branch onto that baseline. Do not merge old runtime from the docs branch over the hardened implementation.
+The old phase-0 account eligibility/MFA remediation is no longer the next V2 implementation task. The reviewed security PR is integrated; this docs branch has merged main without replacing hardened runtime. Preserve that baseline for each V2 slice.
 
 First runtime slice is P0: inventory and prove engine transaction/session integration. Follow with P1's additive policy split and P2's verified signup. Do not enable unsafe signup while postponing mail quotas, OTP replay defenses or uniqueness transactions.
 

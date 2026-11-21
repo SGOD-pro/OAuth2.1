@@ -28,10 +28,6 @@ async function run() {
     { clientId: 1 },
     { name: "app_admins_client_lookup" }
   );
-  await db.collection("app_admin_revoked_tokens").createIndex(
-    { expiresAt: 1 },
-    { expireAfterSeconds: 0, name: "app_admin_revoked_tokens_ttl" }
-  );
   
   console.log("Database setup complete. TTL indexes and account schema migrations applied.");
   await closeDb();

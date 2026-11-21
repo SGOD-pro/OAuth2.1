@@ -1,7 +1,7 @@
 # 0008. Verified multi-account identity platform
 
 **Status:** Proposed, documentation-only. Updated 2026-11-22.
-**Baseline:** main `161ad99`; integrate security PR #2 reviewed at `66738b0` plus report correction `0a5727e` before runtime implementation.
+**Baseline:** integrated main `828acc5`, including security PR #2 reviewed at `66738b0` plus report correction `0a5727e`.
 **Scope:** Full V2 product/architecture plan, delivered as bounded vertical slices. No runtime, deployment or data migration in this change.
 
 ## Problem
@@ -49,7 +49,7 @@ This spec owns requirement IDs and acceptance, not duplicate API/schema text. [R
 
 ## Build plan
 
-- [ ] Integrate reviewed security baseline, reconcile this docs branch without runtime downgrade.
+- [x] Incorporate main with reviewed security baseline, reconcile docs without runtime downgrade.
 - [ ] P0: transaction-aware engine creation and request-local session compatibility proof.
 - [ ] P1: additive client-policy migration and open access without membership.
 - [ ] P2a: mail budgets/outbox, intent/OTP/proof and verification pages.

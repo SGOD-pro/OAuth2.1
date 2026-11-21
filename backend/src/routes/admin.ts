@@ -13,10 +13,13 @@ import {
   normalizeOAuthClientFields,
   hasDangerousMongoKeys,
   validateSafePrimitiveString,
+  toApprovedDisplayLabel,
+  isEmailShaped,
+  escapeRegex,
 } from "../utils/security";
 import { recordAdminAudit } from "../db/state";
 import { invalidateClientOrigins } from "../cache/origin-cache";
-import { requireSuperAdmin, requireScopedAdmin, requireConsumerAppAdmin, isSuperAdmin, requireGatewayTrust } from "../middleware/admin-auth";
+import { requireAdmin, requireSuperAdmin, requireScopedAdmin, requireConsumerAppAdmin, isSuperAdmin, requireGatewayTrust, requireRecentMfa } from "../middleware/admin-auth";
 import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { ObjectId } from "mongodb";
 import { hashPassword } from "better-auth/crypto";
@@ -60,6 +63,24 @@ admin.use("*", async (c, next) => {
     }
   }
   return next();
+});
+
+// 0. Admin Current Identity & MFA Status (Accessible to unenrolled admins for setup)
+admin.get("/me", requireAdmin, async (c) => {
+  const user = c.get("user") as any;
+  const session = c.get("session") as any;
+  return c.json({
+    user: {
+      id: user?.id || user?._id,
+      email: user?.email,
+      role: user?.role,
+      scopedClientId: user?.scopedClientId || null,
+      twoFactorEnabled: Boolean(user?.twoFactorEnabled),
+    },
+    session: {
+      twoFactorVerified: Boolean(session?.twoFactorVerified),
+    },
+  });
 });
 
 // -- Super-Admin Only Routes ---------------------------------------------
@@ -653,8 +674,10 @@ async function getAggregatedLogs(
       if (entry.userId && (!entry.userEmail || entry.userEmail === entry.userId || entry.userEmail === "unknown")) {
         const found = emailMap.get(entry.userId);
         if (found) {
-          entry.userEmail = found;
+          entry.userEmail = toApprovedDisplayLabel(found);
         }
+      } else if (entry.userEmail && entry.userEmail.includes("@")) {
+        entry.userEmail = toApprovedDisplayLabel(entry.userEmail);
       }
     });
   }
@@ -757,8 +780,8 @@ admin.get("/v2/logs", requireSuperAdmin, async (c) => {
   }
 });
 
-// 5. Delete OAuth Client (Super-Admin only)
-admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
+// 5. Delete OAuth Client (Super-Admin only, requires recent MFA)
+admin.delete("/clients/:id", requireSuperAdmin, requireRecentMfa, async (c) => {
   const id = c.req.param("id");
   const sessionUser = c.get("user") as any;
   let database: any;
@@ -807,8 +830,8 @@ admin.delete("/clients/:id", requireSuperAdmin, async (c) => {
   return c.json({ success: true, message: "Client deleted successfully" });
 });
 
-// 6. Provision Scoped or Global Admin (Super-Admin only with Rate Limiting B6)
-admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
+// 6. Provision Scoped or Global Admin (Super-Admin only with Rate Limiting B6 & Recent MFA)
+admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, requireRecentMfa, async (c) => {
   const body = await c.req.json();
   const sessionUser = c.get("user") as any;
 
@@ -983,12 +1006,24 @@ admin.post("/users", adminProvisionRateLimit, requireSuperAdmin, async (c) => {
 // 6b. List All Users (Super-Admin only)
 admin.get("/users", requireSuperAdmin, async (c) => {
   try {
+    const rawLimit = parseInt(c.req.query("limit") || "100", 10);
+    const rawPage = parseInt(c.req.query("page") || "1", 10);
+    const limit = isNaN(rawLimit) || rawLimit < 1 ? 100 : Math.min(rawLimit, 500);
+    const page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
+    const skip = (page - 1) * limit;
+
     const database = await getDb();
-    const users = await database.collection("user").find({}).sort({ createdAt: -1 }).toArray();
+    const users = await database
+      .collection("user")
+      .find({})
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
     const safeUsers = users.map((u: any) => ({
       _id: u._id?.toString() || u.id,
-      email: u.email,
-      name: u.name || u.email?.split("@")[0] || "User",
+      displayLabel: toApprovedDisplayLabel(u.email, u.name),
+      name: isEmailShaped(u.name) ? toApprovedDisplayLabel(u.name) : (u.name || "User"),
       role: u.role || "user",
       scopedClientId: u.scopedClientId || null,
       createdAt: u.createdAt || new Date(),
@@ -1194,7 +1229,7 @@ admin.patch("/clients/:id", requireScopedAdmin, async (c) => {
   if (!result && !updatedDoc) return c.json({ error: "Client not found" }, 404);
 
   // Invalidate CORS origin cache across Redis and MongoDB after database update (prevents races)
-  await invalidateClientOrigins(oldClient, updatedDoc || { ...oldClient, ...safeUpdate, ...dbUpdates, ...body });
+  await invalidateClientOrigins(oldClient, updatedDoc || { ...oldClient, ...dbUpdates, ...body });
 
   // Token revocation on client disable
   if (body.disabled === true || body.is_active === false) {
@@ -1467,8 +1502,9 @@ admin.get("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
 
     const safeAdmins = admins.map((a: any) => ({
       id: a._id.toString(),
-      email: a.email,
-      name: a.name || a.email.split("@")[0],
+      email: toApprovedDisplayLabel(a.email),
+      displayLabel: toApprovedDisplayLabel(a.email, a.name),
+      name: isEmailShaped(a.name) ? toApprovedDisplayLabel(a.name) : (a.name || toApprovedDisplayLabel(a.email)),
       redirectUrl: a.redirectUrl || "",
       isActive: a.isActive !== false,
       totpEnabled: a.totpEnabled === true,
@@ -1530,7 +1566,7 @@ function isRedirectUrlAllowedForClient(redirectUrl: string, client: any): { allo
 }
 
 // 11. Create Application Admin for a Client (Super-Admin or Scoped-Admin for own app)
-admin.post("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
+admin.post("/clients/:clientId/app-admins", requireScopedAdmin, requireRecentMfa, async (c) => {
   const clientId = c.req.param("clientId");
   const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
@@ -1588,7 +1624,7 @@ admin.post("/clients/:clientId/app-admins", requireScopedAdmin, async (c) => {
     // USER-REQUIRED POLICY: Reject assigning an existing super-admin identity as an app admin.
     const userInDb = await database.collection("user").findOne({ email });
     if (userInDb && (userInDb.role === "super-admin" || (userInDb.role === "admin" && userInDb.scopedClientId === null))) {
-      const reqId = c.get("requestId") || c.req.header("x-request-id");
+      const reqId = (c as any).get("requestId") || c.req.header("x-request-id");
       return c.json(
         {
           error: "Identity conflict: Global Super Admin cannot be assigned as an Application Administrator",
@@ -1732,7 +1768,7 @@ const updateAppAdminHandler = async (c: any) => {
       updateFields.name = body.name.trim();
     }
 
-    if (typeof body.email === "string" && body.email.trim()) {
+    if (typeof body.email === "string" && body.email.trim() && !body.email.includes("***")) {
       const newEmail = body.email.toLowerCase().trim();
       if (!newEmail.includes("@")) {
         return c.json({ error: "Valid email address is required" }, 400);
@@ -1778,6 +1814,7 @@ const updateAppAdminHandler = async (c: any) => {
       updateFields.isActive = body.isActive;
       if (body.isActive === false) {
         updateFields.tokensRevokedBefore = new Date();
+        updateFields.tokenVersion = ((existing.tokenVersion as number) || 1) + 1;
       }
     }
 
@@ -1793,6 +1830,8 @@ const updateAppAdminHandler = async (c: any) => {
       }
       updateFields.password = await hashPassword(body.password);
       updateFields.passwordChangedAt = new Date();
+      updateFields.tokensRevokedBefore = new Date();
+      updateFields.tokenVersion = ((existing.tokenVersion as number) || 1) + 1;
     }
 
     await database.collection("app_admins").updateOne(
@@ -1850,11 +1889,11 @@ const updateAppAdminHandler = async (c: any) => {
     return c.json({ error: err?.message || "Failed to update administrator" }, 500);
   }
 };
-admin.put("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, updateAppAdminHandler);
-admin.patch("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, updateAppAdminHandler);
+admin.put("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, requireRecentMfa, updateAppAdminHandler);
+admin.patch("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, requireRecentMfa, updateAppAdminHandler);
 
 // 13. Delete Application Admin (Super-Admin or Scoped-Admin for own app)
-admin.delete("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, async (c) => {
+admin.delete("/clients/:clientId/app-admins/:adminId", requireScopedAdmin, requireRecentMfa, async (c) => {
   const rawClientId = c.req.param("clientId");
   const adminId = c.req.param("adminId");
   const sessionUser = c.get("user") as any;
@@ -1983,8 +2022,8 @@ admin.get("/clients/:clientId/users", requireScopedAdmin, async (c) => {
       return {
         registrationId: r._id.toString(),
         userId: r.userId,
-        email: u?.email || "Unknown",
-        name: u?.name || u?.email?.split("@")[0] || "User",
+        displayLabel: toApprovedDisplayLabel(u?.email, u?.name),
+        name: isEmailShaped(u?.name) ? toApprovedDisplayLabel(u?.name) : (u?.name || "User"),
         registeredAt: r.registeredAt ? r.registeredAt.toISOString() : null,
       };
     });
@@ -2072,7 +2111,7 @@ admin.post("/clients/:clientId/users", requireScopedAdmin, async (c) => {
 });
 
 // 16. Remove a User from a Client
-admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, async (c) => {
+admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, requireRecentMfa, async (c) => {
   const rawClientId = c.req.param("clientId");
   const userId = c.req.param("userId");
   const sessionUser = c.get("user") as any;
@@ -2108,8 +2147,8 @@ admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, async (c) =
       ),
       database.collection("verification").deleteMany({
         $or: [
-          { value: { $regex: `"userId":"${userId}".*"client_id":"${canonicalClientId}"` } },
-          { value: { $regex: `"client_id":"${canonicalClientId}".*"userId":"${userId}"` } },
+          { value: { $regex: `"userId":"${escapeRegex(userId)}".*"client_id":"${escapeRegex(canonicalClientId)}"` } },
+          { value: { $regex: `"client_id":"${escapeRegex(canonicalClientId)}".*"userId":"${escapeRegex(userId)}"` } },
         ]
       }).catch(() => {}),
     ]);

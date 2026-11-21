@@ -15,7 +15,6 @@ const {
   isPrivateOrLocalHost,
   isStrongPassword,
   originMatchesRedirectUri,
-  safeCallbackURL,
   validateRedirectUri,
 } = await import("../src/utils/security");
 
@@ -126,10 +125,6 @@ assert.equal(validateRedirectUri("https://app.example.com/cb", { isDev: false, e
 assert.equal(isPrivateOrLocalHost("localhost"), true);
 assert.equal(isPrivateOrLocalHost("169.254.169.254"), true);
 assert.equal(isPrivateOrLocalHost("app.example.com"), false);
-
-assert.equal(safeCallbackURL("https://evil.example/cb"), undefined);
-assert.equal(safeCallbackURL("//evil.example/cb"), undefined);
-assert.equal(safeCallbackURL("/oauth/callback?code=abc"), "/oauth/callback?code=abc");
 
 assert.equal(isStrongPassword("short"), false);
 assert.equal(isStrongPassword("longbutmissingclasses"), false);

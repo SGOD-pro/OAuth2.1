@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "generated_at": "2026-10-02T00:00:00Z",
   "master_command": "npm run test:all-security",
-  "total_blocking_suites": 21,
+  "total_blocking_suites": 22,
   "suites": [
     {
       "name": "test-client-mode-transition",
@@ -172,6 +172,14 @@
       "purpose": "Verifies private application user and app-admin registration and revocation lifecycle, inactive record access denial, and production localhost origin restriction.",
       "blocking": true,
       "classification": "membership_and_origin_lifecycle"
+    },
+    {
+      "name": "oauth-security-hardening",
+      "file": "tests/security/oauth-security-hardening.test.ts",
+      "command": "npm run test:oauth-hardening",
+      "purpose": "Verifies account eligibility enforcement, token lifecycle revocation precedence over concurrent exchange/refresh, scope claim minimization, administrative MFA policy, and privacy projections.",
+      "blocking": true,
+      "classification": "oauth_hardening_and_lifecycle"
     },
     {
       "name": "load-and-performance",

@@ -124,12 +124,33 @@ function applyCorsHeadersToResponse(c: Context, origin: string) {
 // Limit: 30 novel uncached origin lookups per IP per 60 seconds.
 const CORS_LOOKUP_LIMIT = 30;
 const CORS_LOOKUP_WINDOW_MS = 60_000;
+const MAX_CORS_BUCKETS = 5000;
 const corsLookupBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function pruneCorsLookupBuckets(now: number): void {
+  for (const [k, v] of corsLookupBuckets.entries()) {
+    if (now > v.resetAt) {
+      corsLookupBuckets.delete(k);
+    }
+  }
+  if (corsLookupBuckets.size >= MAX_CORS_BUCKETS) {
+    const evictCount = Math.max(1, Math.floor(MAX_CORS_BUCKETS * 0.1));
+    let deleted = 0;
+    for (const key of corsLookupBuckets.keys()) {
+      corsLookupBuckets.delete(key);
+      deleted++;
+      if (deleted >= evictCount) break;
+    }
+  }
+}
 
 function checkCorsLookupRateLimit(ip: string): boolean {
   const now = Date.now();
   const bucket = corsLookupBuckets.get(ip);
   if (!bucket || now > bucket.resetAt) {
+    if (corsLookupBuckets.size >= MAX_CORS_BUCKETS) {
+      pruneCorsLookupBuckets(now);
+    }
     corsLookupBuckets.set(ip, { count: 1, resetAt: now + CORS_LOOKUP_WINDOW_MS });
     return true; // allowed
   }

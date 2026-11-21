@@ -1,7 +1,7 @@
 # V2 implementation map: where, what and how
 
 **Status:** Planned work, no files below are implemented by this docs change. Updated 2026-11-22.
-Baseline inspected: main `161ad99` and security branch `0a5727e`. Preserve hardening before implementation. Source paths in code formatting are navigation targets or proposed files, not claims they already exist.
+Baseline inspected: historical main `161ad99` and security branch `0a5727e`; integrated main `828acc5` now supplies the hardened runtime. Preserve it during implementation. Source paths in code formatting are navigation targets or proposed files, not claims they already exist.
 
 ## 1. Rules for changing the existing code
 

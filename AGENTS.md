@@ -10,8 +10,8 @@ Production readiness and conformance must be established with evidence, not infe
 Read [docs/README.md](docs/README.md), [docs/PHASES.md](docs/PHASES.md),
 [docs/IMPLEMENTATION_MAP.md](docs/IMPLEMENTATION_MAP.md), and
 [0008](docs/specs/0008-multi-account-identity-platform/index.md) before V2 changes.
-V2 is planned, not implemented. Integrate reviewed security PR #2 first; do not repeat
-its completed eligibility/MFA hardening as the next feature. Next runtime work is P0's
+V2 is planned, not implemented. Security PR #2 is integrated into main at `828acc5`;
+preserve its eligibility/MFA hardening rather than rebuilding it as the next feature. Next runtime work is P0's
 transaction-aware engine creation and request-local session compatibility proof.
 Then follow bounded P1-P9 slices, preserving private/admin isolation, stable subjects
 and protocol endpoints. New identity pages/APIs require a full-stack slice; a UI-only

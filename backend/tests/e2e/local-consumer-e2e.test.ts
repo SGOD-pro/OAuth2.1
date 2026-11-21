@@ -216,8 +216,55 @@ async function loginAndGetCookie(email: string): Promise<string> {
   return setCookies.map((c: string) => c.split(";")[0]).filter(Boolean).join("; ");
 }
 
-const platformAdminCookie = await loginAndGetCookie(platformAdminEmail);
-const appAdminCookie = await loginAndGetCookie(appAdminEmail);
+const { createOTP } = await import("@better-auth/utils/otp");
+const { base32 } = await import("@better-auth/utils/base32");
+
+async function enrollAndLoginAdminMfa(email: string, pass: string): Promise<string> {
+  const loginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email, password: pass }),
+  });
+  const preCookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+
+  const enableRes = await app.request("/api/auth/two-factor/enable", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: preCookie, "content-type": "application/json" }),
+    body: JSON.stringify({ password: pass }),
+  });
+  const enableData = await enableRes.json();
+  const b32Secret = new URL(enableData.totpURI).searchParams.get("secret")!;
+  const rawSecret = Buffer.from(base32.decode(b32Secret)).toString();
+
+  const enrollOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
+  await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: preCookie, "content-type": "application/json" }),
+    body: JSON.stringify({ code: enrollOtp }),
+  });
+
+  const challengeLoginRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email, password: pass }),
+  });
+  const setCookie = challengeLoginRes.headers.get("set-cookie") || "";
+  const challengePart = setCookie.split(",").find((p: string) => p.trim().startsWith("better-auth.two_factor="));
+  const challengeCookie = (challengePart || "").trim().split(";")[0];
+
+  const challengeOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
+  const verifyChallengeRes = await app.request("/api/auth/two-factor/verify-totp", {
+    method: "POST",
+    headers: getTestHeaders({ Cookie: challengeCookie, "content-type": "application/json" }),
+    body: JSON.stringify({ code: challengeOtp }),
+  });
+  const finalSetCookie = verifyChallengeRes.headers.get("set-cookie") || "";
+  const sessionPart = finalSetCookie.split(",").find((p: string) => p.trim().startsWith("better-auth.session_token="));
+  return (sessionPart || "").trim().split(";")[0];
+}
+
+const platformAdminCookie = await enrollAndLoginAdminMfa(platformAdminEmail, commonPass);
+const appAdminCookie = await enrollAndLoginAdminMfa(appAdminEmail, commonPass);
 const dualAdminCookie = await loginAndGetCookie(dualAdminEmail);
 const ordinaryUserCookie = await loginAndGetCookie(ordinaryUserEmail);
 const privateUser1Cookie = await loginAndGetCookie(privateUser1Email);

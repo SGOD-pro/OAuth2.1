@@ -1,7 +1,7 @@
 # Consumer integration contract
 
 **Authority:** Normative consumer contract. Updated 2026-11-22.
-**Version boundary:** Main `161ad99` is the old runtime; reviewed hardening is on PR #2. V2 account chooser/session/privacy changes below are targets, not available endpoints by documentation alone. Read [architecture](ARCHITECTURE.md), [flows](AUTHENTICATION_FLOWS.md), [sessions](SESSION_MODEL.md) and [phases](PHASES.md).
+**Version boundary:** Main `828acc5` incorporates reviewed security PR #2; this docs branch includes that baseline. V2 account chooser/session/privacy changes below are targets, not available endpoints by documentation alone. Read [architecture](ARCHITECTURE.md), [flows](AUTHENTICATION_FLOWS.md), [sessions](SESSION_MODEL.md) and [phases](PHASES.md).
 
 ## 1. Centralized identity, consumer-owned authorization
 

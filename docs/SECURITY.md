@@ -1,7 +1,7 @@
 # V2 security architecture and trust model
 
 **Status:** NORMATIVE / AUTHORITATIVE requirements. Updated 2026-11-22.
-This is a design contract, not a statement that all V2 controls are implemented. Integrate security PR #2 before V2 runtime work; baseline and exact reviewed references are in [ARCHITECTURE.md](ARCHITECTURE.md).
+This is a design contract, not a statement that all V2 controls are implemented. Security PR #2 is integrated into main `828acc5`; preserve it during V2 runtime work; baseline and exact reviewed references are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 1. Trust boundaries and assets
 

@@ -22,6 +22,11 @@ const isIfPresent = process.argv.includes('--if-present');
 const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
 const skipDeploymentPrep = process.env.SKIP_DEPLOYMENT_PREP === '1' || process.argv.includes('--skip-deployment-prep');
 
+if (isIfPresent && fs.existsSync(rootVercelJson) && fs.existsSync(frontendVercelJson)) {
+  console.log('[prepare-vercel-config] vercel.json already exists; skipping generation (--if-present).');
+  process.exit(0);
+}
+
 if (skipDeploymentPrep) {
   if (isProduction) {
     console.error('[prepare-vercel-config] FATAL: Deployment preparation cannot be skipped in production mode.');
@@ -56,21 +61,17 @@ if (!gatewaySecret) {
 }
 
 if (!gatewaySecret) {
-  if (isIfPresent && !isProduction) {
-    console.warn('[prepare-vercel-config] INTERNAL_GATEWAY_SECRET not found; skipping vercel.json generation for local non-production build (--if-present).');
+  if (isIfPresent) {
+    console.warn('[prepare-vercel-config] INTERNAL_GATEWAY_SECRET not found; skipping vercel.json generation (--if-present).');
     process.exit(0);
   }
-  console.error('[prepare-vercel-config] FATAL: INTERNAL_GATEWAY_SECRET not found in env or backend/.env (required in production)');
-  process.exit(1);
-}
-
-if (gatewaySecret.length < 32) {
-  console.error(`[prepare-vercel-config] FATAL: INTERNAL_GATEWAY_SECRET must be >= 32 characters (got ${gatewaySecret.length})`);
+  console.error('[prepare-vercel-config] FATAL: INTERNAL_GATEWAY_SECRET not found in env or backend/.env');
   process.exit(1);
 }
 
 const defaultLambdaUrl = 'https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws';
-const lambdaBackendUrl = (process.env.LAMBDA_BACKEND_URL || defaultLambdaUrl).trim().replace(/\/+$/, '');
+const backendUrl = process.env.LAMBDA_BACKEND_URL || process.env.VITE_AUTH_URL || defaultLambdaUrl;
+const lambdaBackendUrl = backendUrl.trim().replace(/\/+$/, '');
 
 // Generate from template or structure
 const baseTemplate = fs.existsSync(rootTemplate)
@@ -107,7 +108,7 @@ const baseTemplate = fs.existsSync(rootTemplate)
 
 let configStr = JSON.stringify(baseTemplate, null, 2);
 
-if (process.env.LAMBDA_BACKEND_URL) {
+if (process.env.LAMBDA_BACKEND_URL || process.env.VITE_AUTH_URL) {
   configStr = configStr.replace(
     /https:\/\/yu6fcg6yx4xmq5u4we5n6j3ywm0inmis\.lambda-url\.ap-south-1\.on\.aws/g,
     () => lambdaBackendUrl
