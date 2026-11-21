@@ -111,6 +111,15 @@ check("Route manifest aligns with backend route implementations", () => {
       continue;
     }
 
+    if (r.path.startsWith("/.well-known")) {
+      const subPath = r.path.replace("/.well-known", "");
+      assert.ok(
+        appSrc.includes("/.well-known") && (authRoutesSrc.includes(subPath) || appSrc.includes(`"${r.path}"`)),
+        `/.well-known route '${r.path}' must be mounted via app.ts or auth.ts`
+      );
+      continue;
+    }
+
     if (r.path.startsWith("/api/admin")) {
       const subPath = r.path.replace("/api/admin", "");
       assert.ok(

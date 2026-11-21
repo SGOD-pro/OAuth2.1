@@ -69,6 +69,11 @@ if (gatewaySecret.length < 32) {
   process.exit(1);
 }
 
+if (isProduction && !process.env.LAMBDA_BACKEND_URL) {
+  console.error('[prepare-vercel-config] FATAL: LAMBDA_BACKEND_URL must be explicitly configured in production.');
+  process.exit(1);
+}
+
 const defaultLambdaUrl = 'https://yu6fcg6yx4xmq5u4we5n6j3ywm0inmis.lambda-url.ap-south-1.on.aws';
 const lambdaBackendUrl = (process.env.LAMBDA_BACKEND_URL || defaultLambdaUrl).trim().replace(/\/+$/, '');
 

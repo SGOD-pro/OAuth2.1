@@ -74,7 +74,7 @@ export async function syncAppAdminIdentity(
 
   if (explicitUserId) {
     const rawId = String(explicitUserId).trim();
-    const userConditions = [
+    const userConditions: any[] = [
       { id: rawId },
       ...(ObjectId.isValid(rawId) ? [{ _id: new ObjectId(rawId) }] : [{ _id: rawId }]),
     ];
@@ -222,7 +222,7 @@ export async function syncAppAdminIdentity(
 
     if (isExistingRevoked) {
       console.warn(`[ADMIN_SYNC] Explicit revocation in user_app_registrations for user ${userIdStr} and client ${clientId} preserved; skipping reactivation.`);
-      return;
+      return null;
     }
 
     await database.collection("user_app_registrations").updateOne(
@@ -752,7 +752,7 @@ export async function selfHealAppAdmins(database: Db): Promise<void> {
       }
 
       // 2. Query user by the immutable userId
-      const userConditions = [
+      const userConditions: any[] = [
         { id: rawUserId },
         ...(ObjectId.isValid(rawUserId) ? [{ _id: new ObjectId(rawUserId) }] : [{ _id: rawUserId }]),
       ];

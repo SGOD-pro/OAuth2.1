@@ -3,12 +3,17 @@ dotenv.config();
 
 import assert from "node:assert/strict";
 import crypto from "crypto";
+import { MongoMemoryServer } from "mongodb-memory-server";
+
+// Start disposable in-memory MongoDB before importing any application modules
+const mongod = await MongoMemoryServer.create();
+const mongoUri = mongod.getUri();
 
 // Configure test environment
 process.env.NODE_ENV = "test";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
-process.env.MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/test_security";
+process.env.MONGO_URI = mongoUri;
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "https://auth.example.com";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com";
@@ -140,13 +145,17 @@ await runTest("RATE-2: Redis failure + Mongo failure -> Admin endpoint FAILS CLO
 });
 
 // --------------------------------------------------------------------------
-// TEST 3: Dual Failure (Redis + Mongo) on Auth Endpoint -> Emergency Limiter Enforces Limit
+// TEST 3: Dual Failure (Redis + Mongo) on Auth Endpoint -> FAILS CLOSED Immediately with Zero Handler Executions
 // --------------------------------------------------------------------------
-await runTest("RATE-3: Redis failure + Mongo failure -> Auth endpoint engages emergency limiter and does NOT become unlimited", async () => {
+await runTest("RATE-3: Redis failure + Mongo failure -> Auth endpoint FAILS CLOSED immediately with zero handler executions, multi-worker safe, while public endpoint engages emergency fallback", async () => {
   const testIp = `10.42.3.${Math.floor(Math.random() * 200) + 1}`;
   const prefix = `test_auth_emerg_${crypto.randomBytes(4).toString("hex")}`;
   const limit = 4;
   const windowMs = 60 * 1000;
+  let authHandlerExecutions = 0;
+  let worker1HandlerExecutions = 0;
+  let worker2HandlerExecutions = 0;
+  let publicHandlerExecutions = 0;
 
   const testApp = new Hono();
   testApp.use(
@@ -158,29 +167,109 @@ await runTest("RATE-3: Redis failure + Mongo failure -> Auth endpoint engages em
       sensitivity: "auth",
     })
   );
-  testApp.post("/auth-endpoint", (c) => c.json({ status: "authenticated" }, 200));
+  testApp.post("/auth-endpoint", (c) => {
+    authHandlerExecutions++;
+    return c.json({ status: "authenticated" }, 200);
+  });
+
+  // Dual-app regression: simulate two independent Hono app instances within one process under store outage
+  // In serverless / multi-instance architectures, in-process limiters allow N * limit requests.
+  // Immediate fail-closed ensures neither app instance permits any requests.
+  const worker1App = new Hono();
+  worker1App.use(
+    "/auth-worker",
+    createRateLimiter({
+      windowMs,
+      limit,
+      prefix: "test_worker_auth",
+      sensitivity: "auth",
+    })
+  );
+  worker1App.post("/auth-worker", (c) => {
+    worker1HandlerExecutions++;
+    return c.json({ status: "worker1_ok" }, 200);
+  });
+
+  const worker2App = new Hono();
+  worker2App.use(
+    "/auth-worker",
+    createRateLimiter({
+      windowMs,
+      limit,
+      prefix: "test_worker_auth",
+      sensitivity: "auth",
+    })
+  );
+  worker2App.post("/auth-worker", (c) => {
+    worker2HandlerExecutions++;
+    return c.json({ status: "worker2_ok" }, 200);
+  });
+
+  // Public endpoint with emergency limiter fallback
+  const publicApp = new Hono();
+  publicApp.use(
+    "/public-endpoint",
+    createRateLimiter({
+      windowMs,
+      limit,
+      prefix: "test_public_emerg",
+      sensitivity: "public",
+    })
+  );
+  publicApp.get("/public-endpoint", (c) => {
+    publicHandlerExecutions++;
+    return c.json({ status: "public_ok" }, 200);
+  });
 
   // Simulate MongoDB failure
   stateModule.__simulateRateLimitStoreFailure(true);
 
   try {
-    // Requests 1..4 should be allowed by emergency in-process limiter
-    for (let i = 1; i <= limit; i++) {
-      const res = await testApp.request("/auth-endpoint", {
-        method: "POST",
-        headers: getTestHeaders(testIp),
-      });
-      assert.equal(res.status, 200, `Auth request ${i} should be permitted by emergency limiter`);
-    }
-
-    // Request 5 must be blocked by the emergency limiter (does NOT become unlimited!)
-    const blockedRes = await testApp.request("/auth-endpoint", {
+    // 1. Immediate denial on Auth Endpoint: request 1 must be rejected with 429
+    const authRes = await testApp.request("/auth-endpoint", {
       method: "POST",
       headers: getTestHeaders(testIp),
     });
-    assert.equal(blockedRes.status, 429, "Auth request exceeding limit under store failure must return 429");
-    const data = await blockedRes.json();
-    assert.equal(data.error, "too_many_requests");
+    assert.equal(authRes.status, 429, "Auth request under store failure must immediately return 429");
+    assert.equal(authHandlerExecutions, 0, "Protected auth handler must NEVER execute under store failure");
+    const authData = await authRes.json();
+    assert.equal(authData.error, "too_many_requests");
+
+    // 2. Dual-App Regression: neither app instance 1 nor app instance 2 executes protected handler
+    for (let i = 0; i < 3; i++) {
+      const w1Res = await worker1App.request("/auth-worker", {
+        method: "POST",
+        headers: getTestHeaders(`10.42.3.${10 + i}`),
+      });
+      assert.equal(w1Res.status, 429, "App instance 1 must immediately deny auth request under store failure");
+
+      const w2Res = await worker2App.request("/auth-worker", {
+        method: "POST",
+        headers: getTestHeaders(`10.42.3.${20 + i}`),
+      });
+      assert.equal(w2Res.status, 429, "App instance 2 must immediately deny auth request under store failure");
+    }
+    assert.equal(worker1HandlerExecutions, 0, "App instance 1 protected handler execution count must be 0");
+    assert.equal(worker2HandlerExecutions, 0, "App instance 2 protected handler execution count must be 0");
+
+    // 3. Preserve Bounded Public-Endpoint Fallback:
+    // Public endpoint engages emergency limiter: requests 1..limit allowed (200), request limit+1 blocked (429)
+    const publicIp = "10.42.3.99";
+    for (let i = 1; i <= limit; i++) {
+      const pubRes = await publicApp.request("/public-endpoint", {
+        method: "GET",
+        headers: getTestHeaders(publicIp),
+      });
+      assert.equal(pubRes.status, 200, `Public request ${i} should be allowed by emergency limiter`);
+    }
+    assert.equal(publicHandlerExecutions, limit, "Public handler must execute for allowed emergency requests");
+
+    const pubBlocked = await publicApp.request("/public-endpoint", {
+      method: "GET",
+      headers: getTestHeaders(publicIp),
+    });
+    assert.equal(pubBlocked.status, 429, "Public request exceeding emergency limit must return 429");
+    assert.equal(publicHandlerExecutions, limit, "Public handler must not execute when emergency limit exceeded");
   } finally {
     stateModule.__simulateRateLimitStoreFailure(false);
   }
@@ -199,32 +288,38 @@ await runTest("RATE-4: Credential stuffing target defense blocks brute force acr
   // Clear any existing emergency record for this target key
   emergencyRateLimiter.clear();
 
-  // Simulate Mongo failure
-  stateModule.__simulateRateLimitStoreFailure(true);
-
-  try {
-    // Simulate 15 attempts from 15 DIFFERENT IP addresses targeting the same victim email
-    for (let i = 1; i <= targetLimit; i++) {
-      const rotatingIp = `198.51.${Math.floor(i / 250)}.${i % 250}`;
-      const res = await app.request("/api/auth/sign-in/email", {
-        method: "POST",
-        headers: getTestHeaders(rotatingIp, { Origin: config.frontendUrl }),
-        body: JSON.stringify({ email: victimEmail, password: `WrongPass${i}!` }),
-      });
-      // Should fail credentials (400 / 401), NOT 429 yet
-      assert.notEqual(res.status, 429, `Attempt ${i} should be processed before reaching target threshold`);
-    }
-
-    // Attempt 16 from yet another new IP address must be BLOCKED with 429
-    const blockedRes = await app.request("/api/auth/sign-in/email", {
+  // Part A: Under normal Mongo fallback (Redis unavailable), target defense caps rotating IPs at 15
+  for (let i = 1; i <= targetLimit; i++) {
+    const rotatingIp = `198.51.${Math.floor(i / 250)}.${i % 250}`;
+    const res = await app.request("/api/auth/sign-in/email", {
       method: "POST",
-      headers: getTestHeaders("198.51.99.99", { Origin: config.frontendUrl }),
-      body: JSON.stringify({ email: victimEmail, password: "AnotherWrongPass!" }),
+      headers: getTestHeaders(rotatingIp, { Origin: config.frontendUrl }),
+      body: JSON.stringify({ email: victimEmail, password: `WrongPass${i}!` }),
     });
+    // Should fail credentials (400 / 401), NOT 429 yet
+    assert.notEqual(res.status, 429, `Attempt ${i} should be processed before reaching target threshold`);
+  }
 
-    assert.equal(blockedRes.status, 429, "Target-keyed brute-force attempt 16 across rotating IPs must be blocked with 429");
-    const data = await blockedRes.json();
-    assert.equal(data.error, "too_many_requests");
+  // Attempt 16 from yet another new IP address must be BLOCKED with 429
+  const blockedRes = await app.request("/api/auth/sign-in/email", {
+    method: "POST",
+    headers: getTestHeaders("198.51.99.99", { Origin: config.frontendUrl }),
+    body: JSON.stringify({ email: victimEmail, password: "AnotherWrongPass!" }),
+  });
+
+  assert.equal(blockedRes.status, 429, "Target-keyed brute-force attempt 16 across rotating IPs must be blocked with 429");
+  const data = await blockedRes.json();
+  assert.equal(data.error, "too_many_requests");
+
+  // Part B: Under total store outage (both Redis and Mongo failing), auth immediately fails closed on attempt 1
+  stateModule.__simulateRateLimitStoreFailure(true);
+  try {
+    const outageRes = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: getTestHeaders("198.51.100.1", { Origin: config.frontendUrl }),
+      body: JSON.stringify({ email: `victim2_${crypto.randomBytes(4).toString("hex")}@example.com`, password: "WrongPass!" }),
+    });
+    assert.equal(outageRes.status, 429, "Auth sign-in under total store failure must fail closed on attempt 1");
   } finally {
     stateModule.__simulateRateLimitStoreFailure(false);
     emergencyRateLimiter.clear();
@@ -259,4 +354,5 @@ console.log("================================================================");
 console.log(`  RATE LIMITING FAILURE MODES SUITE: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 
+await mongod.stop();
 process.exit(failed > 0 ? 1 : 0);

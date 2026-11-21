@@ -86,14 +86,6 @@ export interface LogsState {
   activeQueryKey: string;
 }
 
-export interface User {
-  _id: string;
-  email: string;
-  name: string;
-  role: string;
-  createdAt: string;
-}
-
 interface CacheState<T> {
   data: T | null;
   lastFetched: number;
@@ -104,18 +96,15 @@ interface AdminStore {
   stats: CacheState<Stats>;
   clients: CacheState<OAuthClient[]>;
   logs: LogsState;
-  users: CacheState<User[]>;
   
   fetchStats: (force?: boolean) => Promise<void>;
   fetchClients: (force?: boolean) => Promise<void>;
   fetchLogs: (query?: LogsQuery, force?: boolean) => Promise<void>;
-  fetchUsers: (force?: boolean) => Promise<void>;
   
   // Optimistic mutations
   addClientLocal: (client: OAuthClient) => void;
   updateClientLocal: (client: OAuthClient) => void;
   deleteClientLocal: (clientId: string) => void;
-  updateUserRoleLocal: (userId: string, role: string) => void;
 }
 
 const CACHE_TTL = 30_000; // 30 seconds
@@ -143,7 +132,6 @@ let inFlightStats: Promise<void> | null = null;
 let inFlightClients: Promise<void> | null = null;
 let latestLogRequestId = 0;
 let latestLogQuerySequence = 0;
-let inFlightUsers: Promise<void> | null = null;
 
 export function _resetAdminLogsCacheForTesting() {
   logsCache.clear();
@@ -167,7 +155,6 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
     error: null,
     activeQueryKey: '',
   },
-  users: { data: null, lastFetched: 0, loading: false },
 
   fetchStats: async (force = false) => {
     const { stats } = get();
@@ -381,29 +368,6 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
     }
   },
 
-  fetchUsers: async (force = false) => {
-    const { users } = get();
-    if (!force && users.data && Date.now() - users.lastFetched < CACHE_TTL) return;
-    if (inFlightUsers) return inFlightUsers;
-
-    inFlightUsers = (async () => {
-      set({ users: { ...get().users, loading: true } });
-      try {
-        const res = await apiFetch('/api/admin/users');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data: User[] = await res.json();
-        set({ users: { data, lastFetched: Date.now(), loading: false } });
-      } catch (err) {
-        toast.error(`Failed to load users: ${String(err)}`);
-        set({ users: { ...get().users, loading: false } });
-      } finally {
-        inFlightUsers = null;
-      }
-    })();
-
-    return inFlightUsers;
-  },
-
   addClientLocal: (client) => {
     const enriched: OAuthClient = {
       ...client,
@@ -448,14 +412,5 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
     }));
     // Trigger background stats refresh
     void get().fetchStats(true);
-  },
-
-  updateUserRoleLocal: (userId, role) => {
-    set((state) => ({
-      users: {
-        ...state.users,
-        data: (state.users.data || []).map((u) => u._id === userId ? { ...u, role } : u)
-      }
-    }));
   }
 }));

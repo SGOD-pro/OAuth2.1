@@ -15,6 +15,8 @@ process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "http://localhost:3
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
 process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "127.0.0.1/32,10.0.0.0/8";
+process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
+process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
 
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -24,6 +26,7 @@ import { hashPassword } from "better-auth/crypto";
 const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");
+const { enrollAndLoginAdminMfa } = await import("../fixtures/admin-mfa-fixture");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- APPLICATION MANAGEMENT AUTHORIZATION AUDIT");
@@ -112,13 +115,7 @@ await db.collection("user").updateOne(
   { email: superAdminEmail },
   { $set: { role: "admin", scopedClientId: null, emailVerified: true } }
 );
-const superLogin = await app.request("/api/auth/sign-in/email", {
-  method: "POST",
-  headers: getTestHeaders(),
-  body: JSON.stringify({ email: superAdminEmail, password: superAdminPassword }),
-});
-assert.equal(superLogin.status, 200, "Super admin login must return 200");
-const superAdminCookie = (superLogin.headers.get("set-cookie") || "").split(";")[0];
+const superAdminCookie = await enrollAndLoginAdminMfa(app, superAdminEmail, superAdminPassword, getTestHeaders);
 assert.ok(superAdminCookie, "Super admin must receive session cookie");
 
 // 2. Scoped Admin User (Assigned to Client 1 only) + Session
@@ -131,13 +128,7 @@ await db.collection("user").updateOne(
   { email: scopedAdminEmail },
   { $set: { role: "admin", scopedClientId: client1_id, emailVerified: true } }
 );
-const scopedLogin = await app.request("/api/auth/sign-in/email", {
-  method: "POST",
-  headers: getTestHeaders(),
-  body: JSON.stringify({ email: scopedAdminEmail, password: scopedAdminPassword }),
-});
-assert.equal(scopedLogin.status, 200, "Scoped admin login must return 200");
-const scopedAdminCookie = (scopedLogin.headers.get("set-cookie") || "").split(";")[0];
+const scopedAdminCookie = await enrollAndLoginAdminMfa(app, scopedAdminEmail, scopedAdminPassword, getTestHeaders);
 assert.ok(scopedAdminCookie, "Scoped admin must receive session cookie");
 
 // 3. Regular End-User + Session
@@ -535,13 +526,7 @@ await runTest("STRICT-1: Admin with scopedClientId: '' (empty string) CANNOT cre
     { email: emptyScopeEmail },
     { $set: { role: "admin", scopedClientId: "", emailVerified: true } }
   );
-  const loginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: emptyScopeEmail, password: emptyScopePass }),
-  });
-  assert.equal(loginRes.status, 200);
-  const cookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+  const cookie = await enrollAndLoginAdminMfa(app, emptyScopeEmail, emptyScopePass, getTestHeaders);
 
   const res = await app.request("/api/admin/clients", {
     method: "POST",
@@ -564,13 +549,7 @@ await runTest("STRICT-2: Admin with scopedClientId: undefined CANNOT create appl
     { email: undefScopeEmail },
     { $set: { role: "admin", emailVerified: true }, $unset: { scopedClientId: "" } }
   );
-  const loginRes = await app.request("/api/auth/sign-in/email", {
-    method: "POST",
-    headers: getTestHeaders(),
-    body: JSON.stringify({ email: undefScopeEmail, password: undefScopePass }),
-  });
-  assert.equal(loginRes.status, 200);
-  const cookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
+  const cookie = await enrollAndLoginAdminMfa(app, undefScopeEmail, undefScopePass, getTestHeaders);
 
   const res = await app.request("/api/admin/clients", {
     method: "POST",

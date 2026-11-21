@@ -97,6 +97,7 @@ await db.collection("user").insertOne({
   role: "super-admin",
   scopedClientId: null,
   emailVerified: true,
+  twoFactorEnabled: true,
   createdAt: now,
 });
 
@@ -107,6 +108,8 @@ async function mintSuperToken(): Promise<string> {
     role: "super-admin",
     scoped_client_id: null,
     aud: "http://localhost:3000",
+    mfa: true,
+    amr: ["mfa"],
   })
     .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer("http://localhost:3000")

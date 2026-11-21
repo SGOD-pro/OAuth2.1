@@ -76,6 +76,7 @@ await db.collection("user").insertOne({
   name: "Telemetry Super Admin",
   role: "super-admin",
   scopedClientId: null,
+  twoFactorEnabled: true,
   emailVerified: true,
   createdAt: new Date(),
 });
@@ -85,6 +86,8 @@ async function mintSuperAdminToken(): Promise<string> {
     sub: superAdminId,
     role: "super-admin",
     aud: "http://localhost:3000",
+    mfa: true,
+    amr: ["mfa"],
   })
     .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer("http://localhost:3000")

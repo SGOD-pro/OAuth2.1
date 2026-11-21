@@ -231,3 +231,4 @@ try {
   cleanGeneratedFiles();
   restoreLocalEnvFiles();
 }
+process.exit(0);

@@ -42,7 +42,10 @@ The IdP server runs on Node.js / AWS Lambda and requires the following configura
 | Variable | Type | Required | Description | Default |
 |---|---|---|---|---|
 | `AUTH_PUBLIC_SIGNUP_ENABLED` | Boolean | No | Enables self-registration globally on the IdP for public applications. | `true` |
-| `AUTH_EMAIL_VERIFICATION_ENABLED` | Boolean | No | Enforces email verification before issuing OAuth authorization codes. | `false` |
+| `AUTH_EMAIL_VERIFICATION_ENABLED` | Boolean | No | Enforces email verification before issuing OAuth authorization codes. When set to `true`, `EMAIL_DELIVERY_WEBHOOK_URL` is required and fails closed at startup if absent. | `false` |
+| `EMAIL_DELIVERY_WEBHOOK_URL` | String (URL) | Conditional | Delivery transport webhook URL. Required when `AUTH_EMAIL_VERIFICATION_ENABLED=true`. In production mode (`NODE_ENV=production`), HTTPS is strictly enforced and loopback hosts are rejected. | None |
+| `AUTH_EMAIL_VERIFICATION_ROLLOUT_MODE` | String | No | Rollout policy mode. Allowed: `enforce_new` (grandfather pre-rollout accounts), `enforce_all` (strictly enforce on all accounts). | `enforce_all` |
+| `AUTH_EMAIL_VERIFICATION_ENFORCED_AFTER` | String (ISO) | Conditional | ISO timestamp cutoff for `enforce_new` rollout mode. Accounts created prior to this timestamp are granted a temporary verification grace window. | None |
 
 ### 2.4 Distributed Cache & Rate Limiting
 

@@ -8,7 +8,12 @@ import crypto from "crypto";
 process.env.NODE_ENV = "test";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
-process.env.MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/test_security";
+let mongod: any = null;
+if (!process.env.MONGO_URI) {
+  const { MongoMemoryServer } = await import("mongodb-memory-server");
+  mongod = await MongoMemoryServer.create();
+  process.env.MONGO_URI = mongod.getUri();
+}
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "https://auth.example.com";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com";
@@ -21,6 +26,7 @@ const { default: app } = await import("../../src/app");
 const { getDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");
 const { config } = await import("../../src/config");
+const { enrollAndLoginAdminMfa } = await import("../fixtures/admin-mfa-fixture");
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- DIRECT BACKEND ACCESS & PROTOCOL BOUNDARY SUITE");
@@ -275,15 +281,11 @@ const superAdminPass = "SuperAdmin@1234!";
 await authProvider.api.signUpEmail({
   body: { email: superAdminEmail, password: superAdminPass, name: "Gateway Super Admin" },
 });
-await db.collection("user").updateOne({ email: superAdminEmail }, { $set: { role: "admin", scopedClientId: null } });
+await db.collection("user").updateOne({ email: superAdminEmail }, { $set: { role: "admin", scopedClientId: null, emailVerified: true } });
 
-const superLoginRes = await app.request("/api/auth/sign-in/email", {
-  method: "POST",
-  headers: getTestHeaders({ Origin: process.env.FRONTEND_URL || "https://app.example.com" }),
-  body: JSON.stringify({ email: superAdminEmail, password: superAdminPass }),
-});
-assert.equal(superLoginRes.status, 200);
-const superCookie = superLoginRes.headers.get("set-cookie") || "";
+const superCookie = await enrollAndLoginAdminMfa(app, superAdminEmail, superAdminPass, (extra) =>
+  getTestHeaders({ Origin: process.env.FRONTEND_URL || "https://app.example.com", ...extra })
+);
 
 const scopedAdminEmail = `gw_scoped_${crypto.randomBytes(4).toString("hex")}@example.com`;
 const scopedAdminPass = "ScopedAdmin@1234!";
@@ -314,15 +316,11 @@ await Promise.all([
 await authProvider.api.signUpEmail({
   body: { email: scopedAdminEmail, password: scopedAdminPass, name: "Gateway Scoped Admin" },
 });
-await db.collection("user").updateOne({ email: scopedAdminEmail }, { $set: { role: "admin", scopedClientId: tenantA } });
+await db.collection("user").updateOne({ email: scopedAdminEmail }, { $set: { role: "admin", scopedClientId: tenantA, emailVerified: true } });
 
-const scopedLoginRes = await app.request("/api/auth/sign-in/email", {
-  method: "POST",
-  headers: getTestHeaders({ Origin: process.env.FRONTEND_URL || "https://app.example.com" }),
-  body: JSON.stringify({ email: scopedAdminEmail, password: scopedAdminPass }),
-});
-assert.equal(scopedLoginRes.status, 200);
-const scopedCookie = scopedLoginRes.headers.get("set-cookie") || "";
+const scopedCookie = await enrollAndLoginAdminMfa(app, scopedAdminEmail, scopedAdminPass, (extra) =>
+  getTestHeaders({ Origin: process.env.FRONTEND_URL || "https://app.example.com", ...extra })
+);
 
 const normalUserEmail = `gw_user_${crypto.randomBytes(4).toString("hex")}@example.com`;
 const normalUserPass = "NormalUser@1234!";
@@ -491,4 +489,7 @@ await runTest("GATEWAY-10: Client presenting malformed/short x-gateway-secret (<
 
 console.log(`  DIRECT BACKEND SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
+if (mongod) {
+  await mongod.stop();
+}
 process.exit(failed > 0 ? 1 : 0);
