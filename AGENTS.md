@@ -158,3 +158,84 @@ Before declaring your integration task complete, verify every item:
   Do not claim erasure if old backups can recover keys or plaintext.
 - Fingerprints and Bloom filters never decide authentication, uniqueness or access.
 - Record source inspection, mocked probes, integration tests and blocked checks separately.
+
+---
+
+## 🛠️ Core Engineering Rules
+
+### 1. Think before coding
+- State material assumptions before implementation.
+- Ask when missing information changes correctness, security or scope.
+- Explain meaningful tradeoffs and suggest a simpler solution when appropriate.
+- Never silently invent requirements or claim unverified behavior.
+- Resolve routine choices using existing project conventions without unnecessary questions.
+
+### 2. Simplicity first
+- Implement only the requested behavior.
+- Prefer existing components and platform capabilities.
+- Do not add speculative abstractions, configuration, dependencies or features.
+- Do not introduce factories, interfaces, wrappers or DI containers for a single trivial use.
+- Choose the smallest design that meets the actual requirements.
+
+### 3. Surgical changes
+- Every changed line must trace to the requested task.
+- Match existing style and preserve unrelated behavior.
+- Avoid unrelated refactoring, formatting and cleanup.
+- Remove code/imports made unused by your changes.
+- Report unrelated dead code without deleting it.
+- Preserve security controls and existing test assertions.
+
+### 4. Goal-driven execution
+- Define observable success criteria before implementation.
+- For multi-step work, give a short plan with a verification check per step.
+- For bug fixes, reproduce the failure with a focused regression test when practical.
+- Test meaningful behavior and security boundaries, not implementation details.
+- Run relevant checks and inspect the final diff.
+- Report actual results, including failed, skipped or blocked checks.
+- Never claim tests passed unless they were executed successfully.
+
+### 5. Comments explain why
+- Comments explain intent, constraints, tradeoffs or non-obvious security decisions.
+- Do not narrate code that is already clear.
+- Remove redundant comments in code you change.
+- Preserve useful protocol references and security invariants.
+
+### 6. Error ownership
+- Handle and translate errors once at the owning boundary:
+  HTTP handler, CLI entrypoint or background-job runner.
+- Internal functions normally propagate errors with safe, useful context.
+- Do not catch merely to log and rethrow at every layer.
+- Never swallow failures or return success-shaped defaults.
+- Local handling is allowed for required cleanup, transaction rollback,
+  bounded recovery or a documented domain outcome.
+- Cleanup must preserve the original failure.
+- Never expose credentials, tokens, PII or internal stack traces publicly.
+
+### 7. File size and responsibilities
+- Keep new source files under 300 lines.
+- When modifying an existing source file, keep it under 300 lines
+  or document a narrowly scoped exception.
+- Do not split large unrelated legacy files during a small fix.
+- Split by cohesive responsibility before a file grows too large.
+- Avoid artificial fragmentation, circular dependencies and generic
+  helpers/utils dumping grounds.
+- Never compress code or remove useful explanations to meet the limit.
+- Generated files, lockfiles and reference documentation are exempt.
+
+### 8. Encapsulation and dependency injection
+- Group related state and behavior into cohesive modules or objects.
+- Use classes when they clarify state, lifecycle or invariants.
+- Keep simple stateless operations as functions.
+- Pass external dependencies explicitly, such as storage, mail,
+  key services, clocks and randomness, where substitution or testing helps.
+- Prefer constructor/function injection over hidden mutable globals.
+- Do not introduce a DI framework without a concrete need.
+- Use small shared error/async-job wrappers only when multiple real
+  call sites share the same boundary policy.
+- Wrappers must preserve errors, cancellation, deadlines and transaction context.
+
+### 9. Security takes precedence
+- Simplicity never justifies removing validation, ownership checks,
+  MFA, rate limits, revocation fences or transaction guarantees.
+- Fail closed at sensitive boundaries.
+- Do not weaken tests or bypass checks to obtain a green result.
