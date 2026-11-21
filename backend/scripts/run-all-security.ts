@@ -10,6 +10,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(__dirname, "..");
 
 const securityTestFiles = [
+  "tests/security/p0-engine-transactions.test.ts",
+  "tests/security/p0-engine-sessions.test.ts",
   "tests/security/test-client-mode-transition.ts",
   "tests/security/cross-client-refresh-matrix.ts",
   "tests/security/full-production-adversarial-suite.ts",

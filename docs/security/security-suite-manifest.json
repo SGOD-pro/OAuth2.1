@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "generated_at": "2026-10-02T00:00:00Z",
   "master_command": "npm run test:all-security",
-  "total_blocking_suites": 22,
+  "total_blocking_suites": 24,
   "suites": [
     {
       "name": "test-client-mode-transition",
@@ -236,6 +236,22 @@
       "purpose": "Verifies rate limiter failure modes: Mongo fallback, fail-closed admin defense, and bounded emergency in-process limiter under dual-store outage.",
       "blocking": false,
       "classification": "adversarial_penetration"
+    },
+    {
+      "name": "p0-engine-transactions",
+      "file": "tests/security/p0-engine-transactions.test.ts",
+      "command": "npm run test:p0-transactions",
+      "purpose": "P0 isolated real-engine MongoDB replica-set proof of atomic proof consumption, unique identity/credential creation, rollback and fail-closed transaction capability.",
+      "blocking": true,
+      "classification": "engine_compatibility"
+    },
+    {
+      "name": "p0-engine-sessions",
+      "file": "tests/security/p0-engine-sessions.test.ts",
+      "command": "npm run test:p0-sessions",
+      "purpose": "P0 in-process engine HTTP harness with real MongoDB replica set: deterministic A/B request-local selection, consent, signed ID tokens, exchange, refresh, expiry and token privacy. Not production chooser or browser evidence.",
+      "blocking": true,
+      "classification": "engine_compatibility"
     }
   ]
 }

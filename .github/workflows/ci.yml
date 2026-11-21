@@ -6,11 +6,13 @@ on:
       - main
       - bug-fix
       - ui
+      - v2
   pull_request:
     branches:
       - main
       - bug-fix
       - ui
+      - v2
     paths:
       - 'backend/**'
       - 'frontend/**'
