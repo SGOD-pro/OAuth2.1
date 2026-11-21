@@ -1,187 +1,77 @@
-# SWYRA Auth -- Troubleshooting Guide (TROUBLESHOOTING.md)
+# Troubleshooting and error contract
 
-**Authority:** Authoritative Triage, Error Catalog & Debugging Guide for SWYRA Auth  
-**Target:** Integrating Developers, AI Coding Agents, and Operations Teams  
+**Authority:** Current diagnostic guide plus planned V2 errors. Updated 2026-11-22.
+V2 identity routes/pages do not exist just because they are documented. First record deployed source SHA, schema version and enabled slice. See [PHASES.md](PHASES.md) and [CONFIGURATION.md](CONFIGURATION.md).
 
-**Version boundary (2026-11-19):** Existing errors below describe the current
-runtime. V2 behavior is planned in [0008](specs/0008-multi-account-identity-platform/index.md).
-Do not diagnose missing account-chooser/OTP/key-deletion features as deployment errors.
+## 1. Protocol errors, existing contract
 
----
+| Error | HTTP/redirect behavior | Check |
+|---|---|---|
+| `invalid_request` | 400 or error redirect only to a validated callback | PKCE/state/redirect/body format and prompt combinations |
+| `invalid_client` | 400/401 per client authentication method | Registered client, enabled status, credentials/method; never reveal secret |
+| `unauthorized_client` | Protocol denial | Allowed grant/type/client policy, dynamic registration disabled |
+| `access_denied` | Validated callback error or controlled 403 | Consent refusal, private membership, disabled/ineligible account |
+| `invalid_grant` | 400/401 in current implementation; V2 protocol tests pin exact cases | Expired/replayed code/refresh, verifier mismatch, revocation fence |
+| `invalid_token` | 401, Bearer error where applicable | Signature/issuer/audience/expiry/account/family state |
+| `too_many_requests` | 429 plus Retry-After | IP/target/global budget or sensitive quota-store outage |
+| `registration_disabled` | Current controlled 403 | Private-context legacy signup; V2 has separate verified enrollment |
 
-## 1. Standard OAuth 2.1 Error Code Reference
+An unknown/unregistered redirect URI must never receive a redirect containing error or code. Show the IdP error page. Errors never include tokens, mailbox, stack traces, database queries or key/provider internals.
 
-SWYRA Auth emits standard, machine-readable OAuth 2.1 / RFC 6749 error codes. Below is the normative reference:
+## 2. Administrative codes to preserve
 
-| Error Code | HTTP Status | RFC Definition | Common Cause in SWYRA Auth |
-|---|---|---|---|
-| `invalid_request` | 400 | Request is missing a required parameter, includes an unsupported parameter, or is malformed. | Missing `code_challenge`, missing `state`, redirect URI mismatch, or malformed body. |
-| `invalid_client` | 400 / 401 | Client authentication failed. | Invalid `CLIENT_SECRET`, unknown `CLIENT_ID`, or client document has `disabled: true`. |
-| `unauthorized_client` | 403 | The client is not authorized to request an authorization code using this method. | Attempting dynamic client registration or using an unauthorized grant type. |
-| `access_denied` | 302 / 403 | The resource owner or authorization server denied the request. | User is unassigned on a private application (`isPublic: false`), or user denied consent. |
-| `invalid_grant` | 400 / 401 | The authorization code or refresh token is invalid, expired, revoked, or replayed. | Replayed authorization code, incorrect `code_verifier`, or replayed refresh token. |
-| `unsupported_grant_type` | 400 | The authorization grant type is not supported by the authorization server. | Using `grant_type=password` (strictly disabled in OAuth 2.1). |
-| `invalid_token` | 401 | The access token provided is expired, revoked, malformed, or invalid. | Expired access token, untrusted signature, or cross-client access attempt. |
-| `registration_disabled` | 403 | Self-registration is forbidden for this application. | Calling `POST /api/auth/sign-up/email` with a private application `client_id`. |
+`ERR_GATEWAY_FORBIDDEN`, `ERR_SUPER_ADMIN_REQUIRED`, `ERR_CROSS_TENANT_FORBIDDEN`, `ERR_ROLE_FORBIDDEN`, `ERR_IDENTITY_CONFLICT`, `ERR_AUDIENCE_FORBIDDEN`, `ERR_PASSWORD_CHANGE_REQUIRED`, `ERR_MFA_REQUIRED` and `ERR_MFA_STEP_UP_REQUIRED` remain meaningful boundaries. A 403 before an admin action can be correct; do not change an expected successful integration fixture to 403 to make a suite pass.
 
----
+- Password success alone is not an admin session. Complete real enrollment and TOTP challenge; setup-only contexts cannot read dashboard data.
+- Confirm account role/assignment, token audience and purpose. A super-admin platform token cannot enter consumer admin routes.
+- Do not modify emailVerified/MFA flags directly to repair login. Use verified enrollment/recovery and supported migrations.
 
-## 2. Common Symptoms, Causes, and Safe Resolutions
+## 3. Proposed V2 UI API codes
 
-### 2.1 "The redirect_uri is not registered for this application" (`invalid_request`)
+These codes are target contracts, not present runtime promises. They appear only in same-origin identity APIs, not as unregistered OAuth error types. OIDC uses its own standard errors.
 
-- **Symptom:** The `/api/auth/oauth2/authorize` endpoint returns HTTP 400 with `error: "invalid_request"`.
-- **Root Cause:**
-  1. **Trailing Slash Mismatch:** The client configuration has `https://app.com/callback/` (with slash) while the IdP record has `https://app.com/callback` (without slash).
-  2. **Scheme Mismatch:** Attempting `http://` instead of `https://` in production.
-  3. **Localhost in Production:** Providing `http://localhost:3000/callback` when the registered client has `isDev: false`.
-- **Safe Resolution:**
-  - Verify the registered redirect URIs: `GET /api/admin/clients` (or check the admin dashboard).
-  - Update consumer configuration to match the registered URI character-for-character.
-  - **FORBIDDEN:** Do NOT add wildcard or regex redirect URIs.
+| Proposed code | Status | Safe client action |
+|---|---|---|
+| `ERR_VERIFICATION_INVALID` | 400 | Invalid/expired generic code feedback; no account created |
+| `ERR_VERIFICATION_EXHAUSTED` | 429 | Stop guessing; respect Retry-After/restart budget |
+| `ERR_REGISTRATION_EXPIRED` | 410 | Restart budgeted intent; discard stale proof/password form |
+| `ERR_USERNAME_UNAVAILABLE` | 409 | Ask verified intent owner for another normalized username |
+| `ERR_DELIVERY_UNAVAILABLE` | 503 | Bounded user retry; do not claim delivered or create account |
+| `ERR_CONTEXT_EXPIRED` | 401 | Rechoose/reauthenticate account; do not substitute another session |
+| `ERR_SELECTION_STALE` | 409 | Reload transaction-bound chooser; no browser-global fallback |
+| `ERR_ACCOUNT_INELIGIBLE` | 403 | Show owner-safe denial; no account existence enumeration |
+| `ERR_RECENT_AUTH_REQUIRED` | 403 | Reauthenticate same subject for bound action |
+| `ERR_KEY_UNAVAILABLE` | 503 | Protected data unavailable; no plaintext fallback |
+| `ERR_DELETION_PENDING` | 409 | Read narrow job status, never reactivate account |
+| `ERR_SCOPE_NOT_GRANTED` | 403 | Respect refusal/missing optional fields; re-consent only explicitly |
 
----
+Public registration start/reset responses remain generic even for existing/suppressed accounts. A detailed internal reason cannot become a mailbox-enumeration response.
 
-### 2.2 "Access restricted: Your account is not authorized for this private application" (`access_denied`)
+## 4. Symptom-to-owner map
 
-- **Symptom:** User logs in at the IdP, but is redirected to the consumer callback with `error=access_denied`.
-- **Root Cause:** The application has `isPublic = false`, and this authenticated user has not been provisioned in the `user_app_registrations` table.
-- **Safe Resolution:**
-  - An administrator must provision the user for this client:
-    ```bash
-    POST /api/admin/clients/:clientId/users
-    Authorization: Bearer <admin_session>
-    Content-Type: application/json
+| Symptom | Likely boundary | Correct action |
+|---|---|---|
+| `/account` rejects missing OAuth params | Layout treats all identity pages as consumer login | Implement standalone route classification in P3/P5, never invent callback |
+| Wrong OTP still creates user | Old engine signup called before proof | Stop rollout; close signup/provisioning bypass and finalization transaction |
+| Newest email code fails | Resend generation/late queue message or expiry | Inspect generation/job deadline without logging code; only current code works |
+| 'Sent' but no mailbox message | Accepted job versus provider delivery/bounce | Inspect queue/provider/suppression metrics, DNS and sender status |
+| Two tabs issue same account | Ambient active cookie/global frontend state used | Bind explicit selected session to each transaction/context; deterministic browser repro |
+| Logout A logs out B | Global engine signout/session-set replacement | Implement account-scoped operation and preserve other entries |
+| Choosing valid account asks password | Expiry, prompt=login/max_age, required assurance or risk | Show correct reason; chooser presence alone is not authority |
+| Open-app user denied without membership | Legacy access check still authoritative | Audit policy migration at authorize/exchange/refresh/online validation; retain private tests |
+| Private app opens for any platform account | isPublic/clientType confusion or missing membership check | Disable rollout; restore explicit accessPolicy guard |
+| Admin sees full email despite masked UI | API/log/export serialization leak | Fix server projection; remove leaked fields from caches/log pipelines |
+| Deleted user works after restore | Ledger/key state not replayed before traffic | Quarantine, replay denial, reconcile keys/jobs before reopening |
+| Deleted user token works offline | Offline JWT or consumer-local session lifetime | Online introspection/short local sessions; no false immediate-erasure promise |
+| Delete remains pending | Key provider delay/failed replica/worker lease | Reconcile receipts/inventory; retry forward only |
+| 'Unknown device' on normal login | Cleared cookie/VPN/browser update/coarse signal change | Password/TOTP as needed; no fingerprint-only ban |
+| Auth 429 during quota-store failure | Intended fail-closed behavior | Restore stores and admission capacity; never toggle local auth fallback |
+| Filter says absent but DB says present | Stale snapshot/false result misuse | Database uniqueness wins; filter bypasses disabled |
 
-    { "userId": "<user_id>" }
-    ```
-  - **FORBIDDEN:** Do NOT switch `isPublic` to `true` unless the application is intentionally becoming a public platform app.
+## 5. Safe diagnostics
 
----
+Collect request ID, deployed/schema/policy versions, endpoint category, HTTP/code, pseudonymous owner/client/session refs and worker/job category. Do not collect request cookies, Authorization headers, OTP/proof/reset values, full emails, TOTP seeds, DEKs or exported data in issue reports.
 
-### 2.3 "Self-registration is disabled for this private application" (`registration_disabled`)
+Run existing commands at the relevant runtime SHA: `npm run security:docs-check`, `npm run security:integration-check`, affected suites and full security tests. A docs linter cannot prove service security; a function mock cannot prove real mail delivery or multi-process behavior. Check actual CI job logs instead of copied agent summaries.
 
-- **Symptom:** Direct API call to `POST /api/auth/sign-up/email?client_id=...` returns HTTP 403.
-- **Root Cause:** By design, private applications (`isPublic: false`) do not permit public self-registration.
-- **Safe Resolution:**
-  - Accounts must be pre-provisioned by administrators using the Admin API or Super-Admin portal.
-  - In the consumer UI, do not provide a "Sign Up" button; direct users to "Log In with Corporate ID".
-
----
-
-### 2.4 "Direct access to management endpoints forbidden; gateway authentication required"
-
-- **Symptom:** API calls to `/api/admin/*` return HTTP 403 `forbidden`.
-- **Root Cause:** The request was sent directly to the AWS Lambda Function URL instead of through the Vercel edge reverse proxy, or the `x-gateway-secret` header is missing/incorrect.
-- **Safe Resolution:**
-  - Direct all API traffic through the canonical domain (`https://oauth21.vercel.app/api/...`).
-  - Verify that `INTERNAL_GATEWAY_SECRET` is set in Vercel environment variables and matches the Lambda configuration.
-
----
-
-### 2.5 "Refresh token has been revoked due to replay detection" (`invalid_grant`)
-
-- **Symptom:** Subsequent refresh attempts fail with HTTP 401 and `error: "invalid_grant"`.
-- **Root Cause:** Two concurrent requests attempted to refresh using the same refresh token, or an old token was re-sent after rotation. The IdP's CAS state machine detected a replay and revoked the entire token family.
-- **Safe Resolution:**
-  - Clear local tokens on the consumer backend.
-  - Redirect the user to log in again via `/api/auth/oauth2/authorize` with a fresh PKCE flow.
-  - In consumer code, implement client-side queuing or mutex locks during token refresh to avoid concurrent refresh calls.
-
----
-
-### 2.6 "Invalid email or password" when authenticating as Application Administrator
-
-- **Symptom:** Administrator enters valid credentials on the centralized IdP login page (`/auth` or `/api/auth/sign-in/email`) but receives `"Invalid email or password"` or `"invalid password"`.
-- **Root Cause:**
-  1. **Centralized User/Account Table Separation:** In SWYRA Auth, credentials are authenticated by Better Auth against the centralized `user` and `account` collections (`providerId: "credential"`). If an administrator was created or updated in the legacy `app_admins` collection without bidirectional synchronization into `user` and `account`, Better Auth cannot find the credential identity and returns `"Invalid email or password"`.
-  2. **Disabled Centralized Sync:** If administrator provisioning did not populate the `account` password hash or omitted `user_app_registrations`, the user cannot authenticate.
-- **Safe Resolution:**
-  - Automated bidirectional synchronization is now built into `POST /api/admin/clients/:clientId/app-admins` and `PUT/PATCH /api/admin/clients/:clientId/app-admins/:adminId`.
-  - The server startup procedure automatically executes `selfHealAppAdmins(db)` to heal any unsynced administrator records.
-  - To trigger an immediate manual reconciliation across production or dev databases:
-    ```bash
-    npx tsx scripts/migrate-app-admins.ts
-    ```
-
----
-
-### 2.7 Consumer App Integration Mistake: Local Password Form vs. Centralized OAuth 2.1 Redirect
-
-- **Symptom:** Consumer app renders a username/password form on its own `/login` page and attempts to POST credentials to `/api/auth/login` or IdP endpoints, receiving `405 Method Not Allowed` or `404 Not Found`.
-- **Root Cause:** Violating the Prime Directive of Consumer Integration. Under OAuth 2.1, consumer applications NEVER handle, proxy, collect, or store passwords.
-- **Safe Resolution:**
-  - Remove all `<input type="password">` fields and credential submission logic from the consumer application.
-  - The consumer `/login` route must only render a "Sign In" button that performs a `GET /api/auth/login` redirect to the centralized IdP's `/api/auth/oauth2/authorize` endpoint with PKCE `code_challenge` (S256) and `state`.
-
----
-
-### 2.8 Diagnosing MAuth Console 403 Forbidden Rejections
-
-- **Symptom:** Administrator signs in at `/admin/login` and receives the message: "Access denied: Application administrators are not authorized to access the central IdP console. Please sign in through your application portal."
-- **Root Cause:**
-  1. The identity signing in possesses the `app-admin` role or has client scoping (`scopedClientId`). Application administrators manage their application through their consumer app portal and are forbidden from the central MAuth console.
-  2. An administrator account was created without explicit domain role assignment or had conflicting legacy records.
-- **Safe Resolution:**
-  - Application administrators must access their assigned application by signing in through that application OAuth flow at `${AUTH_ISSUER}/api/auth/oauth2/authorize`.
-  - For central platform administration, sign in with an explicit Global Super Admin account (`role: "super-admin"` and `scopedClientId: null`).
-  - To check error causes in logs, inspect the stable `code` field and `x-request-id` header:
-    - `ERR_GATEWAY_FORBIDDEN`: Missing or invalid `x-gateway-secret` header.
-    - `ERR_SUPER_ADMIN_REQUIRED`: Caller possesses `app-admin` but attempted a platform operation.
-    - `ERR_CROSS_TENANT_FORBIDDEN`: Application admin attempted access to an unassigned client.
-    - `ERR_ROLE_FORBIDDEN`: Standard user attempted an administrative route.
-    - `ERR_IDENTITY_CONFLICT`: Attempted assignment of a super admin identity as an application admin.
-
----
-
-## 3. Safe Debugging Protocols
-
-When diagnosing authentication issues:
-
-1. **Inspect Tokens Without Exposing Secrets:**
-   - Decode JWT payloads using `jwt.decode(token, { complete: true })` to inspect `sub`, `iss`, `aud`, `exp`, and `role`.
-   - Never print `CLIENT_SECRET` or user passwords into console logs.
-2. **Verify Public Keys with cURL:**
-   ```bash
-   curl -s https://oauth21.vercel.app/.well-known/jwks.json | jq .
-   ```
-   Ensure the `keys` array contains valid RS256 RSA keys.
-3. **Verify OIDC Discovery with cURL:**
-   ```bash
-   curl -s https://oauth21.vercel.app/.well-known/openid-configuration | jq .
-   ```
-   Verify that `issuer` matches your `AUTH_ISSUER` exactly.
-4. **Forbidden "Fixes":**
-   - NEVER bypass PKCE (`code_challenge`) to "test if PKCE is the problem".
-   - NEVER disable `state` verification.
-   - NEVER change `isDev` to `true` on production clients.
-   - NEVER add localhost fallback literals in configuration files.
-
-## 4. Planned V2 diagnostics
-
-Names below are proposed error categories. Exact routes and response schemas are
-published with their implementation, not by this document alone. Standard OAuth/OIDC
-errors are sent to a callback only after its redirect URI and client are validated.
-
-| Symptom/category | Required handling |
-|---|---|
-| Invalid/expired/replayed registration code | Generic verification failure; no account/credential/session creation; inspect intent expiry and budget without logging the code |
-| OTP send budget exhausted | 429 with bounded Retry-After; resending cannot reset aggregate limits |
-| Delivery provider unavailable | Bounded retry/outbox status; no verification bypass or fake successful account activation |
-| Username already reserved | Authoritative unique-index conflict, safe retry; Bloom filter cannot decide availability |
-| Signed-out chooser entry | Require fresh login; a remembered account ID is not a session |
-| `login_required` | Reauthentication needed; do not reuse an expired/revoked session |
-| `account_selection_required` | Silent request cannot pick an account; retry interactively when appropriate |
-| `consent_required` / `interaction_required` | Silent request cannot satisfy consent or policy; do not bypass consent |
-| Admin MFA enrollment required | Allow only restricted setup; no admin API/token privileges yet |
-| Recent MFA required | Prompt TOTP in a bound reauthentication flow, never downgrade to email OTP |
-| Key service unavailable | Deny decrypt; no plaintext fallback; inspect bounded queue and service health |
-| Deletion pending | Online authentication denied; do not promise keys are already destroyed |
-| Key destruction delayed/failed | Stay pending and retry idempotently; never reactivate account |
-| Old signed JWT still works offline | Expected until expiry unless consumer does online status checks; revocation cannot reach offline verifiers |
-| Device signal changed | Risk review/reauthentication if needed; never infer account ownership or block solely on fingerprint |
-
-Do not enable cross-origin access to account lists as a fix for a consumer's inability
-to see them. Consumers redirect to the IdP. Do not restore a database backup to undo
-account deletion. Follow the quarantine/tombstone procedure in
-[DATA_LIFECYCLE.md](DATA_LIFECYCLE.md).
+For future slices use synthetic disposable fixtures and explicit deterministic barriers. Never 'fix' a production user's state by reusing a deleted ID/key, marking email verified, disabling MFA or restoring revoked token records.

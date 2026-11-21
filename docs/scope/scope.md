@@ -9,32 +9,31 @@ _These are recommendations to keep your build orderly, not requirements. Skip an
 
 ## Active next program: V2 verified multi-account identity platform
 
-**Updated 2026-11-19. Status: planned, documentation only.**
-Baseline `main`: `161ad99ca4ba0de88cff1267b33807db61da306c`.
-[0008](../specs/0008-multi-account-identity-platform/index.md) defines the proposed
-implementation; [PHASES.md](../PHASES.md) is the delivery order and acceptance matrix.
-The [security baseline](../reviews/2026-11-19-identity-platform-baseline.md) records
-current findings and distinguishes independent checks from reported results.
+**Updated 2026-11-22. Status: planned, documentation only.**
+Main at planning snapshot: `161ad99ca4ba0de88cff1267b33807db61da306c`.
+Security PR #2 is independently reviewed at `66738b0` with passing CI; subsequent `0a5727e` corrects evidence wording. Integration into main is separate from this docs PR.
 
-| Feature | Status | Next gate |
+Read [the document index](../README.md), [architecture](../ARCHITECTURE.md), [implementation map](../IMPLEMENTATION_MAP.md), [phases](../PHASES.md) and [0008](../specs/0008-multi-account-identity-platform/index.md).
+
+| Program area | Status | Next gate |
 |---|---|---|
-| Shared account eligibility and token status hardening | planned | Phase 0, real-route and race tests |
-| Independent client type/open-private policy | planned | Audited compatibility migration |
-| OTP enrollment and chosen usernames | planned | No account before verified proof |
-| Mandatory administrator TOTP | planned | Every admin/plugin/recovery path protected |
-| Multiple sessions and chooser | planned | Real browser multi-tab account binding |
-| Own-account privacy dashboard | planned | Ownership and API minimization tests |
-| Per-account encryption | planned | Key-service selection and recovery proof |
-| Account deletion and restore safety | planned | Durable denial, key destruction and cleanup |
-| Distributed abuse and open-source release | planned | Load/cost controls, provenance and security review |
+| Baseline account/token/MFA hardening | Reviewed on security branch, not claimed merged/deployed | Verify final refs/checks; integrate separately |
+| P0 engine/schema compatibility | Planned | Transaction-aware account creation and request-local session proof |
+| P1 client dimensions | Planned | Audit/backfill; open ordinary access, private/admin guards retained |
+| P2 verified signup, username and mail | Planned | Proof-before-create, unique transaction and real bounded delivery |
+| P3 independent sessions and chooser | Planned | Real browser multi-tab subject and purpose isolation |
+| P4 MFA lifecycle/recovery | Planned extension of hardened policy | Real enrollment/invite/recovery and stale-step-up tests |
+| P5 owner dashboard/privacy | Planned | Owner APIs, minimized admin/consumer claims and pages |
+| P6 protected adapter/account keys | Planned | Key-service choice, writer coverage, cost and destruction proof |
+| P7 export/deletion/restore | Planned | Durable denial, key destruction, cleanup and backup safety |
+| P8 risk/abuse/load | Planned, quotas start in P2 | Edge/fleet/cost measurements; no fingerprint/filter authority |
+| P9 open-source release | Planned | Provenance, disclosure, self-host/recovery and independent review |
 
-- [x] Capture the target architecture and baseline source review.
-- [ ] Implement phase 0 only, shared account eligibility across issuance/validation.
-- [ ] Complete the remaining ordered gates in PHASES.md with per-slice evidence.
+- [x] Expand architecture, page/API workflows, schemas, security and implementation map in docs.
+- [ ] Integrate reviewed security baseline and reconcile V2 docs onto it.
+- [ ] P0 compatibility proof, then ordered vertical slices in PHASES.md.
 
-No runtime or data migration is complete through this scope update. Existing slice 7
-status below is retained as historical workflow status, not silently reconciled from
-reported tests. Existing private-app provisioning and super/app admin boundaries remain.
+No V2 runtime/data migration is complete through this update. Historical slice states below remain history; they do not override V2 gates or establish current deployment status.
 
 ## At a glance
 

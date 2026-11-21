@@ -5,16 +5,19 @@ Welcome, AI coding agent (e.g., Google Antigravity, Claude Code, GitHub Copilot,
 This repository contains **SWYRA Auth**, a centralized **OAuth / OpenID Connect (OIDC)** identity provider.
 Production readiness and conformance must be established with evidence, not inferred from this description.
 
-## V2 planning boundary (2026-11-19)
+## V2 planning boundary (2026-11-22)
 
-Read [docs/PHASES.md](docs/PHASES.md),
-[docs/DATA_LIFECYCLE.md](docs/DATA_LIFECYCLE.md), and
-[0008](docs/specs/0008-multi-account-identity-platform/index.md) before identity changes.
-V2 is planned, not implemented. Existing app/private/admin behavior remains the
-compatibility baseline until its own migration passes. The next runtime slice is
-shared account eligibility in token issuance and validation. Do not bundle the entire
-redesign into one implementation. Preserve earlier verification history without
-marking unimplemented V2 work complete.
+Read [docs/README.md](docs/README.md), [docs/PHASES.md](docs/PHASES.md),
+[docs/IMPLEMENTATION_MAP.md](docs/IMPLEMENTATION_MAP.md), and
+[0008](docs/specs/0008-multi-account-identity-platform/index.md) before V2 changes.
+V2 is planned, not implemented. Integrate reviewed security PR #2 first; do not repeat
+its completed eligibility/MFA hardening as the next feature. Next runtime work is P0's
+transaction-aware engine creation and request-local session compatibility proof.
+Then follow bounded P1-P9 slices, preserving private/admin isolation, stable subjects
+and protocol endpoints. New identity pages/APIs require a full-stack slice; a UI-only
+task still follows frontend restrictions. Do not mark future endpoints/configuration
+as implemented or future tests as passed. Account key deletion never replaces durable
+revocation, independent restore safety or residual cleanup.
 
 ---
 
@@ -116,7 +119,7 @@ Before completing any integration task, verify:
 
 ## 📋 Integration Recipes Index
 
-For complete, copy-pasteable, verified code examples, refer directly to [docs/INTEGRATION.md](docs/INTEGRATION.md#6-concrete-framework-integration-recipes):
+For the normative framework contracts and reviewed fixture requirements, refer directly to [docs/INTEGRATION.md](docs/INTEGRATION.md#6-concrete-framework-integration-recipes):
 
 - **Next.js 14+ (App Router) BFF**: Route handlers for PKCE login, callback, and HttpOnly session cookie storage.
 - **Pure React SPA (Vite / CRA)**: In-browser PKCE S256 generation, redirect, token exchange without secrets.

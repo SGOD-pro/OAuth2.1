@@ -1,180 +1,98 @@
-# SWYRA Auth: security architecture and trust model
+# V2 security architecture and trust model
 
-**Status:** NORMATIVE / AUTHORITATIVE SECURITY SPECIFICATION.
-**Updated:** 2026-11-19. V2 requirements below are planned unless identified as existing.
-**Baseline:** `161ad99ca4ba0de88cff1267b33807db61da306c`.
+**Status:** NORMATIVE / AUTHORITATIVE requirements. Updated 2026-11-22.
+This is a design contract, not a statement that all V2 controls are implemented. Integrate security PR #2 before V2 runtime work; baseline and exact reviewed references are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-These are required controls, not a claim that every runtime path meets them.
-See the [current source review](reviews/2026-11-19-identity-platform-baseline.md),
-[architecture](ARCHITECTURE.md), [integration contract](INTEGRATION.md),
-[data lifecycle](DATA_LIFECYCLE.md), and [delivery gates](PHASES.md).
+## 1. Trust boundaries and assets
 
-## 1. Trust boundaries
+Untrusted: browser JS, user/consumer inputs, selected account IDs, callbacks, forwarded headers from untrusted peers, device signals and provider webhooks until authenticated. A trusted gateway header identifies the gateway, not a user. Separate subject, role, client audience, session purpose, assurance and resource ownership at every backend boundary.
 
-The browser, consumer apps, request parameters, account selectors, device signals, and
-forwarded headers are untrusted. Edge-to-origin gateway authentication authenticates
-the proxy, not the user. Require independent role, audience, subject, client policy,
-and resource ownership validation in the backend. No consumer direct MongoDB access.
+Protect credentials, account PII, signed tokens, MFA secrets, session/proof handles, user keys, client secrets, signing keys and mail budgets. Consumer apps receive scoped claims, never IdP passwords/OTP/TOTP inputs, account lists, raw session credentials, key access or Mongo credentials. Identity-management APIs use IdP-only CORS and CSRF; allowed consumer origins do not gain access to them.
 
-Retain gateway secret checks on protected management surfaces. Only trust forwarding
-headers from configured proxies; verify actual hosting peer behavior. Use TLS, secure
-headers, a restrictive frontend CSP, and explicit CORS policies. Protocol endpoints
-needed by consumers differ from IdP session, account-list, profile, and admin APIs.
-Registered callback origins do not gain access to those identity-management surfaces.
+## 2. Threat-to-control matrix
 
-## 2. Existing protocol controls to preserve
+| Threat | Required controls | Acceptance evidence |
+|---|---|---|
+| Create account with wrong/unverified email | Proof-before-create, strict bypass closure, atomic unique finalization | Wrong/expired/replayed code creates zero identities/credentials/sessions |
+| Credential stuffing/password guessing | Distributed source/target/global budgets, adaptive hash, cost admission | Rotating IPs, multi-process counters and store-loss tests |
+| OTP/TOTP/recovery replay | Purpose/generation binding, expiry, atomic tries/consume, accepted-step replay protection | Concurrent guesses and duplicate accepted code rejected |
+| Login CSRF/session fixation | Origin/CSRF, rotated opaque handles, browser-bound intents | Attacker cannot attach victim/attacker session through guessed entry |
+| Cross-tab subject confusion | Explicit transaction/context subject, revision and final fence | Interleaved A/B authorization and dashboard mutations remain isolated |
+| Broken object authorization | Server-derived owner and scoped role/client checks | Foreign session/grant/export/deletion ID rejected |
+| Cross-client privilege escalation | Exact audience/client binding, active assignments and assurance | App admin cannot enter platform or another app; super admin not consumer admin |
+| Revocation/refresh/deletion races | Atomic monotonic versions, shared issuance fences, family/grant state | Separate workers with deterministic barriers; no credential resurrection |
+| NoSQL/regex/prototype injection | Primitive schemas, operator-key rejection, escaped bounded search, allowlists | Controlled 400 with no unsafe query or unintended update |
+| Token/code interception or mix-up | Exact redirects, PKCE S256, state/nonce, issuer/audience pinning | Code substitution, malicious redirects and nonce/state mismatch rejected |
+| XSS/clickjacking/data leakage | CSP on actual served UI, escaping, local assets, anti-framing, no-store/referrer controls | Injection tests, header checks at edge and browser, no secrets in logs |
+| Mail flooding/provider abuse | Durable multi-dimensional send budgets, encrypted bounded outbox | Provider outage/retry/cost-cap tests, no verification on acceptance |
+| Data theft/key recovery | Protected adapter, per-account AEAD/keys, independent destruction ledger | Cross-account decrypt denial and pre-deletion snapshot restore test |
+| DDoS/resource exhaustion | Hosting edge, gateway, quotas, deadlines, bounded expensive concurrency | Staging load/failure evidence; no fingerprint-only protection |
 
-- Authorization Code flow uses `/api/auth/oauth2/authorize`, PKCE `S256`, and exact
-  registered redirects. Keep this project's random state contract; clients verify
-  state on both success and error callbacks. Require nonce validation when sent.
-- No implicit or resource-owner-password grant. No password relay through consumers.
-- Public OAuth clients have NO client_secret. Confidential secrets stay server-side.
-- Pin `RS256`; validate issuer, intended audience, required subject, expiry, and token
-  type. ID tokens establish login at the client; resource APIs accept access tokens.
-- Authorization codes are single-use and bound to client, redirect, PKCE, account,
-  session, consent, and the specific authorization transaction.
-- Refresh families remain client/account/session bound with durable atomic rotation.
-  Preserve forward-only revocation. A bounded concurrent-refresh grace must not revive
-  a consumed token or administrator-revoked family. No timeout-driven blind retries.
-- Private app membership, client enabled state, and app-admin assignments remain
-  authoritative. Removing open-app membership gates never removes these controls.
-- Preserve NoSQL primitive validation, operator/prototype-key rejection, and explicit
-  writable-field allowlists. Never accept role or email verification from signup input.
+## 3. Protocol and token invariants
 
-## 3. Mandatory V2 account eligibility
+Consumers use `/api/auth/oauth2/authorize` and Authorization Code with PKCE S256. Preserve existing token, UserInfo, introspection, revocation, discovery and JWKS URLs. No implicit/password grant, credential relay, wildcard redirects or dynamic public registration. Validate registered redirects before redirecting errors.
 
-A single shared server-side predicate must check that the immutable account exists,
-is verified, is active, is not banned/disabled/deleting/deleted, has current session
-and revocation versions, and satisfies the transaction's policy. Enforce it at login,
-chooser selection, authorization, code exchange, refresh, UserInfo, introspection,
-management APIs, and data decryption. Missing state fails closed.
+Project contract requires random state verified by consumer on success/error, OIDC nonce and transaction binding. Pin issuer, intended audience and RS256 algorithm; validate expiry, subject, token purpose, authorized party when relevant and requested `auth_time`. Never treat ID tokens as API access tokens. Unknown key IDs cause a bounded configured-JWKS refresh, not arbitrary `jku` retrieval.
 
-Do not accept a token merely because a plugin returned `active=true`. Apply the same
-client, account, session/family, expiry, scope, and revocation checks to every
-introspection path. User ID lookup is authoritative; email fallback must not resolve
-a different account or revive a deleted subject. Do not elevate signed claims using
-a database role. A demoted user must not regain old authority from token contents.
+Access tokens are signed, not encrypted. Release claims only under granted scopes and owner privacy choices. Consumers tolerate missing email/profile. Online IdP endpoints reject revoked accounts/families; offline verifiers may accept an otherwise valid JWT for its remaining lifetime (currently up to 900 seconds). Immediate revocation requires online status checks and retiring consumer-local sessions.
 
-Online IdP denial must take effect when revocation/deletion commits. Offline resource
-servers can accept a signed access token until expiry, currently up to 900 seconds.
-Revocation endpoints cannot reach into offline verifiers. Require online status checks
-for immediate denial and define consumer notification/local-session cleanup separately.
+Targeted family revoke affects `(clientId,familyId)` and does not increment global account versions. Global password reset/ban/revoke/deletion atomically advances tokenVersion and nondecreasing revocation timestamps. Issuance uses durable conditional transitions, not a final read followed by unfenced writes. Account/session/grant/policy checks apply equally to custom and plugin-active branches.
 
-## 4. Enrollment, verification, and recovery
+## 4. Algorithm and secret-purpose choices
 
-No durable user/account/credential record before a valid email OTP and atomic proof
-consumption. Registration intents are expiring untrusted state and grant no login.
-Use purpose-bound server-keyed OTP verifiers, limited guesses, resend invalidation,
-constant-shape responses, mailbox and IP/browser budgets, and server-side expiry checks.
-TTL background deletion is cleanup, not an expiry enforcement mechanism.
+| Purpose | Selected direction | Forbidden shortcut |
+|---|---|---|
+| Random credentials/handles | OS CSPRNG, at least 128-bit identifiers and 256-bit secret tokens | Math.random, UUID/time-derived OTP or predictable tokens |
+| Password | Retain audited engine adaptive hash; inspect lockfile implementation, measure cost; Argon2id migration only through reviewed engine hooks | Reversible encryption, SHA-256 password hash or silent algorithm replacement |
+| OTP verifier | Domain-separated HMAC-SHA-256 with separate secret and constant-time compare | Unsalted six-digit hash susceptible to offline enumeration |
+| TOTP | RFC 6238 through engine; 30-second step and narrowly reviewed drift window | Custom TOTP, client-supplied MFA flags, accepting same step twice |
+| PII encryption | AES-256-GCM, versioned per-account DEK, unique nonce, canonical AAD | XOR encryption, fixed nonce, one shared deletable key |
+| Lookup indexes | Versioned purpose-separated HMAC-SHA-256 | Raw mailbox hash described as anonymous; trusting filter for uniqueness |
+| Access/ID tokens | Existing RS256/JWKS profile and short expiry | Algorithm negotiation from untrusted headers, unsigned tokens |
+| Service mail/events | Authenticated transport, signed body/timestamp/nonce or provider SDK verification | Unauthenticated callback marks account verified |
+| Sessions/reset/backup | Digests/one-way storage where supported and atomic one-use semantics | Raw tokens in logs, account list or persistent browser storage |
 
-Initial proposed limits: 6-digit code, 5-minute expiry, 5 guesses per intent,
-60-second resend cooldown, 3 sends per mailbox per 15 minutes, 10 per day, and a
-30-minute intent lifetime. These are design values, not current configuration.
-Resend must not reset mailbox-wide guess/send budgets. Random intent IDs have at
-least 128 bits of entropy. Never log codes, proofs, passwords, recovery tokens, or seeds.
+Email verification establishes mailbox control. Email is not an out-of-band administrative MFA substitute. Password plus TOTP is MFA but is not phishing resistant. Passkeys/WebAuthn are a later explicit extension; do not advertise them as built. No generic collection of 'cybersecurity algorithms' substitutes for a threat/control/test mapping.
 
-Verify changed email before activation, require recent reauthentication, notify the
-old address, and revoke affected sessions/grants according to documented policy.
-Do not auto-link accounts by email without an authenticated ownership proof. Admin
-provisioning/invitations cannot assert mailbox ownership. Existing unverified or
-admin-asserted verification records need an explicit migration policy and review.
+Key purposes are separated: JWT signing, engine secrets, OTP verifier, lookup index, mail payload, webhook signing and account data/wrapping. Use least-privilege secret access and rotation. Do not silently reuse `BETTER_AUTH_SECRET` for every new purpose. In-flight versions must be bounded and old proofs invalidated safely on key rotation.
 
-## 5. Multiple accounts and session safety
+## 5. Enrollment and recovery invariant
 
-- Browser session sets contain only independently authenticated account sessions.
-- Account choice uses CSRF-protected POSTs and validated server-side transactions.
-- Account lists are IdP-origin only, `Cache-Control: no-store`, never embeddable or
-  available via cross-origin credentialed CORS. Protect against login CSRF and fixation.
-- Concurrent tabs bind to their own selected account and consent. Recheck status
-  immediately before issuing or exchanging codes; fail on selection races.
-- Sign out one account, remove a remembered account, sign out every account in this
-  browser, revoke one device, and revoke all account sessions are distinct operations.
-- Removing a remembered label does not silently revoke other devices. Account logout
-  revokes the chosen session and its bound grants according to the selected operation.
-- Require recent authentication for delete/export, password/email changes, MFA changes,
-  and elevated administrative actions. No credential-free sensitive operation merely
-  because the chooser contains a valid long-lived session.
+[AUTHENTICATION_FLOWS.md](AUTHENTICATION_FLOWS.md) is authoritative for OTP state and bypass closure. No user/credential/session before valid proof consumed in the finalization transaction. No admin-created `emailVerified=true` without verified claiming. Ordinary existing unverified users need an audited re-verification rollout; grace cannot bypass bans, revocation, password-change or deletion checks.
 
-## 6. Administrative assurance and authorization
+Password reset never disables MFA or converts unverified identity to verified. Recovery credentials are single-use and audited; administrative lost-factor recovery cannot be email-only. Unenrolled admins have setup-only authority and cannot use plugin admin APIs, bearer/cookie alternatives or social login to bypass it.
 
-Keep `super-admin`, `app-admin`, and `user` explicit and mutually exclusive per account.
-App admins require active assignments by stable user ID and canonical client ID.
-Super admins have platform authority only, never automatic consumer admin claims.
-Multiple separately authenticated accounts on one browser do not merge privileges.
+## 6. Accounts, sessions and administration
 
-TOTP enrollment and completed MFA are mandatory for both administrator roles.
-An unenrolled admin receives only enrollment authority. Every admin API, including
-Better Auth plugin routes, bearer tokens, role promotion, impersonation, and recovery,
-must enforce the same assurance and recent-MFA policy. Initial elevated freshness
-limit: 5 minutes, recorded server-side. Email OTP alone never satisfies admin MFA.
+[SESSION_MODEL.md](SESSION_MODEL.md) defines explicit context binding. A chosen label/fingerprint is never authorization. Reauthenticate the same subject for sensitive operations and bind action receipts to payload/purpose. A session set carries no aggregated privileges. Role changes, reset/recovery, bans and deletion invalidate prior elevated authority.
 
-TOTP secrets use reviewed engine encryption plus the account key lifecycle where
-compatible; backup codes are hashed and consumed atomically. Prevent TOTP replay in
-accepted time steps. Recovery is a separate audited flow which revokes old sessions,
-not a generic flag that skips MFA. Add passkeys later for phishing resistance.
+Every administrative path, including direct engine/plugin endpoints, enforces explicit role, canonical client scope, audience, completed TOTP and recent MFA. Keep `user`, `app-admin` and `super-admin` distinct per identity. Super admins have platform authority, not automatic consumer admin rights. Optional user TOTP is enforced once enabled, not displayed as a decorative setting.
 
-Preserve structured errors and request IDs: `ERR_GATEWAY_FORBIDDEN`,
-`ERR_SUPER_ADMIN_REQUIRED`, `ERR_CROSS_TENANT_FORBIDDEN`, `ERR_ROLE_FORBIDDEN`,
-`ERR_IDENTITY_CONFLICT`, `ERR_AUDIENCE_FORBIDDEN`, `ERR_PASSWORD_CHANGE_REQUIRED`.
-Never include private user data in error descriptions or request correlation IDs.
+## 7. Privacy, encryption and deletion
 
-## 7. Privacy and cryptography
+[DATA_LIFECYCLE.md](DATA_LIFECYCLE.md) owns field classification, adapter coverage, key inventory and deletion states. Admin lists/search/logs/exports return chosen username or legacy local-part label plus opaque ID; UI column hiding is insufficient. Full owner contact is available to owner and necessary delivery components, not general administrator decrypt privileges.
 
-Encrypt account PII under versioned per-account data keys using authenticated encryption.
-Bind account ID, record/field purpose, and key/schema version as associated data.
-Use library-managed safe nonces and reviewed key-service policies. Passwords use
-salted adaptive hashes; encryption is not a substitute. Non-recoverable session/token
-secrets should use digests where engine compatibility permits.
+Delete first commits durable access denial/version change and recoverable work, then destroys keys and purges residual records. Shared surviving wrapping keys plus restorable account DEKs do not meet irreversible erasure. Missing key/deletion services fail closed for protected reads. Never restore erased keys or denied users while rolling back/repairing a deployment. Exact retention and exceptional operational access require documented narrow policy and audit, not a super-admin wildcard.
 
-Admin list/search/export/log serializers must omit full email and nonessential PII.
-An email local part remains identifying data. Tokens are signed, not encrypted;
-release `email`/`profile` claims only under granted scopes and privacy policy.
-Never return plaintext data keys or broad decryption capability to consumers/admins.
+## 8. Availability and device risk
 
-Cryptographic erasure is complete only when every applicable key copy and recoverable
-wrapping path is destroyed and verified. Backup-restorable wrapped data keys under a
-shared surviving master key are not erased. Define residual metadata, backup retention,
-logs, third-party data, and pending key-deletion delays honestly. See
-[DATA_LIFECYCLE.md](DATA_LIFECYCLE.md).
+[ABUSE_DEFENSE.md](ABUSE_DEFENSE.md) defines admission, risk, cache and filter contracts. Maintain fail-closed auth/admin behavior on dual quota-store failure, including signup/OTP/reset and future identity routes outside `/api/auth/*`. A process-local limiter is insufficient for a fleet-wide sensitive budget.
 
-## 8. Abuse and availability
+Fingerprints are optional short-lived risk observations, not identity/MFA or DDoS prevention. Never require persistent canvas/audio tracking, infer account linking from browser similarity or authorize from a trusted-device string. Missing signals never bypass rate limits. Bloom/XOR/approximate structures remain optional performance experiments and cannot decide security state.
 
-Fingerprinting is a spoofable privacy-sensitive risk signal, not identity, MFA, or
-DDoS protection. Apply edge filtering, distributed multi-dimensional quotas, bounded
-mail and worker queues, request/body/time/concurrency ceilings, and cost alarms.
-Never let a missing fingerprint bypass a limit or block legitimate account recovery.
+## 9. Security release and open-source requirements
 
-The existing emergency limiter is process-local. It is not evidence of a fleet-wide
-serverless bound. V2 signup, OTP, recovery, and admin authentication fail closed when
-durable sensitive-operation budgets cannot be enforced. Public cacheable metadata
-can have a separately documented degraded mode. Limits need distributed tests.
+Use [security-suite-manifest.json](security/security-suite-manifest.json) as executable inventory, not fixed prose counts. New tests ship with each slice and enter CI/manifests in that implementation, preserving current assertions. Evidence distinguishes source inspection, function mocks, application-instance tests, real disposable services, separate workers, browser flows, live provider, key-service and restore tests.
 
-Bloom filters never make security decisions. On uncertainty or unavailable/stale
-filters use authoritative storage and its quotas. Prevent filter-driven enumeration.
+Open-source release includes license and dependency provenance/SBOM, dependency/secret history review and actual credential rotation, supported Node/DB/Redis versions, versioned migrations and self-host instructions, a private vulnerability disclosure route with response process, security release/update policy and an external review before claiming public readiness. Generated secret-bearing gateway config remains untracked. No production data in fixtures or unsolicited live penetration testing.
 
-## 9. Verification and release
-
-The authoritative executable suite inventory is
-[security-suite-manifest.json](security/security-suite-manifest.json), not a fixed
-count in prose. Run `npm run test:all-security`, `npm run security:docs-check`, and
-`npm run security:integration-check` in isolated infrastructure. Record exact commit,
-commands, counts, skipped cases, dependencies, and blocked checks. A static linter is
-not a penetration test. Existing review summaries are reported evidence only.
-
-V2 requires adversarial multi-tab/multi-process tests, OTP races/replays, MFA bypass,
-privacy projections, deletion/token races, key loss, backup restore, consumer isolation,
-and outage/load tests. No production data, test email spam, live destructive actions,
-or external penetration scanning is authorized by this design change.
-
-## 10. Reference standards
+## 10. Primary references
 
 - [OAuth security BCP, RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html)
-- [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)
-- [NIST SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html)
-- [NIST SP 800-88 Rev. 2](https://csrc.nist.gov/pubs/sp/800/88/r2/final)
-- [OWASP MFA guidance](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html)
-- [OWASP denial of service guidance](https://cheatsheetseries.owasp.org/cheatsheets/Denial_of_Service_Cheat_Sheet.html)
+- [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html)
+- [TOTP, RFC 6238](https://www.rfc-editor.org/rfc/rfc6238.html)
+- [Argon2, RFC 9106](https://www.rfc-editor.org/rfc/rfc9106.html)
+- [NIST authentication guidance](https://pages.nist.gov/800-63-4/sp800-63b.html)
+- [Better Auth multi-session documentation](https://better-auth.com/docs/plugins/multi-session)
 
-These sources inform the design. This repository does not claim NIST certification,
-formal OIDC conformance, phishing-resistant TOTP, or Google-equivalent security.
+These sources guide specific decisions; they do not certify SWYRA or verify its runtime behavior. Google-like UX is a product goal, not a security assurance level.

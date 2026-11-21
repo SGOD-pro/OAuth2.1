@@ -1,144 +1,74 @@
 # 0008. Verified multi-account identity platform
 
-**Date:** 2026-11-19.
-**Status:** Proposed implementation specification. No runtime implementation in this change.
-**Baseline:** `main` at `161ad99ca4ba0de88cff1267b33807db61da306c`.
+**Status:** Proposed, documentation-only. Updated 2026-11-22.
+**Baseline:** main `161ad99`; integrate security PR #2 reviewed at `66738b0` plus report correction `0a5727e` before runtime implementation.
+**Scope:** Full V2 product/architecture plan, delivered as bounded vertical slices. No runtime, deployment or data migration in this change.
 
-## Problem and intended behavior
+## Problem
 
-SWYRA currently has one active IdP browser context and app-coupled registration
-bookkeeping. The target lets a person create distinct verified accounts, keep multiple
-account sessions on one browser profile, select a valid session for consumer login,
-control their privacy, and delete an account without a large synchronous data cascade.
-It retains registered clients, private-app memberships, super-admin authority and
-app-admin isolation. It does not promise feature/security equivalence with Google.
+The current single ambient browser session and app-coupled registration do not satisfy independent multi-account login. Verification after identity creation does not satisfy zero-account-on-invalid-OTP. A user needs an own-account dashboard, meaningful privacy, safe enrollment, scoped consumer access and a deletion lifecycle that avoids large synchronous cascades without false erasure claims.
 
-## Decisions and assumptions
+## Target and boundaries
 
-- Multiple accounts mean distinct verified mailboxes, one identity per normalized email.
-  Keep password login. Email OTP is required for enrollment, not a replacement for
-  TOTP or automatic proof of administrative assurance.
-- Open applications require no membership prerequisite. Registered clients, consent,
-  requested scopes, disabled-client checks and protocol protections remain mandatory.
-- Private applications retain explicit memberships and controlled provisioning.
-  Creating a platform account does not assign it to a private app.
-- Split proposed `clientType`, `accessPolicy`, and existing `isDev`. Do not infer
-  confidentiality from legacy `isPublic`.
-- Keep existing endpoints and stable `userId` subjects. Pairwise subject migration is
-  a separately versioned future decision, not silently introduced here.
-- Replace the one-active-IdP-account policy only after independent sessions are proven.
-  Super and app admins remain different accounts with separate purpose-bound sessions.
-- Administrative TOTP is mandatory. No admin email verification by assertion alone.
-- Ordinary admin output uses username or local-part display labels. Email is not an
-  authorization key and the local part is not unique or anonymous.
-- Per-account keys cover classified data. Key destruction does not replace revocation,
-  metadata cleanup, deletion logs, or consumer-side deletion obligations.
-- First-party resettable browser IDs plus coarse risk signals support abuse detection.
-  No fingerprint-derived authentication or claim that fingerprints stop DDoS.
-- Bloom filters are optional future hints; database constraints remain authoritative.
+A person may own multiple accounts with distinct verified mailboxes. Each account has a stable subject, chosen username, independent credentials/session/assurance and data keys. A browser chooser can reuse valid sessions for a registered consumer without another password when policy allows. Open apps need no ordinary member list; private membership, registered clients, consent, client authentication and app/platform admin isolation remain.
 
-## Required components and invariants
+Keep the installed credential/OAuth engine. Preserve issuer, subject IDs and existing protocol endpoints. New identity APIs are IdP-only. Do not add dynamic public client registration, a second credential system, fingerprint-based authentication, custom crypto or claims of Google/NIST/conformance equivalence.
 
-| Component | Minimum proposed fields | Invariant |
-|---|---|---|
-| Registration intent | Random ID, encrypted email, keyed lookup/verifier, purpose, expiry, attempts, send budget, proof status | No account before verification; atomic consume; no raw password or code |
-| Identity | Random `userId`, username, verified contact, account status/version, role | Unique email/username; no ID reuse or privilege injection |
-| Browser session set | Random handle digest, entries of account/session references, version, expiry | Bound to authenticated sessions; 10-entry initial cap; not physical device identity |
-| Per-account session | Account/session IDs, browser-set reference, auth/MFA times, expiry, assurance, revocation version, purpose | No session sharing or ambient admin privilege across accounts |
-| Authorization transaction | Random ID, selected subject/session/version, client, redirect, state, nonce, PKCE, scope, consent, expiry | Selection and issuance bound to one transaction; single-use code |
-| Consent | Account/client, granted scopes, grant version, timestamps | No public-app membership prerequisite; scope expansions require consent |
-| Private membership/admin assignment | Immutable account/client IDs, explicit role/status | Ordinary open-app history cannot grant admin/private access |
-| Protected data | Ciphertext, nonce/tag, schema/key version and AAD binding | Cross-account decrypt fails; deleted account denied before key/cache use |
-| Deletion job/tombstone | Account ID/version, state, checkpoints, key inventory, retry and proof references | Durable denial first; monotonic states; no plaintext PII in tombstone |
+## Canonical design documents
 
-Exact collection names and plugin schema mappings are finalized in bounded implementation
-specifications after inspecting actual engine behavior. Do not implement the above as
-unreviewed parallel collections that bypass the engine's session/token guarantees.
+[Architecture](../../ARCHITECTURE.md), [flows and API contracts](../../AUTHENTICATION_FLOWS.md), [session model](../../SESSION_MODEL.md), [pages](../../USER_EXPERIENCE.md), [mail](../../MAIL_SERVICE.md), [security](../../SECURITY.md), [abuse/caches/filters](../../ABUSE_DEFENSE.md), [data lifecycle](../../DATA_LIFECYCLE.md), [implementation map](../../IMPLEMENTATION_MAP.md), [phases](../../PHASES.md), [integration](../../INTEGRATION.md), [configuration](../../CONFIGURATION.md), [deployment](../../DEPLOYMENT.md) and [diagnostics](../../TROUBLESHOOTING.md).
 
-## Endpoint contracts
+This spec owns requirement IDs and acceptance, not duplicate API/schema text. [Rationale](rationale.md) records tradeoffs; [verify.md](verify.md) is the prospective evidence ledger.
 
-Existing protocol paths remain unchanged. The following are proposed IdP-internal API
-contracts, not currently available endpoints and not consumer integration requirements.
-All identity operations require strict origin/CSRF checks, typed bodies, request limits,
-no-store responses, and server-side subject binding.
+## Acceptance criteria and traceability
 
-| Proposed action | Suggested route | Required authority |
-|---|---|---|
-| Start/resend registration | `POST /api/identity/registration/start`, `/resend` | Anonymous bounded registration transaction; generic response |
-| Verify mailbox code | `POST /api/identity/registration/verify` | Intent ID and code; atomic attempt and proof handling |
-| Finalize account | `POST /api/identity/registration/complete` | One-use verified proof, chosen username, password; atomic uniqueness |
-| List signed-in accounts | `GET /api/identity/accounts` | IdP browser session-set proof only, never consumer access token |
-| Choose account | `POST /api/identity/accounts/select` | CSRF, bound OAuth transaction, validated selected session |
-| Remove remembered account | `POST /api/identity/accounts/remove` | Browser-set ownership; explicit operation semantics |
-| Own profile/privacy | `GET/PATCH /api/identity/me` | Bound account session; field allowlist; recent auth for sensitive changes |
-| Own grants/sessions | `GET /api/identity/me/grants`, `/sessions` | Account ownership; no other account IDs from request trusted |
-| Revoke a grant/session | `POST /api/identity/me/grants/:id/revoke`, `/sessions/:id/revoke` | Owned object; recent auth as policy requires |
-| Request/retrieve export | `POST/GET /api/identity/me/export` | Recent reauthentication; owner-only short-lived retrieval |
-| Delete account/status | `POST /api/identity/me/deletion`, `GET /api/identity/me/deletion` | Recent reauthentication and explicit confirmation; status bound to deletion receipt |
-
-A deletion status receipt has narrow read-only authority after session revocation,
-is stored as a digest, expires, and cannot decrypt data or authorize account recovery.
-No GET changes account/session state. Publish exact routes, errors and schemas only
-with the implementing slice. Keep new identity routes outside broad consumer CORS.
-
-## Acceptance criteria
-
-- **AC-1:** Every token/session/online status boundary denies ineligible accounts,
-  including plugin-active introspection; deletion and revocation win issuance races.
-- **AC-2:** Invalid, expired, exhausted, resent or replayed OTPs create zero durable
-  users/accounts/credentials/sessions/memberships. Concurrent valid finalization produces
-  exactly one account under database unique constraints and atomic proof consumption.
-- **AC-3:** Users choose normalized unique usernames. Identical email local parts from
-  different domains do not collide as identities or leak full emails in admin output.
-- **AC-4:** Open apps authorize eligible consented users without app membership;
-  private apps reject unassigned users; all three client dimensions remain independent.
-- **AC-5:** Two accounts stay signed in independently. Selecting A in tab A and B in
-  tab B issues codes/tokens for the correct account without global-context races.
-- **AC-6:** Expired/revoked sessions require login. OIDC prompt/max_age/nonce semantics
-  are tested, including ambiguous `prompt=none` and invalid prompt combinations.
-- **AC-7:** App/super admin authority always requires completed TOTP and recent MFA,
-  with enrollment-only sessions and no plugin/social/bearer/recovery bypass.
-- **AC-8:** Own-account dashboard, exports, privacy settings, grants and session
-  revocation enforce server-side ownership; full email is absent from ordinary admin
-  lists/search/export/log paths, and claims follow consented scopes.
-- **AC-9:** Protected account fields use reviewed AEAD and per-account key versions;
-  secrets/PII never escape through backups, queues, caches, tokens or logs contrary
-  to the declared field inventory. Document residual metadata explicitly.
-- **AC-10:** Deletion commits durable denial before asynchronous cleanup, destroys all
-  recoverable account key paths before claiming erasure, and survives worker failure
-  and pre-deletion backup restore without account resurrection.
-- **AC-11:** Distributed quotas and edge controls bound signup/OTP/recovery costs and
-  load. Fingerprints and Bloom filters never become security authorities.
-- **AC-12:** Existing clients/API paths and private/admin isolation pass regression
-  checks. Open-source release includes license/provenance and disclosure procedures,
-  secret/dependency audit, self-host instructions and measured release evidence.
+| ID | Requirement and observable acceptance | Slice | Primary contract |
+|---|---|---|---|
+| AC-01 | Existing hardening preserved across code/refresh/UserInfo/introspection/admin/plugin paths; no token resurrection | Prerequisite, all slices | SECURITY, SESSION_MODEL |
+| AC-02 | Wrong/expired/exhausted/replayed/superseded email OTP creates zero user/account/session/membership/consent records | P2 | AUTHENTICATION_FLOWS |
+| AC-03 | Concurrent verified completion creates exactly one account; duplicate username/email handled by unique transaction and one-use proof | P0, P2 | DATA_LIFECYCLE |
+| AC-04 | New accounts choose normalized unique usernames; same local part across domains never conflates identities | P2 | ARCHITECTURE |
+| AC-05 | Public/confidential client type, open/private policy and isDev independent; legacy migration rejects ambiguity | P1 | INTEGRATION, IMPLEMENTATION_MAP |
+| AC-06 | Eligible user enters open app without membership; private unassigned user denied through authorize/exchange/refresh/online validation | P1 | AUTHENTICATION_FLOWS |
+| AC-07 | Two accounts coexist in browser; selecting A/B in separate tabs yields respective subjects, independent expiry/logout | P3 | SESSION_MODEL |
+| AC-08 | Browser account list private to IdP, no raw session-token export; selector/context guessing, CSRF and fixation denied | P3 | SESSION_MODEL, SECURITY |
+| AC-09 | prompt/max_age/nonce/consent semantics tested; active chooser presence does not bypass policy or freshness | P3 | AUTHENTICATION_FLOWS, INTEGRATION |
+| AC-10 | Both admin roles require completed TOTP and recent MFA, setup-only enrollment, one-use recovery and no plugin/social/bearer bypass | P4 | SECURITY, AUTHENTICATION_FLOWS |
+| AC-11 | Ordinary users can enable TOTP; password/contact/reset/recovery flows preserve factor policy and revoke stale authority | P4, P5 | AUTHENTICATION_FLOWS |
+| AC-12 | Own dashboard profile/privacy/grants/sessions/export/deletion enforce account context and object ownership | P5, P7 | USER_EXPERIENCE |
+| AC-13 | Admin lists/search/log/export omit full email; username/local-part plus opaque ID only; owner and scoped consumer sharing separate | P5 | SECURITY, USER_EXPERIENCE |
+| AC-14 | Existing consumer protocol/data APIs remain available with scopes/consent/privacy; no generic decrypt endpoint or direct DB | P1, P5 | INTEGRATION |
+| AC-15 | Email transport authenticated/bounded, code delivery never creates/verifies account, real send/error/suppression/deadline tests | P2 | MAIL_SERVICE |
+| AC-16 | Account PII encrypted through every engine/custom writer under account keys with AAD/version; no shared-key erasure claim | P6 | DATA_LIFECYCLE |
+| AC-17 | Deletion commits immediate denial, idempotent forward-only work, final key receipts, residual cleanup and safe pre-deletion restore | P7 | DATA_LIFECYCLE |
+| AC-18 | Distributed budgets/edge admission bound auth/mail/hash costs across workers; store outage fails closed for sensitive work | P2, P8 | ABUSE_DEFENSE |
+| AC-19 | Device risk uses resettable coarse signals; spoof/missing/VPN drift not sole allow/ban; step-up and owner notification tested | P8 | ABUSE_DEFENSE |
+| AC-20 | Cache hits/filter results never bypass authority; optional Bloom/XOR require measured snapshot/fallback semantics | P8 | ABUSE_DEFENSE |
+| AC-21 | Pages include expired/denied/loading/retry/accessibility states and standalone account entry; no fake API/security states | P2-P7 | USER_EXPERIENCE |
+| AC-22 | Self-host/upgrade, retention, admin recovery, provenance/license/disclosure and release evidence complete | P9 | DEPLOYMENT |
 
 ## Build plan
 
-See [PHASES.md](../../PHASES.md) for ordering and exit tests. All unchecked.
+- [ ] Integrate reviewed security baseline, reconcile this docs branch without runtime downgrade.
+- [ ] P0: transaction-aware engine creation and request-local session compatibility proof.
+- [ ] P1: additive client-policy migration and open access without membership.
+- [ ] P2a: mail budgets/outbox, intent/OTP/proof and verification pages.
+- [ ] P2b: username/password finalization transaction and all provisioning bypass closure.
+- [ ] P3: session registry, transaction/dashboard contexts, chooser and independent logout.
+- [ ] P4: verified invitation, MFA lifecycle, step-up and recovery custody.
+- [ ] P5: owner dashboard, minimized privacy/claims/admin views and export preparation.
+- [ ] P6a: key provider choice, real destruction/restore/cost/latency proof.
+- [ ] P6b: protected adapter, blind indexes and bounded plaintext migration.
+- [ ] P7: deletion denial/ledger, export/deletion workers and quarantine restore.
+- [ ] P8: risk rules, fleet abuse/load/cost evidence and optional measured filters.
+- [ ] P9: open-source/public release readiness and independent review.
 
-- [ ] 0. Close baseline token/account eligibility gaps with real-route regression tests.
-- [ ] 1. Separate client authentication type from open/private access and audit migration.
-- [ ] 2. Add verified enrollment, safe username constraints and bounded mail delivery.
-- [ ] 3. Enforce mandatory administrative TOTP and recovery/promotion revocation rules.
-- [ ] 4. Add independent account sessions and transaction-bound chooser/OIDC behavior.
-- [ ] 5. Add privacy dashboard, minimized serializers, scope controls and own-account APIs.
-- [ ] 6. Select and prove account key service, then migrate classified data encryption.
-- [ ] 7. Add deletion denial, key destruction, bounded cleanup and restore validation.
-- [ ] 8. Validate distributed abuse controls and load/cost budgets before open rollout.
-- [ ] 9. Complete release provenance, documentation, security reporting and external review.
+Exact file-level work and migration behavior: IMPLEMENTATION_MAP. Dependencies/exit gates: PHASES. New scripts/routes enter executable manifests only with implementing code.
 
-## Unresolved decisions and limits
+## Decisions to ratify in the affected slice
 
-Key-service choice, verified-email provenance migration, email normalization collisions,
-mail delivery provider, production quota sizing, admin recovery custody, precise data
-retention, and consumer deletion notification contract require measured decisions in
-those slices. They do not block documenting the target or phase 0 hardening.
-No code implementation, model training, deployment or data migration is included here.
+Key backend and per-account economics/backup guarantees; mail provider credentials/domain readiness; deployed quota/concurrency/SLO sizing; existing email verification provenance/collisions; admin offline recovery custody; exact retention/reuse policy; optional consumer deletion-event protocol. These are explicit deployment gates, not excuses to leave basic signup/session semantics unspecified.
 
-## Validation
+## Completion rule
 
-[Baseline review](../../reviews/2026-11-19-identity-platform-baseline.md) separates
-reported tests, independently executed checks, source findings and blocked database
-suites. Future implementation must record real browser, multi-process, replica-set,
-Redis, key-service and restore evidence at the exact reviewed commit.
+Unchecked means not implemented. A slice is complete only with behavior, migration, UI/API contract, adversarial/compatibility tests, exact-commit evidence and updated docs. No aggregate test count alone closes all criteria. Preserve separate evidence for real services, browser tabs, processes, provider delivery, key destruction and restore.

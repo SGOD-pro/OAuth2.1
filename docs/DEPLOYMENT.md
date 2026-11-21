@@ -1,197 +1,99 @@
-# SWYRA Auth -- Production Deployment Guide (DEPLOYMENT.md)
+# Deployment, migration and operating V2
 
-**Authority:** Authoritative Production Deployment & Operational Runbook  
-**Target:** DevOps Engineers, Platform Administrators, and Site Reliability Engineers  
+**Status:** Current deployment references plus planned V2 runbook. Updated 2026-11-22.
+Do not deploy V2 from this docs-only branch. Integrate reviewed security PR #2 first. [PHASES.md](PHASES.md) owns rollout gates; [CONFIGURATION.md](CONFIGURATION.md) distinguishes implemented from proposed variables.
 
-**V2 status (2026-11-19):** The multi-account identity platform is a planned
-migration, not deployed functionality. Follow [PHASES.md](PHASES.md) and
-[DATA_LIFECYCLE.md](DATA_LIFECYCLE.md). Current source findings are recorded in the
-[baseline review](reviews/2026-11-19-identity-platform-baseline.md).
+## 1. Deployment profiles
 
----
+| Component | Reference cloud | Self-host profile |
+|---|---|---|
+| UI/edge | Vercel SPA/gateway plus explicitly configured edge abuse controls | TLS reverse proxy plus configured edge/DDoS service |
+| API | Hono on Node.js 24 or AWS Lambda | Same standalone Node entrypoint behind private/authenticated proxy |
+| State | MongoDB replica set/Atlas, isolated database credentials | Replica set with transactions, backups and lease/fence tests |
+| Distributed quota/cache | Supported Redis REST deployment | Compatible supported transport; raw TCP needs explicit adapter proof |
+| Mail | SES behind durable outbox/worker | Approved SMTP/webhook adapter, same budgets/authentication |
+| Account keys | Separate account-scoped key authority, reference KMS | Vault profile only if key destruction/restore capabilities proven |
+| Jobs | Narrow worker entrypoints, e.g. queue-triggered compute | Managed worker processes with leases and bounded concurrency |
 
-## 1. Deployment Topology Overview
+The cloud choices are reference designs, not new resources created by these docs. Do not claim low-cost/free operation without measuring provider, per-account key and mail costs. Missing self-host crypto-erasure capability must be surfaced as a limitation.
 
-SWYRA Auth operates across two complementary cloud infrastructures:
+## 2. Existing build and deployment commands
 
-1. **Frontend & Edge Gateway (Vercel):**
-   - Hosts the React SPA frontend (login, consent, account settings).
-   - Serves as the public edge reverse-proxy. Rewrites `/api/*` to the AWS Lambda backend.
-   - Injects the trusted perimeter header `x-gateway-secret` on rewritten requests.
-2. **Backend Engine (AWS Lambda):**
-   - High-performance Node.js 24 runtime executing the bundled Hono server (`dist/index.cjs`).
-   - Connects to MongoDB Atlas for persistence and Upstash Redis for distributed rate limiting.
-
----
-
-## 2. Infrastructure Deployment Steps
-
-### 2.1 Backend Deployment (AWS Lambda via SAM)
-
-#### Prerequisites
-- AWS CLI configured with appropriate IAM permissions.
-- AWS SAM CLI installed.
-- Node.js 24+ and npm.
-
-#### Build and Deploy
-```bash
-# 1. Navigate to backend directory
-cd backend
-
-# 2. Build the optimized single-file bundle
-npm run build
-
-# 3. Deploy via AWS SAM using samconfig.toml parameters
-sam build
-sam deploy --config-file samconfig.toml
-```
-
-#### Environment Variables on AWS Lambda
-Ensure the Lambda environment variables are configured in AWS Systems Manager Parameter Store or Lambda environment:
-- `NODE_ENV=production`
-- `MONGO_URI=mongodb+srv://...`
-- `BETTER_AUTH_SECRET=<min 32-character secret>`
-- `BETTER_AUTH_URL=https://oauth21.vercel.app`
-- `FRONTEND_URL=https://oauth21.vercel.app`
-- `INTERNAL_GATEWAY_SECRET=<64-hex character secret>`
-- `TRUSTED_PROXY_CIDRS=127.0.0.1/32,10.0.0.0/8`
-- `ALLOW_DEV_CLIENTS_IN_PRODUCTION=false`
-- `AUTH_PUBLIC_SIGNUP_ENABLED=true`
-
----
-
-### 2.2 Frontend & Edge Gateway Deployment (Vercel)
-
-#### Build Configuration
-Before triggering deployment on Vercel, the edge rewrite rules must be populated with the active `INTERNAL_GATEWAY_SECRET` without committing the secret to version control.
+Build from the intended runtime SHA with dependencies from lockfiles:
 
 ```bash
-# Prepare edge rewrite configuration from environment
-node scripts/prepare-vercel-config.mjs
-
-# Build frontend bundle
-cd frontend
-npm run build
+npm --prefix backend ci
+npm --prefix frontend ci
+npm run security:integration-check
+npm run security:docs-check
+npm --prefix backend run build
+npm --prefix backend run build:node
+npm --prefix frontend run build:ui
 ```
 
-#### Vercel Environment Variables
-Configure the following in the Vercel Project Settings:
-- `INTERNAL_GATEWAY_SECRET`: The exact 64-hex string configured on AWS Lambda.
-- `VITE_PUBLIC_SIGNUP_ENABLED`: `true` (or `false` to disable public sign-up globally).
+Lambda and Node builds currently write the same output path. Build/package each artifact separately; do not deploy the Node bundle as Lambda by running both in one release directory. Existing SAM workflow uses the Lambda artifact and `sam validate --lint`; inspect checked-out scripts before invoking a deployment.
 
----
+Use explicit approved `LAMBDA_BACKEND_URL` and fresh gateway secret for generated Vercel rewrites. `build:ui` avoids the gateway-generation hook; actual gateway release runs its own generation stage. No secret-bearing generated `vercel.json` or `.env` is tracked. Configure trusted proxy ranges from observed deployment peers, not a guessed broad range.
 
-## 3. Secret Management & Rotation Protocols
+## 3. Prerequisite security integration
 
-### 3.1 Rotating `INTERNAL_GATEWAY_SECRET` & Remediation of Historical Secrets
+1. Record actual main/security/docs refs, PR checks and deployed SHA. Security at `66738b0` passed CI; later wording correction `0a5727e` does not mean deployed. Merge/release through normal authorization, not as a side effect of editing docs.
+2. Rotate secrets ever exposed in repository history in actual services. Editing git files does not rotate credentials. Audit dependency lockfiles, licenses and source provenance.
+3. Verify real TLS, direct-origin rejection, issuer/discovery/JWKS URLs, callback rules, mandatory admin MFA and current revoke/refresh behavior in staging.
+4. Rebase/reconcile V2 docs and runtime work onto the integrated security baseline without overwriting fixes. Keep earlier reports as historical evidence.
 
-> [!CAUTION]
-> **Mandatory Production Rotation of Historical Secrets:**  
-> Any secret values previously checked into Git history (including historical keys `139f62ef...` and `d5856917...`) MUST be treated as compromised. Operators MUST manually generate and configure fresh secrets in AWS Lambda and Vercel project settings. The repository now uses untracked `vercel.json` and `frontend/vercel.json` generated from tracked `*.template.json` files to guarantee secret-bearing deployment configuration is never tracked in Git.
+## 4. Safe schema and feature rollout
 
-The `INTERNAL_GATEWAY_SECRET` authenticates the edge proxy to the Lambda function. SWYRA Auth accepts strictly the `x-gateway-secret` header (legacy secondary headers like `x-internal-secret` are permanently removed).
+For each P0-P9 slice: pin schema/reader/writer versions; dry-run counts and collisions; apply additive indexes/fields; deploy compatible readers; enable new writers for a controlled cohort; observe and verify; remove old reads only after backfill and rollback window. Exact migration CLIs ship with implementation, not as fictitious commands here.
 
-**Zero-Downtime Secret Rotation Procedure:**
+- Do not enable verified signup before real mail provider, durable cost budgets, proof keys, unique indexes and transaction-aware engine writes are ready.
+- Close old/public engine signup, provider auto-create and admin-create bypasses before enabling the new form.
+- Migrate client policy without changing registered secrets/callbacks or opening private access.
+- Add browser sessions only after cookie/header limits, independent account contexts and real A/B browser tests pass. Reauthenticate unsupported old sessions; never import MFA assurance by guess.
+- Enforce privacy at serialization and claims boundaries before exposing dashboard switches. UI hiding alone is not a migration.
+- Enable protected writes only after key provider/writer inventory proof. Backfill in bounded batches and measure remaining plaintext copies.
+- Enable deletion only when independent ledger, key-destruction receipts, cleanup jobs and quarantine restore are tested.
 
-1. **Generate a fresh 64-character hex secret:**
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-   ```
-2. **Dual-Secret Overlap on AWS Lambda:** Configure `INTERNAL_GATEWAY_SECRET` on AWS Lambda with both current and new secrets separated by a comma (`currentSecret,newSecret`). The backend evaluates each secret with timing-safe comparison on incoming `x-gateway-secret` headers.
-3. **Update Vercel Edge:** Update `INTERNAL_GATEWAY_SECRET` in Vercel Project Settings with the new secret and trigger a deployment. The build script `scripts/prepare-vercel-config.mjs` injects the secret into an untracked `vercel.json` during the build.
-4. **Finalize on AWS Lambda:** Once Vercel edge deployment completes, update AWS Lambda's `INTERNAL_GATEWAY_SECRET` to contain only `newSecret`.
-5. **Update `backend/.env`:** Update the local environment file for testing.
-6. **Verify Perimeter:** Execute `npm run test:direct-backend` to ensure the new secret is active and invalid/legacy headers are rejected (403).
+Cohort rollback disables new feature entry while preserving security, compatible reads, existing account data and denial fences. It cannot revive consumed proofs, revoked grants, deleting accounts or destroyed keys.
 
-### 3.2 Rotating Client Secrets
+## 5. Mail readiness
 
-Confidential OAuth clients may rotate secrets without downtime:
-1. Request a secret rotation via Super-Admin API: `POST /api/admin/clients/:clientId/rotate-secret`.
-2. Update the consumer application's `CLIENT_SECRET` environment variable.
-3. Restart the consumer application.
+Configure verified sending domain, DKIM/SPF/DMARC alignment, provider production access, bounce/complaint suppression, signed callbacks, queue and worker IAM, send deadline and global cost cap. Use controlled test recipients before public access. Confirm no plaintext OTP/reset payload in application/provider diagnostics.
 
-### 3.3 Identity Domain Role Migration Runbook
+Exercise worker crash after send, late superseded generation, timeout after provider acceptance, duplicate callback and queue backlog. Alert on oldest usable job age before it exceeds OTP lifetime. Delivery outages suspend new send-dependent actions without disabling independent sign-in policy.
 
-Before upgrading production to the mutually exclusive administrator model, execute the migration procedure:
+## 6. MFA and bootstrap custody
 
-1. **Create Database Backup:**
-   ```bash
-   mongodump --uri="$MONGO_URI" --out="backup_$(date +%Y%m%d_%H%M%S)"
-   ```
+Bootstrap operator provisions a verified super-admin invitation through a controlled procedure, owner proves mailbox, sets password and enrolls TOTP. Do not distribute temporary passwords by email. Require at least two independently recoverable authorized custodians before normal operations depend on one admin.
 
-2. **Run Read Only Audit Dry Run:**
-   ```bash
-   npm --prefix backend run migrate:roles
-   ```
-   Inspect the classification summary:
-   - **Class A (`super-admin`):** Global administrators with explicit null scope.
-   - **Class B (`app-admin`):** Application administrators with active client assignments.
-   - **Class C (`user`):** Standard end users.
-   - **Class D (Flagged):** Conflicting or ambiguous records. These are never automatically promoted.
+Record emergency recovery custody, offline backup location, access approval/audit, notification/delay and mandatory credential/session revocation. No static env switch or email-only endpoint disables admin MFA. Drill lost-factor recovery and last-super-admin responsibility transfer before public release.
 
-3. **Resolve Class D Flagged Accounts:**
-   If any accounts are flagged in Class D, operators must inspect records and resolve them before or after migration.
+## 7. Secret and key rotation
 
-4. **Apply Migration:**
-   ```bash
-   npm --prefix backend run migrate:roles:apply
-   ```
-   The migration updates domain roles, deletes active session cookies for migrated users, and revokes refresh token families in `oauth_token_families`. Note that active RS256 access tokens remain valid until their expiration window completes (maximum fifteen minutes).
+Gateway secret rotation retains existing supported bounded overlap: configure old+new on origin, switch gateway to new, verify, then retire old. JWT signing rotation publishes new public key with overlapping old verification until valid issued tokens expire; never rotate by fallback to opaque/unsigned tokens.
 
-5. **Rollback Procedure (if required):**
-   This legacy role-migration restore example must not restore deleted subjects,
-   revoked credentials or erased account keys. V2 restores require quarantine and
-   independent tombstone replay before traffic. Never run it as an automatic V2 rollback.
-   ```bash
-   mongorestore --uri="$MONGO_URI" backup_<timestamp>/
-   ```
+V2 OTP verifier/mail/lookup/account key rotations use separate versions and bounded overlap. Old OTP proofs expire/invalidate; lookup rotation retains global uniqueness; DEK rotation re-encrypts with version/AAD and inventories all old versions. Key destruction is distinct from routine rotation. Never delete a shared signing/client secret as a user's data-erasure action.
 
----
+## 8. Backup, recovery and deletion restore
 
-## 4. Production Pre-Flight Checklist
+Maintain application snapshots separately from append-only denial ledger/destruction receipts. Key-service backup/replica policy must not restore erased account keys. Operator access is least-privilege and audited.
 
-Before directing live user traffic to SWYRA Auth, verify:
+Restore drill: isolate restored network and outbound mail; restore data; replay ledger newer than snapshot; advance denial versions; reconcile key state and sessions/jobs; prove a pre-deletion account cannot log in, refresh or decrypt; ensure unaffected accounts work; then admit traffic. Do not use blind `mongorestore` as production rollback. Pending destruction stays pending after restore; never show erased based on missing local rows alone.
 
-- [ ] `NODE_ENV` is set to `production` on both Lambda and edge environments.
-- [ ] `ALLOW_DEV_CLIENTS_IN_PRODUCTION` is set to `false`.
-- [ ] `INTERNAL_GATEWAY_SECRET` is non-empty, high-entropy, and matches between Vercel and Lambda.
-- [ ] `INTERNAL_GATEWAY_SECRET` is NOT hardcoded in git-tracked `vercel.json` or `samconfig.toml` files.
-- [ ] `TRUSTED_PROXY_CIDRS` is configured with the proxy IP ranges.
-- [ ] MongoDB connection uses TLS and connects to a replica set with transaction support.
-- [ ] All required suites in `docs/security/security-suite-manifest.json` pass: `npm run test:all-security`. Record blocked/skipped checks explicitly.
-- [ ] Documentation consistency linter passes: `npm run security:docs-check`.
-- [ ] Integration contract linter passes: `npm run security:integration-check`.
-- [ ] Discovery metadata at `/.well-known/openid-configuration` returns HTTPS URLs.
-- [ ] Public JWKS endpoint at `/.well-known/jwks.json` returns active RSA public keys.
+## 9. Operations and incident response
 
-## 5. V2 release and migration runbook requirements
+| Signal | Response |
+|---|---|
+| Distributed auth-budget stores down | Auth/OTP/reset/admin deny; restore stores, investigate load; never toggle local allow fallback |
+| OTP/mail spend spike | Enforce global cap, pause new sends, inspect pseudonymous purpose/source metrics; preserve existing sessions |
+| Queue backlog/dead letters | Stop expired jobs; recover leases with fences; do not send obsolete codes |
+| Suspected account takeover | Revoke affected session/family/account version as warranted, notify owner safely, audited recovery |
+| Key service unavailable | Deny protected reads, isolate dependency; no plaintext/cache bypass |
+| Deletion pending too long | Reconcile inventory/provider receipts and lease; retry forward only, never reactivate |
+| Origin bypass/WAF saturation | Block origin path, validate gateway/proxy chain and edge admission; measure before reopening |
 
-1. Pin the source commit and audit current client authentication methods, access
-   flags, verification provenance, identities, role assignments and secret exposure.
-   Rotate historically exposed secrets in actual deployments; git edits do not rotate them.
-2. Close phase 0 findings before enabling new public enrollment/SSO behavior.
-   Establish CI coverage for docs-only changes as well as runtime/security changes.
-3. Apply additive client-policy schema and dual-read support. Dry-run ambiguous
-   clients/duplicates; preserve current private clients and explicit app assignments.
-4. Deploy verified enrollment with a real bounded mail queue, delivery provider,
-   per-mailbox/IP/browser/global budgets and monitoring before enabling signup.
-   Do not simply set AUTH_EMAIL_VERIFICATION_ENABLED and assume OTP is implemented.
-5. Require administrative TOTP enrollment through restricted sessions. Test recovery,
-   promotion, social callback and plugin admin paths before rolling out multiple accounts.
-6. Prove multi-account tab isolation and logout semantics with real browser tests.
-   Preserve old clients and expire/reverify legacy sessions safely during cutover.
-7. Select account key infrastructure only after latency/cost/quotas, engine adapter,
-   old-key recovery and provider destruction-delay tests. Inventory and migrate every
-   plaintext copy with checkpointed verification before erasure is advertised.
-8. Deploy durable deletion/tombstone jobs and key-cache invalidation before account
-   deletion UI. Restore pre-deletion snapshots into quarantine and prove no resurrection.
-9. Exercise real distributed Redis/Mongo failures, edge quotas, worker/mail backlogs,
-   key-service outage and bounded load. Fingerprints are not the edge DDoS defense.
-10. Complete license/provenance, dependency/SBOM audit, private vulnerability reporting,
-    fresh-secret validation, self-host setup, documented limitations and independent
-    review. Public repository visibility alone is not release readiness.
+Set measured latency/error/queue-age/cost SLOs and ownership before launch. No unsupported throughput/security percentage in release notes. Run drills on disposable/staging resources with explicit load scope.
 
-Roll out by bounded cohorts with recorded rollback thresholds and telemetry. Rollback
-may disable a feature or restore compatible code; it must not restore deleted accounts,
-keys, consumed proofs, old privileges, or revoked token families. Production data
-migration and deployment are separate actions from this documentation change.
+## 10. Release evidence
+
+Required: integration/docs checks, affected and full security suites, genuine browser/network flows, multi-process concurrency, real Redis/Mongo replica set, controlled mail delivery, key deletion/restore, migration from old schema, fresh self-host install, license/SBOM/secret review and private vulnerability disclosure process. Record exact SHA and blocked/skipped checks. Static checks and CI passing do not prove production secrets were rotated, DNS is configured, keys irrecoverable or live provider mail delivered.

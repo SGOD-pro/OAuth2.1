@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased: V2 design expansion (2026-11-22)
+
+Documentation only: expanded verified signup/OTP/username, account chooser/session isolation, MFA/recovery, owner dashboard, consumer policy, encrypted data/deletion, mail/abuse/device/filter/cache contracts, diagrams, implementation map and P0-P9 migration/verification gates. No V2 runtime feature, deployment or migration is completed by this entry.
+
+
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

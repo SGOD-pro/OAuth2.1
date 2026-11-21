@@ -1,178 +1,129 @@
-# SWYRA Auth: consumer integration contract
+# Consumer integration contract
 
-**Authority:** Normative consumer contract. Updated 2026-11-19.
-**Current runtime baseline:** `161ad99ca4ba0de88cff1267b33807db61da306c`.
-V2 account selection and privacy behavior is planned, not available merely because
-this document describes it. See [architecture](ARCHITECTURE.md), [security](SECURITY.md),
-[phases](PHASES.md) and [0008](specs/0008-multi-account-identity-platform/index.md).
+**Authority:** Normative consumer contract. Updated 2026-11-22.
+**Version boundary:** Main `161ad99` is the old runtime; reviewed hardening is on PR #2. V2 account chooser/session/privacy changes below are targets, not available endpoints by documentation alone. Read [architecture](ARCHITECTURE.md), [flows](AUTHENTICATION_FLOWS.md), [sessions](SESSION_MODEL.md) and [phases](PHASES.md).
 
-## 1. Centralized login
+## 1. Centralized identity, consumer-owned authorization
 
-Use Authorization Code flow with PKCE S256 through `/api/auth/oauth2/authorize`.
-Consumer apps never collect IdP passwords, OTPs or TOTP codes, relay credentials,
-access MongoDB, or store copies of IdP credential tables. Business data and app
-permissions remain the consumer's responsibility. Keep client secrets server-side.
+Start login with a top-level browser redirect to `/api/auth/oauth2/authorize`. The consumer never collects/proxies IdP passwords, email OTPs or TOTP codes. It never connects to IdP MongoDB or copies IdP credential/session tables. IdP authenticates an immutable subject; each consumer owns its business data and authorization.
 
-## 2. Client policy
+An ordinary user of an open app needs no app membership in V2. This does not make a paid/admin/business resource public. Private app membership and app-admin assignments remain IdP access controls; consumer business permissions remain additional checks.
 
-| Concept | Existing runtime | Planned V2 |
+## 2. Three independent client dimensions
+
+| Concept | Legacy/hardened contract | V2 contract |
 |---|---|---|
-| Public Application, open user access | `isPublic=true`, automatic connection/membership bookkeeping | `accessPolicy=open`, no ordinary membership prerequisite |
-| Private Application, restricted access | `isPublic=false`, explicit membership, controlled signup | `accessPolicy=private`, preserve explicit membership and controlled provisioning |
-| Public OAuth client | No securely retained client secret | `clientType=public`, NO client_secret, PKCE required |
-| Confidential OAuth client | Server-held CLIENT_SECRET and registered authentication method | `clientType=confidential`, client authentication plus PKCE |
-| Development callbacks | Explicit `isDev` handling | Retain independently of access and client authentication |
+| Public Application, open user access | `isPublic=true`, registration/history bookkeeping | `accessPolicy=open`, eligible users may consent without ordinary membership |
+| Private Application | `isPublic=false`, explicit membership | `accessPolicy=private`, assigned users only |
+| Public OAuth client | Cannot keep a secret | `clientType=public`, NO client_secret, S256 required |
+| Confidential OAuth client | Server-held CLIENT_SECRET and registered authentication method | `clientType=confidential`, client authentication plus S256 |
+| Callback environment | `isDev` | Retained independently; only exact configured dev loopbacks |
 
-The legacy `isPublic` field must not be used to infer secret handling. Existing clients
-keep their current policy until audited migration. An open app still needs registered
-callbacks, an active client, eligible account, granted scopes, and user consent.
-An app's own business authorization can still deny a correctly authenticated user.
+A private app can use a public client; an open app can use a confidential client. Super admins continue client registration and disabling. Do not implement unauthenticated dynamic client registration or remove callbacks, consent, quotas or disabled-client checks when removing open membership gates.
 
-Super admins register/manage clients and platform configuration. App admins manage
-only explicitly assigned clients. Internal roles are `super-admin`, `app-admin`,
-`user`. Existing consumer app-admin tokens use `role=admin` with the target
-`scoped_client_id`. Super admins do not gain consumer administration privileges.
-Existing assignments and protocol fields must not change without versioned migration.
+## 3. Stable protocol endpoints and data API boundary
 
-## 3. Existing protocol endpoints
-
-| Purpose | Method | Path |
+| Action | Method | Path |
 |---|---|---|
 | Discovery | GET | `/.well-known/openid-configuration` |
-| Public signing keys | GET | `/.well-known/jwks.json` |
-| Authorization | GET | `/api/auth/oauth2/authorize` |
+| Signing keys | GET | `/.well-known/jwks.json` |
+| Authorize | GET | `/api/auth/oauth2/authorize` |
 | Code exchange/refresh | POST | `/api/auth/oauth2/token` |
 | UserInfo | GET | `/api/auth/oauth2/userinfo` |
-| Revocation | POST | `/api/auth/oauth2/revoke` |
-| Introspection | POST | `/api/auth/oauth2/introspect` |
+| Revoke | POST | `/api/auth/oauth2/revoke` |
+| Introspect | POST | `/api/auth/oauth2/introspect` |
 
-Keep endpoint paths stable. Proposed `/api/identity/*` APIs are IdP-internal and
-must not be used by consumer apps to enumerate browser accounts or manage identity.
-Dynamic external client registration remains disabled.
+Keep these URLs and immutable subjects stable. Discovery advertises only supported implemented metadata. Consumer browser APIs get only registered origin permissions appropriate to their client type; server-to-server calls validate client credentials. Identity APIs `/api/identity/*` are IdP-only and never expose account lists or owner dashboard controls to a consumer origin.
 
-## 4. Authorization transaction requirements
+Scopes retain `openid`, `profile`, `email`, `offline_access` where supported/approved. UserInfo returns only claims authorized by scope and owner privacy settings. `sub` is required stable identity; do not key a business account on email/username. Optional fields may be absent. Admin email masking does not prevent a user from explicitly sharing email with a consented consumer, and consumer consent cannot grant the admin dashboard general email access.
 
-1. Generate random state (at least 128 bits), a high-entropy PKCE verifier, its S256
-   challenge, and a random OIDC nonce. Bind them to one expiring browser transaction.
-2. Redirect with registered `client_id`, exact `redirect_uri`, `response_type=code`,
-   requested `scope`, `state`, `nonce`, `code_challenge`, and
-   `code_challenge_method=S256`. Request only needed scopes.
-3. At callback, validate stored transaction and state before processing success or
-   OAuth errors. Consume the transaction once, expire it, and defend concurrent-tab
-   flows with separate transaction records rather than one shared verifier cookie.
-4. Exchange the code with its verifier and redirect URI. Confidential clients also
-   authenticate using their registered method. Validate HTTP status and token schema.
-   Do not blindly retry consumed codes or timeouts.
-5. Validate ID token signature, RS256 algorithm, issuer, audience/authorized party,
-   expiry, required subject, nonce, auth_time when requested, and at_hash if present.
-   Validate access tokens separately for the intended resource API and scopes.
-6. Create the consumer's own protected session with session rotation. Check ownership
-   and app permissions on every protected business API. Do not treat an ID token as
-   a resource access token or use email as a stable subject.
+Other registered-app data endpoints remain possible through explicit resource audience, documented scopes and owner permissions. They do not become generic decrypt/export APIs. Preserve existing app APIs through scoped policy adapters; publish any incompatible resource contract separately with fixtures/migration.
 
-JWTs are signed, not encrypted. `openid`, `profile`, `email`, and `offline_access`
-are separate permissions. V2 releases email/profile claims only when granted and
-consistent with privacy settings; consumers must tolerate omitted optional claims.
-The current custom mint path includes email/name even without those scopes, tracked
-as a baseline privacy gap. Do not rely on that disclosure in new integrations.
+## 4. Authorization and callback contract
 
-## 5. Planned account chooser and SSO
+1. Create one server-side or tested OIDC-library transaction per login tab: random state >=128 bits, high-entropy verifier, S256 challenge, random nonce, original safe local destination and expiry. No shared single-verifier cookie across simultaneous tabs.
+2. Redirect with registered client_id, exact redirect_uri, response_type=code, requested scopes, state, nonce, code_challenge and method S256. No password/OTP/device fingerprint query parameters. For explicit account switching request `prompt=select_account` when V2 support is published.
+3. At callback validate and consume state/transaction for both success and errors. Reject unknown, expired or replayed transactions. Never trust callback role/email fields outside validated tokens.
+4. Exchange once with verifier and exact redirect. Confidential clients use registered client authentication; public clients send no secret. Validate HTTP status and token schema. A timeout does not justify blindly retrying a consumed code.
+5. Verify ID token signature against configured JWKS, RS256, issuer, audience/azp, expiry, nonempty subject, nonce and requested auth_time; verify at_hash when present. Resource APIs separately validate access token purpose/audience/scopes. Do not treat a decode-only JWT operation as verification.
+6. Create a rotated consumer session. Prefer random opaque Secure HttpOnly host-only cookie plus shared server-side TTL/revocation storage. Enforce business authorization on every API. Cookie attributes do not make unsigned role JSON trustworthy.
 
-When V2 ships, the IdP displays accounts authenticated in that browser profile, not
-all accounts physically present on a device. A valid eligible account session can
-continue without a password when policy permits. Consent, reauthentication, private
-membership, and administrative MFA still apply. A remembered signed-out entry needs
-fresh login. Consumers never receive the account list.
+## 5. V2 chooser, login and MFA behavior
 
-| OIDC request | Required target behavior |
+The IdP displays accounts signed in to that browser profile. It does not enumerate OS/Google accounts, other devices or accounts from a consumer-provided email. Selecting an active eligible account can continue without password; a signed-out entry requires login. A new login adds an account rather than globally replacing another one.
+
+Consent, private assignment, account status and required assurance are still checked. Consumer cannot set `mfa=true`, force privileged claims through scopes or rely on device recognition as authentication. App-admin access always needs completed MFA; stale privileged actions step up on the IdP.
+
+| OIDC input | Target behavior after implemented support |
 |---|---|
-| `prompt=select_account` | Ask for an account; bind selection to this OAuth transaction |
-| `prompt=login` | Reauthenticate the selected account |
-| `prompt=consent` | Obtain consent for this request |
-| `prompt=none` | No UI; return an OIDC error if login, consent or account selection is needed |
-| `max_age=N` | Reauthenticate when authentication age exceeds N; return required auth_time |
-| `login_hint` | Display hint only, never proof of account/session ownership |
+| `prompt=select_account` | Choose account and bind it to this transaction |
+| `prompt=login` | Fresh authentication for the selected subject |
+| `prompt=consent` | Display approval for requested scopes |
+| `prompt=none` | No UI; explicit OIDC error when login/selection/consent is required |
+| `max_age` | Selected subject's actual auth age; required auth_time |
+| `login_hint` | Display hint only; no account ownership proof |
 
-`none` cannot combine with other prompt values. Exact supported metadata and error
-behavior are published only after implementation tests. Existing library support is
-not assumed to satisfy the multi-account design. Never implement silent selection
-by changing a browser-wide current user while another tab is authorizing.
+`none` cannot combine with other prompts. An ambiguous two-account silent request returns account_selection_required rather than silently using a global cookie. Consumer must handle login_required/consent_required/interaction_required without redirect loops. Request only supported tested behavior; do not assume a library plugin covers this full contract.
 
-## 6. Framework integration recipes and session storage
+## 6. Concrete framework integration recipes
 
-The previous illustrative Next.js recipe serialized unsigned user/role JSON into an
-HttpOnly cookie. HttpOnly does not prevent client-side forgery. That recipe is removed.
-The previous SPA recipe stored access tokens in sessionStorage and omitted complete
-OIDC validation; it is not a production integration template.
+Executable fixtures live under [test/](../test/), including Next.js and React+Express consumers. They are verification fixtures, not a blanket production endorsement. V2 implementation must update both old/new consumer journeys without installing a duplicate identity system.
 
-Use the following required framework contracts and the versioned consumer fixtures
-under [test/](../test/) for executable examples. Fixtures are test evidence, not a
-blanket production endorsement. Complete application-specific review is required.
-
-| Framework | Required implementation |
+| Consumer pattern | Required implementation |
 |---|---|
-| Next.js BFF | Server-side authorization transactions and token exchange; random opaque session handle in Secure HttpOnly host-only cookie; server-side TTL/revocation store |
-| Express/FastAPI BFF | Same transaction/session contract; isolate token storage from browser; validate signatures, issuer, audience, expiry, subject and required scopes |
-| Browser SPA/mobile public client | No client secret; tested OIDC library for transaction and token validation; access tokens in memory; no persistent refresh/bearer tokens in web storage |
-| Resource API | Access tokens only; RS256/JWKS validation with issuer/audience/expiry/subject and scope checks; online status checks if immediate revocation is required |
+| Next.js BFF | Server authorization transaction and code exchange; server token store; opaque cookie; no IdP credentials in React forms |
+| Express/FastAPI BFF | Same server transaction/session contract; audience/scope validation on business APIs; ownership checks |
+| Browser SPA/mobile | Public client, tested OIDC implementation, PKCE/state/nonce; memory-based web token storage, no persistent bearer/refresh in web storage |
+| Resource API | Access token signature/iss/aud/exp/sub/scopes; online status for immediate revocation; no ID token as bearer |
 
-An encrypted/authenticated cookie can be considered only with reviewed key rotation,
-expiry, revocation and replay behavior. Unsigned identity or role JSON must never
-be trusted. Cookie flags do not provide cryptographic integrity. Prefer a BFF when
-browser token exposure is unnecessary. Protect cookie-backed mutations against CSRF.
+Consumer env: explicit issuer/client/callback; server-only secret for confidential clients and session secret. No production localhost fallback. IdP Mongo/provider/key settings never go into consumer env. Prefer BFF where token exposure to JS is unnecessary.
 
-Use exact issuer/callback configuration with no localhost or client-ID production
-fallback. Keep secrets out of public environment prefixes and repository files.
-A production IdP can host explicitly configured development clients; runtime mode is
-not client mode. Validate all three client dimensions independently.
+Refresh families rotate atomically. Multi-instance BFFs coordinate refresh through a shared durable lock/fence/session version. A losing worker cannot overwrite a newer token or restore a revoked one. Reauthentication after uncertainty is safer than rollback upserts that resurrect credentials.
 
-## 7. Refresh, logout and deletion
+## 7. Logout, grant revocation and deletion
 
-Refresh families rotate with one durable winner. Serialize refreshes per consumer
-session using a shared store for multiple instances. An in-process mutex or sticky
-sessions alone do not provide cross-process coordination. Losing workers must handle
-a clean reauthentication result without resurrecting a consumed token.
+| Operation | Consumer effect |
+|---|---|
+| Local logout | Retire current consumer session only |
+| IdP account/browser logout | Explicit IdP operation; preserve unrelated account sessions |
+| Token/family revoke | Authenticated and client-owned; preserve unrelated families/accounts |
+| User disconnects app | Stop using revoked grant; retire local app session and obtain new consent if appropriate |
+| IdP account deletion | Online validation denies; consumer owns its own data retention and deletion |
 
-Distinguish local consumer logout, IdP account logout, browser-wide signout, removing
-a remembered account, device/session revocation, consent revocation, and deleting the
-whole account. One account's logout must not sign out another account unintentionally.
+Offline validation may accept access tokens until expiry (existing maximum 900 seconds); consumer-local sessions can persist longer unless actively checked. Introspection/short sessions are required when immediate invalidation matters. Calling the revoke API alone cannot change an offline verifier's result.
 
-Offline JWT validation can accept a revoked token until its expiry, currently up to
-900 seconds. For immediate rejection, resource servers must perform online status
-checks and retire local consumer sessions. Calling revocation alone cannot change an
-offline verifier's result. IdP deletion does not delete consumer-owned business data.
-An authenticated consumer deletion-notification contract remains planned separately.
+A signed optional deletion-event contract is proposed in [DATA_LIFECYCLE.md](DATA_LIFECYCLE.md). Do not assume that event endpoint exists, that all consumers support it or that notification means data erasure. IdP does not cascade into consumer databases. Account dashboard explains this boundary.
 
 ## 8. The 10 Golden Rules for AI Agents
 
-1. Keep IdP credentials at the centralized IdP.
-2. Never connect consumer apps directly to IdP MongoDB.
-3. Never copy IdP credential/session/token tables into a consumer.
+1. Keep credentials, email OTP and TOTP input at the central IdP.
+2. Never connect consumer applications directly to IdP MongoDB.
+3. Never copy IdP credential/session/token tables into consumers.
 4. Keep CLIENT_SECRET server-side; public clients use NO client_secret.
 5. Never persist bearer tokens or confidential secrets in browser storage.
-6. Fail closed on missing configuration; no production localhost fallback.
-7. Separate runtime environment from client development mode.
-8. Separate client authentication type, access policy, and callback environment.
-9. Authenticate identity separately from business authorization.
-10. Preserve exact redirects, S256, state, nonce and transaction binding.
+6. Fail closed on missing config; no production localhost/client-ID fallback.
+7. Separate runtime environment from development callback policy.
+8. Separate client authentication type, access policy and isDev.
+9. Check business authorization separately from authentication.
+10. Preserve exact callbacks, S256, state, nonce and per-tab transaction binding.
 
 ## 9. 18 Security Review Questions
 
-1. Is the client public or confidential independently of user access policy?
-2. Is development/production callback mode explicit?
-3. Is the callback exactly registered and production HTTPS?
-4. Are secrets absent from browser bundles and web storage?
-5. Is PKCE S256 enforced without downgrade?
+1. Is client type explicit independently of open/private access?
+2. Are dev/production callback rules explicit?
+3. Is callback exactly registered and production HTTPS?
+4. Are secrets absent from browser bundles and persistent web storage?
+5. Is S256 enforced without downgrade?
 6. Is state checked on both successful and error callbacks?
-7. Is nonce generated, transaction-bound and verified?
-8. Are transactions one-use and safe across multiple tabs?
+7. Is nonce transaction-bound and validated?
+8. Are concurrent login tabs isolated and transactions single-use?
 9. Are issuer and audience pinned?
-10. Are RS256 signature, expiry and subject verified?
-11. Are ID tokens and access tokens validated for separate purposes?
+10. Are RS256 signature, expiry, subject and token purpose verified?
+11. Are access tokens and ID tokens used for their intended roles?
 12. Are return destinations limited to approved local paths?
-13. Is the app session integrity-protected, rotated and revocable?
-14. Is business authorization checked separately?
-15. Are scopes/consent and optional claims handled correctly?
-16. Are private memberships and admin scope/assurance checked?
-17. Is immediate vs offline revocation behavior documented?
-18. Do real integration tests and both contract checks pass?
+13. Is consumer session integrity-protected, rotated and revocable?
+14. Are business authorization and owner checks independent?
+15. Are scopes/privacy and missing optional claims handled?
+16. Are private membership and administrative MFA enforced?
+17. Are offline versus immediate revocation/deletion limits explained?
+18. Do real consumer/browser tests and contract checks pass at the reviewed SHA?

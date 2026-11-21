@@ -1,77 +1,93 @@
-# V2 delivery phases
+# V2 delivery phases and migration gates
 
-**Status:** Planned. Updated 2026-11-19. No V2 runtime work is complete.
-**Specification:** [0008](specs/0008-multi-account-identity-platform/index.md).
-**Baseline security review:** [2026-11-19](reviews/2026-11-19-identity-platform-baseline.md).
+**Status:** Documentation complete enough to guide bounded implementation; V2 runtime pending. Updated 2026-11-22.
+Read [architecture](ARCHITECTURE.md), [implementation map](IMPLEMENTATION_MAP.md) and [0008](specs/0008-multi-account-identity-platform/index.md).
 
-Build one bounded vertical slice at a time. Each row requires implementation, targeted
-adversarial tests, compatibility evidence, review, and documentation before completion.
-Do not infer completion from this plan or existing green suite summaries.
+## 1. Baseline and next task
 
-| Order | Slice | Dependencies | Exit evidence |
-|---|---|---|---|
-| 0 | Current account/token eligibility hardening | Baseline review | Real-route code/refresh/UserInfo/introspection denial for missing, banned, disabled, unverified, deleting accounts; revocation race and client isolation tests |
-| 1 | Split client type from open/private access | 0 | Audited backfill, explicit ambiguity report, compatible old clients; open access without membership; private negative tests; no unintended secret/callback changes |
-| 2 | Verified enrollment and usernames | 0, 1 | No account/credential/session writes on invalid OTP; atomic finalization races; delivery failure and abuse budgets; verified admin invitation claiming |
-| 3 | Mandatory administrative TOTP | 0, 2 | Setup-only sessions for unenrolled admins; every admin API and plugin path protected; recovery/reset/promotion bypass tests |
-| 4 | Multiple account sessions and chooser | 0 to 3 | Two real browser accounts, independent logout/expiry, multi-tab subject binding, OIDC prompt/max_age tests, admin-purpose isolation |
-| 5 | Privacy dashboard and API projections | 2 to 4 | Own-account checks, consent/scope controls, no full emails in ordinary admin API/search/export/logs; exports and recent-auth checks |
-| 6 | Account key service and encrypted data | 0, 2, 5; key-service decision | Cost/latency and engine compatibility proof; nonce/AAD/key rotation tests; complete field inventory and protected write coverage |
-| 7 | Deletion, cleanup, and backup restore | 0, 4 to 6 | Idempotent deletion jobs; immediate online denial; refresh/delete races; independently witnessed key destruction; pre-deletion snapshot restore denies resurrection |
-| 8 | Distributed abuse and availability validation | Incrementally from 0, before open rollout | OTP/mail/IP/account/client quotas, multi-process failure tests, edge/load budgets, queue deadlines; no fingerprint-only controls |
-| 9 | Open-source release readiness | 0 to 8 | License/provenance, vulnerability reporting, clean secret history response, pinned dependencies/SBOM, self-host guide, release checks and external security review |
+Security hardening is reviewed at `66738b0`; [CI run 44947156668](https://github.com/SGOD-pro/OAuth2.1/actions/runs/44947156668) passed backend/frontend, 29 hardening checks, 49 CORS checks and 27 security suites. Later `0a5727e` corrects the in-process dual-instance test wording. This is historical exact-commit evidence, not a claim that V2 features exist or that PR #2 is merged. Verify actual refs and CI again before integration.
 
-## First implementation slice
+The old phase-0 account eligibility/MFA remediation is no longer the next V2 implementation task. Integrate the reviewed security PR separately, then reconcile/rebase this docs-only branch onto that baseline. Do not merge old runtime from the docs branch over the hardened implementation.
 
-Phase 0 is the next runtime task. Preserve the current public/private policy while
-adding a shared account eligibility guard to minting and every token validation path.
-Use real disposable MongoDB integration tests and account-state transitions. Prove
-both plugin-active and custom JWT introspection branches obey the guard. Do not add
-OTP, chooser, encryption, or membership-policy migration in the same implementation.
+First runtime slice is P0: inventory and prove engine transaction/session integration. Follow with P1's additive policy split and P2's verified signup. Do not enable unsafe signup while postponing mail quotas, OTP replay defenses or uniqueness transactions.
 
-Initially record unverified-account compatibility explicitly. If rejecting existing
-unverified accounts affects deployments, require an audited re-verification rollout
-rather than silently turning a stored false flag into verified status. The new public
-identity release cannot waive verified enrollment.
+## 2. Dependency graph
 
-## Migration and rollback gates
+```mermaid
+flowchart TD
+    Base["Reviewed security baseline"] --> P0["P0 engine and schema proof"]
+    P0 --> P1["P1 client-policy migration"]
+    P0 --> P2["P2 verified signup and mail budgets"]
+    P1 --> P3["P3 multi-account sessions and chooser"]
+    P2 --> P3
+    P2 --> P4["P4 MFA lifecycle and recovery"]
+    P3 --> P5["P5 owner dashboard and privacy"]
+    P4 --> P5
+    P0 --> P6["P6 key service and protected adapter"]
+    P5 --> P6
+    P6 --> P7["P7 export, deletion and restore"]
+    P3 --> P8["P8 risk and load acceptance"]
+    P7 --> Release["P9 public and open-source release"]
+    P8 --> Release
+```
 
-1. Inventory real schema, collection names, plugin-managed writes, existing account
-   verification provenance, legacy role exceptions, and consumer token expectations.
-2. Use additive versioned schemas, dry-run counts, duplicate/collision reports, bounded
-   backfills and checkpoints. Stop on ambiguous identities; never auto-promote roles.
-3. Keep existing client IDs and endpoints stable. Separate ordinary open-app connection
-   history from private membership and app-admin authority before removing a gate.
-4. Test the previous client contract and new contract together. Existing sessions may
-   be reauthenticated rather than silently imported with elevated assurance.
-5. Encrypt only after adapter/plugin compatibility and key-service recovery boundaries
-   are proven. Inventory every plaintext copy before making erasure claims.
-6. Roll back using compatible readers and feature disablement. Never undo a tombstone,
-   revive a token family, or restore a destroyed account key. Reapply deletion ledger
-   before any restored system becomes reachable.
+Abuse admission is a cross-cutting dependency from P0/P2, not something postponed to P8. P8 validates fleet behavior, optional risk rules and release load/cost ceilings. Scope may be subdivided into smaller PRs; dependencies and invariants remain.
 
-## Release acceptance matrix
+## 3. Slice-by-slice build plan
 
-| Category | Required scenarios |
+| Slice | Concrete output and primary files | Required exit evidence |
+|---|---|---|
+| P0, compatibility/contracts | Engine writer/collection map; transaction-aware creation proof; request-local selected-session proof; config/migration version conventions. `utils/auth.ts`, `db/mongo.ts`, future engine adapter | Real engine+Mongo replica set: failed proof/create rollback creates no usable identity; real two-tab or harness subject selection independent of ambient cookie; no raw engine session-token listing to JS |
+| P1, client dimensions | `clientType`, `accessPolicy`, `isDev` resolver and M1 migration; `routes/admin.ts`, `routes/auth.ts`, `utils/security.ts`, app forms | All type/access/dev combinations; zero ambiguous auto-classifications; open eligible user without membership succeeds; private unassigned user fails at authorize/exchange/refresh/online validation |
+| P2a, mail and intents | Durable send budgets/outbox/provider/test sink; intent/generation/verify/proof APIs; registration/verify pages | Wrong/expired/resent/exhausted/replayed codes create zero identities/credentials/sessions; no sends on store loss; queue timeout/deadline/suppression and generic responses |
+| P2b, finalization and username | Transactional unique email/username+proof consume, engine bypass closure, complete-profile page | Two workers finalizing same proof produce one account; email/username collision handling; lost response idempotency; direct plugin/social/admin-create bypass denied; real sink delivery test |
+| P3, session registry and chooser | Browser set, explicit OAuth/dashboard contexts, engine wrapper, chooser/Add account/logout pages | Real browser A/B sessions and interleaved tabs, independent expiry/logout, code subject correctness, CSRF/fixation/CORS denial, OIDC prompts/max_age, revoked selected session cannot issue |
+| P4, MFA lifecycle | Extend hardened mandatory admin policy to enrollment/invite/recovery and context purposes; optional user TOTP | Real password/TOTP enrollment/login, setup-only API denial, backup single use, stale privileged step-up, promotion/reset/recovery invalidation, plugin and bearer/cookie paths |
+| P5, dashboard and privacy | Profile/security/sessions/grants/privacy pages, owner APIs, minimized claims/admin output, bounded export preparation | Account A cannot read/mutate B through IDs/context/cache; scope/privacy filtering; full email absent from admin list/search/export/log; export never includes secrets |
+| P6a, key backend proof | Provider interface, reference cloud/self-host support statement, cost/latency/quotas, destruction and backup model | Real key service final-destruction test; document scheduled/pending limitations; no shared-key/backup recovery path claimed erased |
+| P6b, protected adapter | Field envelopes, blind-index migration, all engine/custom writers protected, versioned reads/backfill | Cross-account/AAD failures, rotation/nonce safety, lookup uniqueness across key versions, key outage denial, complete plaintext inventory/backup caveat |
+| P7, deletion and data jobs | Owner deletion, ledger/status receipt, key destroy/cleanup workers, export delivery and restore runbook | Durable denial before accepted response; multi-worker refresh/delete race; partial destruction/lost worker resumes; pre-delete snapshot restore cannot resurrect; other accounts preserved |
+| P8, device risk and availability | First-party coarse observations, explainable step-up rules, edge WAF/admission/dependency budgets, load/cost measurements | Separate process quotas/failover; false-positive/mobile/VPN/accessibility trials; mail and hash-cost ceiling; no fingerprint-only decision; optional filter benchmark only if justified |
+| P9, release | License/SBOM/disclosure/support policy, operator/self-host docs, migration/restore drills, independent review | Clean install plus upgrade, secret rotation evidence, all release scenarios, supported deployment profiles and explicit limitations |
+
+Each PR updates routes, typed configuration, UI states, tests, migration and its owned docs together. Initial P0 is a bounded technical proof, not permission to start the whole platform. Document a failed engine capability honestly and revise only that adapter boundary.
+
+## 4. Release checkpoints
+
+| Checkpoint | Enabled behavior | Still withheld |
+|---|---|---|
+| Internal verified signup | P0-P2 complete; staff/test mail domains under real budgets | Public signup marketing; unsupported migration/erasure promises |
+| Multi-account preview | P3-P5 complete plus current abuse controls | Cryptographic deletion until P6/P7 pass |
+| Data lifecycle preview | Key backend and restore tests pass, ownership dashboard usable | Erasure labels for unsupported self-host profiles |
+| Public V2 | P0-P9 acceptance complete, operator budgets and recovery custody ratified | Unimplemented passkeys, dynamic developer registration, unsupported compliance claims |
+
+Never ship a Delete account action that pretends key destruction is implemented. During preview clearly label data features unavailable rather than rendering fake controls. Existing data APIs and consumer paths remain compatible through phased opt-in.
+
+## 5. Migration and rollback discipline
+
+1. Freeze target SHA, audit actual deployed config, verification provenance, client metadata and duplicate identities. No production data in development.
+2. Add schemas/indexes and compatible readers before writers. Dry-run collision/ambiguity report; no automatic merge or role promotion. Test stopped/restarted batch checkpoints.
+3. Enable new writes for a controlled cohort. Keep global security invariants enabled; slice rollout controls cannot bypass OTP/MFA/denial. Record schema/policy versions.
+4. Observe request/error/queue/cost/risk metrics and owner reports. Roll back a cohort's optional behavior only through a compatible reader. Keep already-created accounts and monotonic revoked versions valid/denied as appropriate.
+5. Key deletion, consumed proofs, revoked grants and tombstones are forward-only. Rolling back code never restores destroyed keys, unconsumes secrets or reactivates deleted accounts. Restore only in quarantine with independent ledger replay.
+6. Publish new consumer expectations only when actual fixtures prove compatibility. Do not change issuer/client IDs/subjects or secret custody in an unrelated migration.
+
+## 6. Acceptance categories
+
+| Category | Mandatory adversarial scenarios |
 |---|---|
-| Enrollment | Wrong/expired/replayed OTP, resend, mailbox flooding, duplicate email/username, concurrent finalization, queued delivery failure, no secret logging |
-| Accounts | Add two accounts, remove one, expire one, revoke remotely, chooser CSRF/fixation/ID guessing, tab A vs tab B selection races |
-| OAuth/OIDC | PKCE/state/nonce binding, all prompt values and invalid combinations, max_age, consent expansion/revocation, code replay, refresh replay, incorrect audience/client |
-| Administration | App vs platform isolation, mandatory MFA enrollment and freshness, social-login bypass, bearer/cookie bypass, backup-code replay, promotion/demotion, plugin admin routes |
-| Privacy | Owner vs another subject, chosen username vs email label, server-side projections, scope filtering, exports, admin logs, no account-list CORS/cache leakage |
-| Data lifecycle | Encryption migration, old/new key versions, wrong AAD, nonce misuse prevention, key outage, decrypt after tombstone, key-cache purge, delayed destruction, recovery from worker crash |
-| Deletion | Concurrent refresh/code exchange, lost worker, partial key failure, repeated requests, unrelated account survival, username/email reuse, third-party residual data disclosure |
-| Resilience | Real Mongo replica-set transactions, real disposable Redis, cold starts, multiple processes, quota-store loss, queue backlog, mail cost ceiling, timeout and load shedding |
-| Release | Dependency and license audit, vulnerability reporting route, fresh secrets, clean install, migrations, recovery drills, no unsupported security/conformance claims |
+| Enrollment | Wrong/expired/replayed/superseded codes, concurrent tries/finalization, address normalization collisions, username race, direct engine bypass, provider failure |
+| Accounts | Add A/B, tab A vs B, expiry and remote revoke, chooser CSRF/fixation/entry guessing, context cache leakage, session cap |
+| Protocol | Code/state/nonce/PKCE substitution, prompt combinations/max_age, scopes/consent changes, all client dimensions, replay and disabled policy |
+| MFA/admin | Genuine enrollment and challenge, backup/TOTP replay, stale step-up, app/platform boundaries, promotion/recovery and plugin bypass |
+| Privacy | Foreign profile/session/grant/export/deletion IDs, hidden email in JSON/search/log/export, optional claim refusal and username/local-part collision |
+| Data | Key/AAD version mismatch, every protected writer, unknown key/outage, plaintext residuals and index rotation uniqueness |
+| Deletion | Token issuance race, unrelated account survival, lost lease/worker, delayed key deletion, pre-deletion snapshot restore, consumer residual boundary |
+| Availability | Real Redis/Mongo fallback/failover, separate workers, bounded hashing/mail/queues, forged IP/fingerprint, edge origin bypass, load shedding |
+| Release | Fresh install/upgrade, secret and dependency provenance, disclosure route, operator recovery, self-host key profile limitations |
 
-Bloom filters are deferred until measurements justify them. Require an explicit design
-for sizing, false-positive rate, rebuild/versioning, saturation, invalidation, and
-safe storage fallback. A filter must never override an authorization result.
+## 7. Evidence format
 
-## Evidence format
+Record source SHA, worktree status, commands, fixture/service versions, pass/fail/blocked/skipped counts and category: source inspection, mock, in-process app instance, separate worker, real browser/network/provider/key service/restore. Tests with two Hono instances in one process must not be called separate-worker evidence.
 
-Each verification records commit SHA, clean/dirty worktree, exact commands, infrastructure
-versions, observed counts, failures, skipped and blocked scenarios. Separate source
-inspection, mocked function probes, real service integration, browser tests, and live
-deployment evidence. Docs-only changes run documentation/integration/link checks;
-they do not imply all security suites ran.
+Docs-only changes run link/contract/documentation checks and diagram validation. Runtime suites are evidence only for the exact runtime SHA where they ran. V2 checklist entries remain unchecked until the corresponding behavior and migration pass, not because the documents exist.
