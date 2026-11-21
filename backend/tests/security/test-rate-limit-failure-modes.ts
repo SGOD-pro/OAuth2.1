@@ -172,9 +172,9 @@ await runTest("RATE-3: Redis failure + Mongo failure -> Auth endpoint FAILS CLOS
     return c.json({ status: "authenticated" }, 200);
   });
 
-  // Two-worker regression: simulate two independent worker instances under store outage
-  // In serverless / multi-process architectures, in-process limiters allow N * limit requests.
-  // Immediate fail-closed ensures neither worker permits any requests.
+  // Dual-app regression: simulate two independent Hono app instances within one process under store outage
+  // In serverless / multi-instance architectures, in-process limiters allow N * limit requests.
+  // Immediate fail-closed ensures neither app instance permits any requests.
   const worker1App = new Hono();
   worker1App.use(
     "/auth-worker",
@@ -235,22 +235,22 @@ await runTest("RATE-3: Redis failure + Mongo failure -> Auth endpoint FAILS CLOS
     const authData = await authRes.json();
     assert.equal(authData.error, "too_many_requests");
 
-    // 2. Two-Worker Regression: neither Worker 1 nor Worker 2 executes protected handler
+    // 2. Dual-App Regression: neither app instance 1 nor app instance 2 executes protected handler
     for (let i = 0; i < 3; i++) {
       const w1Res = await worker1App.request("/auth-worker", {
         method: "POST",
         headers: getTestHeaders(`10.42.3.${10 + i}`),
       });
-      assert.equal(w1Res.status, 429, "Worker 1 must immediately deny auth request under store failure");
+      assert.equal(w1Res.status, 429, "App instance 1 must immediately deny auth request under store failure");
 
       const w2Res = await worker2App.request("/auth-worker", {
         method: "POST",
         headers: getTestHeaders(`10.42.3.${20 + i}`),
       });
-      assert.equal(w2Res.status, 429, "Worker 2 must immediately deny auth request under store failure");
+      assert.equal(w2Res.status, 429, "App instance 2 must immediately deny auth request under store failure");
     }
-    assert.equal(worker1HandlerExecutions, 0, "Worker 1 protected handler execution count must be 0");
-    assert.equal(worker2HandlerExecutions, 0, "Worker 2 protected handler execution count must be 0");
+    assert.equal(worker1HandlerExecutions, 0, "App instance 1 protected handler execution count must be 0");
+    assert.equal(worker2HandlerExecutions, 0, "App instance 2 protected handler execution count must be 0");
 
     // 3. Preserve Bounded Public-Endpoint Fallback:
     // Public endpoint engages emergency limiter: requests 1..limit allowed (200), request limit+1 blocked (429)
