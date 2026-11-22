@@ -131,6 +131,20 @@ describe("OAuth V2 P1a: Client Policy Classification & Read-Only Inventory", () 
     assert.equal(res.accessPolicy, "private");
   });
 
+  it("allows loopback redirect URIs for production native clients without isDev", () => {
+    const doc = {
+      clientId: "native-client",
+      application_type: "native",
+      isDev: false,
+      isPublic: true,
+      redirectUris: ["http://127.0.0.1:8080/callback", "http://localhost/callback"],
+    };
+    const res = resolveClientPolicy(doc);
+    assert.equal(res.isAmbiguous, false);
+    assert.equal(res.clientType, "public");
+    assert.equal(res.reasonCodes.length, 0);
+  });
+
   it("flags CONFLICTING_ACCESS_FLAGS when isPublic and is_public contradict", () => {
     const doc = {
       clientId: "conflict-access",

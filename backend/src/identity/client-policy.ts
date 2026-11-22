@@ -66,7 +66,7 @@ function isLoopbackHostname(hostname: string): boolean {
   return clean === "localhost" || clean === "127.0.0.1" || clean === "::1" || clean.endsWith(".localhost");
 }
 
-function validateRedirectUriSyntax(uri: string, isDev: boolean): string | null {
+function validateRedirectUriSyntax(uri: string, isDev: boolean, isNative = false): string | null {
   if (!uri || typeof uri !== "string" || uri.trim() === "") return "Redirect URI must be a non-empty string";
   if (uri.includes("#")) return `URI contains fragment component: ${uri}`;
   if (uri.includes("*")) return `URI contains wildcard component: ${uri}`;
@@ -86,7 +86,7 @@ function validateRedirectUriSyntax(uri: string, isDev: boolean): string | null {
 
   if (parsed.protocol === "http:") {
     const isLoopback = isLoopbackHostname(parsed.hostname);
-    if (!isDev || !isLoopback) {
+    if ((!isDev && !isNative) || !isLoopback) {
       return `Insecure HTTP redirect URI forbidden for non-loopback or production client: ${uri}`;
     }
   }
@@ -130,6 +130,8 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
   }
 
   const isDev = Boolean(clientDoc.isDev ?? clientDoc.is_dev);
+  const appType = clientDoc.application_type || clientDoc.applicationType;
+  const isNative = appType === "native";
   const rawUris = clientDoc.redirectUris || clientDoc.redirect_uris;
   const redirectUris = Array.isArray(rawUris) ? rawUris : [];
 
@@ -138,7 +140,7 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
     reasons.push("Client has no registered redirect URIs");
   } else {
     for (const uri of redirectUris) {
-      const err = validateRedirectUriSyntax(uri, isDev);
+      const err = validateRedirectUriSyntax(uri, isDev, isNative);
       if (err) {
         reasonCodes.push("INVALID_REDIRECT_URI");
         reasons.push(err);
@@ -148,7 +150,6 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
 
   const rawSecret = clientDoc.clientSecret ?? clientDoc.client_secret;
   const hasSecret = typeof rawSecret === "string" && rawSecret.trim().length > 0;
-  const appType = clientDoc.application_type || clientDoc.applicationType;
   const authMethod = clientDoc.token_endpoint_auth_method || clientDoc.metadata?.token_endpoint_auth_method;
 
   if (appType === "native" && hasSecret) {

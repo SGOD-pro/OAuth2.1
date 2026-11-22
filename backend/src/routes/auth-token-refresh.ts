@@ -17,6 +17,13 @@ import {
     validatePostRefreshEligibility,
 } from "./auth-token-refresh-validate";
 
+async function releaseRotationLock(database: any, activeTokenHash: string, clientId: string): Promise<void> {
+    await database.collection("oauth_token_families").updateOne(
+        { activeTokenHash, clientId, rotating: true },
+        { $set: { rotating: false } }
+    ).catch(() => {});
+}
+
 /**
  * Handle refresh_token grant exchange.
  * Enforces atomic rotation locks, replay detection, eligibility gates,
@@ -83,6 +90,7 @@ export async function handleRefreshTokenGrant(
             preRefreshTokenVersion
         );
         if (!preCheck.valid && preCheck.errorResponse) {
+            await releaseRotationLock(database, incomingHash, canonicalClientId);
             return c.json(
                 {
                     error: preCheck.errorResponse.error,
@@ -97,10 +105,7 @@ export async function handleRefreshTokenGrant(
     try {
         res = await authProvider.handler(reqToForward);
     } catch (handlerErr) {
-        await database.collection("oauth_token_families").updateOne(
-            { activeTokenHash: incomingHash, clientId: canonicalClientId, rotating: true },
-            { $set: { rotating: false } }
-        ).catch(() => {});
+        await releaseRotationLock(database, incomingHash, canonicalClientId);
         throw handlerErr;
     }
 
@@ -121,6 +126,7 @@ export async function handleRefreshTokenGrant(
                     preRefreshTokenVersion
                 );
                 if (!postCheck.valid && postCheck.errorResponse) {
+                    await releaseRotationLock(database, incomingHash, canonicalClientId);
                     return c.json(
                         {
                             error: postCheck.errorResponse.error,
@@ -269,5 +275,6 @@ export async function handleRefreshTokenGrant(
         }
     }
 
+    await releaseRotationLock(database, incomingHash, canonicalClientId);
     return res;
 }

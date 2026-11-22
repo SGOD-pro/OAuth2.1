@@ -11,7 +11,7 @@
 
 import { MongoClient, Db } from "mongodb";
 import dotenv from "dotenv";
-import { auditClientPolicies, ClientAuditSummary } from "../src/identity/client-policy.js";
+import { auditClientPolicies, ClientAuditSummary } from "../src/identity/client-policy";
 
 dotenv.config({ path: ".env" });
 
