@@ -265,6 +265,66 @@ Better Auth's OAuth provider plugin stores client definitions in collection `oau
   - Platform super admins manage the identity provider and hold no ambient access to consumer application tenant data.
   - In `checkUserHasAppAccess` (`backend/src/utils/app-access.ts:83-87`), if `user.role === "super-admin"`, access is denied (`return false`) unconditionally for consumer applications, even if a row exists in `user_app_registrations` or `app_admins`. Platform super admins must never access private consumer tenant applications.
 
+### Administrative interface specification (Slice P1c)
+
+Slice P1c delivers the frontend user experience for independent client dimensions in the administrative console, updating `RegisterAppModal.tsx`, `EditAppModal.tsx`, and `AdminClients.tsx`.
+
+#### 1. Three independent controls
+
+The interface separates client policy into three distinct controls:
+- **Client authentication type**: Radio or dropdown selecting `Confidential` (server application holding a secret) or `Public` (single page or native application using PKCE S256 without a secret).
+- **User access policy**: Radio or dropdown selecting `Private` (enterprise application restricted to assigned tenant members) or `Open` (accessible to any authenticated platform user without manual assignment).
+- **Development callbacks**: Toggle selecting `Production` (strict HTTPS required) or `Development` (allows loopback callbacks on `localhost`, `127.0.0.1`, `[::1]`).
+
+#### 2. Register App modal behavior
+
+- **Creation defaults**:
+  - Client authentication type defaults to `Confidential`.
+  - User access policy defaults to `Private` (fail closed security baseline).
+  - Development callbacks default to `Production` (`isDev: false`).
+- **Credential provisioning**:
+  - When `Confidential` is selected, the modal explains that a cryptographically secure client secret will be generated and shown once upon submission.
+  - When `Public` is selected, the secret section is hidden, and an informative note explains that public clients use PKCE S256 on authorization code exchange and do not possess a secret.
+- **Validation and save states**:
+  - The submit action is disabled while required fields (`name`, at least one redirect URI) are missing.
+  - Redirect URIs are validated on blur. In production mode, insecure HTTP or loopback URIs display an inline error.
+  - In production IdP deployments, toggling Development mode requires verified super admin authority and displays an alert indicating local testing status.
+
+#### 3. Edit App modal behavior
+
+- **Displaying legacy records**:
+  - Client records that lack explicit `clientType` or `accessPolicy` fields display a neutral status badge labeled `Legacy Compatible`, showing their inferred classification.
+- **Resolving ambiguous records**:
+  - When a client record contains conflicting flags, missing access metadata, or invalid URIs, the edit modal displays a prominent amber warning banner: `Ambiguous configuration requiring administrative review`.
+  - The banner lists the active safe reason codes (for example, missing access metadata or conflicting dev flags).
+  - Operators resolve the ambiguity by explicitly selecting a Client Authentication Type and User Access Policy.
+  - Saving the updated client persists explicit `clientType` and `accessPolicy` fields, which advances the record status to `Migrated` and clears all ambiguity reason codes.
+- **Handling credential and policy transitions**:
+  - Transition from `Confidential` to `Public`: The modal displays a critical confirmation alert explaining that the existing client secret will be revoked and deleted, and that consumer software must supply PKCE S256 verifiers. The operator must confirm the change before saving.
+  - Transition from `Public` to `Confidential`: The modal prompts the operator to generate a fresh client secret upon saving.
+  - Transition from `Private` to `Open`: The modal warns that tenant membership requirements will no longer be enforced once the open access gate is activated.
+- **Role based permission enforcement**:
+  - App Admins (who only possess scoped authority for a single client) see client policy dimensions as disabled or read only display values.
+  - Only Platform Super Admins can alter `clientType`, `accessPolicy`, or `isDev`. Any attempted modification by non super admins is rejected by the backend with HTTP 403 Forbidden.
+
+#### 4. Client list page behavior (AdminClients.tsx)
+
+- The clients table displays three distinct visual pills for each application:
+  - Client Type pill: `Confidential` or `Public`.
+  - Access Policy pill: `Private` or `Open`.
+  - Environment pill: `Production` or `Development`.
+- Ambiguous records display an amber warning pill labeled `Ambiguous` in the status column, allowing operators to filter and remediate unmigrated clients quickly.
+- The client list remains restricted exclusively to platform super admins (`GET /api/admin/clients`).
+
+#### 5. Browser acceptance checks (Slice P1c)
+
+- **BAC-P1C-01 (Register clean Open Public client):** Super admin opens Register App, chooses Public and Open, enters HTTPS redirect URI. Submits form. Client is created with `clientType: "public"`, `accessPolicy: "open"`, no secret is displayed or persisted, and client list displays Open Public pills.
+- **BAC-P1C-02 (Register clean Private Confidential client):** Super admin opens Register App, chooses Confidential and Private, enters HTTPS redirect URI. Submits form. Modal displays newly generated client secret with copy shortcut, client document has `clientType: "confidential"`, `accessPolicy: "private"`, and client list displays Private Confidential pills.
+- **BAC-P1C-03 (Register clean Open Confidential client):** Super admin opens Register App, chooses Confidential and Open. Form validates, secret is generated once, document has `clientType: "confidential"`, `accessPolicy: "open"`.
+- **BAC-P1C-04 (Register clean Private Public client):** Super admin opens Register App, chooses Public and Private. Form validates, no secret is generated, document has `clientType: "public"`, `accessPolicy: "private"`.
+- **BAC-P1C-05 (Remediate Ambiguous legacy client):** Super admin navigates to client list, locates an ambiguous client with amber badge, clicks Edit. Modal shows ambiguity reason codes. Super admin selects explicit Public and Open options and saves. Client list refreshes; ambiguous badge disappears and status updates to Migrated.
+- **BAC-P1C-06 (Unauthorized policy edit rejection):** A scoped App Admin navigates to their assigned application in the console. Policy selectors (`clientType`, `accessPolicy`, `isDev`) are disabled or read only. If the user attempts to send policy fields via direct HTTP PATCH, backend returns HTTP 403 Forbidden and the stored policy remains unchanged.
+
 ### API and interface surface
 
 | Endpoint or Surface | Method | Key inputs | Key outputs | Auth | Key errors |

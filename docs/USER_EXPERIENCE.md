@@ -91,7 +91,7 @@ Deletion confirmation displays the chosen username, app connections that will lo
 
 ## 6. Administrative page changes
 
-Register/Edit app exposes three separate controls: Client authentication type, User access policy, and Development callbacks. Explain each in plain language and protect edits by super-admin authority. Show no public-app user allowlist requirement. Preserve private invitations/members and app-admin assignment UI.
+Register/Edit app exposes three separate controls: Client authentication type, User access policy, and Development callbacks. Explain each in plain language and protect edits by super-admin authority. Show no public-app user allowlist requirement. Preserve private invitations/members and app-admin assignment UI. See the [P1c administrative interface specification](specs/0008-multi-account-identity-platform/0008-p1-client-policy-migration.md#administrative-interface-specification-slice-p1c) for exact control behaviors, creation defaults, ambiguous record resolution, credential transition alerts, and browser acceptance checks BAC-P1C-01 through BAC-P1C-06.
 
 User lists, logs, exports and search results use `{ accountId, username/displayLabel, status, role }`. Do not ship full email then hide it in JSX. Admin search uses username/opaque ID; raw email lookup for delivery is backend-only and separately authorized. Labels from the email local part are not unique; administrative actions target IDs. Admins receive no default decrypt/export-as-user operation.
 

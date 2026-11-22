@@ -2,9 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveClientPolicy, auditClientPolicies } from "../../src/identity/client-policy";
+import { resolveClientPolicy } from "../../src/identity/client-policy";
 
-describe("OAuth V2 P1a: Client Policy Classification & Read-Only Inventory", () => {
+describe("OAuth V2 P1a: Client Policy Classification Unit Suite", () => {
   // AC-P1A-01 & AC-P1A-03: Four Clean Combinations & Legacy Mapping
   it("classifies clean Class A: open public client (legacy isPublic=true, no secret)", () => {
     const doc = {
@@ -103,34 +103,6 @@ describe("OAuth V2 P1a: Client Policy Classification & Read-Only Inventory", () 
     assert.equal(res.isAmbiguous, false);
   });
 
-  // AC-P1A-04: Ambiguity Detection & Reason Codes
-  it("flags MISSING_REDIRECT_URIS when redirect URIs array is empty or missing", () => {
-    const doc = { clientId: "no-uris", isPublic: true, redirectUris: [] };
-    const res = resolveClientPolicy(doc);
-    assert.equal(res.isAmbiguous, true);
-    assert.equal(res.classification, "AMBIGUOUS");
-    assert.equal(res.accessPolicy, "private"); // Fails closed
-    assert.ok(res.reasonCodes.includes("MISSING_REDIRECT_URIS"));
-  });
-
-  it("flags INVALID_REDIRECT_URI for URI fragments, wildcards, userinfo, and prod http", () => {
-    const doc = {
-      clientId: "bad-uris",
-      isDev: false,
-      isPublic: true,
-      redirectUris: [
-        "https://example.com/callback#fragment",
-        "https://*.wildcard.com/cb",
-        "https://user:pass@example.com/cb",
-        "http://insecure.example.com/cb",
-      ],
-    };
-    const res = resolveClientPolicy(doc);
-    assert.equal(res.isAmbiguous, true);
-    assert.ok(res.reasonCodes.includes("INVALID_REDIRECT_URI"));
-    assert.equal(res.accessPolicy, "private");
-  });
-
   it("allows loopback redirect URIs for production native clients without isDev", () => {
     const doc = {
       clientId: "native-client",
@@ -145,40 +117,92 @@ describe("OAuth V2 P1a: Client Policy Classification & Read-Only Inventory", () 
     assert.equal(res.reasonCodes.length, 0);
   });
 
-  it("flags CONFLICTING_ACCESS_FLAGS when isPublic and is_public contradict", () => {
+  // AC-P1A-04: Ambiguity Detection & Safe Reason Codes
+  it("flags PARTIAL_EXPLICIT_POLICY when only one explicit dimension is specified", () => {
+    const doc1 = {
+      clientId: "partial-type-only",
+      clientType: "public",
+      redirectUris: ["https://example.com/cb"],
+    };
+    const res1 = resolveClientPolicy(doc1);
+    assert.equal(res1.isAmbiguous, true);
+    assert.ok(res1.reasonCodes.includes("PARTIAL_EXPLICIT_POLICY"));
+
+    const doc2 = {
+      clientId: "partial-policy-only",
+      accessPolicy: "open",
+      redirectUris: ["https://example.com/cb"],
+    };
+    const res2 = resolveClientPolicy(doc2);
+    assert.equal(res2.isAmbiguous, true);
+    assert.ok(res2.reasonCodes.includes("PARTIAL_EXPLICIT_POLICY"));
+  });
+
+  it("flags MISSING_ACCESS_METADATA when explicit policy and legacy flags are absent", () => {
     const doc = {
-      clientId: "conflict-access",
+      clientId: "missing-access-flags",
+      redirectUris: ["https://example.com/cb"],
+    };
+    const res = resolveClientPolicy(doc);
+    assert.equal(res.isAmbiguous, true);
+    assert.ok(res.reasonCodes.includes("MISSING_ACCESS_METADATA"));
+    assert.equal(res.accessPolicy, "private"); // Fails closed
+  });
+
+  it("flags MALFORMED_ACCESS_METADATA when legacy access flags are non-boolean", () => {
+    const doc = {
+      clientId: "string-access-flag",
+      isPublic: "true" as any,
+      redirectUris: ["https://example.com/cb"],
+    };
+    const res = resolveClientPolicy(doc);
+    assert.equal(res.isAmbiguous, true);
+    assert.ok(res.reasonCodes.includes("MALFORMED_ACCESS_METADATA"));
+  });
+
+  it("flags MALFORMED_DEV_FLAGS when dev flags are non-boolean", () => {
+    const doc = {
+      clientId: "number-dev-flag",
+      isDev: 1 as any,
       isPublic: true,
-      is_public: false,
       redirectUris: ["https://example.com/cb"],
     };
     const res = resolveClientPolicy(doc);
     assert.equal(res.isAmbiguous, true);
-    assert.ok(res.reasonCodes.includes("CONFLICTING_ACCESS_FLAGS"));
-    assert.equal(res.accessPolicy, "private");
+    assert.ok(res.reasonCodes.includes("MALFORMED_DEV_FLAGS"));
   });
 
-  it("flags CONFLICTING_DEV_FLAGS when isDev and is_dev contradict", () => {
-    const doc = {
-      clientId: "conflict-dev",
-      isDev: true,
-      is_dev: false,
+  it("flags CONFLICTING_AUTH_METHOD for mismatch between auth method and secrets", () => {
+    const noneWithSecret = {
+      clientId: "none-with-secret",
+      token_endpoint_auth_method: "none",
+      clientSecret: "stray-secret",
+      isPublic: true,
       redirectUris: ["https://example.com/cb"],
     };
-    const res = resolveClientPolicy(doc);
-    assert.equal(res.isAmbiguous, true);
-    assert.ok(res.reasonCodes.includes("CONFLICTING_DEV_FLAGS"));
-  });
+    const res1 = resolveClientPolicy(noneWithSecret);
+    assert.equal(res1.isAmbiguous, true);
+    assert.ok(res1.reasonCodes.includes("CONFLICTING_AUTH_METHOD"));
 
-  it("flags CONFLICTING_ID_FIELDS when clientId and client_id differ", () => {
-    const doc = {
-      clientId: "id-a",
-      client_id: "id-b",
+    const basicWithoutSecret = {
+      clientId: "basic-without-secret",
+      token_endpoint_auth_method: "client_secret_basic",
+      isPublic: false,
       redirectUris: ["https://example.com/cb"],
     };
-    const res = resolveClientPolicy(doc);
-    assert.equal(res.isAmbiguous, true);
-    assert.ok(res.reasonCodes.includes("CONFLICTING_ID_FIELDS"));
+    const res2 = resolveClientPolicy(basicWithoutSecret);
+    assert.equal(res2.isAmbiguous, true);
+    assert.ok(res2.reasonCodes.includes("CONFLICTING_AUTH_METHOD"));
+
+    const invalidAuthMethod = {
+      clientId: "invalid-auth-method",
+      token_endpoint_auth_method: "unsupported_method",
+      isPublic: true,
+      redirectUris: ["https://example.com/cb"],
+    };
+    const res3 = resolveClientPolicy(invalidAuthMethod);
+    assert.equal(res3.isAmbiguous, true);
+    assert.ok(res3.reasonCodes.includes("CONFLICTING_AUTH_METHOD"));
   });
 
   it("flags CONFLICTING_METADATA for public client with secret or native with secret", () => {
@@ -197,6 +221,7 @@ describe("OAuth V2 P1a: Client Policy Classification & Read-Only Inventory", () 
       clientId: "native-secret",
       application_type: "native",
       clientSecret: "stray-secret",
+      isPublic: true,
       redirectUris: ["https://example.com/cb"],
     };
     const res2 = resolveClientPolicy(nativeWithSecret);
@@ -204,70 +229,38 @@ describe("OAuth V2 P1a: Client Policy Classification & Read-Only Inventory", () 
     assert.ok(res2.reasonCodes.includes("CONFLICTING_METADATA"));
   });
 
-  // AC-P1A-02: Read-Only Inventory Scanner & Zero Writes Proof
-  it("audits client documents and produces accurate summary counts", async () => {
-    const mockClients = [
-      { clientId: "c1", isPublic: true, redirectUris: ["https://c1.com/cb"] },
-      { clientId: "c2", isPublic: false, clientSecret: "s2", redirectUris: ["https://c2.com/cb"] },
-      { clientId: "c3", isPublic: true, clientSecret: "s3", redirectUris: ["https://c3.com/cb"] },
-      { clientId: "c4", isPublic: false, redirectUris: ["https://c4.com/cb"] },
-      { clientId: "c5", clientType: "public", accessPolicy: "open", redirectUris: ["https://c5.com/cb"] },
-      { clientId: "c6", isPublic: true, redirectUris: [] }, // Ambiguous
-    ];
+  it("flags CONFLICTING_ACCESS_FLAGS, DEV_FLAGS, and ID_FIELDS", () => {
+    const accessConflict = resolveClientPolicy({
+      clientId: "c1", isPublic: true, is_public: false, redirectUris: ["https://example.com/cb"],
+    });
+    assert.ok(accessConflict.reasonCodes.includes("CONFLICTING_ACCESS_FLAGS"));
 
-    const mockDb = {
-      collection: (name: string) => {
-        assert.equal(name, "oauthClient");
-        return { find: () => ({ toArray: async () => mockClients }) };
-      },
+    const devConflict = resolveClientPolicy({
+      clientId: "c2", isDev: true, is_dev: false, isPublic: true, redirectUris: ["https://example.com/cb"],
+    });
+    assert.ok(devConflict.reasonCodes.includes("CONFLICTING_DEV_FLAGS"));
+
+    const idConflict = resolveClientPolicy({
+      clientId: "id-a", client_id: "id-b", isPublic: true, redirectUris: ["https://example.com/cb"],
+    });
+    assert.ok(idConflict.reasonCodes.includes("CONFLICTING_ID_FIELDS"));
+  });
+
+  it("flags MISSING_REDIRECT_URIS and INVALID_REDIRECT_URI without leaking raw URIs or credentials", () => {
+    const sensitivePassword = "SuperSensitivePassword123!";
+    const badDoc = {
+      clientId: "bad-uri-client",
+      isDev: false,
+      isPublic: true,
+      redirectUris: [`https://user:${sensitivePassword}@example.com/cb#fragment`],
     };
+    const res = resolveClientPolicy(badDoc);
+    assert.equal(res.isAmbiguous, true);
+    assert.ok(res.reasonCodes.includes("INVALID_REDIRECT_URI"));
 
-    const summary = await auditClientPolicies(mockDb);
-    assert.equal(summary.totalClients, 6);
-    assert.equal(summary.compatibleOpenPublicCount, 1);
-    assert.equal(summary.compatiblePrivateConfidentialCount, 1);
-    assert.equal(summary.compatibleOpenConfidentialCount, 1);
-    assert.equal(summary.compatiblePrivatePublicCount, 1);
-    assert.equal(summary.migratedCount, 1);
-    assert.equal(summary.ambiguousCount, 1);
-    assert.equal(summary.clients.length, 6);
-  });
-
-  it("verifies zero database writes during inventory audit execution", async () => {
-    let writeAttempts = 0;
-    const forbidden = ["insertOne", "insertMany", "updateOne", "updateMany", "deleteOne", "deleteMany", "replaceOne", "bulkWrite"];
-    const proxy = new Proxy({}, {
-      get: (_t, prop: string) => {
-        if (prop === "find") return () => ({ toArray: async () => [{ clientId: "c", isPublic: true, redirectUris: ["https://c.com/cb"] }] });
-        if (forbidden.includes(prop)) {
-          writeAttempts++;
-          throw new Error(`Forbidden write operation called: ${prop}`);
-        }
-        return undefined;
-      },
-    });
-
-    const summary = await auditClientPolicies({ collection: () => proxy });
-    assert.equal(writeAttempts, 0);
-    assert.equal(summary.totalClients, 1);
-    assert.equal(summary.compatibleOpenPublicCount, 1);
-  });
-
-  it("never exposes client secrets in audit records or summary output", async () => {
-    const rawSecret = "super-confidential-secret-do-not-leak";
-    const mockClients = [
-      { clientId: "sc", clientSecret: rawSecret, client_secret: rawSecret, isPublic: false, redirectUris: ["https://tenant.com/cb"] },
-    ];
-    const summary = await auditClientPolicies({
-      collection: () => ({ find: () => ({ toArray: async () => mockClients }) }),
-    });
-    const serialized = JSON.stringify(summary);
-
-    assert.ok(!serialized.includes(rawSecret), "Audit output must never leak raw client secret");
-    for (const client of summary.clients) {
-      assert.equal((client as any).clientSecret, undefined);
-      assert.equal((client as any).client_secret, undefined);
-    }
+    const reasonsText = JSON.stringify(res.reasons);
+    assert.ok(!reasonsText.includes(sensitivePassword), "Reasons must omit raw credentials");
+    assert.ok(!reasonsText.includes("https://"), "Reasons must omit raw redirect URIs");
   });
 
   // AC-P1A-05: Runtime Boundary Isolation

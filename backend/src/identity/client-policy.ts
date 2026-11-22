@@ -5,61 +5,17 @@
  * Enforces legacy mapping rules, ambiguity reason codes, and zero write audit.
  */
 
-export type ClientType = "public" | "confidential";
-export type AccessPolicy = "open" | "private";
+import type {
+  ClientType,
+  AccessPolicy,
+  ClientClassification,
+  AmbiguityReasonCode,
+  ResolvedClientPolicy,
+  ClientAuditRecord,
+  ClientAuditSummary,
+} from "./client-policy-types";
 
-export type ClientClassification =
-  | "MIGRATED"
-  | "COMPATIBLE_OPEN_PUBLIC"
-  | "COMPATIBLE_PRIVATE_CONFIDENTIAL"
-  | "COMPATIBLE_OPEN_CONFIDENTIAL"
-  | "COMPATIBLE_PRIVATE_PUBLIC"
-  | "AMBIGUOUS";
-
-export type AmbiguityReasonCode =
-  | "MISSING_REDIRECT_URIS"
-  | "INVALID_REDIRECT_URI"
-  | "CONFLICTING_ACCESS_FLAGS"
-  | "CONFLICTING_DEV_FLAGS"
-  | "CONFLICTING_ID_FIELDS"
-  | "CONFLICTING_METADATA"
-  | "UNCERTAIN_AUTHENTICATION_TYPE";
-
-export interface ResolvedClientPolicy {
-  clientType: ClientType;
-  accessPolicy: AccessPolicy;
-  isDev: boolean;
-  classification: ClientClassification;
-  isExplicit: boolean;
-  isAmbiguous: boolean;
-  reasonCodes: AmbiguityReasonCode[];
-  reasons: string[];
-}
-
-export interface ClientAuditRecord {
-  id: string;
-  clientId: string;
-  name: string;
-  classification: ClientClassification;
-  resolvedClientType?: ClientType;
-  resolvedAccessPolicy?: AccessPolicy;
-  isDev: boolean;
-  isAmbiguous: boolean;
-  reasonCodes: AmbiguityReasonCode[];
-  reasons: string[];
-}
-
-export interface ClientAuditSummary {
-  totalClients: number;
-  migratedCount: number;
-  compatibleOpenPublicCount: number;
-  compatiblePrivateConfidentialCount: number;
-  compatibleOpenConfidentialCount: number;
-  compatiblePrivatePublicCount: number;
-  ambiguousCount: number;
-  clients: ClientAuditRecord[];
-  timestamp: string;
-}
+export * from "./client-policy-types";
 
 function isLoopbackHostname(hostname: string): boolean {
   const clean = hostname.toLowerCase().replace(/^\[|\]$/g, "");
@@ -67,27 +23,27 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 function validateRedirectUriSyntax(uri: string, isDev: boolean, isNative = false): string | null {
-  if (!uri || typeof uri !== "string" || uri.trim() === "") return "Redirect URI must be a non-empty string";
-  if (uri.includes("#")) return `URI contains fragment component: ${uri}`;
-  if (uri.includes("*")) return `URI contains wildcard component: ${uri}`;
+  if (!uri || typeof uri !== "string" || uri.trim() === "") return "Redirect URI must be a non empty string";
+  if (uri.includes("#")) return "URI contains fragment component";
+  if (uri.includes("*")) return "URI contains wildcard component";
 
   let parsed: URL;
   try {
     parsed = new URL(uri.trim());
   } catch {
-    return `Malformed URL syntax: ${uri}`;
+    return "Malformed URL syntax";
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return `Unsupported scheme '${parsed.protocol}' in URI: ${uri}`;
+    return "Unsupported scheme in redirect URI";
   }
-  if (parsed.username || parsed.password) return `URI contains userinfo credentials: ${uri}`;
-  if (!parsed.hostname) return `URI missing hostname: ${uri}`;
+  if (parsed.username || parsed.password) return "URI contains userinfo credentials";
+  if (!parsed.hostname) return "URI missing hostname";
 
   if (parsed.protocol === "http:") {
     const isLoopback = isLoopbackHostname(parsed.hostname);
     if ((!isDev && !isNative) || !isLoopback) {
-      return `Insecure HTTP redirect URI forbidden for non-loopback or production client: ${uri}`;
+      return "Insecure HTTP redirect URI forbidden for non loopback or production client";
     }
   }
 
@@ -108,25 +64,72 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
     rawClientId.trim() !== rawSnakeClientId.trim()
   ) {
     reasonCodes.push("CONFLICTING_ID_FIELDS");
-    reasons.push(`Conflicting clientId ('${rawClientId}') and client_id ('${rawSnakeClientId}')`);
+    reasons.push("Conflicting clientId and client_id identifier fields");
   }
 
-  if (
-    typeof clientDoc.isPublic === "boolean" &&
-    typeof clientDoc.is_public === "boolean" &&
-    clientDoc.isPublic !== clientDoc.is_public
-  ) {
-    reasonCodes.push("CONFLICTING_ACCESS_FLAGS");
-    reasons.push(`Conflicting isPublic (${clientDoc.isPublic}) and is_public (${clientDoc.is_public})`);
+  const hasCamelDev = clientDoc.isDev !== undefined;
+  const hasSnakeDev = clientDoc.is_dev !== undefined;
+  if (hasCamelDev && typeof clientDoc.isDev !== "boolean") {
+    reasonCodes.push("MALFORMED_DEV_FLAGS");
+    reasons.push("isDev flag must be a boolean");
   }
-
+  if (hasSnakeDev && typeof clientDoc.is_dev !== "boolean") {
+    reasonCodes.push("MALFORMED_DEV_FLAGS");
+    reasons.push("is_dev flag must be a boolean");
+  }
   if (
     typeof clientDoc.isDev === "boolean" &&
     typeof clientDoc.is_dev === "boolean" &&
     clientDoc.isDev !== clientDoc.is_dev
   ) {
     reasonCodes.push("CONFLICTING_DEV_FLAGS");
-    reasons.push(`Conflicting isDev (${clientDoc.isDev}) and is_dev (${clientDoc.is_dev})`);
+    reasons.push("Conflicting isDev and is_dev boolean flags");
+  }
+
+  const hasCamelPublic = clientDoc.isPublic !== undefined;
+  const hasSnakePublic = clientDoc.is_public !== undefined;
+  if (hasCamelPublic && typeof clientDoc.isPublic !== "boolean") {
+    reasonCodes.push("MALFORMED_ACCESS_METADATA");
+    reasons.push("isPublic flag must be a boolean");
+  }
+  if (hasSnakePublic && typeof clientDoc.is_public !== "boolean") {
+    reasonCodes.push("MALFORMED_ACCESS_METADATA");
+    reasons.push("is_public flag must be a boolean");
+  }
+  if (
+    typeof clientDoc.isPublic === "boolean" &&
+    typeof clientDoc.is_public === "boolean" &&
+    clientDoc.isPublic !== clientDoc.is_public
+  ) {
+    reasonCodes.push("CONFLICTING_ACCESS_FLAGS");
+    reasons.push("Conflicting isPublic and is_public access flags");
+  }
+
+  const explicitType = clientDoc.clientType;
+  const explicitPolicy = clientDoc.accessPolicy;
+  const hasExplicitType = explicitType !== undefined;
+  const hasExplicitPolicy = explicitPolicy !== undefined;
+
+  const isTypeValid = explicitType === "public" || explicitType === "confidential";
+  const isPolicyValid = explicitPolicy === "open" || explicitPolicy === "private";
+
+  if (hasExplicitType && !isTypeValid) {
+    reasonCodes.push("CONFLICTING_METADATA");
+    reasons.push("Invalid explicit clientType value");
+  }
+  if (hasExplicitPolicy && !isPolicyValid) {
+    reasonCodes.push("CONFLICTING_METADATA");
+    reasons.push("Invalid explicit accessPolicy value");
+  }
+
+  if (hasExplicitType !== hasExplicitPolicy) {
+    reasonCodes.push("PARTIAL_EXPLICIT_POLICY");
+    reasons.push("Partial explicit policy: clientType and accessPolicy must both be defined");
+  }
+
+  if (!hasExplicitPolicy && !hasCamelPublic && !hasSnakePublic) {
+    reasonCodes.push("MISSING_ACCESS_METADATA");
+    reasons.push("Client is missing both explicit accessPolicy and legacy access flags");
   }
 
   const isDev = Boolean(clientDoc.isDev ?? clientDoc.is_dev);
@@ -152,23 +155,23 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
   const hasSecret = typeof rawSecret === "string" && rawSecret.trim().length > 0;
   const authMethod = clientDoc.token_endpoint_auth_method || clientDoc.metadata?.token_endpoint_auth_method;
 
+  const validAuthMethods = ["none", "client_secret_basic", "client_secret_post", "client_secret_jwt", "private_key_jwt"];
+  if (authMethod !== undefined && !validAuthMethods.includes(authMethod)) {
+    reasonCodes.push("CONFLICTING_AUTH_METHOD");
+    reasons.push("Unsupported or invalid token_endpoint_auth_method value");
+  }
+  if (authMethod === "none" && hasSecret) {
+    reasonCodes.push("CONFLICTING_AUTH_METHOD");
+    reasons.push("token_endpoint_auth_method is none but a client secret is registered");
+  }
+  if ((authMethod === "client_secret_basic" || authMethod === "client_secret_post") && !hasSecret) {
+    reasonCodes.push("CONFLICTING_AUTH_METHOD");
+    reasons.push("token_endpoint_auth_method requires a secret but none is registered");
+  }
+
   if (appType === "native" && hasSecret) {
     reasonCodes.push("CONFLICTING_METADATA");
     reasons.push("Native application type registered with a client secret");
-  }
-
-  const explicitType = clientDoc.clientType;
-  const explicitPolicy = clientDoc.accessPolicy;
-  const isTypeValid = explicitType === "public" || explicitType === "confidential";
-  const isPolicyValid = explicitPolicy === "open" || explicitPolicy === "private";
-
-  if (explicitType !== undefined && !isTypeValid) {
-    reasonCodes.push("CONFLICTING_METADATA");
-    reasons.push(`Invalid clientType value: '${explicitType}'`);
-  }
-  if (explicitPolicy !== undefined && !isPolicyValid) {
-    reasonCodes.push("CONFLICTING_METADATA");
-    reasons.push(`Invalid accessPolicy value: '${explicitPolicy}'`);
   }
 
   if (isTypeValid && isPolicyValid) {
@@ -204,7 +207,7 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
     derivedClientType = "public";
   }
 
-  const legacyIsPublic = clientDoc.isPublic !== false && clientDoc.is_public !== false;
+  const legacyIsPublic = clientDoc.isPublic === true || clientDoc.is_public === true;
   const derivedAccessPolicy: AccessPolicy = legacyIsPublic ? "open" : "private";
 
   if (reasonCodes.length > 0) {
