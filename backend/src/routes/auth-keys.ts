@@ -102,7 +102,8 @@ export type TokenBarrierStage =
     | "before_issuance_commit"
     | "after_issuance_commit"
     | "before_fence_code"
-    | "before_fence_refresh";
+    | "before_fence_refresh"
+    | "after_lease_claim";
 
 let tokenBarrierHookForTesting: ((stage: TokenBarrierStage, userId?: string) => Promise<void>) | null = null;
 export function setTokenBarrierHookForTesting(hook: ((stage: TokenBarrierStage, userId?: string) => Promise<void>) | null): void {

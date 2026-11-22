@@ -52,6 +52,11 @@ export async function handleRefreshTokenGrant(
     const { existingFamily, leaseOwner } = claimResult;
 
     try {
+        const tokenBarrierHook = getTokenBarrierHookForTesting();
+        if (tokenBarrierHook) {
+            await tokenBarrierHook("after_lease_claim", leaseOwner);
+        }
+
         let preRefreshIssuedAtSec: number | undefined;
         let preRefreshIssuedAtMs: number | undefined;
         let preRefreshTokenVersion: number | undefined;
