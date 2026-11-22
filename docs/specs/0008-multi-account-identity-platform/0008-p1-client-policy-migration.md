@@ -136,7 +136,7 @@ export interface OAuthClientPolicyFields {
 When inspecting or resolving a client document from MongoDB, the policy resolver applies the following precedence:
 
 1. **Explicit V2 fields (Status: Migrated):**
-   If both `clientType` and `accessPolicy` are explicitly set on the document, the client is classified as `MIGRATED`. The explicit values are used directly.
+   If both `clientType` and `accessPolicy` are explicitly set on the document, and the client passes full validation (valid redirect URIs, matching credentials, and zero conflicting metadata), the client is classified as `MIGRATED`. If validation fails or conflicting metadata remains, it is classified as `AMBIGUOUS`. The explicit values are used directly once validated.
 
 2. **Clean Class A (Compatible Open Public Client):**
    - Explicit fields missing.
@@ -287,7 +287,7 @@ The interface separates client policy into three distinct controls:
   - When `Public` is selected, the secret section is hidden, and an informative note explains that public clients use PKCE S256 on authorization code exchange and do not possess a secret.
 - **Validation and save states**:
   - The submit action is disabled while required fields (`name`, at least one redirect URI) are missing.
-  - Redirect URIs are validated on blur. In production mode, insecure HTTP or loopback URIs display an inline error.
+  - Redirect URIs are validated on blur. In production mode (`isDev: false`), insecure HTTP redirect URIs display an inline error, with the exception of native applications (`application_type: "native"`) which permit loopback HTTP callbacks (`localhost`, `127.0.0.1`, `[::1]`) with ephemeral ports per RFC 8252.
   - In production IdP deployments, toggling Development mode requires verified super admin authority and displays an alert indicating local testing status.
 
 #### 3. Edit App modal behavior
@@ -298,7 +298,7 @@ The interface separates client policy into three distinct controls:
   - When a client record contains conflicting flags, missing access metadata, or invalid URIs, the edit modal displays a prominent amber warning banner: `Ambiguous configuration requiring administrative review`.
   - The banner lists the active safe reason codes (for example, missing access metadata or conflicting dev flags).
   - Operators resolve the ambiguity by explicitly selecting a Client Authentication Type and User Access Policy.
-  - Saving the updated client persists explicit `clientType` and `accessPolicy` fields, which advances the record status to `Migrated` and clears all ambiguity reason codes.
+  - Saving the updated client persists explicit `clientType` and `accessPolicy` fields. The client record status advances to `Migrated` only after full validation passes, including redirect URIs, credentials (confidential clients must possess a secret or asymmetric key assertion metadata; public clients must possess no secret), and zero conflicting metadata. If validation fails or conflicting flags remain, the record remains `Ambiguous` until all issues are resolved.
 - **Handling credential and policy transitions**:
   - Transition from `Confidential` to `Public`: The modal displays a critical confirmation alert explaining that the existing client secret will be revoked and deleted, and that consumer software must supply PKCE S256 verifiers. The operator must confirm the change before saving.
   - Transition from `Public` to `Confidential`: The modal prompts the operator to generate a fresh client secret upon saving.
@@ -322,7 +322,7 @@ The interface separates client policy into three distinct controls:
 - **BAC-P1C-02 (Register clean Private Confidential client):** Super admin opens Register App, chooses Confidential and Private, enters HTTPS redirect URI. Submits form. Modal displays newly generated client secret with copy shortcut, client document has `clientType: "confidential"`, `accessPolicy: "private"`, and client list displays Private Confidential pills.
 - **BAC-P1C-03 (Register clean Open Confidential client):** Super admin opens Register App, chooses Confidential and Open. Form validates, secret is generated once, document has `clientType: "confidential"`, `accessPolicy: "open"`.
 - **BAC-P1C-04 (Register clean Private Public client):** Super admin opens Register App, chooses Public and Private. Form validates, no secret is generated, document has `clientType: "public"`, `accessPolicy: "private"`.
-- **BAC-P1C-05 (Remediate Ambiguous legacy client):** Super admin navigates to client list, locates an ambiguous client with amber badge, clicks Edit. Modal shows ambiguity reason codes. Super admin selects explicit Public and Open options and saves. Client list refreshes; ambiguous badge disappears and status updates to Migrated.
+- **BAC-P1C-05 (Remediate Ambiguous legacy client):** Super admin navigates to client list, locates an ambiguous client with amber badge, clicks Edit. Modal shows ambiguity reason codes. Super admin selects explicit Public and Open options, corrects any invalid redirect URIs or conflicting credentials, and saves. Client list refreshes; ambiguous badge disappears and status updates to Migrated only after all validation checks pass.
 - **BAC-P1C-06 (Unauthorized policy edit rejection):** A scoped App Admin navigates to their assigned application in the console. Policy selectors (`clientType`, `accessPolicy`, `isDev`) are disabled or read only. If the user attempts to send policy fields via direct HTTP PATCH, backend returns HTTP 403 Forbidden and the stored policy remains unchanged.
 
 ### API and interface surface

@@ -14,41 +14,9 @@ import type {
   ClientAuditRecord,
   ClientAuditSummary,
 } from "./client-policy-types";
+import { validateRedirectUriSyntax } from "./client-policy-types";
 
 export * from "./client-policy-types";
-
-function isLoopbackHostname(hostname: string): boolean {
-  const clean = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  return clean === "localhost" || clean === "127.0.0.1" || clean === "::1" || clean.endsWith(".localhost");
-}
-
-function validateRedirectUriSyntax(uri: string, isDev: boolean, isNative = false): string | null {
-  if (!uri || typeof uri !== "string" || uri.trim() === "") return "Redirect URI must be a non empty string";
-  if (uri.includes("#")) return "URI contains fragment component";
-  if (uri.includes("*")) return "URI contains wildcard component";
-
-  let parsed: URL;
-  try {
-    parsed = new URL(uri.trim());
-  } catch {
-    return "Malformed URL syntax";
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return "Unsupported scheme in redirect URI";
-  }
-  if (parsed.username || parsed.password) return "URI contains userinfo credentials";
-  if (!parsed.hostname) return "URI missing hostname";
-
-  if (parsed.protocol === "http:") {
-    const isLoopback = isLoopbackHostname(parsed.hostname);
-    if ((!isDev && !isNative) || !isLoopback) {
-      return "Insecure HTTP redirect URI forbidden for non loopback or production client";
-    }
-  }
-
-  return null;
-}
 
 export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedClientPolicy {
   const reasonCodes: AmbiguityReasonCode[] = [];
@@ -155,10 +123,10 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
   const hasSecret = typeof rawSecret === "string" && rawSecret.trim().length > 0;
   const authMethod = clientDoc.token_endpoint_auth_method || clientDoc.metadata?.token_endpoint_auth_method;
 
-  const validAuthMethods = ["none", "client_secret_basic", "client_secret_post", "client_secret_jwt", "private_key_jwt"];
-  if (authMethod !== undefined && !validAuthMethods.includes(authMethod)) {
+  const supportedAuthMethods = ["none", "client_secret_basic", "client_secret_post", "private_key_jwt"];
+  if (authMethod !== undefined && !supportedAuthMethods.includes(authMethod)) {
     reasonCodes.push("CONFLICTING_AUTH_METHOD");
-    reasons.push("Unsupported or invalid token_endpoint_auth_method value");
+    reasons.push("Unsupported token_endpoint_auth_method");
   }
   if (authMethod === "none" && hasSecret) {
     reasonCodes.push("CONFLICTING_AUTH_METHOD");
@@ -169,19 +137,44 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
     reasons.push("token_endpoint_auth_method requires a secret but none is registered");
   }
 
+  const rawJwks = clientDoc.jwks ?? clientDoc.metadata?.jwks;
+  const rawJwksUri = clientDoc.jwks_uri ?? clientDoc.jwksUri ?? clientDoc.metadata?.jwks_uri ?? clientDoc.metadata?.jwksUri;
+  const hasJwks = Boolean(
+    rawJwks &&
+      ((Array.isArray(rawJwks?.keys) && rawJwks.keys.length > 0) ||
+        (Array.isArray(rawJwks) && rawJwks.length > 0) ||
+        (typeof rawJwks === "object" && Object.keys(rawJwks).length > 0))
+  );
+  const hasJwksUri = typeof rawJwksUri === "string" && rawJwksUri.trim().length > 0;
+
+  if (authMethod === "private_key_jwt") {
+    if (hasSecret) {
+      reasonCodes.push("CONFLICTING_AUTH_METHOD");
+      reasons.push("private_key_jwt client authentication cannot possess a client secret");
+    }
+    if (!hasJwks && !hasJwksUri) {
+      reasonCodes.push("CONFLICTING_AUTH_METHOD");
+      reasons.push("private_key_jwt client authentication requires jwks or jwks_uri metadata");
+    }
+  }
+
   if (appType === "native" && hasSecret) {
     reasonCodes.push("CONFLICTING_METADATA");
     reasons.push("Native application type registered with a client secret");
   }
 
   if (isTypeValid && isPolicyValid) {
-    if (explicitType === "public" && hasSecret) {
+    if (explicitType === "public" && (hasSecret || (authMethod && authMethod !== "none"))) {
       reasonCodes.push("CONFLICTING_METADATA");
-      reasons.push("Explicit public client cannot possess a client secret");
+      reasons.push("Explicit public client cannot possess a client secret or confidential auth method");
     }
-    if (explicitType === "confidential" && !hasSecret) {
+    if (explicitType === "confidential" && !hasSecret && authMethod !== "private_key_jwt") {
       reasonCodes.push("CONFLICTING_METADATA");
-      reasons.push("Explicit confidential client must possess a registered client secret");
+      reasons.push("Explicit confidential client must possess a registered client secret or key assertion metadata");
+    }
+    if (explicitType === "confidential" && authMethod === "none") {
+      reasonCodes.push("CONFLICTING_METADATA");
+      reasons.push("Explicit confidential client cannot use none auth method");
     }
 
     if (reasonCodes.length === 0) {
@@ -201,7 +194,12 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
   let derivedClientType: ClientType = "public";
   if (authMethod === "none") {
     derivedClientType = "public";
-  } else if (hasSecret || authMethod === "client_secret_basic" || authMethod === "client_secret_post") {
+  } else if (
+    hasSecret ||
+    authMethod === "client_secret_basic" ||
+    authMethod === "client_secret_post" ||
+    authMethod === "private_key_jwt"
+  ) {
     derivedClientType = "confidential";
   } else {
     derivedClientType = "public";
@@ -223,15 +221,13 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
     };
   }
 
-  let classification: ClientClassification;
+  let classification: ClientClassification = "COMPATIBLE_PRIVATE_PUBLIC";
   if (derivedClientType === "public" && derivedAccessPolicy === "open") {
     classification = "COMPATIBLE_OPEN_PUBLIC";
   } else if (derivedClientType === "confidential" && derivedAccessPolicy === "private") {
     classification = "COMPATIBLE_PRIVATE_CONFIDENTIAL";
   } else if (derivedClientType === "confidential" && derivedAccessPolicy === "open") {
     classification = "COMPATIBLE_OPEN_CONFIDENTIAL";
-  } else {
-    classification = "COMPATIBLE_PRIVATE_PUBLIC";
   }
 
   return {
@@ -248,8 +244,6 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
 
 export async function auditClientPolicies(db: any): Promise<ClientAuditSummary> {
   const cursor = db.collection("oauthClient").find({});
-  const rawDocs: any[] = typeof cursor.toArray === "function" ? await cursor.toArray() : await cursor;
-
   const clients: ClientAuditRecord[] = [];
   const counts = {
     MIGRATED: 0,
@@ -260,26 +254,31 @@ export async function auditClientPolicies(db: any): Promise<ClientAuditSummary> 
     AMBIGUOUS: 0,
   };
 
-  for (const doc of rawDocs) {
-    const resolved = resolveClientPolicy(doc);
+  const processDoc = (doc: any) => {
+    const res = resolveClientPolicy(doc);
     const id = String(doc.id || doc.clientId || doc.client_id || (doc._id ? String(doc._id) : ""));
     const clientId = String(doc.clientId || doc.client_id || doc.id || id);
     const name = String(doc.name || doc.client_name || doc.clientName || "Unnamed Client").trim();
-
-    counts[resolved.classification]++;
-
+    counts[res.classification]++;
     clients.push({
       id,
       clientId,
       name,
-      classification: resolved.classification,
-      resolvedClientType: resolved.clientType,
-      resolvedAccessPolicy: resolved.accessPolicy,
-      isDev: resolved.isDev,
-      isAmbiguous: resolved.isAmbiguous,
-      reasonCodes: resolved.reasonCodes,
-      reasons: resolved.reasons,
+      classification: res.classification,
+      resolvedClientType: res.clientType,
+      resolvedAccessPolicy: res.accessPolicy,
+      isDev: res.isDev,
+      isAmbiguous: res.isAmbiguous,
+      reasonCodes: res.reasonCodes,
+      reasons: res.reasons,
     });
+  };
+
+  if (typeof (cursor as any)[Symbol.asyncIterator] === "function") {
+    for await (const doc of cursor as any) processDoc(doc);
+  } else {
+    const rawDocs: any[] = typeof cursor.toArray === "function" ? await cursor.toArray() : await cursor;
+    for (const doc of rawDocs) processDoc(doc);
   }
 
   return {

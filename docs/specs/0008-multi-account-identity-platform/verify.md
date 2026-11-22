@@ -15,7 +15,7 @@ Record actual commands/results in the documentation PR: relative links/anchors, 
 | Request-local selected engine sessions | 07-09 | In-process engine HTTP + real Mongo replica set | P0 proof passed, 6 cases; browser/workers and P3 wiring pending |
 | OTP start/verify/resend/finalize and wrong-code zero writes | 02-04,15 | Real API + disposable DB/mail sink; concurrency workers | Pending |
 | New user/profile/key/session and lost response recovery | 03,16 | Real engine finalization + idempotency | Pending |
-| Client-policy backfill and open/private matrix | 05-06,14 | Old/new schema and real consumer fixtures | P1a classification and zero write audit verified (22 unit/CLI cases passed); P1b enforcement and P1c UI pending |
+| Client-policy backfill and open/private matrix | 05-06,14 | Old/new schema and real consumer fixtures | P1a classification and zero write audit verified (30 unit/CLI cases passed); refresh lease fencing verified; P1b enforcement and P1c UI pending |
 | Browser A/B login, tab interleave, expiry/logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | Pending |
 | Account-list CORS/CSRF/fixation/context misuse | 08 | Browser and direct HTTP negatives | Pending |
 | Genuine user/admin MFA, recovery/promotion/step-up/plugin paths | 10-11 | Real password/TOTP/backup protocol | Pending |
@@ -39,27 +39,32 @@ A failed security invariant blocks affected rollout; do not skip/relax it for a 
 
 ## P1a client policy classification and read only audit evidence
 
-**Date:** 2026-11-22. **Result:** P1a classification and zero write read only audit verified. Runtime routes, token exchange, and administrative endpoints remain untouched. P1b runtime enforcement and P1c frontend administrative controls remain pending.
+**Date:** 2026-11-22. **Result:** P1a classification, authentication method resolution, streaming cursor audit, and refresh lease fencing verified. Runtime routes, token exchange, and administrative endpoints remain untouched. P1b runtime enforcement and P1c frontend administrative controls remain pending.
 
 ### Tested commit and boundary
 
 * Branch: `v2`
 * Worktree status: Clean at verification
 * Source scope:
-  * `backend/src/identity/client-policy-types.ts`: Pure classification types and records
-  * `backend/src/identity/client-policy.ts`: Pure classification logic and safe reason codes
+  * `backend/src/identity/client-policy-types.ts`: Pure classification types, records, and URI validation
+  * `backend/src/identity/client-policy.ts`: Pure classification logic, safe reason codes, and streaming cursor audit
+  * `backend/src/routes/auth-token-claim.ts`: Unique fencing token generation on rotation claim
+  * `backend/src/routes/auth-token-refresh.ts`: Ownership safe release and rotation commit
+  * `backend/src/db/token-families.ts`: Atomic CAS rotation requiring matching lease owner
   * `backend/scripts/audit-client-policies.ts`: Read only CLI audit scanner
   * `backend/tests/unit/client-policy-classification.test.ts`: Pure classification unit test suite (16 tests)
+  * `backend/tests/unit/client-policy-auth-methods.test.ts`: Authentication method regression suite (8 tests)
   * `backend/tests/unit/client-policy-audit-cli.test.ts`: Database and CLI execution test suite (6 tests)
-  * `docs/specs/0008-multi-account-identity-platform/0008-p1-client-policy-migration.md`: P1c administrative UI specification and browser acceptance checks BAC-P1C-01 through BAC-P1C-06
+  * `backend/tests/unit/refresh-lease-fencing.test.ts`: Deterministic separate worker lease fencing suite (1 test)
+  * `docs/specs/0008-multi-account-identity-platform/0008-p1-client-policy-migration.md`: P1c administrative UI specification, production native loopback alignment, and Migrated validation invariant
   * `docs/USER_EXPERIENCE.md`: Section 6 link to P1c administrative UI specification
 * File length: All modified and new production and test source files are strictly under 300 lines
 
 ### Verification commands and execution evidence
 
 1. Command: `npm run test:unit`
-   * Unit test suites executed: 12
-   * Unit test suites passed: 12
+   * Unit test suites executed: 14
+   * Unit test suites passed: 14
    * Classification cases in `client-policy-classification.test.ts`: 16 passed, 0 failed
      * Four clean classes: Open Public, Private Confidential, Open Confidential, Private Public
      * Migrated class with explicit fields
@@ -68,10 +73,25 @@ A failed security invariant blocks affected rollout; do not skip/relax it for a 
      * Ambiguity reason codes: PARTIAL_EXPLICIT_POLICY, MISSING_ACCESS_METADATA, MALFORMED_ACCESS_METADATA, MALFORMED_DEV_FLAGS, CONFLICTING_AUTH_METHOD, ID conflicts
      * Complete URI redaction: Safe constant error messages without raw URIs, queries, fragments, or userinfo credentials
      * Pure isolation: Zero mutations to input records; no runtime imports into authorize or token routes
+   * Authentication method cases in `client-policy-auth-methods.test.ts`: 8 passed, 0 failed
+     * `private_key_jwt` missing `jwks` or `jwks_uri` classified as ambiguous, never clean public
+     * `private_key_jwt` with valid `jwks_uri` and no secret classified as confidential
+     * `private_key_jwt` with registered client secret flagged as conflicting
+     * Unsupported `client_secret_jwt` flagged as ambiguous
+     * Explicit public client with `private_key_jwt` flagged as conflicting metadata
+     * Explicit confidential client with `private_key_jwt` and `jwks_uri` resolves as Migrated
+     * Four legitimate legacy combinations preserved
    * Audit CLI cases in `client-policy-audit-cli.test.ts`: 6 passed, 0 failed
      * Engine enforced zero writes against real MongoDB instance using read only database user role (`roles: [{ role: "read", db: dbName }]`), verifying that direct insert attempts throw `MongoServerError: not authorized`
      * Output redaction in CLI JSON and human readable output
      * Process exit codes: 0 for clean inventory, 1 for ambiguous inventory, 1 for missing configuration
+   * Refresh lease fencing cases in `refresh-lease-fencing.test.ts`: 1 passed, 0 failed
+     * Worker A acquires lease with unique fencing owner
+     * Worker A paused, lease expired in MongoDB, Worker B acquires new lease with distinct owner
+     * Worker A resumes failure cleanup; release with stale owner matches 0 documents; Worker B retains lease
+     * Stale Worker A attempts rotation commit; CAS matches 0 documents and fails
+     * Active Worker B commits rotation successfully
+     * Stale Worker A attempts replay after grace window; replay detection cascades and revokes family
 2. Command: `npm run security:docs-check`
    * Result: Passed without errors
 3. Command: `git diff --check`

@@ -1,9 +1,10 @@
 import { verifyAndRotateTokenFamily, recordAuthEvent } from "../db/state";
 import { getTrustedClientIp } from "../utils/security";
 import { config } from "../config";
+import crypto from "node:crypto";
 
 export type ClaimRotationResult =
-    | { claimed: true; claim: any; existingFamily: any }
+    | { claimed: true; claim: any; existingFamily: any; leaseOwner: string }
     | { claimed: false; response: Response };
 
 export async function claimRotationRights(
@@ -47,6 +48,7 @@ export async function claimRotationRights(
     }
 
     const staleLockThreshold = new Date(Date.now() - 15000);
+    const leaseOwner = crypto.randomUUID();
 
     // Atomic compare-and-swap to claim rotation rights for this token family
     // Scoped strictly by canonicalClientId to prevent cross-client CAS contention
@@ -62,7 +64,7 @@ export async function claimRotationRights(
             ],
         },
         {
-            $set: { rotating: true, rotatingAt: new Date() },
+            $set: { rotating: true, rotatingAt: new Date(), rotationOwner: leaseOwner },
         },
         { returnDocument: "after" }
     );
@@ -133,5 +135,6 @@ export async function claimRotationRights(
         claimed: true,
         claim,
         existingFamily,
+        leaseOwner,
     };
 }

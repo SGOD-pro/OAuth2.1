@@ -14,6 +14,9 @@ export interface TokenFamilyDoc {
   createdAt: Date;
   updatedAt: Date;
   revokedAt?: Date;
+  rotating?: boolean;
+  rotatingAt?: Date;
+  rotationOwner?: string;
 }
 
 export async function registerTokenFamily(
@@ -49,7 +52,8 @@ export async function verifyAndRotateTokenFamily(
   userId?: string,
   nowMs: number = Date.now(),
   expectedClientId?: string,
-  tokenVersion?: number
+  tokenVersion?: number,
+  leaseOwner?: string
 ): Promise<{
   valid: boolean;
   replayed: boolean;
@@ -141,13 +145,18 @@ export async function verifyAndRotateTokenFamily(
 
   // 4. Legitimate Rotation with Atomic Compare-and-Swap (CAS)
   if (doc.activeTokenHash === incomingTokenHash) {
+    const filter: Record<string, any> = {
+      _id: doc._id,
+      activeTokenHash: incomingTokenHash,
+      status: "active",
+      ...(expectedClientId ? { clientId: expectedClientId } : (doc.clientId ? { clientId: doc.clientId } : {})),
+    };
+    if (leaseOwner) {
+      filter.rotationOwner = leaseOwner;
+    }
+
     const updateResult = await db.collection<TokenFamilyDoc>("oauth_token_families").updateOne(
-      {
-        _id: doc._id,
-        activeTokenHash: incomingTokenHash,
-        status: "active",
-        ...(expectedClientId ? { clientId: expectedClientId } : (doc.clientId ? { clientId: doc.clientId } : {})),
-      },
+      filter,
       {
         $push: { consumedTokenHashes: incomingTokenHash },
         $set: {
@@ -157,6 +166,7 @@ export async function verifyAndRotateTokenFamily(
           ...(userId && !doc.userId ? { userId } : {}),
           ...(typeof tokenVersion === "number" ? { tokenVersion } : (typeof doc.tokenVersion === "number" ? { tokenVersion: doc.tokenVersion } : { tokenVersion: 1 })),
         },
+        $unset: { rotationOwner: "" },
       }
     );
 

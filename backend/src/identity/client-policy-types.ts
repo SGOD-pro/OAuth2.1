@@ -62,3 +62,36 @@ export interface ClientAuditSummary {
   clients: ClientAuditRecord[];
   timestamp: string;
 }
+
+export function isLoopbackHostname(hostname: string): boolean {
+  const clean = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return clean === "localhost" || clean === "127.0.0.1" || clean === "::1" || clean.endsWith(".localhost");
+}
+
+export function validateRedirectUriSyntax(uri: string, isDev: boolean, isNative = false): string | null {
+  if (!uri || typeof uri !== "string" || uri.trim() === "") return "Redirect URI must be a non empty string";
+  if (uri.includes("#")) return "URI contains fragment component";
+  if (uri.includes("*")) return "URI contains wildcard component";
+
+  let parsed: URL;
+  try {
+    parsed = new URL(uri.trim());
+  } catch {
+    return "Malformed URL syntax";
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return "Unsupported scheme in redirect URI";
+  }
+  if (parsed.username || parsed.password) return "URI contains userinfo credentials";
+  if (!parsed.hostname) return "URI missing hostname";
+
+  if (parsed.protocol === "http:") {
+    const isLoopback = isLoopbackHostname(parsed.hostname);
+    if ((!isDev && !isNative) || !isLoopback) {
+      return "Insecure HTTP redirect URI forbidden for non loopback or production client";
+    }
+  }
+
+  return null;
+}
