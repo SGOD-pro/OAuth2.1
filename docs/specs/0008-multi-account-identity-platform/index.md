@@ -14,6 +14,10 @@ A person may own multiple accounts with distinct verified mailboxes. Each accoun
 
 Keep the installed credential/OAuth engine. Preserve issuer, subject IDs and existing protocol endpoints. New identity APIs are IdP-only. Do not add dynamic public client registration, a second credential system, fingerprint-based authentication, custom crypto or claims of Google/NIST/conformance equivalence.
 
+## Structure
+
+- [0008-p1-client-policy-migration.md](0008-p1-client-policy-migration.md): Independent client dimensions, read only inventory, and gated open access without membership, supporting decisions AC-05 and AC-06.
+
 ## Canonical design documents
 
 [Architecture](../../ARCHITECTURE.md), [flows and API contracts](../../AUTHENTICATION_FLOWS.md), [session model](../../SESSION_MODEL.md), [pages](../../USER_EXPERIENCE.md), [mail](../../MAIL_SERVICE.md), [security](../../SECURITY.md), [abuse/caches/filters](../../ABUSE_DEFENSE.md), [data lifecycle](../../DATA_LIFECYCLE.md), [implementation map](../../IMPLEMENTATION_MAP.md), [phases](../../PHASES.md), [integration](../../INTEGRATION.md), [configuration](../../CONFIGURATION.md), [deployment](../../DEPLOYMENT.md) and [diagnostics](../../TROUBLESHOOTING.md).
@@ -51,7 +55,7 @@ This spec owns requirement IDs and acceptance, not duplicate API/schema text. [R
 
 - [x] Incorporate main with reviewed security baseline, reconcile docs without runtime downgrade.
 - [x] P0: transaction-aware engine creation and request-local session compatibility proof, [local evidence and limitations](p0-evidence.md). Production wiring belongs to P2/P3.
-- [ ] P1: additive client-policy migration and open access without membership.
+- [ ] P1: additive client-policy migration and open access without membership, see [0008-p1-client-policy-migration.md](0008-p1-client-policy-migration.md).
 - [ ] P2a: mail budgets/outbox, intent/OTP/proof and verification pages.
 - [ ] P2b: username/password finalization transaction and all provisioning bypass closure.
 - [ ] P3: session registry, transaction/dashboard contexts, chooser and independent logout.
