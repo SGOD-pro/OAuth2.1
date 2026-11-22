@@ -203,60 +203,223 @@ The module `backend/src/identity/client-policy.ts` exposes `auditClientPolicies(
 5. **Phase 5 (Slice P1c Deployment):** Deploy frontend administrative UI updates providing explicit selectors for client type and access policy.
 6. **Rollback guarantee:** If any client experiences authorization anomalies during Phase 4, operators set `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED=false` immediately. Open applications resume creating legacy membership rows upon login. Because all schema updates are additive, existing data and active token families remain valid.
 
-### Better Auth client authentication enforcement (Slice P1b)
+### 4.4 Endpoint specific matrix and protocol enforcement (Slice P1b)
 
-Better Auth's OAuth provider plugin stores client definitions in collection `oauthClient`:
-- **Confidential clients (`clientType: "confidential"`):**
-  - Better Auth verifies `client_secret` against the stored hash on `/api/auth/oauth2/token`.
-  - Clients authenticate via HTTP Basic (`Authorization: Basic <base64(client_id:client_secret)>`) or request body (`client_id` and `client_secret`).
-  - Requests with missing, malformed, or mismatched credentials are rejected with HTTP 401 `invalid_client`.
-- **Public clients (`clientType: "public"`):**
-  - Stored `clientSecret` is null or undefined, and `token_endpoint_auth_method` is set to `"none"`.
-  - Requests submitting a `client_secret` are rejected with HTTP 400 `invalid_client` (public clients must not supply secrets).
-  - PKCE S256 is mandatory. The authorization request (`/api/auth/oauth2/authorize`) must include `code_challenge` and `code_challenge_method=S256`. The token request (`/api/auth/oauth2/token`) must include `code_verifier`. Better Auth verifies that `BASE64URL(SHA256(code_verifier)) === code_challenge`.
-- **Public client token refresh:**
-  - When refreshing tokens (`grant_type=refresh_token`), public clients authenticate by supplying `client_id` only.
-  - Public clients do NOT supply a PKCE code verifier on refresh requests per RFC 6749 Section 6.
-  - Refresh security is provided by client bound refresh token rotation with single use replay detection in `oauth_token_families`. Any replayed refresh token immediately revokes the active token and the entire token family.
+The runtime enforcement in Slice P1b governs eight distinct OAuth and OIDC protocol operations. Each endpoint enforces deterministic validation ordering, explicit authority checks, standard error codes, exact HTTP status codes, caching headers, and safe redirection behavior.
 
-### Development environment and loopback rules (Slice P1b)
+#### 1. Authorization request (`GET /api/auth/oauth2/authorize`)
+- **Validation order:**
+  1. Basic syntax and client identity validation: Parse `client_id` and `redirect_uri`. If either parameter is missing or contains invalid URL syntax, return direct HTTP 400 `invalid_request` without redirecting per RFC 6749 Section 3.1.2.4.
+  2. Client resolution and policy classification: Fetch client record from MongoDB via `resolveClientPolicy`. If record does not exist or `disabled: true`, return direct HTTP 400 `invalid_client` without redirecting. If classification `status === "ambiguous"`, return HTTP 400 `invalid_client` without redirecting when `redirect_uri` is invalid; if `redirect_uri` is verified registered, redirect 302 with `error=invalid_client` and description indicating client configuration requires administrative review.
+  3. Redirect URI validation: Match incoming `redirect_uri` against registered client URIs via `isRegisteredRedirectUri`. Exact match of scheme, host, port, path, and query is required. Ephemeral variable ports are permitted only on loopback hosts (`localhost`, `127.0.0.1`, `[::1]`) when `isDev: true` per RFC 8252 Section 7.3. Fragments (`#`) and userinfo credentials (`user:pass@`) are strictly rejected. If mismatch, return direct HTTP 400 `invalid_request` without redirecting.
+  4. PKCE validation for public clients: If `clientType === "public"`, verify `code_challenge` is present and `code_challenge_method === "S256"`. If missing or method is `"plain"`, redirect 302 to registered redirect URI with `error=invalid_request` per RFC 7636 and OAuth 2.1.
+  5. Session authentication check: Verify user session. If unauthenticated, redirect to IdP login preserving OAuth transaction state.
+  6. Authority and access policy checks:
+     - If `accessPolicy === "private"`: If `user.role === "super-admin"`, redirect 302 with `error=access_denied` (platform super admins are strictly excluded from private consumer tenant applications). Verify active registration via `checkUserHasAppAccess(database, sessionUser, canonicalClientId)`. If unassigned or revoked, redirect 302 with `error=access_denied`.
+     - If `accessPolicy === "open"`: Authenticated eligible user is allowed access. If `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED === true`, skip writing to `user_app_registrations`. If false (legacy mode), record fallback registration.
+  7. Account eligibility check: Verify `checkAccountEligibility(user)`. If banned, disabled, inactive, deleting, or deleted, redirect 302 with `error=access_denied`.
+  8. Scope and consent evaluation: If consent required, redirect 302 to `/consent`; if consent skipped or previously granted, generate authorization code, store in `oauthAuthorizationCode`, and redirect 302 to `redirect_uri?code=...&state=...`.
+- **Response headers:** `Cache-Control: no-store`, `Pragma: no-cache`.
+- **Safe redirect behavior:** Per RFC 6749 Section 3.1.2.4, errors in `client_id` or `redirect_uri` MUST NOT redirect. Redirection occurs only after `redirect_uri` is verified against registered client URIs.
 
-- **Strict boolean parsing:** The property `isDev` is parsed strictly as a boolean (`Boolean(target.isDev ?? target.is_dev)`). Non boolean strings or numeric values cannot enable development mode.
-- **Production IdP protection:** On a production IdP (`NODE_ENV === "production"`), creating or updating a client with `isDev: true` requires verified super admin authority (`isSuperAdminOp === true`) or global configuration `ALLOW_DEV_CLIENTS_IN_PRODUCTION === true`.
-- **Native loopback port exception:**
-  - In development mode (`isDev: true`), redirect URIs may use loopback hostnames (`localhost`, `127.0.0.1`, `[::1]`).
-  - Per RFC 8252 Section 7.3, native clients running on loopback interfaces may bind to variable ephemeral ports. During redirect URI validation in `isRegisteredRedirectUri`, loopback URIs allow port variance between the registered URI and the incoming request URI.
-  - For non loopback URIs, port matching must be strictly exact.
-  - Production clients (`isDev: false`) strictly forbid loopback URIs, intranet IP addresses, and insecure HTTP.
+#### 2. Consent decision (`POST /api/auth/oauth2/consent`)
+- **Validation order:**
+  1. Session verification: User must hold an active authenticated session. If unauthenticated, return HTTP 401 Unauthorized.
+  2. Input validation: Verify `clientId`, `redirectUri`, `scopes`, and `decision` ("accept" or "deny"). If invalid, return HTTP 400 `invalid_request`.
+  3. Client resolution: Resolve client policy via `resolveClientPolicy`. If ambiguous or disabled, return HTTP 400 `invalid_client`.
+  4. Redirect URI validation: Verify `redirectUri` matches registered client URIs via `isRegisteredRedirectUri`. If mismatch, return HTTP 400 `invalid_request`.
+  5. Account eligibility: Check `checkAccountEligibility(user)`. If ineligible, return HTTP 403 `access_denied`.
+  6. Private tenant access check: If `accessPolicy === "private"`, reject platform super admins unconditionally (`user.role === "super-admin"`) and verify `checkUserHasAppAccess`. If not active member, return HTTP 403 `access_denied` or redirect 302 with `error=access_denied`.
+  7. Open access gate: If `accessPolicy === "open"` and consent granted, skip membership write when `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED === true`. If false, record fallback membership row.
+  8. Decision outcome: If decision is "deny", redirect 302 to `redirectUri?error=access_denied&state=...`. If "accept", issue authorization code and redirect 302 to `redirectUri?code=...&state=...`.
+- **Response headers:** `Cache-Control: no-store`, `Pragma: no-cache`.
 
-### Complete mapping of affected runtime paths
+#### 3. Authentication continuation (`POST /api/auth/oauth2/continue` and 2FA continuation)
+- **Validation order:**
+  1. Continuation token validation: Validate encrypted or signed context challenge. If missing, expired, or invalid, return HTTP 400 `invalid_request`.
+  2. Multi factor verification: Verify TOTP or backup code proof. If invalid, return HTTP 400 `invalid_grant`.
+  3. User eligibility and revocation check: Verify `checkAccountEligibility(user)` and `tokenVersion`. If account state changed during step up challenge, return HTTP 403 `access_denied`.
+  4. Client resolution: Resolve target client via `resolveClientPolicy`. If ambiguous or disabled, return HTTP 400 `invalid_client`.
+  5. Open access gate: If `accessPolicy === "open"`, skip membership write if `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED === true`. If false, write fallback row.
+  6. Private tenant membership: If `accessPolicy === "private"`, verify active membership and super admin exclusion.
+  7. Flow resumption: Issue authorization code or redirect 302 to consent or target callback.
+- **Response headers:** `Cache-Control: no-store`, `Pragma: no-cache`.
 
-1. **OAuth authorization (`GET /api/auth/oauth2/authorize`):**
-   - Resolves canonical client and policy dimensions via `resolveClientPolicy`.
-   - If `accessPolicy === "private"`: checks `checkUserHasAppAccess(database, sessionUser, canonicalClientId)`. If inactive or unassigned, redirects to callback with `302 error=access_denied`.
-   - If `accessPolicy === "open"`: if `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED === true`, skips writing to `user_app_registrations`. If false (legacy mode), records membership row.
-2. **OAuth consent and continuation (`POST /api/auth/oauth2/consent` and `/api/auth/oauth2/continue`):**
-   - Validates session user and target client policy.
-   - Private applications strictly verify active assignment in `user_app_registrations` or `app_admins`.
-3. **Authorization code exchange (`POST /api/auth/oauth2/token` with `grant_type=authorization_code`):**
-   - Intercepts client credentials in `authenticateTokenClient`.
-   - Public clients enforce PKCE S256 and reject client secrets.
-   - Confidential clients enforce valid secret authentication.
-   - Verifies pre code user eligibility, registers initial token family, mints RS256 JWT, and commits issuance linearization.
-4. **Refresh token exchange (`POST /api/auth/oauth2/token` with `grant_type=refresh_token`):**
-   - Validates pre refresh eligibility and private application access in `validatePreRefreshEligibility`.
-   - Public clients supply `client_id` without secret or PKCE verifier.
-   - Performs atomic CAS lock, rotates token family, checks replay detection, and validates post refresh eligibility in `validatePostRefreshEligibility`.
-   - If user is revoked or private app membership is deactivated, refresh fails with HTTP 401 `invalid_grant` and token family is revoked.
-5. **Online token validation (`GET /api/auth/oauth2/userinfo` and `POST /api/auth/oauth2/introspect`):**
-   - Verifies RS256 token against JWKS public keys.
-   - UserInfo route checks account eligibility and private app access before returning profile claims.
-   - Introspection route returns `active: false` if user account is ineligible or private application assignment has been revoked.
-6. **Authentication membership write paths (Phase out under open access gate):**
-   - Password login (`POST /sign-in/email` in `backend/src/routes/auth-sign-in.ts:243`): Currently inserts into `user_app_registrations` for public clients. Under Slice P1b with bypass enabled, this insert is skipped when client is open.
-   - Email signup (`POST /sign-up/email` in `backend/src/routes/auth-sign-up.ts:142`): Currently upserts into `user_app_registrations` for public clients. Under Slice P1b with bypass enabled, this upsert is skipped when client is open.
-   - Social login callbacks (`backend/src/routes/auth-interceptors.ts:207`): Currently upserts into `user_app_registrations` for public clients. Under Slice P1b with bypass enabled, this upsert is skipped when client is open.
-   - Multi factor authentication continuation (`completeTwoFactorAuth` in `backend/src/routes/auth-two-factor-context.ts:150`): Currently upserts into `user_app_registrations`. Under Slice P1b with bypass enabled, this upsert is skipped when client is open.
+#### 4. Authorization code exchange (`POST /api/auth/oauth2/token` with `grant_type=authorization_code`)
+- **Validation order:**
+  1. Transport and method validation: Request must be `POST` with `Content-Type: application/x-www-form-urlencoded`.
+  2. Extract client credentials: Parse HTTP Basic (`Authorization: Basic ...`) or request body (`client_id`, `client_secret`).
+  3. Resolve client policy: Resolve client via `resolveClientPolicy`. If client not found or `status === "ambiguous"`, return HTTP 401 `invalid_client`.
+  4. Client authentication enforcement:
+     - If `clientType === "public"`: Verify no client secret was supplied. If a secret is present, reject with HTTP 400 `invalid_client` (public clients must not supply secrets). Verify `code_verifier` is supplied; if missing, return HTTP 400 `invalid_request`. Verify PKCE: compute `BASE64URL(SHA256(code_verifier))` and assert exact match with stored `code.code_challenge`.
+     - If `clientType === "confidential"`: Verify credentials. If `client_secret_basic` or `client_secret_post`, compare hashed secret with stored hash. If `private_key_jwt`, verify asymmetric JWT assertion against registered `jwks` or `jwks_uri`. If invalid credentials, return HTTP 401 `invalid_client` with `WWW-Authenticate: Basic` header if basic auth attempted.
+  5. Authorization code retrieval and atomic one time consumption: Find code in `oauthAuthorizationCode`. Atomically delete or mark code consumed. If code already consumed or expired, trigger replay mitigation and return HTTP 400 `invalid_grant`.
+  6. Code client binding: Verify `code.clientId === client.clientId`. If mismatch, return HTTP 400 `invalid_grant`.
+  7. Code redirect URI binding: Verify `code.redirectUri === request.redirect_uri`. If mismatch, return HTTP 400 `invalid_grant`.
+  8. User eligibility and revocation check: Verify `checkAccountEligibility(user)` and `user.tokenVersion`. If ineligible, return HTTP 400 `invalid_grant`.
+  9. Private tenant membership check: If `accessPolicy === "private"`, verify `checkUserHasAppAccess(database, user, client.clientId)`. If unassigned or revoked, return HTTP 400 `invalid_grant`. Platform super admins denied unconditionally.
+  10. Token minting and linearization: Mint RS256 JWT access token, ID token (if scope openid), and refresh token. Register initial family in `oauth_token_families`. Commit issuance linearization. Return HTTP 200 with JSON payload.
+- **Response headers:** `Cache-Control: no-store`, `Pragma: no-cache`.
+
+#### 5. Refresh token exchange (`POST /api/auth/oauth2/token` with `grant_type=refresh_token`)
+- **Validation order:**
+  1. Transport and method validation: `POST` with `Content-Type: application/x-www-form-urlencoded`.
+  2. Client authentication:
+     - If `clientType === "public"`: Authenticate by `client_id` only. Strictly no client secret permitted. Strictly no PKCE `code_verifier` required per RFC 6749 Section 6.
+     - If `clientType === "confidential"`: Authenticate client using registered method (`client_secret_basic`, `client_secret_post`, or `private_key_jwt`). If credentials invalid, return HTTP 401 `invalid_client`.
+  3. Pre refresh eligibility check: Verify refresh token syntax and expiration in `validatePreRefreshEligibility`.
+  4. Atomic CAS claim and rotation fencing: Acquire rotation lease with unique `leaseOwner` in `oauth_token_families`. Fencing token ensures stale workers cannot overwrite or release an active lease.
+  5. Single use replay detection: If presented refresh token was already consumed, trigger immediate cascade revocation of the entire token family (`revoked: true`, `revokedReason: "token_replayed"`) and return HTTP 401 `invalid_grant`.
+  6. Post refresh eligibility and private access check: Verify user account status via `checkAccountEligibility(user)`, verify `user.tokenVersion`, and if `accessPolicy === "private"`, verify active membership in `user_app_registrations` or `app_admins`. If access revoked, fail with HTTP 401 `invalid_grant` and revoke family.
+  7. Commit rotation: Update active token hash in `oauth_token_families`, append previous token hash to `consumedTokenHashes`, clear rotation lease, and return minted RS256 access token and new rotated refresh token with HTTP 200.
+- **Response headers:** `Cache-Control: no-store`, `Pragma: no-cache`.
+
+#### 6. User profile (`GET /api/auth/oauth2/userinfo`)
+- **Validation order:**
+  1. Extract access token from `Authorization: Bearer <access_token>`. If missing, return HTTP 401 `invalid_token` with `WWW-Authenticate: Bearer error="invalid_token"`.
+  2. Cryptographic signature and issuer verification: Verify RS256 signature against IdP JWKS public keys. Verify `iss` matches `AUTH_ISSUER` and token is unexpired.
+  3. Account eligibility check: Look up user in `user` collection. Check `checkAccountEligibility(user)` and verify token `tokenVersion` matches `user.tokenVersion`. If ineligible, return HTTP 401 `invalid_token`.
+  4. Private tenant access check: Look up client associated with token audience (`aud`). If client has `accessPolicy === "private"`, verify active membership in `user_app_registrations` or `app_admins`. If membership revoked, return HTTP 403 `forbidden`.
+  5. Projection and scope filtering: Return profile claims matching granted scopes (`sub`, `email`, `name`, `profile`). Expose full emails only if email scope is granted. Local part labels remain personal data.
+- **Response headers:** `Cache-Control: no-store`, `Pragma: no-cache`.
+
+#### 7. Token introspection (`POST /api/auth/oauth2/introspect` per RFC 7662)
+- **Validation order:**
+  1. Client authentication: Confidential client authentication strictly required. Public clients cannot introspect tokens without authority. Authenticate calling client via `client_secret_basic`, `client_secret_post`, or `private_key_jwt`. If unauthenticated or ambiguous, return HTTP 401 `invalid_client`.
+  2. Input parameter validation: Verify `token` parameter is present. If missing, return HTTP 400 `invalid_request`.
+  3. Token inspection: Decode token (JWT access token or opaque/hashed refresh token).
+  4. Validity checks: Cryptographic verification, expiration check, family revocation check in `oauth_token_families`, account eligibility check in `checkAccountEligibility`, and `tokenVersion` check.
+  5. Client audience and authority check: If calling client does not match token audience or lacks authority, return `{ active: false }`.
+  6. Outcome: If all checks pass, return HTTP 200 `{ active: true, scope, client_id, sub, exp, iat, iss, aud }`. If any check fails, return HTTP 200 `{ active: false }` per RFC 7662 Section 2.2.
+- **Response headers:** `Cache-Control: no-store`, `Pragma: no-cache`.
+
+#### 8. Token revocation (`POST /api/auth/oauth2/revoke` per RFC 7009)
+- **Validation order:**
+  1. Client authentication: Authenticate calling client. Confidential clients authenticate with valid credentials. Public clients authenticate with `client_id`.
+  2. Input parameter validation: Verify `token` and optional `token_type_hint` (`access_token` or `refresh_token`).
+  3. Resolve token: Locate token in active database tokens or `oauth_token_families`.
+  4. Client binding check: Verify the token was issued to the calling client (`clientId`). A client cannot revoke tokens belonging to a different client.
+  5. Revocation action: If token is a refresh token or part of a token family, atomically mark the family as revoked (`revoked: true`, `revokedReason: "client_revoked"`), increment `tokenVersion` if durable user revocation requested, and purge associated database tokens.
+  6. Outcome: Per RFC 7009 Section 2.2, if the token is valid and revoked, or if the token is already invalid or nonexistent, return HTTP 200 OK (`{ success: true }` or empty body). If client authentication fails, return HTTP 401 `invalid_client`.
+- **Response headers:** `Cache-Control: no-store`, `Pragma: no-cache`.
+
+#### Comprehensive protocol endpoint matrix
+
+| Protocol Endpoint | Method | Validation Order Summary | Authority Checks | Standard OAuth Errors | HTTP Status | Headers | Safe Redirect Behavior |
+|---|---|---|---|---|---|---|---|
+| `/api/auth/oauth2/authorize` | GET | 1. Syntax, 2. Client/policy, 3. Redirect URI, 4. PKCE (public), 5. Session, 6. Access policy, 7. User eligibility, 8. Consent | User session, app membership (if private), super admin exclusion | `invalid_request`, `unauthorized_client`, `access_denied`, `invalid_client` | 302, 400 | `Cache-Control: no-store`, `Pragma: no-cache` | Never redirect on invalid URI or missing client; redirect 302 only after URI verified |
+| `/api/auth/oauth2/consent` | POST | 1. Session, 2. Inputs, 3. Client/policy, 4. Redirect URI, 5. Eligibility, 6. Private access, 7. Bypass gate, 8. Code issue | Active session, private membership, super admin exclusion | `invalid_request`, `invalid_client`, `access_denied` | 302, 400, 401, 403 | `Cache-Control: no-store`, `Pragma: no-cache` | Direct HTTP error on invalid inputs; redirect 302 with error query on denial |
+| `/api/auth/oauth2/continue` | POST | 1. Continuation token, 2. MFA proof, 3. Eligibility, 4. Client/policy, 5. Bypass gate, 6. Private access, 7. Resume | 2FA verification, active membership, super admin exclusion | `invalid_request`, `invalid_grant`, `access_denied`, `invalid_client` | 302, 400, 403 | `Cache-Control: no-store`, `Pragma: no-cache` | Direct HTTP error on invalid token; redirect 302 on resumed authorization |
+| `/api/auth/oauth2/token` (code) | POST | 1. Transport, 2. Client auth, 3. Policy, 4. PKCE or secret, 5. Code consumption, 6. Bindings, 7. Eligibility, 8. Private access, 9. Mint | Client authentication, code ownership, private membership, super admin exclusion | `invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type` | 200, 400, 401 | `Cache-Control: no-store`, `Pragma: no-cache`, `WWW-Authenticate` (on 401) | Never redirects; pure JSON response |
+| `/api/auth/oauth2/token` (refresh) | POST | 1. Transport, 2. Client auth, 3. Pre eligibility, 4. CAS lease claim, 5. Replay check, 6. Post eligibility, 7. Commit | Client binding, rotation lease ownership, private membership | `invalid_request`, `invalid_client`, `invalid_grant` | 200, 400, 401 | `Cache-Control: no-store`, `Pragma: no-cache`, `WWW-Authenticate` (on 401) | Never redirects; pure JSON response |
+| `/api/auth/oauth2/userinfo` | GET | 1. Bearer token, 2. Signature/issuer, 3. User eligibility, 4. Private access, 5. Claims projection | Bearer token validity, private membership, granted scopes | `invalid_token`, `forbidden` | 200, 401, 403 | `Cache-Control: no-store`, `Pragma: no-cache`, `WWW-Authenticate` (on 401) | Never redirects; pure JSON claims |
+| `/api/auth/oauth2/introspect` | POST | 1. Confidential client auth, 2. Token input, 3. Inspection, 4. Validity, 5. Audience check, 6. Response | Confidential client authentication, audience authority | `invalid_client`, `invalid_request` | 200, 400, 401 | `Cache-Control: no-store`, `Pragma: no-cache` | Never redirects; returns `{ active: boolean }` |
+| `/api/auth/oauth2/revoke` | POST | 1. Client auth, 2. Token input, 3. Token lookup, 4. Client binding, 5. Family revocation, 6. Purge | Client authentication, token client ownership | `invalid_client`, `invalid_request` | 200, 400, 401 | `Cache-Control: no-store`, `Pragma: no-cache` | Never redirects; RFC 7009 returns 200 on success or nonexistent token |
+
+### 4.5 Client authentication rules, engine support, and refresh rotation (Slice P1b)
+
+The identity provider integrates `@better-auth/oauth-provider` v1.6.10 and `@better-auth/core` 1.7.1 within a Hono application architecture. The actual installed engine provides foundational token and client schema management, while custom middleware and route handlers in `backend/src/routes/auth-token*.ts` enforce independent client dimensions, PKCE rules, and ownership fenced refresh rotation.
+
+#### Supported client authentication methods
+1. `none`:
+   - Restricted exclusively to public clients (`clientType: "public"`).
+   - Stored `clientSecret` must be null or empty, and `token_endpoint_auth_method` is `"none"`.
+   - Requests presenting a client secret are rejected with HTTP 400 `invalid_client`.
+   - Mandatory PKCE S256 on authorization code issuance and exchange.
+2. `client_secret_basic`:
+   - Restricted to confidential clients (`clientType: "confidential"`).
+   - Client transmits credentials in the HTTP `Authorization` header using Basic scheme (`Authorization: Basic <base64(client_id:client_secret)>`).
+   - Verified against the stored secret hash. Mismatched or missing secret returns HTTP 401 `invalid_client` with `WWW-Authenticate: Basic realm="OAuth"`.
+3. `client_secret_post`:
+   - Restricted to confidential clients (`clientType: "confidential"`).
+   - Client transmits `client_id` and `client_secret` in the `application/x-www-form-urlencoded` request body.
+   - Verified against the stored secret hash.
+4. `private_key_jwt`:
+   - Restricted to confidential clients (`clientType: "confidential"`).
+   - Client authenticates by submitting a signed asymmetric JWT assertion (`client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer` and `client_assertion`).
+   - IdP verifies the assertion against the registered `jwks` or `jwks_uri`. Zero client secret is stored or permitted.
+
+#### Unsupported client authentication methods
+- `client_secret_jwt`:
+  - Not enabled in the installed engine configuration.
+  - Classified as `CONFLICTING_AUTH_METHOD` in `resolveClientPolicy` and flagged as `AMBIGUOUS`. Any client configured with `client_secret_jwt` fails closed until updated to a supported method.
+
+#### PKCE requirements
+- Public clients:
+  - Mandatory on authorization: Request must include `code_challenge` and `code_challenge_method=S256`. The `"plain"` challenge method is strictly forbidden.
+  - Mandatory on code exchange: Request must include `code_verifier`. The server validates `BASE64URL(SHA256(code_verifier)) === code_challenge`.
+- Confidential clients:
+  - PKCE is optional for confidential clients but strongly recommended. If a confidential client provides a `code_challenge` during authorization, it must provide a matching `code_verifier` during code exchange.
+
+#### Client bound refresh rotation without PKCE
+- Per RFC 6749 Section 6, public clients refresh tokens by submitting `grant_type=refresh_token`, `refresh_token`, and `client_id`.
+- Public clients do NOT supply a PKCE `code_verifier` during refresh token exchange.
+- Refresh security is provided by client bound refresh token rotation with single use replay detection in `oauth_token_families`:
+  - Each refresh acquisition obtains a unique atomic CAS lease using `leaseOwner`.
+  - Replay of an already consumed refresh token triggers immediate cascade revocation of the active token and the entire token family.
+  - A paused or failed worker releases only its own owned lease via `releaseRotationLock`, ensuring a newer winning worker's lease is never disturbed.
+
+### 4.6 Complete inventory of membership reads and writes affected by open access
+
+The migration to open access removes ambient writes to collection `user_app_registrations` for open applications when `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED === true`. All affected call sites across the application codebase are identified below:
+
+| Source File and Location | Operation | Legacy Behavior (`BYPASS=false`) | Modern Behavior (`BYPASS=true`) | Security Invariants |
+|---|---|---|---|---|
+| `backend/src/routes/auth-sign-in.ts:243` | Password login (`POST /sign-in/email`) | If client is public, inserts row into `user_app_registrations` | If client `accessPolicy === "open"`, skips write; if private, never writes ambient row | Zero ambient writes for open clients; private apps require explicit prior assignment |
+| `backend/src/routes/auth-sign-up.ts:142` | Email signup (`POST /sign-up/email`) | If client is public, upserts row into `user_app_registrations` | If client `accessPolicy === "open"`, skips write; if private, never writes ambient row | Zero ambient writes for open clients; private apps require explicit prior assignment |
+| `backend/src/routes/auth-interceptors.ts:207` | Social login callbacks | If client is public, upserts row into `user_app_registrations` | If client `accessPolicy === "open"`, skips write; if private, never writes ambient row | Identity federation preserves open access without ambient registration rows |
+| `backend/src/routes/auth-two-factor-context.ts:150` | 2FA continuation (`completeTwoFactorAuth`) | Upserts row into `user_app_registrations` | If client `accessPolicy === "open"`, skips write; if private, never writes ambient row | Multi factor continuation respects client access policy dimensions |
+| `backend/src/routes/auth-authorize.ts:232` | Authorization request (`GET /authorize`) | Checks `isPublic`; writes fallback registration if public | If `accessPolicy === "open"`, skips write; if private, verifies `checkUserHasAppAccess` | Super admin exclusion unconditionally enforced; private tenant access strictly gated |
+| `backend/src/routes/auth-consent.ts:127` | Consent decision (`POST /consent`) | Writes registration row on consent acceptance | If `accessPolicy === "open"`, skips write; if private, verifies active membership | Consent records user approval without creating durable database registration rows |
+
+#### Preservation of private tenant membership enforcement
+- For all applications with `accessPolicy: "private"`, `checkUserHasAppAccess(database, sessionUser, canonicalClientId)` is strictly evaluated across authorization, consent, code exchange, token refresh, UserInfo, and introspection.
+- If a user lacks an active assignment in `user_app_registrations` or `app_admins`, access is denied immediately.
+- Ambient registration rows are NEVER created for private applications on any login, signup, or authorization path.
+
+#### Platform super admin consumer isolation invariant
+- Platform super admins hold administrative authority over the identity provider and have zero ambient authority over consumer application tenant data.
+- In `checkUserHasAppAccess` (`backend/src/utils/app-access.ts:83-87`), if `user.role === "super-admin"`, access is denied (`return false`) unconditionally for all consumer applications, even if an explicit row exists in `user_app_registrations` or `app_admins`. Platform super admins must never access private consumer tenant applications.
+
+### 4.7 Rollback procedures and recovery guarantees
+
+To ensure operational stability and zero data loss, the platform implements three distinct, independent rollback procedures addressing runtime issuance failures, membership transaction scope, and deployment rollbacks.
+
+#### Procedure 1: Issuance failure cleanup
+- **Trigger:** Token minting, cryptographic signing, or linearization fails mid request (for example, database network timeout, crypto provider error, or worker termination during code exchange or refresh).
+- **Refresh rotation cleanup:**
+  - The rotation lease was acquired with a unique `leaseOwner` fencing token.
+  - The error handling boundary in `handleRefreshTokenGrant` executes `releaseRotationLock(database, incomingHash, canonicalClientId, leaseOwner)`.
+  - Because `releaseRotationLock` requires an exact match on `rotationOwner: leaseOwner`, a stale or failing worker will never clear or corrupt an active lease held by a subsequent winning worker.
+  - If token documents were inserted into MongoDB before linearization failed, `purgeTokensOnCommitFailure` purges the newly inserted tokens.
+  - If the token family was left in an unrecoverable state, it is marked `revoked: true` with `revokedReason: "issuance_linearization_failed"`.
+- **Authorization code exchange cleanup:**
+  - The authorization code was atomically marked consumed to prevent replay attacks.
+  - Any partially minted access tokens are purged from the database.
+  - The consumed code is not restored, preventing code injection or replay. The client simply initiates a fresh authorization flow.
+
+#### Procedure 2: Membership write rollback
+- **Trigger:** An authorization flow fails after an ambient membership write occurred.
+- **Legacy compatibility mode (`OPEN_APP_MEMBERSHIP_BYPASS_ENABLED=false`):**
+  - If an open application creates an ambient row in `user_app_registrations` during login or authorization, but token issuance subsequently fails within the same request transaction scope, the newly inserted registration row is removed.
+- **Modern open access mode (`OPEN_APP_MEMBERSHIP_BYPASS_ENABLED=true`):**
+  - Zero ambient rows are written to `user_app_registrations` for open applications. Consequently, membership write rollback is an intrinsic zero cost no op.
+- **Private applications:**
+  - Private applications never create ambient membership rows on login or authorization paths. Membership rollback is always a no op.
+
+#### Procedure 3: Deployment rollback of authentication enforcement
+- **Feature flag toggle rollback:**
+  - If unexpected client behavior occurs after activating open access bypass, operators immediately set `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED=false` in application configuration.
+  - Open applications immediately resume creating legacy fallback rows in `user_app_registrations`.
+  - Because all schema additions (`clientType`, `accessPolicy`, `isDev`, `policyVersion`) are additive and nullable, existing database records remain valid and no database migration rollback is required.
+- **Binary or container rollback:**
+  - If the application binary or container is rolled back from Slice P1b to Slice P1a:
+    - Legacy backend versions safely ignore additive policy fields and read legacy fields (`isPublic`, `isDev`, `clientSecret`).
+    - Active token families in `oauth_token_families` remain 100% valid.
+    - In flight concurrent requests complete cleanly under existing timeout fences.
+    - Ambiguous records flagged during P1a audit remain safely flagged and fail closed in both versions.
+- **Operator remediation steps:**
+  - If a legitimate client was flagged as ambiguous and fails closed, platform super admins update the document directly with `clientType` and `accessPolicy` via `PATCH /api/admin/clients/:id`, or restore valid legacy `isPublic` and `redirectUris` metadata.
 
 ### Preservation of administrative trust boundaries
 
@@ -383,12 +546,44 @@ The build plan follows a tracer bullet approach across three distinct slices:
 3. Create unit tests in `backend/tests/unit/client-policy-classification.test.ts` verifying all mapping rules, clear classes, ambiguous edge cases, and zero runtime mutation, satisfies **AC-P1A-01**, **AC-P1A-02**, **AC-P1A-03**, **AC-P1A-04**, **AC-P1A-05**.
 
 ### Slice P1b: Runtime Enforcement and Open Access Gate
-4. Update `backend/src/utils/client-resolver.ts` and `backend/src/utils/client-config-validator.ts` to normalize independent dimensions and validate strict `isDev` and loopback port matching, satisfies **AC-P1B-03**, **AC-P1B-05**.
-5. Update `backend/src/routes/admin-clients.ts` and `admin-client-detail.ts` to support super admin creation and modification of explicit policy dimensions while enforcing super admin boundaries, satisfies **AC-P1C-02**.
-6. Update `backend/src/routes/auth-authorize.ts`, `auth-consent.ts`, and `auth-token-refresh-validate.ts` to enforce `accessPolicy === "private"`, enforce super admin consumer exclusion, and gate open application membership writes, satisfies **AC-P1B-01**, **AC-P1B-06**.
-7. Update `backend/src/routes/auth-token-auth.ts`, `auth-token-code.ts`, and `auth-token-refresh.ts` to enforce PKCE S256 on public clients, secret authentication on confidential clients, and verifier free client bound refresh rotation, satisfies **AC-P1B-03**, **AC-P1B-04**.
-8. Update `auth-sign-in.ts`, `auth-sign-up.ts`, `auth-interceptors.ts`, and `auth-two-factor-context.ts` to skip ambient membership writes for open clients when bypass is enabled, satisfies **AC-P1B-02**.
-9. Create comprehensive security integration tests in `backend/tests/security/client-policy-enforcement.test.ts` verifying open access without membership, revoked private access denial, super admin exclusion, and token lifecycle invariants, satisfies **AC-P1B-01**, **AC-P1B-02**, **AC-P1B-03**, **AC-P1B-04**, **AC-P1B-05**, **AC-P1B-06**, **AC-P1B-07**.
+
+Slice P1b represents the smallest cohesive backend implementation slice to activate independent client dimensions and the open access gate without frontend changes.
+
+#### 1. Affected files and responsibilities
+- `backend/src/config/schema.ts` and `backend/src/config/index.ts`: Add `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED` boolean flag defaulting to `false` (under 300 lines).
+- `backend/src/utils/client-resolver.ts`: Integrate `resolveClientPolicy` into canonical client resolution. Enforce strict boolean `isDev` parsing and native loopback ephemeral port rules per RFC 8252 (under 300 lines).
+- `backend/src/routes/auth-authorize.ts`: Enforce open versus private access policy. Gate ambient membership writes using `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED`. Enforce mandatory PKCE S256 for public clients. Enforce unconditional super admin exclusion from private tenant apps (under 300 lines).
+- `backend/src/routes/auth-consent.ts`: Gate membership writes on consent approval. Enforce private tenant membership verification and super admin exclusion (under 300 lines).
+- `backend/src/routes/auth-token-auth.ts`: Enforce client authentication rules in token handler. Reject client secrets presented by public clients. Verify secrets for confidential clients. Verify asymmetric assertions for `private_key_jwt` (under 300 lines).
+- `backend/src/routes/auth-token-code.ts`: Enforce mandatory PKCE `code_verifier` for public clients on authorization code exchange (under 300 lines).
+- `backend/src/routes/auth-token-refresh.ts`: Enforce verifier free client bound refresh rotation for public clients. Preserve atomic CAS lease claim with `leaseOwner` and single use replay cascade revocation (under 300 lines).
+- `backend/src/routes/auth-sign-in.ts`: Skip ambient `user_app_registrations` write for open applications when bypass is enabled (under 300 lines).
+- `backend/src/routes/auth-sign-up.ts`: Skip ambient `user_app_registrations` write for open applications when bypass is enabled (under 300 lines).
+- `backend/src/routes/auth-interceptors.ts`: Skip ambient `user_app_registrations` write on social login callbacks for open applications when bypass is enabled (under 300 lines).
+- `backend/src/routes/auth-two-factor-context.ts`: Skip ambient `user_app_registrations` write on 2FA continuation for open applications when bypass is enabled (under 300 lines).
+- `backend/src/routes/admin-client-detail.ts`: Restrict policy field modifications (`clientType`, `accessPolicy`, `isDev`) strictly to verified super admins (under 300 lines).
+- `backend/tests/security/client-policy-enforcement.test.ts`: Focused security integration test suite verifying all runtime enforcement invariants and consumer integration recipes (under 300 lines).
+
+#### 2. Acceptance criteria mapping
+- **AC-P1B-01 (Umbrella 0008 AC-06):** Open applications allow eligible users to authorize and consent without inserting rows into `user_app_registrations` when `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED=true`.
+- **AC-P1B-02 (Umbrella 0008 AC-06):** Ambient membership writes for open applications are removed from password login, email signup, social login callbacks, and 2FA continuation when bypass is active.
+- **AC-P1B-03 (Umbrella 0008 AC-05):** Public clients strictly omit secrets and enforce PKCE S256 on authorization and code exchange. Confidential clients authenticate using valid credentials.
+- **AC-P1B-04:** Public clients executing token refresh use client bound refresh rotation without requiring a PKCE verifier. Replayed refresh tokens trigger immediate token family revocation.
+- **AC-P1B-05:** Native loopback redirect URIs allow ephemeral variable ports in development mode per RFC 8252 Section 7.3. Production clients strictly require HTTPS.
+- **AC-P1B-06:** Platform super admin accounts are strictly excluded from private consumer applications across all authorization checks.
+- **AC-P1B-07 (Umbrella 0008 AC-14):** Protocol endpoints and offline RS256 token verification against JWKS remain fully compatible. Zero direct database access is granted to consumers.
+
+#### 3. Real API and consumer verification scenarios
+- **Scenario 1 (Open Public Single Page App Recipe):**
+  A Vite single page application configured with `clientType: "public"` and `accessPolicy: "open"`. Initiates authorization with `code_challenge` (S256), zero secret. Completes consent and code exchange with `code_verifier`. Authenticates successfully with zero rows created in `user_app_registrations`. Refreshes tokens by presenting `refresh_token` and `client_id` without verifier. Presenting an already consumed refresh token triggers immediate family revocation.
+- **Scenario 2 (Open Confidential Server BFF Recipe):**
+  A Next.js App Router Backend for Frontend configured with `clientType: "confidential"` and `accessPolicy: "open"`. Authenticates to `/api/auth/oauth2/token` via `client_secret_basic`. Authorization code exchange mints RS256 JWT tokens with zero membership rows in `user_app_registrations`. JWT cryptographically verifies offline against `/.well-known/jwks.json`.
+- **Scenario 3 (Private Public Mobile Recipe):**
+  A native mobile application configured with `clientType: "public"` and `accessPolicy: "private"`. An unassigned user attempting authorization receives `302 error=access_denied`. A provisioned tenant member in `user_app_registrations` completes PKCE S256 authorization successfully.
+- **Scenario 4 (Private Confidential Enterprise Recipe):**
+  An enterprise tenant service configured with `clientType: "confidential"` and `accessPolicy: "private"`. Authenticates via client secret. An unassigned user or revoked member is denied. A platform super admin attempting authorization receives `302 error=access_denied` unconditionally.
+- **Scenario 5 (Ambiguous Client Fail Closed Scenario):**
+  A legacy client with conflicting flags or malformed metadata (`status === "ambiguous"`). Rejects authorization requests with HTTP 400 or safe redirect `error=invalid_client`. Rejects token requests with HTTP 401 `invalid_client`. Rejects introspection and revocation with HTTP 401 `invalid_client`.
 
 ### Slice P1c: Frontend Administrative Controls
 10. Update `frontend/pages/admin/RegisterAppModal.tsx`, `EditAppModal.tsx`, and `AdminClients.tsx` to provide explicit selectors for client type and access policy, satisfies **AC-P1C-01**.
