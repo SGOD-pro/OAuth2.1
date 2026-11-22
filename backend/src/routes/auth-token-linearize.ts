@@ -158,24 +158,28 @@ export async function purgeTokensOnCommitFailure(
     resolvedUserId: string,
     jwtAt: string,
     tokenData: any,
-    familyId?: string | null
+    familyId?: string | null,
+    revokeFamilyInsteadOfDelete?: boolean
 ): Promise<void> {
+    const familyQuery = familyId ? { familyId } : { clientId: canonicalClientId, userId: resolvedUserId };
     await Promise.all([
         database.collection("oauthAccessToken").deleteMany({
             $or: [
                 { clientId: canonicalClientId, userId: resolvedUserId },
                 { token: jwtAt },
-                ...(tokenData.access_token ? [{ token: tokenData.access_token }] : []),
+                ...(tokenData?.access_token ? [{ token: tokenData.access_token }] : []),
             ],
         }),
         database.collection("oauthRefreshToken").deleteMany({
             $or: [
                 { clientId: canonicalClientId, userId: resolvedUserId },
-                ...(tokenData.refresh_token ? [{ token: tokenData.refresh_token }] : []),
+                ...(tokenData?.refresh_token ? [{ token: tokenData.refresh_token }] : []),
             ],
         }),
-        familyId
-            ? database.collection("oauth_token_families").deleteMany({ familyId })
-            : database.collection("oauth_token_families").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+        revokeFamilyInsteadOfDelete
+            ? database.collection("oauth_token_families").updateMany(familyQuery, {
+                $set: { status: "revoked", revokedAt: new Date(), rotating: false },
+            })
+            : database.collection("oauth_token_families").deleteMany(familyQuery),
     ]);
 }

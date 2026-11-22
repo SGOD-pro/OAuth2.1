@@ -247,12 +247,13 @@ export async function handleRefreshTokenGrant(
                         resolvedUserId,
                         jwtAt,
                         tokenData,
-                        currentFamilyId
+                        currentFamilyId,
+                        true
                     );
                     return c.json({
                         error: "invalid_grant",
                         error_description: "User account was revoked or version transitioned during token refresh",
-                    }, 400);
+                    }, 401);
                 }
 
                 if (tokenBarrierHook && resolvedUserId) {
