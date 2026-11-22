@@ -101,8 +101,8 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Mocked engine execution vs live MongoDB distinction:
      * Classification and auth method tests execute pure in memory helpers with zero network or database dependencies
      * Audit CLI tests execute direct CLI functions against disposable authenticated MongoDB instances with genuine read only role enforcement
-     * Refresh lease fencing tests execute production route handlers across genuine worker threads and distinct MongoDB connections
-     * No mocked engine responses are substituted for genuine database or cryptographic validations in P1a suites
+     * Refresh lease fencing tests execute production `handleRefreshTokenGrant` route handlers across genuine worker threads and distinct MongoDB connections
+     * In `refresh-lease-fencing.test.ts`, Worker B configures an `authProvider.handler` mock for token minting while executing live MongoDB CAS lease acquisition, lease fencing, and rotation commit against disposable MongoDB
 2. Command: `npm run security:docs-check`
    * Result: Passed without errors
 3. Command: `git diff --check`
