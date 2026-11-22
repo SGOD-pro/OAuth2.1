@@ -20,7 +20,7 @@ import { handleVerifyTotp, handleVerifyBackupCode } from "./auth-two-factor";
 export const auth = new Hono();
 
 // 1. Credentials and pre-login initiation
-auth.post("/oauth/initiate", handleOAuthInitiate);
+auth.get("/oauth/initiate", handleOAuthInitiate);
 auth.post("/sign-in/email", handleSignInEmail);
 auth.post("/sign-up/email", handleSignUpEmail);
 
