@@ -1,49 +1,21 @@
-import { config } from "../config"
+import { config } from "../config";
 import { betterAuth } from "better-auth";
 import { admin, jwt, twoFactor } from "better-auth/plugins";
-import { createAccessControl } from "better-auth/plugins/access";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { client, database } from "../db/mongo";
-import { isLoopbackHost, isStrongPassword, normalizeOrigin } from "./security";
-import { isOriginAllowed } from "../middleware/cors";
+import { isStrongPassword } from "./security";
+import {
+  superAdminRole,
+  legacyAdminRole,
+  appAdminRole,
+  userRole,
+  isSuperAdminUser,
+} from "./auth-roles";
+import { resolveTrustedOrigins } from "./auth-trusted-origins";
+import { sendVerificationEmailHandler } from "./auth-verification-email";
 
-const accessControl = createAccessControl({
-    user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'impersonate-admins', 'delete', 'set-password', 'set-email', 'get', 'update'],
-    session: ['list', 'revoke', 'delete']
-});
-
-const superAdminRole = accessControl.newRole({
-    user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'impersonate-admins', 'delete', 'set-password', 'set-email', 'get', 'update'],
-    session: ['list', 'revoke', 'delete'],
-});
-
-const legacyAdminRole = accessControl.newRole({
-    user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'delete', 'set-password', 'set-email', 'get', 'update'],
-    session: ['list', 'revoke', 'delete'],
-});
-
-const appAdminRole = accessControl.newRole({
-    user: [],
-    session: [],
-});
-
-const userRole = accessControl.newRole({
-    user: [],
-    session: [],
-});
-
-
-export function isSuperAdminUser(user: any): boolean {
-    if (!user) return false;
-    if (user.role === "super-admin") {
-        return user.scopedClientId === null || user.scopedClientId === undefined;
-    }
-    if (user.role === "admin" && user.scopedClientId === null) {
-        return true;
-    }
-    return false;
-}
+export { isSuperAdminUser };
 
 export const AUTH_INSTANCE = Symbol("AUTH_INSTANCE");
 export type AuthInstance = ReturnType<typeof betterAuth>;
@@ -51,62 +23,7 @@ export type AuthInstance = ReturnType<typeof betterAuth>;
 export const authProvider = betterAuth({
     appName: "SWYRA Auth", // TOTP issuer label shown in authenticator apps
     baseURL: config.auth.baseURL,
-    trustedOrigins: async (request?: Request) => {
-        const isProduction = config.env === "production";
-        const allowDevInProd = config.allowDevClientsInProduction;
-
-        const origins = new Set<string>();
-        if (config.frontendUrl) {
-            const normFrontend = normalizeOrigin(config.frontendUrl);
-            if (normFrontend) origins.add(normFrontend);
-        }
-
-        // Only in development do we populate default local dev loopback origins
-        if (!isProduction) {
-            origins.add("http://localhost:5174");
-            origins.add("http://localhost:5173");
-            origins.add("http://localhost:3000");
-            origins.add("http://localhost:5175");
-            origins.add("http://localhost:3001");
-            origins.add("http://127.0.0.1:5174");
-            origins.add("http://127.0.0.1:3000");
-        }
-
-        if (request) {
-            const reqOrigin = request.headers.get("origin");
-            if (reqOrigin) {
-                const normalized = normalizeOrigin(reqOrigin);
-                if (normalized) {
-                    let isLoopback = false;
-                    try {
-                        isLoopback = isLoopbackHost(new URL(normalized).hostname);
-                    } catch {}
-
-                    if (!isProduction) {
-                        if (isLoopback) {
-                            origins.add(normalized);
-                        } else {
-                            try {
-                                const allowed = await isOriginAllowed(normalized);
-                                if (allowed) origins.add(normalized);
-                            } catch {}
-                        }
-                    } else {
-                        // In production: loopback is strictly prohibited unless explicitly configured dev mode
-                        if (isLoopback && !allowDevInProd) {
-                            // Do not trust loopback origin in production
-                        } else {
-                            try {
-                                const allowed = await isOriginAllowed(normalized);
-                                if (allowed) origins.add(normalized);
-                            } catch {}
-                        }
-                    }
-                }
-            }
-        }
-        return Array.from(origins);
-    },
+    trustedOrigins: resolveTrustedOrigins,
     secret: config.auth.secret,
 
     emailAndPassword: {
@@ -127,61 +44,7 @@ export const authProvider = betterAuth({
         sendOnSignIn:
             config.auth.emailVerificationEnabled,
         expiresIn: 3600,
-        sendVerificationEmail: async ({ user, url, token }: any) => {
-            const webhookUrl = config.emailDeliveryWebhookUrl || process.env.EMAIL_DELIVERY_WEBHOOK_URL;
-            if (!webhookUrl || typeof webhookUrl !== "string" || !webhookUrl.trim()) {
-                if (config.auth.emailVerificationEnabled) {
-                    console.error("[EMAIL_VERIFICATION] Explicit failure: Email verification is enabled but EMAIL_DELIVERY_WEBHOOK_URL is not configured");
-                    throw new Error("Email verification is enabled but EMAIL_DELIVERY_WEBHOOK_URL is not configured");
-                }
-                console.warn("[EMAIL_VERIFICATION] Warning: No external email delivery transport configured for user verification.");
-                return;
-            }
-
-            let validatedUrl: URL;
-            try {
-                validatedUrl = new URL(webhookUrl.trim());
-            } catch {
-                console.error("[EMAIL_VERIFICATION] Invalid EMAIL_DELIVERY_WEBHOOK_URL format");
-                throw new Error("Invalid email delivery webhook transport configuration");
-            }
-
-            if (config.env === "production") {
-                if (validatedUrl.protocol !== "https:") {
-                    console.error("[EMAIL_VERIFICATION] Insecure transport rejected: EMAIL_DELIVERY_WEBHOOK_URL must use HTTPS in production");
-                    throw new Error("EMAIL_DELIVERY_WEBHOOK_URL must use HTTPS in production");
-                }
-                const host = validatedUrl.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-                if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host.endsWith(".localhost")) {
-                    console.error("[EMAIL_VERIFICATION] Insecure transport rejected: EMAIL_DELIVERY_WEBHOOK_URL cannot be loopback in production");
-                    throw new Error("EMAIL_DELIVERY_WEBHOOK_URL cannot be a loopback address in production");
-                }
-            }
-
-            try {
-                const res = await fetch(validatedUrl.toString(), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ email: user.email, url, token }),
-                    signal: AbortSignal.timeout(5000),
-                });
-
-                if (!res.ok) {
-                    console.error(`[EMAIL_VERIFICATION] Email delivery webhook failed with status ${res.status}`);
-                    throw new Error(`Email delivery webhook failed with HTTP ${res.status}`);
-                }
-            } catch (err: any) {
-                if (err.name === "TimeoutError" || err.name === "AbortError" || err.message?.includes("timed out")) {
-                    console.error("[EMAIL_VERIFICATION] Delivery webhook timed out after 5000ms");
-                    throw new Error("Email delivery timed out");
-                }
-                if (err.message?.includes("HTTP") || err.message?.includes("HTTPS") || err.message?.includes("loopback")) {
-                    throw err;
-                }
-                console.error("[EMAIL_VERIFICATION] Delivery webhook network error");
-                throw new Error("Email delivery transport network failure");
-            }
-        },
+        sendVerificationEmail: sendVerificationEmailHandler,
     },
 
     advanced: {

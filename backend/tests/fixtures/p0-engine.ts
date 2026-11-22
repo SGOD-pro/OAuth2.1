@@ -73,17 +73,25 @@ export async function p0Fixture() {
     for (const [field, definition] of Object.entries(table.fields)) {
       if (!definition.index && !definition.unique) continue;
       const column = definition.fieldName ?? field;
-      await db.collection(name).createIndex({ [column]: 1 }, {
-        name: getDatabaseFieldIndexName(name, column, definition.unique ?? false),
-        unique: definition.unique ?? false,
-      });
+      try {
+        await db.collection(name).createIndex({ [column]: 1 }, {
+          name: getDatabaseFieldIndexName(name, column, definition.unique ?? false),
+          unique: definition.unique ?? false,
+        });
+      } catch (err: any) {
+        if (err?.code !== 86 && !err?.message?.includes("already exists")) throw err;
+      }
     }
     for (const index of resolveDatabaseTableIndexes({
       fields: table.fields, indexes: table.indexes, tableName: name,
     })) {
-      await db.collection(name).createIndex(Object.fromEntries(
-        index.columns.map(field => [field === "id" ? "_id" : field, 1]),
-      ), { name: index.name, unique: index.unique ?? false });
+      try {
+        await db.collection(name).createIndex(Object.fromEntries(
+          index.columns.map(field => [field === "id" ? "_id" : field, 1]),
+        ), { name: index.name, unique: index.unique ?? false });
+      } catch (err: any) {
+        if (err?.code !== 86 && !err?.message?.includes("already exists")) throw err;
+      }
     }
   }
   const hash = await context.password.hash("P0-Disposable-Password!123");
