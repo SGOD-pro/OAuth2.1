@@ -1,12 +1,17 @@
+process.env.NODE_ENV = "test";
+process.env.BETTER_AUTH_SECRET = "a".repeat(32);
+process.env.BETTER_AUTH_URL = "http://localhost:3000";
+process.env.FRONTEND_URL = "http://localhost:5174";
+process.env.GOOGLE_CLIENT_ID = "test-google-id";
+process.env.GOOGLE_CLIENT_SECRET = "test-google-secret";
+process.env.INTERNAL_GATEWAY_SECRET = "g".repeat(32);
+
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { MongoClient, Db } from "mongodb";
-import dotenv from "dotenv";
-
-dotenv.config({ path: ".env" });
 
 describe("OAuth V2: Ownership-Safe Refresh Lease and Fencing Deterministic Suite", () => {
   let mongod: MongoMemoryServer;
@@ -24,6 +29,10 @@ describe("OAuth V2: Ownership-Safe Refresh Lease and Fencing Deterministic Suite
   });
 
   after(async () => {
+    try {
+      const { closeDb } = await import("../../src/db/mongo");
+      await closeDb();
+    } catch {}
     await mongoClient?.close();
     await mongod?.stop();
   });
@@ -205,5 +214,46 @@ describe("OAuth V2: Ownership-Safe Refresh Lease and Fencing Deterministic Suite
       await workerA.terminate();
       await workerB.terminate();
     }
+  });
+
+  it("proves handleRefreshTokenGrant releases lock on thrown error", async () => {
+    const { handleRefreshTokenGrant } = await import("../../src/routes/auth-token-refresh");
+    const rawToken = "error-refresh-token-direct";
+    const initialHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+    const clientId = "client-error-direct";
+    const userId = "user-error-1";
+
+    await db.collection("user").insertOne({
+      _id: userId as any,
+      id: userId,
+      email: "user-error@example.com",
+    });
+
+    await db.collection("oauth_token_families").insertOne({
+      familyId: "fam-error-direct",
+      clientId,
+      userId,
+      activeTokenHash: initialHash,
+      consumedTokenHashes: [],
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      tokenVersion: 1,
+    });
+
+    const mockC = { json: (body: any, status: number) => ({ body, status }) };
+    const mockContext: any = {
+      canonicalClientId: clientId,
+      clientDoc: { isPublic: true },
+      reqToForward: { notARequest: true },
+    };
+
+    await assert.rejects(async () => {
+      await handleRefreshTokenGrant(mockC, mockContext, rawToken);
+    });
+
+    const fam = await db.collection("oauth_token_families").findOne({ activeTokenHash: initialHash });
+    assert.equal(fam?.rotating, false, "Rotation lock must be released on thrown error");
+    assert.equal(fam?.rotationOwner, undefined, "rotationOwner must be unset on thrown error");
   });
 });

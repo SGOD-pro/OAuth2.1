@@ -19,7 +19,7 @@ Read [the document index](../README.md), [architecture](../ARCHITECTURE.md), [im
 |---|---|---|
 | Baseline account/token/MFA hardening | Merged into main, incorporated in docs branch; deployment not inferred | Preserve baseline; verify runtime refs/checks before release |
 | P0 engine/schema compatibility | Locally verified, [evidence](../specs/0008-multi-account-identity-platform/p0-evidence.md) | Accept isolated proof; production P2/P3 wiring remains |
-| P1 client dimensions | Planned | Audit/backfill; open ordinary access, private/admin guards retained |
+| P1 client dimensions | In Progress | P1a classification and audit verified; P1b enforcement and P1c UI pending |
 | P2 verified signup, username and mail | Planned | Proof-before-create, unique transaction and real bounded delivery |
 | P3 independent sessions and chooser | Planned | Real browser multi-tab subject and purpose isolation |
 | P4 MFA lifecycle/recovery | Planned extension of hardened policy | Real enrollment/invite/recovery and stale-step-up tests |

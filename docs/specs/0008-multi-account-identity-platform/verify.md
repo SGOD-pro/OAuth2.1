@@ -15,7 +15,7 @@ Record actual commands/results in the documentation PR: relative links/anchors, 
 | Request-local selected engine sessions | 07-09 | In-process engine HTTP + real Mongo replica set | P0 proof passed, 6 cases; browser/workers and P3 wiring pending |
 | OTP start/verify/resend/finalize and wrong-code zero writes | 02-04,15 | Real API + disposable DB/mail sink; concurrency workers | Pending |
 | New user/profile/key/session and lost response recovery | 03,16 | Real engine finalization + idempotency | Pending |
-| Client-policy backfill and open/private matrix | 05-06,14 | Old/new schema and real consumer fixtures | P1a classification and zero write audit verified (30 unit/CLI cases passed); refresh lease fencing verified; P1b enforcement and P1c UI pending |
+| Client-policy backfill and open/private matrix | 05-06,14 | Old/new schema and real consumer fixtures | P1a classification and zero write audit verified (32 unit/CLI cases passed); refresh lease fencing verified; P1b enforcement and P1c UI pending |
 | Browser A/B login, tab interleave, expiry/logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | Pending |
 | Account-list CORS/CSRF/fixation/context misuse | 08 | Browser and direct HTTP negatives | Pending |
 | Genuine user/admin MFA, recovery/promotion/step-up/plugin paths | 10-11 | Real password/TOTP/backup protocol | Pending |
@@ -85,13 +85,14 @@ A failed security invariant blocks affected rollout; do not skip/relax it for a 
      * Engine enforced zero writes against real MongoDB instance using read only database user role (`roles: [{ role: "read", db: dbName }]`), verifying that direct insert attempts throw `MongoServerError: not authorized`
      * Output redaction in CLI JSON and human readable output
      * Process exit codes: 0 for clean inventory, 1 for ambiguous inventory, 1 for missing configuration
-   * Refresh lease fencing cases in `refresh-lease-fencing.test.ts`: 1 passed, 0 failed
+   * Refresh lease fencing cases in `refresh-lease-fencing.test.ts`: 2 passed, 0 failed
      * Worker A acquires lease with unique fencing owner
      * Worker A paused, lease expired in MongoDB, Worker B acquires new lease with distinct owner
      * Worker A resumes failure cleanup; release with stale owner matches 0 documents; Worker B retains lease
      * Stale Worker A attempts rotation commit; CAS matches 0 documents and fails
      * Active Worker B commits rotation successfully
      * Stale Worker A attempts replay after grace window; replay detection cascades and revokes family
+     * Thrown error in handleRefreshTokenGrant releases lock with leaseOwner, leaving family unblocked
 2. Command: `npm run security:docs-check`
    * Result: Passed without errors
 3. Command: `git diff --check`

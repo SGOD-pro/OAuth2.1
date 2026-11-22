@@ -1,6 +1,6 @@
 # 0008. Verified multi-account identity platform
 
-**Status:** Proposed program; P0 compatibility proof locally verified. P1-P9 pending. Updated 2026-11-22.
+**Status:** Proposed program; P0 proof and P1a classification/audit verified. P1b-P9 pending. Updated 2026-11-22.
 **Baseline:** integrated main `828acc5`, including security PR #2 reviewed at `66738b0` plus report correction `0a5727e`.
 **Scope:** Full V2 product/architecture plan, delivered as bounded vertical slices. P0 adds isolated compatibility adapters/tests, not production identity routes, deployment or data migration.
 
