@@ -1,145 +1,30 @@
 import { create } from 'zustand';
 import { toast } from 'sonner';
 import { apiFetch } from './api';
+import type {
+  Stats,
+  OAuthClient,
+  LogEntry,
+  LogsQuery,
+  AdminStore,
+  CachedQueryResult,
+} from './adminStore-types';
+import {
+  CACHE_TTL,
+  logsCache,
+  inFlightLogs,
+  queryOwnership,
+  incrementRequestId,
+  incrementQuerySequence,
+  getLatestRequestId,
+  _resetAdminLogsCacheForTesting,
+} from './adminStore-cache';
 
-export interface RecentActivityItem {
-  id?: string;
-  type?: string;
-  userId?: string;
-  ipAddress?: string | null;
-  userAgent?: string | null;
-  timestamp?: string | null;
-}
-
-export interface Stats {
-  totalClients: number;
-  activeClients: number;
-  totalUsers: number;
-  recentLogins: number;
-  recentSessions24h?: number;
-  activeSessions?: number;
-  recentActivity?: RecentActivityItem[];
-}
-
-export interface OAuthClient {
-  client_id: string;
-  client_name: string;
-  // client_secret is intentionally NOT included — secrets are only returned once at creation
-  // time (POST /clients response) and should never be fetched via list/detail endpoints.
-  redirect_uris: string[];
-  redirectUris?: string[];
-  allowed_origins?: string[];
-  allowedOrigins?: string[];
-  disabled: boolean;
-  is_dev?: boolean;
-  isDev?: boolean;
-  is_public?: boolean;
-  isPublic?: boolean;
-  metadata?: {
-    allowedOrigins?: string[];
-    allowed_origins?: string[];
-    isDev?: boolean;
-    is_dev?: boolean;
-  };
-  skip_consent: boolean;
-  enable_end_session: boolean;
-  has_custom_admins?: boolean;
-  hasCustomAdmins?: boolean;
-  adminEmail?: string | null;
-  adminUserId?: string | null;
-  createdAt?: string | Date;
-  created_at?: string | Date;
-  updatedAt?: string | Date;
-  updated_at?: string | Date;
-}
-
-export interface LogEntry {
-  userId: string;
-  userEmail: string | null;
-  action: string;
-  ipAddress: string | null;
-  createdAt: string | null;
-  appName?: string | null;
-  applicationName?: string | null;
-  outcome?: string | null;
-  clientId?: string | null;
-}
-
-export interface LogsQuery {
-  page?: number;
-  limit?: number;
-  search?: string;
-  action?: string;
-  outcome?: string;
-  clientId?: string;
-}
-
-export interface LogsState {
-  data: LogEntry[] | null;
-  totalCount: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-  lastFetched: number;
-  loading: boolean;
-  error: string | null;
-  activeQueryKey: string;
-}
-
-interface CacheState<T> {
-  data: T | null;
-  lastFetched: number;
-  loading: boolean;
-}
-
-interface AdminStore {
-  stats: CacheState<Stats>;
-  clients: CacheState<OAuthClient[]>;
-  logs: LogsState;
-  
-  fetchStats: (force?: boolean) => Promise<void>;
-  fetchClients: (force?: boolean) => Promise<void>;
-  fetchLogs: (query?: LogsQuery, force?: boolean) => Promise<void>;
-  
-  // Optimistic mutations
-  addClientLocal: (client: OAuthClient) => void;
-  updateClientLocal: (client: OAuthClient) => void;
-  deleteClientLocal: (clientId: string) => void;
-}
-
-const CACHE_TTL = 30_000; // 30 seconds
-
-interface CachedQueryResult {
-  data: LogEntry[];
-  totalCount: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-  lastFetched: number;
-}
-
-const logsCache = new Map<string, CachedQueryResult>();
-const inFlightLogs = new Map<string, Promise<{
-  data: LogEntry[];
-  totalCount: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-}>>();
-const queryOwnership = new Map<string, number>();
+export * from './adminStore-types';
+export { _resetAdminLogsCacheForTesting };
 
 let inFlightStats: Promise<void> | null = null;
 let inFlightClients: Promise<void> | null = null;
-let latestLogRequestId = 0;
-let latestLogQuerySequence = 0;
-
-export function _resetAdminLogsCacheForTesting() {
-  logsCache.clear();
-  inFlightLogs.clear();
-  queryOwnership.clear();
-  latestLogRequestId = 0;
-  latestLogQuerySequence = 0;
-}
 
 export const useAdminStore = create<AdminStore>((set, get) => ({
   stats: { data: null, lastFetched: 0, loading: false },
@@ -218,10 +103,6 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
     const queryKey = JSON.stringify({ page, limit, search, action, outcome, clientId });
     const now = Date.now();
 
-    // 1. Cached Query Return:
-    // If unexpired cached data exists for this query, return it immediately.
-    // Crucially, increment request identity before returning so any obsolete in-flight
-    // request cannot update results, totals, loading, or errors.
     const cached = logsCache.get(queryKey);
     const activeMatch = get().logs.activeQueryKey === queryKey && get().logs.data !== null;
     const isCachedValid = Boolean(cached && now - cached.lastFetched < CACHE_TTL);
@@ -239,8 +120,7 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
             lastFetched: get().logs.lastFetched,
           };
 
-      // Invalidate any older in-flight requests by updating request identity
-      ++latestLogRequestId;
+      incrementRequestId();
 
       set({
         logs: {
@@ -258,18 +138,14 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
       return;
     }
 
-    // 2. Fresh Request:
-    // Update request identity and mark store as loading for this query
-    const currentRequestId = ++latestLogRequestId;
+    const currentRequestId = incrementRequestId();
     set({ logs: { ...get().logs, loading: true, error: null } });
 
-    // 3. In-flight Deduplication & Ownership Tracking:
-    // Reuse in-flight network request for identical query parameters unless forced
     let fetchPromise = inFlightLogs.get(queryKey);
 
     try {
       if (!fetchPromise || force) {
-        const queryToken = ++latestLogQuerySequence;
+        const queryToken = incrementQuerySequence();
         if (queryOwnership.size >= 100 && !queryOwnership.has(queryKey)) {
           const oldestKey = queryOwnership.keys().next().value;
           if (oldestKey) queryOwnership.delete(oldestKey);
@@ -304,7 +180,6 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
             totalPages,
           };
 
-          // Only the current sequence owner may publish that query's cached result
           if (queryOwnership.get(queryKey) === queryToken) {
             if (logsCache.size >= 100) {
               const oldestKey = logsCache.keys().next().value;
@@ -327,8 +202,7 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
 
       const result = await fetchPromise;
 
-      // Guard against race conditions: do not overwrite newer search/filter results
-      if (currentRequestId === latestLogRequestId) {
+      if (currentRequestId === getLatestRequestId()) {
         set({
           logs: {
             data: result.data,
@@ -344,7 +218,7 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
         });
       }
     } catch (err: unknown) {
-      if (currentRequestId === latestLogRequestId) {
+      if (currentRequestId === getLatestRequestId()) {
         const errorMsg =
           err instanceof Error
             ? err.message
@@ -361,7 +235,6 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
         });
       }
     } finally {
-      // Delete in-flight entry only when it still belongs to the completing request
       if (fetchPromise && inFlightLogs.get(queryKey) === fetchPromise) {
         inFlightLogs.delete(queryKey);
       }
@@ -388,7 +261,6 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
         },
       };
     });
-    // Trigger background stats refresh
     void get().fetchStats(true);
   },
 
@@ -399,7 +271,6 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
         data: (state.clients.data || []).map((c) => c.client_id === client.client_id ? client : c)
       }
     }));
-    // Trigger background stats refresh
     void get().fetchStats(true);
   },
 
@@ -410,7 +281,6 @@ export const useAdminStore = create<AdminStore>((set, get) => ({
         data: (state.clients.data || []).filter((c) => c.client_id !== clientId)
       }
     }));
-    // Trigger background stats refresh
     void get().fetchStats(true);
   }
 }));
