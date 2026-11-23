@@ -1441,7 +1441,10 @@ await runTest(19, "Social login private-app isolation: real Better Auth handler 
 await runTest(20, "Social login public-app membership: creates membership idempotently with zero duplicates", async () => {
   const publicAppId = `public_app_${testSuffix}`;
   const publicCallbackUrl = `${process.env.FRONTEND_URL || "http://localhost:5174"}/cb-pub`;
-  await seedOAuthClient(publicAppId, "pub_secret_12345", true, [publicCallbackUrl]);
+  await seedOAuthClient(publicAppId, "pub_secret_12345", true, [publicCallbackUrl], false, {
+    isDev: true,
+    is_dev: true,
+  });
 
   const pubSocialEmail = `pub_social_${crypto.randomBytes(4).toString("hex")}@example.com`;
   mockGoogleProfile = {
