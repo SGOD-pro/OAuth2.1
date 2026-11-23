@@ -3,12 +3,8 @@ dotenv.config();
 
 // Ensure test verifies security invariants
 process.env.NODE_ENV = "test";
-import { MongoMemoryServer } from "mongodb-memory-server";
-let mongod: any = null;
-if (!process.env.MONGO_URI || process.env.MONGO_URI.includes("mongodb.net") || process.env.MONGO_URI.includes("cluster0")) {
-  mongod = await MongoMemoryServer.create();
-  process.env.MONGO_URI = mongod.getUri();
-}
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
+const suite = await setupSuiteDatabase("app_mgmt_auth");
 
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "http://localhost:3000";
@@ -566,9 +562,7 @@ console.log("================================================================");
 console.log(`  APPLICATION MANAGEMENT AUTH RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 
-if (mongod) {
-  await mongod.stop();
-}
+await suite.cleanup();
 
 if (failed > 0) {
   process.exit(1);

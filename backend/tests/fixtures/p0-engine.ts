@@ -2,22 +2,17 @@ import { createLocalAccountIssuer } from "@better-auth/core/db";
 import { getDatabaseFieldIndexName, resolveDatabaseTableIndexes } from "@better-auth/core/db/internal";
 import { createAuthMiddleware } from "better-auth/api";
 import { betterAuth, type BetterAuthPlugin } from "better-auth";
-import { MongoMemoryReplSet } from "mongodb-memory-server";
-import { MongoClient } from "mongodb";
 import { createEngineTransactionBoundary } from "../../src/identity/engine-transaction";
 import { isolateTestEnvironment } from "./test-env-isolation";
+import { setupSuiteDatabase } from "./test-docker-mongo";
 
 export async function p0Fixture() {
   isolateTestEnvironment();
-  const replica = await MongoMemoryReplSet.create({
-    replSet: { count: 1, storageEngine: "wiredTiger" },
-    binary: { version: "7.0.24" },
-    instanceOpts: [{ args: ["--nounixsocket"] }],
-  });
-  const client = await new MongoClient(replica.getUri()).connect();
-  const db = client.db("p0_compatibility");
+  const suite = await setupSuiteDatabase("p0_compatibility");
+  const { client, dbName, uri } = suite;
+  const db = client.db(dbName);
   Object.assign(process.env, {
-    MONGO_URI: replica.getUri("p0_compatibility"), NODE_ENV: "test",
+    MONGO_URI: uri, NODE_ENV: "test",
     BETTER_AUTH_SECRET: "p0-disposable-engine-secret-000000000000",
     BETTER_AUTH_URL: "http://localhost:3000", FRONTEND_URL: "http://localhost:5174",
     GOOGLE_CLIENT_ID: "p0-unused", GOOGLE_CLIENT_SECRET: "p0-unused",
@@ -131,6 +126,6 @@ export async function p0Fixture() {
       return { reached, release: () => { release(); held = null; } };
     },
     fail: (at: typeof failAt) => { failAt = at; },
-    close: async () => { await closeDb(); await client.close(); await replica.stop(); },
+    close: async () => { await closeDb(); await suite.cleanup(); },
   };
 }

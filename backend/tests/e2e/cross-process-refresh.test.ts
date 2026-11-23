@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { spawn, ChildProcess } from "node:child_process";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { MongoClient } from "mongodb";
 import * as jose from "jose";
 import net from "node:net";
@@ -70,12 +70,11 @@ process.on("exit", () => {
 });
 
 // 1. Start disposable MongoDB for IdP
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+const suite = await setupSuiteDatabase("cross_process_refresh");
+const mongoUri = suite.uri;
 console.log(`Disposable MongoDB started at ${mongoUri}`);
 
-const mongoClient = new MongoClient(mongoUri);
-await mongoClient.connect();
+const mongoClient = suite.client;
 const db = mongoClient.db();
 
 // 2. Seed test client for Express Consumers
@@ -355,8 +354,7 @@ try {
   await killChild(consumer1);
   await killChild(consumer2);
   await killChild(idpChild);
-  await mongoClient.close();
-  await mongod.stop();
+  await suite.cleanup();
   process.exit(0);
 } catch (err) {
   console.error("Test failed:", err);
@@ -365,7 +363,6 @@ try {
       try { process.kill(-c.pid, "SIGKILL"); } catch {}
     }
   }
-  await mongoClient.close();
-  await mongod.stop();
+  await suite.cleanup();
   process.exit(1);
 }

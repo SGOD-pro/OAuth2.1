@@ -10,21 +10,19 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { Worker } from "node:worker_threads";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import { MongoClient, Db } from "mongodb";
+import { setupSuiteDatabase, type SuiteDatabaseContext } from "../fixtures/test-docker-mongo";
 
 describe("OAuth V2: Ownership-Safe Refresh Lease and Fencing Deterministic Suite", () => {
-  let mongod: MongoMemoryServer;
+  let suite: SuiteDatabaseContext;
   let mongoClient: MongoClient;
   let db: Db;
   let mongoUri: string;
 
   before(async () => {
-    mongod = await MongoMemoryServer.create({ binary: { version: "7.0.24" } });
-    mongoUri = mongod.getUri();
-    process.env.MONGO_URI = mongoUri;
-    mongoClient = new MongoClient(mongoUri);
-    await mongoClient.connect();
+    suite = await setupSuiteDatabase("refresh_lease_fencing");
+    mongoUri = suite.uri;
+    mongoClient = suite.client;
     db = mongoClient.db();
     const { getIdpSigningKey } = await import("../../src/routes/auth");
     await getIdpSigningKey();
@@ -35,8 +33,7 @@ describe("OAuth V2: Ownership-Safe Refresh Lease and Fencing Deterministic Suite
       const { closeDb } = await import("../../src/db/mongo");
       await closeDb();
     } catch {}
-    await mongoClient?.close();
-    await mongod?.stop();
+    if (suite) await suite.cleanup();
   });
 
   function createWorker(clientId: string, incomingHash: string, userId: string): Worker {

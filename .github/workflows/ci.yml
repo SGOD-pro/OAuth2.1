@@ -61,17 +61,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
-    services:
-      mongodb:
-        image: mongo:6
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -95,6 +84,9 @@ jobs:
       - name: Install Frontend Dependencies
         working-directory: frontend
         run: npm ci
+
+      - name: Start Shared Test MongoDB Service (Docker)
+        run: npm run test:mongo:start
 
       - name: Run Integration Contract Linter
         run: npm run security:integration-check
@@ -140,22 +132,6 @@ jobs:
       - name: Run Live Browser E2E Test Suite (Playwright)
         run: npm run test:browser-e2e
 
-      - name: Run Private App Login Isolation Test Suite
-        working-directory: backend
-        run: npm run test:private-app-isolation
-
-      - name: Run OAuth Security Hardening Test Suite
-        working-directory: backend
-        run: npm run test:oauth-hardening
-
-      - name: Run Client Policy Enforcement Test Suite
-        working-directory: backend
-        run: npm run test:client-policy-enforcement
-
-      - name: Run Client Policy Four Class Compatibility Test Suite
-        working-directory: backend
-        run: npm run test:client-policy-compatibility
-
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine
 
@@ -166,7 +142,6 @@ jobs:
         working-directory: backend
         env:
           NODE_ENV: test
-          MONGO_URI: mongodb://127.0.0.1:27017/test_security
           BETTER_AUTH_SECRET: "ci_better_auth_secret_minimum_32_characters_long_key"
           BETTER_AUTH_URL: http://localhost:3000
           FRONTEND_URL: http://localhost:5174
@@ -175,6 +150,10 @@ jobs:
           TRUSTED_PROXY_CIDRS: "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32"
           INTERNAL_GATEWAY_SECRET: "ci_internal_gateway_secret_minimum_32_characters_key"
         run: npm run test:all-security
+
+      - name: Stop Shared Test MongoDB Service (Docker)
+        if: always()
+        run: npm run test:mongo:stop
 
       - name: Build Lambda Bundle
         working-directory: backend

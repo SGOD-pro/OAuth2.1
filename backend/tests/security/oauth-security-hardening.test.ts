@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import { Worker } from "node:worker_threads";
 import { createRequire } from "node:module";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { generateKeyPair, SignJWT } from "jose";
 import { createOTP } from "@better-auth/utils/otp";
 
@@ -14,9 +14,7 @@ console.log("================================================================");
 console.log("  SWYRA AUTH -- OAUTH SECURITY HARDENING REGRESSION TEST SUITE");
 console.log("================================================================\n");
 
-const mongod = await MongoMemoryServer.create();
-process.env.MONGO_URI = mongod.getUri();
-process.env.NODE_ENV = "test";
+const suite = await setupSuiteDatabase("oauth_hardening");
 process.env.BETTER_AUTH_SECRET = "s".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -1090,7 +1088,7 @@ await runTest("SEC-01-I: Revocation wins overlapping code exchange and refresh u
 
   const worker = new Worker(workerCode, {
     eval: true,
-    workerData: { mongoUri: mongod.getUri(), mongoPkgPath },
+    workerData: { mongoUri: suite.uri, mongoPkgPath },
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -2428,7 +2426,7 @@ await runTest("SEC-07-F: Protocol regression: two independent token families for
 });
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 console.log(`\n================================================================`);
 console.log(`  OAUTH SECURITY HARDENING TEST RESULTS: ${passed} PASSED, ${failed} FAILED`);

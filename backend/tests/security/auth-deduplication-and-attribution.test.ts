@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { ObjectId } from "mongodb";
 import { SignJWT, generateKeyPair, exportJWK } from "jose";
 
@@ -8,11 +8,7 @@ console.log("================================================================");
 console.log("  SWYRA AUTH -- AUTH LOG DEDUPLICATION & ATTRIBUTION TEST SUITE");
 console.log("================================================================\n");
 
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
-
-process.env.NODE_ENV = "test";
-process.env.MONGO_URI = mongoUri;
+const suite = await setupSuiteDatabase("auth_dedup");
 process.env.BETTER_AUTH_SECRET = "d".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -366,7 +362,7 @@ await runTest("Database failure produces visible HTTP 500 error instead of empty
 
 // Cleanup
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 console.log("================================================================");
 console.log(`  ALL ${passed} DEDUPLICATION & ATTRIBUTION TESTS PASSED CLEANLY`);

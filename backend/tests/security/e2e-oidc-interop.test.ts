@@ -9,7 +9,8 @@ import { serve } from "@hono/node-server";
 process.env.NODE_ENV = "test";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
-process.env.MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/test_security";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
+const suite = await setupSuiteDatabase("e2e_oidc_interop");
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "http://127.0.0.1:3847";
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
@@ -21,7 +22,7 @@ process.env.TOTP_ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || "c".repeat(
 
 const jose = await import("jose");
 const { default: app } = await import("../../src/app");
-const { getDb } = await import("../../src/db/mongo");
+const { getDb, closeDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");
 
 console.log("================================================================");
@@ -776,6 +777,8 @@ await runTest(29, "Adversarial: Private Application Isolation: Unregistered user
 // Suite Results & Teardown
 // ==========================================================================
 server.close();
+await closeDb();
+await suite.cleanup();
 
 console.log("\n================================================================");
 console.log(`  E2E OIDC INTEROP SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);

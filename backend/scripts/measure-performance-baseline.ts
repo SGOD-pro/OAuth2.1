@@ -2,13 +2,12 @@ import { isolateTestEnvironment, assertNoExternalInfrastructure } from "../tests
 isolateTestEnvironment();
 
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../tests/fixtures/test-docker-mongo";
 import { performance } from "node:perf_hooks";
 import * as jose from "jose";
 
-// Guaranteed disposable in-memory database
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+const suite = await setupSuiteDatabase("perf_baseline");
+const mongoUri = suite.uri;
 
 process.env.NODE_ENV = "test";
 process.env.MONGO_URI = mongoUri;
@@ -290,7 +289,7 @@ const corsCachedStats = computePercentiles(corsCachedLatencies);
 console.log("\n================================================================");
 console.log("  BENCHMARK MEASUREMENT RESULTS (in milliseconds)");
 console.log("================================================================");
-console.log(`Environment: Node ${process.version}, Linux ${process.platform} ${process.arch}, Disposable MongoMemoryServer`);
+console.log(`Environment: Node ${process.version}, Linux ${process.platform} ${process.arch}, Disposable Docker MongoDB`);
 console.log("----------------------------------------------------------------");
 console.log("Operation                    | p50 (ms) | p95 (ms) | p99 (ms) | Avg (ms) | Min (ms) | Max (ms)");
 console.log("-----------------------------|----------|----------|----------|----------|----------|----------");
@@ -316,4 +315,4 @@ for (const col of collections) {
 }
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();

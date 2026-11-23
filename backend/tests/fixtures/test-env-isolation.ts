@@ -110,21 +110,21 @@ export function validateDisposableMongoUri(uri: string, varName: string = "MONGO
   } catch {
     throw new Error(
       `[SECURITY_VIOLATION] Inherited non-disposable Mongo URI detected in test environment (variable: ${varName}). ` +
-      "Tests and benchmarks must strictly run against a local disposable MongoMemoryServer."
+      "Tests and benchmarks must strictly run against a local disposable test MongoDB instance."
     );
   }
 }
 
 /**
- * Proves that the active MONGO_URI matches the URI of a specific MongoMemoryServer
- * instance. Call this immediately after MongoMemoryServer.create() and before any
+ * Proves that the active MONGO_URI matches the URI of the disposable test MongoDB
+ * instance. Call this immediately after obtaining the test URI and before any
  * database operations to assert that no inherited or ambient URI is in use.
  *
  * Parses the actual connection endpoint, verifies the host is loopback, and proves
  * the port matches the disposable instance's exact port. Does not print credentials
  * or raw connection strings in error messages.
  *
- * @param mongodUri - The URI returned by mongod.getUri() from your MongoMemoryServer.
+ * @param mongodUri - The expected URI returned by the test harness.
  * @param envVar - The environment variable to check (defaults to "MONGO_URI").
  */
 export function assertIsMemoryServerUri(mongodUri: string, envVar: string = "MONGO_URI"): void {
@@ -136,11 +136,13 @@ export function assertIsMemoryServerUri(mongodUri: string, envVar: string = "MON
 
   if (active.host !== expected.host || active.port !== expected.port) {
     throw new Error(
-      `[SECURITY_VIOLATION] Active ${envVar} endpoint does not match the disposable MongoMemoryServer. ` +
-      "Target host or port mismatch. Tests must strictly use the test-created MongoMemoryServer."
+      `[SECURITY_VIOLATION] Active ${envVar} endpoint does not match the disposable test MongoDB harness. ` +
+      "Target host or port mismatch. Tests must strictly use the disposable test MongoDB service."
     );
   }
 }
+
+export const assertIsDisposableTestMongoUri = assertIsMemoryServerUri;
 
 export function assertNoExternalInfrastructure(): void {
   for (const envVar of REDIS_ALIAS_ENV_VARS) {

@@ -1,15 +1,10 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { ObjectId } from "mongodb";
 import { SignJWT, generateKeyPair, exportJWK } from "jose";
 
-// 1. Start disposable in-memory MongoDB
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
-
-process.env.NODE_ENV = "test";
-process.env.MONGO_URI = mongoUri;
+const suite = await setupSuiteDatabase("nosql_injection");
 process.env.BETTER_AUTH_SECRET = "a".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -275,7 +270,7 @@ console.log(`  NOSQL INJECTION BOUNDARY RESULTS: ${passed} PASSED, ${failed} FAI
 console.log("================================================================\n");
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 if (failed > 0) {
   process.exit(1);

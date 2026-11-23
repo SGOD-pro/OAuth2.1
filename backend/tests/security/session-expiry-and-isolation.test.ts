@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { ObjectId } from "mongodb";
 import { SignJWT, generateKeyPair, exportJWK } from "jose";
 
@@ -8,11 +8,7 @@ console.log("================================================================");
 console.log("  SWYRA AUTH -- SESSION EXPIRY & ISOLATION VERIFICATION SUITE");
 console.log("================================================================\n");
 
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
-
-process.env.NODE_ENV = "test";
-process.env.MONGO_URI = mongoUri;
+const suite = await setupSuiteDatabase("session_expiry");
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
 process.env.BETTER_AUTH_SECRET = "a".repeat(32);
@@ -386,7 +382,7 @@ await runTest("EXP-5: Public client_id alone cannot access protected APIs or rea
 });
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 console.log("\n================================================================");
 console.log(`  SESSION EXPIRY & ISOLATION RESULTS: ${passed} PASSED, ${failed} FAILED`);

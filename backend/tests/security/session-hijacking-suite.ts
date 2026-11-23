@@ -8,7 +8,8 @@ import crypto from "crypto";
 process.env.NODE_ENV = "test";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
-process.env.MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/test_security";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
+const suite = await setupSuiteDatabase("session_hijacking");
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "https://auth.example.com";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com";
@@ -19,7 +20,7 @@ process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repea
 process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
 
 const { default: app } = await import("../../src/app");
-const { getDb } = await import("../../src/db/mongo");
+const { getDb, closeDb } = await import("../../src/db/mongo");
 const { authProvider } = await import("../../src/utils/auth");
 
 console.log("================================================================");
@@ -353,4 +354,6 @@ console.log("================================================================");
 console.log(`  SESSION HIJACKING SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 
+await closeDb();
+await suite.cleanup();
 process.exit(failed > 0 ? 1 : 0);

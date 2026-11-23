@@ -7,7 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { spawn, ChildProcess } from "node:child_process";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { MongoClient } from "mongodb";
 import { chromium, Browser, BrowserContext } from "playwright";
 
@@ -105,12 +105,11 @@ function getChromiumExecutable(): string | undefined {
 }
 
 // 1. Start disposable in-memory MongoDB
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+const suite = await setupSuiteDatabase("browser_e2e");
+const mongoUri = suite.uri;
 console.log(`Disposable MongoDB running at ${mongoUri}`);
 
-const mongoClient = new MongoClient(mongoUri);
-await mongoClient.connect();
+const mongoClient = suite.client;
 const db = mongoClient.db();
 
 // 2. Client Definitions
@@ -642,8 +641,7 @@ try {
   await browser.close();
   if (frontendServer) { try { (frontendServer as any).close(); } catch {} }
   killAllChildren();
-  await mongoClient.close();
-  await mongod.stop();
+  await suite.cleanup();
   process.exit(0);
 } catch (err) {
   console.error("\n❌ BROWSER E2E TEST FAILED:", err);
@@ -652,7 +650,6 @@ try {
   }
   if (frontendServer) { try { (frontendServer as any).close(); } catch {} }
   killAllChildren();
-  await mongoClient.close();
-  await mongod.stop();
+  await suite.cleanup();
   process.exit(1);
 }

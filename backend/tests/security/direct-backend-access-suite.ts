@@ -8,12 +8,8 @@ import crypto from "crypto";
 process.env.NODE_ENV = "test";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
-let mongod: any = null;
-if (!process.env.MONGO_URI) {
-  const { MongoMemoryServer } = await import("mongodb-memory-server");
-  mongod = await MongoMemoryServer.create();
-  process.env.MONGO_URI = mongod.getUri();
-}
+const { setupSuiteDatabase } = await import("../fixtures/test-docker-mongo");
+const suite = await setupSuiteDatabase("direct_backend");
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "https://auth.example.com";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com";
@@ -489,7 +485,5 @@ await runTest("GATEWAY-10: Client presenting malformed/short x-gateway-secret (<
 
 console.log(`  DIRECT BACKEND SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
-if (mongod) {
-  await mongod.stop();
-}
+await suite.cleanup();
 process.exit(failed > 0 ? 1 : 0);

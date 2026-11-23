@@ -2,12 +2,12 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { importJWK, jwtVerify } from "jose";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import { MongoClient, Db } from "mongodb";
 import { isolateTestEnvironment } from "../fixtures/test-env-isolation";
+import { setupSuiteDatabase, type SuiteDatabaseContext } from "../fixtures/test-docker-mongo";
 
 describe("OAuth V2 P1b: Client Policy Four Classes HTTP Compatibility Suite", () => {
-  let mongod: MongoMemoryServer;
+  let suite: SuiteDatabaseContext;
   let client: MongoClient;
   let db: Db;
   let app: any;
@@ -17,8 +17,8 @@ describe("OAuth V2 P1b: Client Policy Four Classes HTTP Compatibility Suite", ()
   let assignedSessionCookie = "";
   let unassignedSessionCookie = "";
   let assignedUserId = "";
+  let dbName = "";
 
-  const dbName = "p1b_http_compatibility";
   const privConfSecret = "priv_conf_secret_value_12345";
   const openConfSecret = "open_conf_secret_value_12345";
   const privConfHash = crypto.createHash("sha256").update(privConfSecret).digest("base64url");
@@ -43,8 +43,9 @@ describe("OAuth V2 P1b: Client Policy Four Classes HTTP Compatibility Suite", ()
 
   before(async () => {
     isolateTestEnvironment();
-    mongod = await MongoMemoryServer.create({ binary: { version: "7.0.24" } });
-    const mongoUri = mongod.getUri();
+    suite = await setupSuiteDatabase("p1b_compat");
+    dbName = suite.dbName;
+    const mongoUri = suite.uri;
 
     Object.assign(process.env, {
       NODE_ENV: "test", MONGO_URI: mongoUri, DB_NAME: dbName,
@@ -62,8 +63,7 @@ describe("OAuth V2 P1b: Client Policy Four Classes HTTP Compatibility Suite", ()
     const appModule = await import("../../src/app");
     app = appModule.default;
 
-    client = new MongoClient(mongoUri);
-    await client.connect();
+    client = suite.client;
     db = client.db(dbName);
     setTestDbOverride(db);
 
@@ -127,9 +127,8 @@ describe("OAuth V2 P1b: Client Policy Four Classes HTTP Compatibility Suite", ()
 
   after(async () => {
     if (setTestDbOverride) setTestDbOverride(null);
-    if (client) await client.close();
     if (closeDb) await closeDb();
-    if (mongod) await mongod.stop();
+    if (suite) await suite.cleanup();
   });
 
   it("verifies Class A: Open Public client code flow and token exchange", async () => {

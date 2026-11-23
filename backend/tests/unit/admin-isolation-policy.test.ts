@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import crypto from "crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import { ObjectId, type Db } from "mongodb";
 import { SignJWT, generateKeyPair, exportJWK } from "jose";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 
-// 1. Start disposable in-memory MongoDB before loading modules
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+const suite = await setupSuiteDatabase("admin_isolation");
+const mongoUri = suite.uri;
 
 process.env.NODE_ENV = "test";
 process.env.MONGO_URI = mongoUri;
@@ -469,13 +468,13 @@ async function run() {
   console.log("================================================================================\n");
 
   await closeDb();
-  await mongod.stop();
+  await suite.cleanup();
   process.exit(0);
 }
 
 run().catch(async (err) => {
   console.error("Test execution failed:", err);
   await closeDb();
-  await mongod.stop();
+  await suite.cleanup();
   process.exit(1);
 });

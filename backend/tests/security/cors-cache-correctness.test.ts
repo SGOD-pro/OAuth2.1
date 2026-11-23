@@ -7,22 +7,19 @@ import crypto from "node:crypto";
 import { fork } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { ObjectId } from "mongodb";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 1. Guaranteed disposable in-memory database
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+// 1. Guaranteed disposable test database
+const suite = await setupSuiteDatabase("cors_cache");
+const mongoUri = suite.uri;
 
-process.env.NODE_ENV = "test";
-process.env.MONGO_URI = mongoUri;
-
-// Prove MONGO_URI matches the in-process disposable server, not any other loopback listener.
-const { assertIsMemoryServerUri } = await import("../fixtures/test-env-isolation");
-assertIsMemoryServerUri(mongoUri);
+// Prove MONGO_URI matches the disposable test server, not any other loopback listener.
+const { assertIsDisposableTestMongoUri } = await import("../fixtures/test-env-isolation");
+assertIsDisposableTestMongoUri(mongoUri);
 process.env.BETTER_AUTH_SECRET = "a".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -3254,7 +3251,7 @@ await runTest("CORS-49 [Real Redis 8.8.3 + Multi-process Worker]: Global invalid
 });
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 console.log("\n================================================================");
 console.log(`  CORS CACHE CORRECTNESS RESULTS: ${passed} PASSED, ${failed} FAILED`);

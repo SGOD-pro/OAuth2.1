@@ -1,17 +1,13 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- PRIVATE APP LOGIN ISOLATION SECURITY SUITE");
 console.log("================================================================\n");
 
-// Guaranteed disposable in-memory database
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
-
-process.env.NODE_ENV = "test";
-process.env.MONGO_URI = mongoUri;
+// Guaranteed disposable test database
+const suite = await setupSuiteDatabase("private_app_isolation");
 process.env.BETTER_AUTH_SECRET = "i".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -660,6 +656,6 @@ console.log(`  ISOLATION SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 if (failed > 0) process.exit(1);

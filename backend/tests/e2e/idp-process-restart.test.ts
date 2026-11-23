@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { spawn, ChildProcess } from "node:child_process";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { MongoClient } from "mongodb";
 import * as jose from "jose";
 
@@ -55,12 +55,11 @@ process.on("SIGINT", () => process.exit(1));
 process.on("SIGTERM", () => process.exit(1));
 
 // 1. Start disposable in-memory MongoDB that outlives the IdP process
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+const suite = await setupSuiteDatabase("process_restart");
+const mongoUri = suite.uri;
 console.log(`Disposable MongoDB started at ${mongoUri}`);
 
-const mongoClient = new MongoClient(mongoUri);
-await mongoClient.connect();
+const mongoClient = suite.client;
 const db = mongoClient.db();
 
 // 2. Seed test client and user
@@ -348,12 +347,10 @@ try {
   console.log("================================================================\n");
 
   await terminateProcess(idpProcess);
-  await mongoClient.close();
-  await mongod.stop();
+  await suite.cleanup();
   process.exit(0);
 } catch (err) {
   console.error("Test failed:", err);
-  await mongoClient.close();
-  await mongod.stop();
+  await suite.cleanup();
   process.exit(1);
 }

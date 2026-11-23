@@ -1,19 +1,13 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { ObjectId } from "mongodb";
 import { SignJWT, generateKeyPair, exportJWK } from "jose";
 
-// 1. Guaranteed disposable in-memory database
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
-
-process.env.NODE_ENV = "test";
-process.env.MONGO_URI = mongoUri;
-
-// Prove MONGO_URI matches the in-process disposable server
-const { assertIsMemoryServerUri } = await import("../fixtures/test-env-isolation");
-assertIsMemoryServerUri(mongoUri);
+// 1. Guaranteed disposable test database
+const suite = await setupSuiteDatabase("dashboard_stats");
+const { assertIsDisposableTestMongoUri } = await import("../fixtures/test-env-isolation");
+assertIsDisposableTestMongoUri(suite.uri);
 
 process.env.BETTER_AUTH_SECRET = "a".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
@@ -533,7 +527,7 @@ await runTest(9, "Dashboard card is labeled 'New sessions (24h)' reflecting real
 
 // Teardown
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 console.log("================================================================");
 console.log(`  ALL ${testCount} DASHBOARD STATS ACCURACY TESTS PASSED`);

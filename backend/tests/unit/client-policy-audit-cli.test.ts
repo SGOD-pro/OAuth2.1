@@ -1,35 +1,28 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import crypto from "node:crypto";
 import { MongoClient, Db } from "mongodb";
 import { auditClientPolicies } from "../../src/identity/client-policy";
 import { runClientPolicyAudit } from "../../scripts/audit-client-policies";
+import { startSharedMongo, getBaseAdminUri } from "../fixtures/test-docker-mongo";
 
 describe("OAuth V2 P1a: Client Policy Read-Only Audit & CLI Suite", () => {
-  let mongod: MongoMemoryServer;
   let adminClient: MongoClient;
   let roClient: MongoClient;
   let roDb: Db;
   let roUri: string;
-  const dbName = "audit_cli_test";
+  const dbName = `audit_cli_${crypto.randomBytes(4).toString("hex")}`;
   const rawSecret = "super-confidential-secret-do-not-leak";
   const sensitiveCredential = "SensitivePassword987!";
 
   before(async () => {
-    mongod = await MongoMemoryServer.create({
-      binary: { version: "7.0.24" },
-      auth: { enable: true, customRootName: "siteAdmin", customRootPwd: "AdminPassword123!" },
-    });
-
-    const unauthUri = mongod.getUri();
-    const parsed = new URL(unauthUri);
-    const adminUri = `mongodb://siteAdmin:AdminPassword123!@${parsed.host}/?authSource=admin`;
-
-    adminClient = new MongoClient(adminUri);
+    const { port } = await startSharedMongo();
+    adminClient = new MongoClient(getBaseAdminUri(port));
     await adminClient.connect();
     const adminDb = adminClient.db(dbName);
 
-    // Create a strict read-only database user
+    // Drop user if left from any interrupted prior run, then create a strict read-only database user
+    await adminDb.command({ dropUser: "audit_ro" }).catch(() => {});
     await adminDb.command({
       createUser: "audit_ro",
       pwd: "AuditRoPassword123!",
@@ -47,7 +40,7 @@ describe("OAuth V2 P1a: Client Policy Read-Only Audit & CLI Suite", () => {
     ]);
 
     // Connect with the read-only user
-    roUri = `mongodb://audit_ro:AuditRoPassword123!@${parsed.host}/${dbName}?authSource=${dbName}`;
+    roUri = `mongodb://audit_ro:AuditRoPassword123!@127.0.0.1:${port}/${dbName}?authSource=${dbName}&directConnection=true`;
     roClient = new MongoClient(roUri);
     await roClient.connect();
     roDb = roClient.db(dbName);
@@ -55,8 +48,11 @@ describe("OAuth V2 P1a: Client Policy Read-Only Audit & CLI Suite", () => {
 
   after(async () => {
     if (roClient) await roClient.close().catch(() => {});
-    if (adminClient) await adminClient.close().catch(() => {});
-    if (mongod) await mongod.stop().catch(() => {});
+    if (adminClient) {
+      await adminClient.db(dbName).command({ dropUser: "audit_ro" }).catch(() => {});
+      await adminClient.db(dbName).dropDatabase().catch(() => {});
+      await adminClient.close().catch(() => {});
+    }
   });
 
   it("proves read-only user cannot execute writes in MongoDB", async () => {

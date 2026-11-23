@@ -1,12 +1,12 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import { MongoClient, Db } from "mongodb";
 import { isolateTestEnvironment } from "../fixtures/test-env-isolation";
+import { setupSuiteDatabase, type SuiteDatabaseContext } from "../fixtures/test-docker-mongo";
 
 describe("OAuth V2 P1b: Client Policy Enforcement and Ambiguous Denial Suite", () => {
-  let mongod: MongoMemoryServer;
+  let suite: SuiteDatabaseContext;
   let client: MongoClient;
   let db: Db;
   let app: any;
@@ -16,14 +16,15 @@ describe("OAuth V2 P1b: Client Policy Enforcement and Ambiguous Denial Suite", (
   let authProvider: any;
   let validSessionCookie = "";
   let testUserId = "";
-  const dbName = "p1b_runtime_enforcement";
+  let dbName = "";
   const rawSecret = "test-secret-value-12345";
   const rawSecretHash = crypto.createHash("sha256").update(rawSecret).digest("base64url");
 
   before(async () => {
     isolateTestEnvironment();
-    mongod = await MongoMemoryServer.create({ binary: { version: "7.0.24" } });
-    const mongoUri = mongod.getUri();
+    suite = await setupSuiteDatabase("p1b_enforcement");
+    dbName = suite.dbName;
+    const mongoUri = suite.uri;
 
     Object.assign(process.env, {
       NODE_ENV: "test", MONGO_URI: mongoUri, DB_NAME: dbName,
@@ -43,8 +44,7 @@ describe("OAuth V2 P1b: Client Policy Enforcement and Ambiguous Denial Suite", (
     const resolverModule = await import("../../src/utils/client-resolver");
     resolveOAuthClient = resolverModule.resolveOAuthClient;
 
-    client = new MongoClient(mongoUri);
-    await client.connect();
+    client = suite.client;
     db = client.db(dbName);
     setTestDbOverride(db);
 
@@ -83,9 +83,8 @@ describe("OAuth V2 P1b: Client Policy Enforcement and Ambiguous Denial Suite", (
 
   after(async () => {
     if (setTestDbOverride) setTestDbOverride(null);
-    if (client) await client.close();
     if (closeDb) await closeDb();
-    if (mongod) await mongod.stop();
+    if (suite) await suite.cleanup();
   });
 
   it("carries validated policy dimensions through canonical client representation", async () => {

@@ -15,6 +15,9 @@
     "deploy": "run-s build zip update publish",
     "dev": "tsx watch --env-file=.env src/dev.ts",
     "security:self-check": "tsx --env-file-if-exists=.env scripts/security-self-check.ts",
+    "test:mongo:start": "tsx scripts/test-mongo-service.ts start",
+    "test:mongo:stop": "tsx scripts/test-mongo-service.ts stop",
+    "test:mongo:status": "tsx scripts/test-mongo-service.ts status",
     "test:local-consumer-e2e": "tsx tests/e2e/local-consumer-e2e.test.ts",
     "test:network-consumer-e2e": "tsx tests/e2e/network-consumer-e2e.test.ts",
     "test:process-restart": "tsx tests/e2e/idp-process-restart.test.ts",
@@ -89,7 +92,6 @@
   "devDependencies": {
     "@types/node": "^25.6.2",
     "esbuild": "^0.21.4",
-    "mongodb-memory-server": "^11.3.0",
     "npm-run-all2": "^6.2.0",
     "playwright": "^1.64.1",
     "tsx": "^4.19.2"

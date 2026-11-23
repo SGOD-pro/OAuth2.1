@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import crypto from "crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import { ObjectId, type Db } from "mongodb";
 import { generateKeyPair, exportJWK, SignJWT, jwtVerify } from "jose";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 
-// 1. Start disposable in-memory MongoDB before importing any application config
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+const suite = await setupSuiteDatabase("runtime_resilience");
+const mongoUri = suite.uri;
 
 process.env.NODE_ENV = "test";
 process.env.MONGO_URI = mongoUri;
@@ -718,7 +717,7 @@ async function runTests() {
 
   // Cleanup
   await closeDb();
-  await mongod.stop();
+  await suite.cleanup();
 
   console.log("\nALL REAL RUNTIME RESILIENCE AND KEY RESOLUTION TESTS PASSED (0 FAILURES)!");
   process.exit(0);
@@ -728,7 +727,7 @@ runTests().catch(async (err) => {
   console.error("Test execution failed:", err);
   try {
     await closeDb();
-    await mongod.stop();
+    await suite.cleanup();
   } catch {}
   process.exit(1);
 });

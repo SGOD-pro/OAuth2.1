@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- CONSUMER OAUTH MFA CONTINUATION SECURITY SUITE");
 console.log("================================================================\n");
 
-const mongod = await MongoMemoryServer.create();
-process.env.MONGO_URI = mongod.getUri();
-process.env.NODE_ENV = "test";
+const suite = await setupSuiteDatabase("consumer_mfa");
 process.env.BETTER_AUTH_SECRET = "m".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -1735,9 +1733,7 @@ await runTest("MFA-24: Standalone MFA verification creates no unrelated app memb
 // Teardown
 // -----------------------------------------------------------------------------
 await closeDb();
-if (mongod) {
-  await mongod.stop();
-}
+await suite.cleanup();
 
 console.log("\n================================================================");
 console.log(`  CONSUMER MFA CONTINUATION SUITE: ${passed} PASSED, ${failed} FAILED`);

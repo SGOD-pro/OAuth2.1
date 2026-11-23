@@ -4,19 +4,16 @@ delete process.env.UPSTASH_REDIS_REST_TOKEN;
 
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { ObjectId } from "mongodb";
 
-// 1. Guaranteed disposable in-memory database
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+// 1. Guaranteed disposable test database
+const suite = await setupSuiteDatabase("membership_lifecycle");
+const mongoUri = suite.uri;
 
-process.env.NODE_ENV = "test";
-process.env.MONGO_URI = mongoUri;
-
-// Prove MONGO_URI matches the in-process disposable server, not any other loopback listener.
-const { assertIsMemoryServerUri } = await import("../fixtures/test-env-isolation");
-assertIsMemoryServerUri(mongoUri);
+// Prove MONGO_URI matches the disposable test server, not any other loopback listener.
+const { assertIsMemoryServerUri, assertIsDisposableTestMongoUri } = await import("../fixtures/test-env-isolation");
+assertIsDisposableTestMongoUri(mongoUri);
 process.env.BETTER_AUTH_SECRET = "b".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -1503,7 +1500,7 @@ await runTest("MEM-23: selfHealAppAdmins binds strictly to immutable userId and 
 });
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 console.log("\n================================================================");
 console.log(`  MEMBERSHIP LIFECYCLE RESULTS: ${passed} PASSED, ${failed} FAILED`);

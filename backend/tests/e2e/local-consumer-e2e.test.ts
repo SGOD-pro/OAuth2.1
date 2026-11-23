@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import crypto from "crypto";
 import process from "node:process";
 import { Buffer } from "node:buffer";
-import { MongoMemoryServer } from "mongodb-memory-server";
 import { ObjectId } from "mongodb";
 import * as jose from "jose";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 
-// 1. Start disposable in-memory MongoDB before importing application modules
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+const suite = await setupSuiteDatabase("local_consumer_e2e");
+const mongoUri = suite.uri;
 
 process.env.NODE_ENV = "test";
 process.env.MONGO_URI = mongoUri;
@@ -841,7 +840,7 @@ console.log(`  LOCAL CONSUMER E2E TEST RESULTS: ${passed} PASSED, ${failed} FAIL
 console.log("================================================================\n");
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 if (failed > 0) {
   process.exit(1);

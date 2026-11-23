@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { ObjectId } from "mongodb";
 
 console.log("================================================================");
 console.log("  SWYRA AUTH -- ACCOUNT SWITCH & SESSION ISOLATION E2E SUITE");
 console.log("================================================================\n");
 
-// 1. Start disposable in-memory MongoDB
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
-
-process.env.NODE_ENV = "test";
-process.env.MONGO_URI = mongoUri;
+const suite = await setupSuiteDatabase("account_switch");
 process.env.BETTER_AUTH_SECRET = "b".repeat(32);
 process.env.BETTER_AUTH_URL = "http://localhost:3000";
 process.env.FRONTEND_URL = "http://localhost:5174";
@@ -158,7 +153,7 @@ console.log(`  ACCOUNT SWITCH RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================\n");
 
 await closeDb();
-await mongod.stop();
+await suite.cleanup();
 
 if (failed > 0) {
   process.exit(1);

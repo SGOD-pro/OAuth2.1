@@ -5,15 +5,10 @@ import assert from "node:assert/strict";
 import crypto from "crypto";
 import { ObjectId } from "mongodb";
 
-// CRITICAL SAFEGUARD: Regardless of inherited environment variables or .env contents,
-// final-adversarial-gate must ALWAYS use an isolated disposable in-memory database.
-// Never connect to production, Atlas, or unvetted external instances.
 const inheritedMongoUri = process.env.MONGO_URI;
-import { MongoMemoryServer } from "mongodb-memory-server";
-const mongod = await MongoMemoryServer.create();
-const disposableUri = mongod.getUri();
-process.env.MONGO_URI = disposableUri;
-process.env.NODE_ENV = "test";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
+const suite = await setupSuiteDatabase("final_adversarial_gate");
+const disposableUri = suite.uri;
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
@@ -170,7 +165,7 @@ async function seedOAuthClient(
         disabled,
         redirectUris,
         redirect_uris: redirectUris,
-        allowedOrigins: ["http://localhost:5174"],
+        allowedOrigins: ["http://localhost:5174", "https://app-a.example.com", "https://app-b.example.com"],
         skipConsent: true,
         skip_consent: true,
         applicationType: "web",
@@ -191,12 +186,12 @@ const appA_secret = `secret_a_${testSuffix}_12345`;
 const appB_id = `app_b_${testSuffix}`;
 const appB_secret = `secret_b_${testSuffix}_12345`;
 const disabledApp_id = `app_dis_${testSuffix}`;
-const redirectUriA = "http://localhost:5174/callback-a";
-const redirectUriB = "http://localhost:5174/callback-b";
+const redirectUriA = "https://app-a.example.com/callback-a";
+const redirectUriB = "https://app-b.example.com/callback-b";
 
 await seedOAuthClient(appA_id, appA_secret, false, [redirectUriA]);
 await seedOAuthClient(appB_id, appB_secret, false, [redirectUriB]);
-await seedOAuthClient(disabledApp_id, "disabled_secret_12345", false, ["http://localhost:5174/callback-dis"], true);
+await seedOAuthClient(disabledApp_id, "disabled_secret_12345", false, ["https://app-dis.example.com/callback-dis"], true);
 
 // Provision Super Admin
 const superAdminEmail = `super_${testSuffix}@example.com`;
@@ -292,7 +287,7 @@ async function getAuthCode(clientId: string, redirectUri: string, userCookie: st
 // --------------------------------------------------------------------------
 await runTest(0, "Disposable database isolation: non-test Mongo URI is never used", async () => {
   assert.equal(process.env.MONGO_URI, disposableUri, "Active MONGO_URI must strictly equal disposable in-memory URI");
-  assert.ok(disposableUri.startsWith("mongodb://127.0.0.1:"), "Disposable URI must be local loopback");
+  assert.ok(new URL(disposableUri).hostname === "127.0.0.1", "Disposable URI must be local loopback");
 
   const commandResult = await db.command({ isMaster: 1 });
   assert.ok(commandResult.ismaster || commandResult.isWritablePrimary, "Must be connected to active local mongod");
@@ -1775,9 +1770,7 @@ console.log("================================================================");
 
 const { closeDb } = await import("../../src/db/mongo");
 await closeDb();
-if (mongod) {
-  await mongod.stop();
-}
+await suite.cleanup();
 
 if (failed > 0) {
   console.error("❌ ADVERSARIAL SECURITY GATE: FAIL");

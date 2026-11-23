@@ -88,3 +88,23 @@ V2 cannot disable email verification or admin MFA through runtime compatibility 
 Production clients (`isDev=false`) use exact HTTPS callbacks; no wildcard, IP literal, loopback or regex. Development clients use exact registered loopback and permitted HTTPS callbacks. A production IdP can host development clients only under its explicit operator policy. A transition to production removes invalid callback/origin entries in the same atomic change; conflicting policy values fail.
 
 All new identity routes remain first-party even when a registered consumer origin is allowed for protocol calls. Frontend environment gets only public issuer/client/UI flags. A frontend signup button cannot enable a disabled backend enrollment path.
+
+## 6. Test environment and disposable Docker MongoDB harness
+
+Running unit, integration, e2e, and security tests requires a local Docker engine. Tests use a single shared disposable MongoDB container instead of per suite in memory instances:
+
+- **Docker Image:** `mongodb/mongodb-community-server:8.0-ubi8-slim`
+- **Network Boundary:** Published strictly on loopback `127.0.0.1:27018` (or `TEST_MONGO_PORT`). Never exposed externally.
+- **Topology & Auth:** Single node replica set (`rs0`) with internal keyfile authentication enabled to support MongoDB transactions. Default root user `testAdmin`.
+- **Resource Constraints:**
+  - Container memory limit: `768m` (`--memory 768m`)
+  - WiredTiger cache size: `0.25 GB` (256MB)
+  - Ephemeral storage: in memory tmpfs mounted at `/data/db` (`--tmpfs /data/db:rw,uid=1000,gid=1000,mode=0700`)
+  - File descriptors: `--ulimit nofile=65536:65536`
+- **Lifecycle & Cleanup Commands:**
+  - `npm run test:mongo:start`: Boots the harness container and waits for replica set `PRIMARY` readiness.
+  - `npm run test:mongo:status`: Verifies container health and replica set readiness.
+  - `npm run test:mongo:stop`: Gracefully stops and removes the harness container.
+- **Suite Database Isolation:**
+  - Suites automatically acquire a unique ephemeral database (`test_<name>_<rand>`) dropped upon test completion.
+  - Multi worker tests share the suite namespace while retaining isolated MongoClient connections.

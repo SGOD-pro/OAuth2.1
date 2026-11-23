@@ -18,12 +18,8 @@ process.env.APP_ADMIN_JWT_SECRET = process.env.APP_ADMIN_JWT_SECRET || "b".repea
 process.env.APP_ADMIN_TOTP_KEY = process.env.APP_ADMIN_TOTP_KEY || "c".repeat(32);
 process.env.TRUSTED_PROXY_CIDRS = process.env.TRUSTED_PROXY_CIDRS || "127.0.0.1/32,10.0.0.0/8";
 
-import { MongoMemoryServer } from "mongodb-memory-server";
-let mongod: any = null;
-if (!process.env.MONGO_URI || process.env.MONGO_URI.includes("mongodb.net") || process.env.MONGO_URI.includes("cluster0")) {
-  mongod = await MongoMemoryServer.create();
-  process.env.MONGO_URI = mongod.getUri();
-}
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
+const suite = await setupSuiteDatabase("client_mode_transition");
 
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -810,9 +806,7 @@ console.log("================================================================");
 console.log(`  TRANSITION SUITE RESULTS: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 
-if (mongod) {
-  await mongod.stop();
-}
+await suite.cleanup();
 
 if (failed > 0) {
   process.exit(1);

@@ -1,13 +1,30 @@
 import { isolateTestEnvironment, REDIS_ALIAS_ENV_VARS } from "../tests/fixtures/test-env-isolation";
 isolateTestEnvironment();
 
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { startSharedMongo, stopSharedMongo, getSuiteUri, isHarnessRunning } from "../tests/fixtures/test-docker-mongo";
+import { MongoClient } from "mongodb";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(__dirname, "..");
+
+let wasRunning = false;
+
+process.on("SIGINT", () => {
+  if (!wasRunning) {
+    stopSharedMongo();
+  }
+  process.exit(130);
+});
+process.on("SIGTERM", () => {
+  if (!wasRunning) {
+    stopSharedMongo();
+  }
+  process.exit(143);
+});
 
 const securityTestFiles = [
   "tests/security/p0-engine-transactions.test.ts",
@@ -45,9 +62,9 @@ console.log("================================================================");
 console.log("  SWYRA AUTH -- REPRODUCIBLE ALL-SECURITY TEST HARNESS");
 console.log("================================================================\n");
 
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
-console.log(`Disposable in-memory MongoDB started at: ${mongoUri}\n`);
+wasRunning = await isHarnessRunning();
+const { port } = await startSharedMongo();
+console.log(`Disposable test MongoDB harness running on 127.0.0.1:${port}\n`);
 
 let failedCount = 0;
 let passedCount = 0;
@@ -56,6 +73,10 @@ const results: { file: string; passed: boolean; durationMs: number }[] = [];
 for (const testFile of securityTestFiles) {
   console.log(`\n>>> RUNNING: ${testFile}`);
   const startTime = Date.now();
+
+  const cleanName = path.basename(testFile, ".ts").replace(/[^a-z0-9_]/g, "_").slice(0, 24);
+  const suiteDbName = `test_sec_${cleanName}_${crypto.randomBytes(4).toString("hex")}`;
+  const suiteUri = getSuiteUri(suiteDbName, port);
 
   const childEnv = { ...process.env };
   for (const v of REDIS_ALIAS_ENV_VARS) {
@@ -70,21 +91,13 @@ for (const testFile of securityTestFiles) {
   const exitCode = await new Promise<number>((resolve) => {
     const child = spawn(
       process.execPath,
-      [path.join(backendDir, "node_modules/tsx/dist/cli.mjs"), testFile],
+      ["--import", "tsx", testFile],
       {
         cwd: backendDir,
         env: {
           ...childEnv,
           NODE_ENV: "test",
-          MONGO_URI: mongoUri,
-          BETTER_AUTH_SECRET: "a".repeat(32),
-          BETTER_AUTH_URL: "http://127.0.0.1:3000",
-          FRONTEND_URL: "http://127.0.0.1:5174",
-          INTERNAL_GATEWAY_SECRET: "g".repeat(32),
-          GOOGLE_CLIENT_ID: "test-google-id",
-          GOOGLE_CLIENT_SECRET: "test-google-secret",
-          TRUSTED_PROXY_CIDRS: "127.0.0.1/32,10.0.0.0/8",
-          AUTH_PUBLIC_SIGNUP_ENABLED: "true",
+          MONGO_URI: suiteUri,
         },
         stdio: "inherit",
       }
@@ -96,6 +109,13 @@ for (const testFile of securityTestFiles) {
       resolve(1);
     });
   });
+
+  try {
+    const cleanupClient = new MongoClient(suiteUri);
+    await cleanupClient.connect();
+    await cleanupClient.db(suiteDbName).dropDatabase();
+    await cleanupClient.close();
+  } catch {}
 
   const durationMs = Date.now() - startTime;
   if (exitCode === 0) {
@@ -109,7 +129,9 @@ for (const testFile of securityTestFiles) {
   }
 }
 
-await mongod.stop();
+if (!wasRunning) {
+  stopSharedMongo();
+}
 
 console.log("\n================================================================");
 console.log("  SECURITY TEST SUITE EXECUTION SUMMARY");

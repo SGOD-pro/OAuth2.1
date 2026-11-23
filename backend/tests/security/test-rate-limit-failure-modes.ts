@@ -3,17 +3,15 @@ dotenv.config();
 
 import assert from "node:assert/strict";
 import crypto from "crypto";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 
-// Start disposable in-memory MongoDB before importing any application modules
-const mongod = await MongoMemoryServer.create();
-const mongoUri = mongod.getUri();
+// Start disposable test MongoDB before importing any application modules
+const suite = await setupSuiteDatabase("rate_limit_failure");
 
 // Configure test environment
 process.env.NODE_ENV = "test";
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.UPSTASH_REDIS_REST_TOKEN;
-process.env.MONGO_URI = mongoUri;
 process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "a".repeat(32);
 process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "https://auth.example.com";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL || "https://app.example.com";
@@ -354,5 +352,5 @@ console.log("================================================================");
 console.log(`  RATE LIMITING FAILURE MODES SUITE: ${passed} PASSED, ${failed} FAILED`);
 console.log("================================================================");
 
-await mongod.stop();
+await suite.cleanup();
 process.exit(failed > 0 ? 1 : 0);
