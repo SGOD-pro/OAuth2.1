@@ -639,6 +639,8 @@ async function runTests() {
       redirectUris: ["http://localhost:3000/callback"],
       allowedOrigins: ["http://localhost:3000"],
       isPublic: false,
+      isDev: true,
+      is_dev: true,
       tokenEndpointAuthMethod: "client_secret_basic",
     });
 

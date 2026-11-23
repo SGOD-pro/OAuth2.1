@@ -121,7 +121,8 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 ### Tested commit and boundary
 
 * Branch: `v2`
-* Base inspection commit SHA: `64c91168de14b4e2cdcc02811f494d8da8740ae8`
+* Base inspection commit SHA: `0d96d37dbd2c1e656ea7435ffcceeb4610c96e21`
+* CI run reference: `45088868911` (diagnosed and resolved loopback development classification in restart fixture)
 * Worktree status: Clean at verification
 * Source scope:
   * [client-resolver.ts](../../../backend/src/utils/client-resolver.ts): Extended `CanonicalOAuthClient` with validated policy dimensions and reason codes, resolving via `resolveClientPolicy`
@@ -133,6 +134,8 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
   * [auth-initiate.ts](../../../backend/src/routes/auth-initiate.ts): Direct HTTP 400 rejection on ambiguous client
   * [auth-sign-in.ts](../../../backend/src/routes/auth-sign-in.ts): Direct HTTP 400 rejection on ambiguous client
   * [auth-sign-up.ts](../../../backend/src/routes/auth-sign-up.ts): Direct HTTP 400 rejection on ambiguous client
+  * [idp-process-restart.test.ts](../../../backend/tests/e2e/idp-process-restart.test.ts): Marked local server confidential fixture explicitly as development mode to resolve loopback redirect URI classification under V2 policy resolution while preserving private access policy and secret authentication
+  * [runtime-resilience.test.ts](../../../backend/tests/unit/runtime-resilience.test.ts): Marked local server confidential fixture explicitly as development mode
   * [config-simplification.test.ts](../../../backend/tests/unit/config-simplification.test.ts): Asserted ambiguous classification and fail closed private access policy for incomplete client documents without access metadata
   * [client-policy-enforcement.test.ts](../../../backend/tests/security/client-policy-enforcement.test.ts): 10 focused HTTP entry point tests against disposable MongoDB covering ambiguous denial, Basic challenge headers on 401, and authenticated introspection of tokens targeting ambiguous clients
   * [client-policy-compatibility.test.ts](../../../backend/tests/security/client-policy-compatibility.test.ts): 4 HTTP compatibility integration tests against disposable MongoDB covering Class A (Open Public), Class B (Private Confidential), Class C (Open Confidential), and Class E (Private Public) with authorization code flow, explicit private membership gates, Basic or PKCE credentials, and RS256 token verification
@@ -140,7 +143,9 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 ### Verification commands and execution evidence
 
-1. Command: `npm --prefix backend run test:client-policy-enforcement`
+1. Command: `npm --prefix backend run test:process-restart`
+   * Result: Passed without errors, verifying pre restart tokens, retained signing keys across process termination, post restart refresh token rotation, and UserInfo profile retrieval
+2. Command: `npm --prefix backend run test:client-policy-enforcement`
    * Result: 10 passed, 0 failed
    * Validated canonical policy resolution across Class A (open public), Class B (private confidential), Class C (open confidential), Class E (private public), and Migrated Class
    * Direct HTTP 400 rejection at `GET /api/auth/oauth2/authorize` for ambiguous client with zero redirect
@@ -152,18 +157,18 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Authenticated introspection returns HTTP 200 `{ active: false }` for token targeting ambiguous client
    * HTTP 400 rejection at initiate, sign in, and sign up endpoints
    * Progression verification: clean legacy client proceeds through authorize endpoint with 302 redirect and transaction cookie set
-2. Command: `npm --prefix backend run test:client-policy-compatibility`
+3. Command: `npm --prefix backend run test:client-policy-compatibility`
    * Result: 4 passed, 0 failed
    * Class A (Open Public): authenticated authorization, code issuance, public token exchange with PKCE and no client secret, and RS256 token signature and subject verification
    * Class B (Private Confidential): unassigned user denied with HTTP 302 access denied, assigned user authorized, code issuance, Basic auth token exchange, and RS256 token signature and subject verification
    * Class C (Open Confidential): authenticated authorization, code issuance, Basic auth token exchange, and RS256 token signature and subject verification
    * Class E (Private Public): unassigned user denied with HTTP 302 access denied, assigned user authorized, code issuance, public token exchange with PKCE and no client secret, and RS256 token signature and subject verification
-3. Command: `npm --prefix backend run test:config-simplification`
+4. Command: `npm --prefix backend run test:config-simplification`
    * Result: 10 passed, 0 failed
    * Incomplete client documents without access metadata fail closed to private access policy with ambiguous classification
-4. Command: Unit test suite `NODE_OPTIONS="--jitless" npm --prefix backend run test:unit`
+5. Command: Unit test suite `NODE_OPTIONS="--jitless" npm --prefix backend run test:unit`
    * Result: All 16 unit and security suites passed with 0 failures
-5. Command: `npm --prefix backend run security:docs-check`
+6. Command: `npm --prefix backend run security:docs-check`
    * Result: Passed without errors
-6. Command: `git diff --check`
+7. Command: `git diff --check`
    * Result: Passed without whitespace or formatting errors

@@ -77,6 +77,8 @@ await db.collection("oauthClient").insertOne({
   redirectUris: [testRedirectUri],
   allowedOrigins: ["http://127.0.0.1:3001"],
   isPublic: false,
+  isDev: true,
+  is_dev: true,
   skipConsent: true,
   tokenEndpointAuthMethod: "client_secret_basic",
   createdAt: new Date(),
