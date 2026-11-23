@@ -436,25 +436,25 @@ Rather than relying on unconditional binary rollback assumptions, compatibility 
 
 | Client Classification or State | Rollback to Legacy Behavior | Compatibility Risk | Mitigation or Operator Action |
 |---|---|---|---|
-| Class A (Clean Open Public) | Reads legacy `isPublic: true` and `clientSecret: null`. PKCE S256 remains required. | None | Fully backward compatible. Additive policy fields are ignored by legacy binaries. |
-| Class B (Clean Private Confidential) | Reads legacy `isPublic: false` and validates `clientSecret`. | None | Fully backward compatible. Private access enforcement remains identical. |
+| Class A (Clean Open Public) | Reads legacy `isPublic: true` and `clientSecret: null`. PKCE S256 remains required. | None | Backward compatible for standard web single page apps. Additive policy fields are ignored by legacy binaries. |
+| Class B (Clean Private Confidential) | Reads legacy `isPublic: false` and validates `clientSecret`. | None | Backward compatible. Private access enforcement remains identical. |
 | Class C (Clean Open Confidential) | Reads legacy `isPublic: true` and validates `clientSecret`. | Low | If legacy binary permitted confidential clients with `isPublic: true`, authentication succeeds. |
 | Class E (Clean Private Public) | Reads legacy `isPublic: false`. If legacy binary required secrets for private apps, public exchange fails. | Medium | If legacy binary does not support public private clients, operator must temporarily disable or reconfigure client before binary rollback. |
-| Class D (Ambiguous Records) | Fails closed on both versions. Authorization and token exchange rejected. | None | Ambiguous clients remain safely blocked until explicitly assigned by super admin. |
-| Changed Credentials (Secret Removed) | Client was converted from confidential to public in P1b (secret deleted). Legacy binary expects secret and rejects token exchange. | High | Rollback requires either deploying a compatible patched binary or re provisioning a secret for the affected client. |
-| Existing Token Families | Active token families in `oauth_token_families` remain 100% valid under both versions. | None | Schema additions are additive. Token hashes, expiration, and status remain compatible. |
-| Mixed Version Deployments | Rolling rollout where P1a and P1b nodes run concurrently behind load balancer. | Low | Setting `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED=false` maintains legacy ambient writes across all nodes until rollout completes. |
+| Class D (Ambiguous Records) | P1a does not enforce classifier ambiguity at runtime. Ambiguous records would fall back to legacy permissive evaluation instead of failing closed. | High | Rollback to P1a requires operators to explicitly disable ambiguous client documents in MongoDB (`disabled: true`) before traffic reaches legacy nodes, or deploy a compatible patched binary. |
+| Changed Credentials (Secret Removed) | Client was converted from confidential to public in P1b (secret deleted). Legacy binary expects secret and rejects token exchange. | High | Rollback requires either deploying a compatible patched binary or re provisioning a secret for the affected client before rollback. |
+| Existing Token Families | Backward compatible only for clean Class A and Class B clients without credential changes. Class E or credential transitioned clients fail refresh on legacy nodes. | Medium | Operators must audit active token families. If clients experienced credential or policy transitions, rollback requires re provisioning legacy credentials or deploying a compatible patched binary. |
+| Mixed Version Deployments | P1a and P1b nodes run concurrently behind a load balancer during rolling updates. The membership bypass flag does not align client authentication, PKCE rules, or private access enforcement across mixed versions. | High | Rolling rollout or rollback requires connection draining of incompatible nodes before shifting client traffic. Mixed version clusters risk transaction divergence if multi leg OAuth flows cross node versions. |
 
 * **Feature flag toggle rollback:**
   * If unexpected client behavior occurs after activating open access bypass, operators immediately set `OPEN_APP_MEMBERSHIP_BYPASS_ENABLED=false` in application configuration.
   * Open applications immediately resume creating legacy fallback rows in `user_app_registrations`.
-  * Because all schema additions (`clientType`, `accessPolicy`, `isDev`, `policyVersion`) are additive and nullable, existing database records remain valid.
+  * The membership bypass flag governs only ambient registration writes. It does not alter client authentication rules or private access gates.
 * **Binary rollback procedure:**
   * If rolling back the application binary from Slice P1b to Slice P1a:
-    * Legacy backend versions safely ignore additive policy fields and read legacy fields (`isPublic`, `isDev`, `clientSecret`).
-    * Active token families remain valid.
-    * In flight concurrent requests complete cleanly under existing timeout fences.
-    * If any clients experienced credential transitions (such as secret revocation for public clients), the operator must re provision secrets or deploy a compatible patched binary.
+    * Incompatible nodes must be drained before shifting production traffic so in flight multi leg authorization code flows do not cross versions.
+    * Because P1a does not enforce classifier ambiguity at runtime, operators must disable ambiguous clients in MongoDB (`disabled: true`) prior to rollback to prevent permissive legacy evaluation.
+    * If any clients experienced credential transitions (such as secret revocation for public clients), the operator must re provision secrets or deploy a compatible patched binary before rolling back.
+    * Token families for clients with modified credentials or non standard combinations must be validated before routing traffic to legacy nodes.
 
 ### Preservation of administrative trust boundaries
 

@@ -61,7 +61,7 @@ export async function handleSignInEmail(c: any): Promise<Response> {
     let canonicalClientId: string | null = null;
     if (clientId) {
         clientDoc = await resolveOAuthClient(database, clientId);
-        if (!clientDoc || clientDoc.disabled) {
+        if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
             await recordAuthEvent({
                 eventType: "sign_in",
                 outcome: "denied",
@@ -69,13 +69,13 @@ export async function handleSignInEmail(c: any): Promise<Response> {
                 targetIdentifier,
                 ipAddress: safeIp,
                 userAgent: safeUserAgent,
-                reason: clientDoc?.disabled ? "client_disabled" : "invalid_client",
+                reason: clientDoc?.disabled ? "client_disabled" : (clientDoc?.isAmbiguous ? "client_ambiguous" : "invalid_client"),
             });
             return c.json(
                 {
                     status: false,
                     error: "invalid_client",
-                    message: "Client application not found or disabled",
+                    message: "Client application not found, disabled, or ambiguous",
                 },
                 400
             );

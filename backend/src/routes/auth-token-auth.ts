@@ -79,10 +79,21 @@ export async function authenticateTokenClient(c: any): Promise<ClientAuthResult>
     // Canonicalize client identifier against database
     const database = await getDb();
     const clientDoc = await resolveOAuthClient(database, authClientId);
-    if (!clientDoc || clientDoc.disabled) {
+    if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+        const status = (clientDoc?.isAmbiguous || hasBasicAuth) ? 401 : 400;
+        const headers = hasBasicAuth ? { "WWW-Authenticate": 'Basic realm="OAuth"' } : undefined;
         return {
             success: false,
-            response: c.json({ error: "invalid_client", error_description: "Client application not found or disabled" }, 400),
+            response: c.json(
+                {
+                    error: "invalid_client",
+                    error_description: clientDoc?.isAmbiguous
+                        ? "Client configuration is ambiguous and requires administrative review"
+                        : "Client application not found or disabled",
+                },
+                status,
+                headers
+            ),
         };
     }
 

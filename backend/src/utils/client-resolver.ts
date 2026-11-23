@@ -1,5 +1,12 @@
 import { ObjectId } from "mongodb";
 import { isLoopbackHost, isPrivateOrLocalHost, defaultPort } from "./network-security";
+import {
+  resolveClientPolicy,
+  type ClientType,
+  type AccessPolicy,
+  type ClientClassification,
+  type AmbiguityReasonCode,
+} from "../identity/client-policy";
 
 export interface CanonicalOAuthClient {
   _id: any;
@@ -21,6 +28,12 @@ export interface CanonicalOAuthClient {
   is_public?: boolean;
   skipConsent: boolean;
   skip_consent?: boolean;
+  clientType: ClientType;
+  accessPolicy: AccessPolicy;
+  classification: ClientClassification;
+  isAmbiguous: boolean;
+  ambiguityReasonCodes: AmbiguityReasonCode[];
+  ambiguityReasons: string[];
   [key: string]: any;
 }
 
@@ -40,31 +53,18 @@ export function validateRedirectUri(
     const url = new URL(uri);
 
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-    if (uri.includes("*")) return false;
-    if (uri.includes("#")) return false;
-    // userinfo enables open-redirect tricks
-    if (url.username || url.password) return false;
-    if (!url.hostname) return false;
+    if (uri.includes("*") || uri.includes("#")) return false;
+    if (url.username || url.password || !url.hostname) return false;
 
     const isLoopback = isLoopbackHost(url.hostname);
     const isPrivate = isPrivateOrLocalHost(url.hostname);
 
     if (options.isDev) {
-      if (options.env === "production" && options.allowDevInProd === false) {
-        return false;
-      }
-      if (isLoopback) {
-        return true;
-      }
-      if (url.protocol !== "https:") return false;
-      if (isPrivate) return false;
-      return true;
-    } else {
-      if (isLoopback) return false;
-      if (url.protocol !== "https:") return false;
-      if (isPrivate) return false;
-      return true;
+      if (options.env === "production" && options.allowDevInProd === false) return false;
+      if (isLoopback) return true;
+      return url.protocol === "https:" && !isPrivate;
     }
+    return !isLoopback && url.protocol === "https:" && !isPrivate;
   } catch {
     return false;
   }
@@ -149,6 +149,7 @@ export function normalizeOrigin(origin: string): string | null {
 /**
  * Normalize OAuth client configuration fields so both camelCase and snake_case properties
  * are present, consistent, and cleanly resolved across all data stores and route handlers.
+ * Evaluates independent client dimensions (clientType, accessPolicy, isDev, classification, isAmbiguous).
  */
 export function normalizeOAuthClientFields<T extends Record<string, any>>(rawClient: T): T & CanonicalOAuthClient {
   if (!rawClient || typeof rawClient !== "object") return rawClient as any;
@@ -157,12 +158,14 @@ export function normalizeOAuthClientFields<T extends Record<string, any>>(rawCli
   const redirectUris = (rawClient.redirectUris || rawClient.redirect_uris || []) as string[];
   const rawOrigins = (rawClient.allowedOrigins || rawClient.allowed_origins || []) as string[];
   const allowedOrigins = rawOrigins.length > 0 ? rawOrigins : deriveAllowedOriginsFromRedirectUris(redirectUris);
-  const isPublic = rawClient.isPublic !== false && rawClient.is_public !== false;
-  const isDev = Boolean(rawClient.isDev || rawClient.is_dev);
   const disabled = Boolean(rawClient.disabled);
   const name = String(rawClient.name || rawClient.client_name || rawClient.clientName || "Application").trim();
   const clientSecret = rawClient.clientSecret || rawClient.client_secret;
   const skipConsent = Boolean(rawClient.skipConsent || rawClient.skip_consent);
+
+  const policy = resolveClientPolicy(rawClient);
+  const isPublic = policy.accessPolicy === "open";
+  const isDev = policy.isDev;
 
   return {
     ...rawClient,
@@ -183,13 +186,19 @@ export function normalizeOAuthClientFields<T extends Record<string, any>>(rawCli
     disabled,
     skipConsent,
     skip_consent: skipConsent,
+    clientType: policy.clientType,
+    accessPolicy: policy.accessPolicy,
+    classification: policy.classification,
+    isAmbiguous: policy.isAmbiguous,
+    ambiguityReasonCodes: policy.reasonCodes,
+    ambiguityReasons: policy.reasons,
     ...(clientSecret ? { clientSecret, client_secret: clientSecret } : {}),
   } as any;
 }
 
 /**
  * Resolve canonical OAuth client from database by id, clientId, or client_id.
- * Normalizes field names (clientId, redirectUris, isPublic, disabled).
+ * Normalizes field names (clientId, redirectUris, isPublic, disabled) and client policy dimensions.
  */
 export async function resolveOAuthClient(
   db: any,
@@ -200,22 +209,12 @@ export async function resolveOAuthClient(
   const trimmed = clientIdOrId.trim();
   if (!trimmed) return null;
 
-  const queries: any[] = [
-    { clientId: trimmed },
-    { client_id: trimmed },
-    { id: trimmed },
-  ];
-
+  const queries: any[] = [{ clientId: trimmed }, { client_id: trimmed }, { id: trimmed }];
   if (ObjectId.isValid(trimmed) && trimmed.length === 24) {
-    try {
-      queries.push({ _id: new ObjectId(trimmed) });
-    } catch {}
+    try { queries.push({ _id: new ObjectId(trimmed) }); } catch {}
   }
 
-  const raw = await db.collection("oauthClient").findOne({
-    $or: queries,
-  });
-
+  const raw = await db.collection("oauthClient").findOne({ $or: queries });
   if (!raw) return null;
 
   return normalizeOAuthClientFields(raw);
@@ -237,20 +236,11 @@ export function isRegisteredRedirectUri(
   if (!client || !redirectUri || typeof redirectUri !== "string" || !Array.isArray(client.redirectUris) || client.redirectUris.length === 0) {
     return false;
   }
-
-  // RFC 6749 Section 3.1.2: Redirection endpoint URI MUST NOT include a fragment component
-  if (redirectUri.includes("#")) {
-    return false;
-  }
+  if (redirectUri.includes("#")) return false;
 
   try {
     const targetUrl = new URL(redirectUri);
-
-    // RFC 6749 Section 3.1.2: Redirection endpoint URI MUST NOT contain userinfo
-    if (targetUrl.username || targetUrl.password) {
-      return false;
-    }
-
+    if (targetUrl.username || targetUrl.password) return false;
     const targetHostname = targetUrl.hostname.toLowerCase();
 
     return client.redirectUris.some((registered: string) => {

@@ -12,6 +12,35 @@ export async function handleOAuthRevoke(c: Context) {
     const params = new URLSearchParams(rawBodyText);
     const token = params.get("token");
 
+    const authHeader = c.req.header("authorization");
+    let basicClientId: string | null = null;
+    let hasBasicAuth = false;
+    if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
+        try {
+            const decoded = Buffer.from(authHeader.slice(6).trim(), "base64").toString("utf-8");
+            const colonIndex = decoded.indexOf(":");
+            if (colonIndex !== -1) {
+                basicClientId = decoded.slice(0, colonIndex);
+                hasBasicAuth = true;
+            }
+        } catch {}
+    }
+    const bodyClientId = params.get("client_id");
+    const rawClientId = basicClientId || bodyClientId;
+
+    if (rawClientId) {
+        const database = await getDb();
+        const clientDoc = await resolveOAuthClient(database, rawClientId);
+        if (clientDoc?.isAmbiguous) {
+            const headers = hasBasicAuth ? { "WWW-Authenticate": 'Basic realm="OAuth"' } : undefined;
+            return c.json(
+                { error: "invalid_client", error_description: "Client configuration is ambiguous and requires administrative review" },
+                401,
+                headers
+            );
+        }
+    }
+
     // 1. Forward request to Better Auth for client authentication and provider handling
     const res = await authProvider.handler(c.req.raw);
 
@@ -26,27 +55,13 @@ export async function handleOAuthRevoke(c: Context) {
 
     if (token) {
         try {
-            const authHeader = c.req.header("authorization");
-            let basicClientId: string | null = null;
-            if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
-                try {
-                    const decoded = Buffer.from(authHeader.slice(6).trim(), "base64").toString("utf-8");
-                    const colonIndex = decoded.indexOf(":");
-                    if (colonIndex !== -1) {
-                        basicClientId = decoded.slice(0, colonIndex);
-                    }
-                } catch {}
-            }
-            const bodyClientId = params.get("client_id");
-            const rawClientId = basicClientId || bodyClientId;
-
             if (!rawClientId) {
                 return res;
             }
 
             const database = await getDb();
             const clientDoc = await resolveOAuthClient(database, rawClientId);
-            if (!clientDoc || clientDoc.disabled) {
+            if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
                 return res;
             }
 

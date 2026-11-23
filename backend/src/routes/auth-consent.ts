@@ -54,6 +54,9 @@ export async function handleOAuthConsent(c: Context) {
         }
         clientId = tx.clientId;
     }
+    if (!clientId && (body?.client_id || body?.clientId)) {
+        clientId = body.client_id || body.clientId;
+    }
     if (!clientId) {
         clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
     }
@@ -61,8 +64,8 @@ export async function handleOAuthConsent(c: Context) {
     if (clientId) {
         const database = await getDb();
         const clientDoc = await resolveOAuthClient(database, clientId);
-        if (!clientDoc || clientDoc.disabled) {
-            return c.json({ error: "invalid_client", error_description: "Client application not found or disabled" }, 400);
+        if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+            return c.json({ error: "invalid_client", error_description: "Client application not found, disabled, or ambiguous" }, 400);
         }
 
         if (!clientDoc.isPublic) {
@@ -127,6 +130,9 @@ export async function handleOAuthContinue(c: Context) {
             }
             clientId = tx.clientId;
         }
+        if (!clientId && (body?.client_id || body?.clientId)) {
+            clientId = body.client_id || body.clientId;
+        }
         if (!clientId) {
             clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
         }
@@ -134,7 +140,10 @@ export async function handleOAuthContinue(c: Context) {
         if (clientId) {
             const database = await getDb();
             const clientDoc = await resolveOAuthClient(database, clientId);
-            if (clientDoc && !clientDoc.isPublic) {
+            if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+                return c.json({ error: "invalid_client", error_description: "Client application not found, disabled, or ambiguous" }, 400);
+            }
+            if (!clientDoc.isPublic) {
                 const canonicalClientId = clientDoc.clientId;
                 const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 

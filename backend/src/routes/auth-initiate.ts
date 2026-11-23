@@ -24,12 +24,12 @@ export async function handleOAuthInitiate(c: any): Promise<Response> {
 
     const database = await getDb();
     const clientDoc = await resolveOAuthClient(database, clientId);
-    if (!clientDoc || clientDoc.disabled) {
+    if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
         return c.json(
             {
                 status: false,
                 error: "invalid_client",
-                message: "Client application not found or disabled",
+                message: "Client application not found, disabled, or ambiguous",
             },
             400
         );

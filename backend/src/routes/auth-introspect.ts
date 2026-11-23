@@ -14,6 +14,30 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
         const params = new URLSearchParams(rawBodyText);
         const token = params.get("token") || c.req.query("token") || "";
 
+        // Verify calling client is not ambiguous
+        const authHeader = c.req.header("authorization") || c.req.header("Authorization");
+        let basicClientId: string | null = null;
+        let hasBasicAuth = false;
+        if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
+            try {
+                const decoded = Buffer.from(authHeader.slice(6).trim(), "base64").toString("utf-8");
+                const colonIndex = decoded.indexOf(":");
+                if (colonIndex !== -1) {
+                    basicClientId = decoded.slice(0, colonIndex);
+                    hasBasicAuth = true;
+                }
+            } catch {}
+        }
+        const callerClientId = basicClientId || params.get("client_id");
+        if (callerClientId) {
+            const database = await getDb();
+            const callerDoc = await resolveOAuthClient(database, callerClientId);
+            if (callerDoc?.isAmbiguous) {
+                const headers = hasBasicAuth ? { "WWW-Authenticate": 'Basic realm="OAuth"' } : undefined;
+                return c.json({ error: "invalid_client", error_description: "Calling client configuration is ambiguous" }, 401, headers);
+            }
+        }
+
         // First forward to Better Auth for client authentication and default handling
         const res = await authProvider.handler(c.req.raw);
 
@@ -48,7 +72,7 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
             const tokenClientId = data.client_id || data.clientId;
             if (tokenClientId) {
                 const clientDoc = await resolveOAuthClient(database, tokenClientId);
-                if (!clientDoc || clientDoc.disabled) {
+                if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
                     return c.json({ active: false }, 200);
                 }
             }
@@ -101,7 +125,7 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
                     // Check client validity
                     if (tokenClientId) {
                         const clientDoc = await resolveOAuthClient(database, tokenClientId);
-                        if (!clientDoc || clientDoc.disabled) {
+                        if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
                             return c.json({ active: false }, 200);
                         }
                     }

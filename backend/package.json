@@ -82,7 +82,8 @@
     "admin:create": "tsx --env-file=.env scripts/create-admin.ts",
     "admin:migrate": "tsx --env-file=.env scripts/migrate-app-admins.ts",
     "test:p0-transactions": "node --import tsx tests/security/p0-engine-transactions.test.ts",
-    "test:p0-sessions": "node --import tsx tests/security/p0-engine-sessions.test.ts"
+    "test:p0-sessions": "node --import tsx tests/security/p0-engine-sessions.test.ts",
+    "test:client-policy-enforcement": "node --jitless --import tsx tests/security/client-policy-enforcement.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

@@ -43,9 +43,12 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
         return c.json({ error: "invalid_client", error_description: "Client application not found" }, 401);
     }
 
-    // C. Verify client is not suspended/deactivated
+    // C. Verify client is not suspended/deactivated or ambiguous
     if (client.disabled) {
         return c.json({ error: "unauthorized_client", error_description: "Client application is suspended or deactivated" }, 403);
+    }
+    if (client.isAmbiguous) {
+        return c.json({ error: "invalid_client", error_description: "Client configuration is ambiguous and requires administrative review" }, 400);
     }
 
     // D. Validate requested redirect URI against registered client redirect URI list
