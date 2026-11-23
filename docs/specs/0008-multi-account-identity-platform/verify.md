@@ -15,7 +15,7 @@ Record actual commands and results in the documentation PR: relative links, anch
 | Request local selected engine sessions | 07-09 | In process engine HTTP + real Mongo replica set | P0 proof passed, 6 cases; browser and workers and P3 wiring pending |
 | OTP start, verify, resend, finalize and wrong code zero writes | 02-04,15 | Real API + disposable DB and mail sink; concurrency workers | Pending |
 | New user, profile, key, session and lost response recovery | 03,16 | Real engine finalization + idempotency | Pending |
-| Client policy backfill and open, private matrix | 05-06,14 | Old and new schema and real consumer fixtures | P1a classification and audit (32 cases), refresh lease fencing (2 cases), and P1b canonical resolution and ambiguous denial (8 cases) verified; later P1b enforcement and P1c UI pending |
+| Client policy backfill and open, private matrix | 05-06,14 | Old and new schema and real consumer fixtures | P1a classification and audit (32 cases), refresh lease fencing (2 cases), P1b canonical resolution and ambiguous denial (10 cases), and four class HTTP compatibility (4 cases) verified; later P1b enforcement and P1c UI pending |
 | Browser A and B login, tab interleave, expiry, logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | Pending |
 | Account list CORS, CSRF, fixation, context misuse | 08 | Browser and direct HTTP negatives | Pending |
 | Genuine user, admin MFA, recovery, promotion, step up, plugin paths | 10-11 | Real password, TOTP, backup protocol | Pending |
@@ -116,47 +116,54 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 ## P1b canonical client policy resolution and ambiguous denial evidence
 
-**Date:** 2026-11-23. **Result:** P1b canonical client policy resolution and ambiguous client denial verified across 8 focused integration cases in [client-policy-enforcement.test.ts](../../../backend/tests/security/client-policy-enforcement.test.ts). Canonical client representation now exposes validated policy dimensions (`clientType`, `accessPolicy`, `classification`, `isAmbiguous`, `ambiguityReasonCodes`, `ambiguityReasons`) through [client-resolver.ts](../../../backend/src/utils/client-resolver.ts). All four clean combinations and explicitly migrated records resolve cleanly. Ambiguous clients fail closed at protocol boundaries with endpoint specific responses, and client revocation enforces authentication before mutation with zero mutations.
+**Date:** 2026-11-23. **Result:** P1b canonical client policy resolution, ambiguous client denial, and four class HTTP compatibility verified across 14 focused integration cases (10 in [client-policy-enforcement.test.ts](../../../backend/tests/security/client-policy-enforcement.test.ts) and 4 in [client-policy-compatibility.test.ts](../../../backend/tests/security/client-policy-compatibility.test.ts)). Canonical client representation exposes validated policy dimensions (`clientType`, `accessPolicy`, `classification`, `isAmbiguous`, `ambiguityReasonCodes`, `ambiguityReasons`) through [client-resolver.ts](../../../backend/src/utils/client-resolver.ts). All four clean combinations (Class A open public, Class B private confidential, Class C open confidential, Class E private public) and explicitly migrated records resolve cleanly and complete authorization code flow and token exchange. Ambiguous clients fail closed at protocol boundaries with endpoint specific responses, and client revocation enforces authentication before mutation with zero mutations.
 
 ### Tested commit and boundary
 
 * Branch: `v2`
-* Base inspection commit SHA: `1c409f44293c33ef353254703507e86b2a12be58`
+* Base inspection commit SHA: `64c91168de14b4e2cdcc02811f494d8da8740ae8`
 * Worktree status: Clean at verification
 * Source scope:
   * [client-resolver.ts](../../../backend/src/utils/client-resolver.ts): Extended `CanonicalOAuthClient` with validated policy dimensions and reason codes, resolving via `resolveClientPolicy`
   * [auth-authorize.ts](../../../backend/src/routes/auth-authorize.ts): Direct HTTP 400 rejection for ambiguous clients without redirecting per RFC 6749 Section 3.1.2.4
   * [auth-consent.ts](../../../backend/src/routes/auth-consent.ts): Direct HTTP 400 rejection on ambiguous clients across consent and continuation endpoints
-  * [auth-token-auth.ts](../../../backend/src/routes/auth-token-auth.ts): HTTP 401 rejection on ambiguous clients across authorization code and refresh grants
+  * [auth-token-auth.ts](../../../backend/src/routes/auth-token-auth.ts): HTTP 401 rejection on ambiguous clients across authorization code and refresh grants, returning Basic challenge header when caller presents Basic credentials
   * [auth-introspect.ts](../../../backend/src/routes/auth-introspect.ts): HTTP 401 on ambiguous calling client; returns active false on ambiguous token target client
   * [auth-revoke.ts](../../../backend/src/routes/auth-revoke.ts): HTTP 401 on ambiguous calling client with authentication before mutation guaranteeing zero database mutations
   * [auth-initiate.ts](../../../backend/src/routes/auth-initiate.ts): Direct HTTP 400 rejection on ambiguous client
   * [auth-sign-in.ts](../../../backend/src/routes/auth-sign-in.ts): Direct HTTP 400 rejection on ambiguous client
   * [auth-sign-up.ts](../../../backend/src/routes/auth-sign-up.ts): Direct HTTP 400 rejection on ambiguous client
-  * [client-policy-enforcement.test.ts](../../../backend/tests/security/client-policy-enforcement.test.ts): 8 focused HTTP entry point tests against disposable MongoDB
+  * [config-simplification.test.ts](../../../backend/tests/unit/config-simplification.test.ts): Asserted ambiguous classification and fail closed private access policy for incomplete client documents without access metadata
+  * [client-policy-enforcement.test.ts](../../../backend/tests/security/client-policy-enforcement.test.ts): 10 focused HTTP entry point tests against disposable MongoDB covering ambiguous denial, Basic challenge headers on 401, and authenticated introspection of tokens targeting ambiguous clients
+  * [client-policy-compatibility.test.ts](../../../backend/tests/security/client-policy-compatibility.test.ts): 4 HTTP compatibility integration tests against disposable MongoDB covering Class A (Open Public), Class B (Private Confidential), Class C (Open Confidential), and Class E (Private Public) with authorization code flow, explicit private membership gates, Basic or PKCE credentials, and RS256 token verification
 * File length: All modified and new production and test source files are strictly under 300 lines
 
 ### Verification commands and execution evidence
 
 1. Command: `npm --prefix backend run test:client-policy-enforcement`
-   * Result: 8 passed, 0 failed
+   * Result: 10 passed, 0 failed
    * Validated canonical policy resolution across Class A (open public), Class B (private confidential), Class C (open confidential), Class E (private public), and Migrated Class
    * Direct HTTP 400 rejection at `GET /api/auth/oauth2/authorize` for ambiguous client with zero redirect
    * Direct HTTP 400 rejection at `POST /api/auth/oauth2/consent` and `POST /api/auth/oauth2/continue` for ambiguous client
    * HTTP 401 rejection at `POST /api/auth/oauth2/token` for code exchange and refresh grants
    * HTTP 401 rejection at `POST /api/auth/oauth2/introspect` for ambiguous caller client
+   * HTTP 401 rejection with `WWW-Authenticate: Basic realm="OAuth"` challenge header when caller presents Basic credentials
    * HTTP 401 rejection at `POST /api/auth/oauth2/revoke` for ambiguous caller client, with database verification proving zero mutations on token family and access token documents
+   * Authenticated introspection returns HTTP 200 `{ active: false }` for token targeting ambiguous client
    * HTTP 400 rejection at initiate, sign in, and sign up endpoints
    * Progression verification: clean legacy client proceeds through authorize endpoint with 302 redirect and transaction cookie set
-2. Command: `npm --prefix backend run test:client-policy-classification`
-   * Result: 16 passed, 0 failed
-3. Command: `npm --prefix backend run test:client-policy-auth-methods`
-   * Result: 8 passed, 0 failed
-4. Command: `npm --prefix backend run test:client-policy-audit-cli`
-   * Result: 6 passed, 0 failed
-5. Command: `npm --prefix backend run test:refresh-lease-fencing`
-   * Result: 2 passed, 0 failed
-6. Command: `npm --prefix backend run security:docs-check`
+2. Command: `npm --prefix backend run test:client-policy-compatibility`
+   * Result: 4 passed, 0 failed
+   * Class A (Open Public): authenticated authorization, code issuance, public token exchange with PKCE and no client secret, and RS256 token signature and subject verification
+   * Class B (Private Confidential): unassigned user denied with HTTP 302 access denied, assigned user authorized, code issuance, Basic auth token exchange, and RS256 token signature and subject verification
+   * Class C (Open Confidential): authenticated authorization, code issuance, Basic auth token exchange, and RS256 token signature and subject verification
+   * Class E (Private Public): unassigned user denied with HTTP 302 access denied, assigned user authorized, code issuance, public token exchange with PKCE and no client secret, and RS256 token signature and subject verification
+3. Command: `npm --prefix backend run test:config-simplification`
+   * Result: 10 passed, 0 failed
+   * Incomplete client documents without access metadata fail closed to private access policy with ambiguous classification
+4. Command: Unit test suite `NODE_OPTIONS="--jitless" npm --prefix backend run test:unit`
+   * Result: All 16 unit and security suites passed with 0 failures
+5. Command: `npm --prefix backend run security:docs-check`
    * Result: Passed without errors
-7. Command: `git diff --check`
+6. Command: `git diff --check`
    * Result: Passed without whitespace or formatting errors

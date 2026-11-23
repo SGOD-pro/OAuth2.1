@@ -324,10 +324,14 @@ console.log("=== Testing Slice 5: Application Configuration Simplification ===")
   assert.deepEqual(normalized.redirect_uris, []);
   assert.deepEqual(normalized.allowedOrigins, []);
   assert.deepEqual(normalized.allowed_origins, []);
-  assert.equal(normalized.isPublic, true);
-  assert.equal(normalized.is_public, true);
+  assert.equal(normalized.isPublic, false);
+  assert.equal(normalized.is_public, false);
   assert.equal(normalized.isDev, false);
   assert.equal(normalized.is_dev, false);
+  assert.equal(normalized.isAmbiguous, true);
+  assert.equal(normalized.classification, "AMBIGUOUS");
+  assert.equal(normalized.accessPolicy, "private");
+  assert.ok(normalized.ambiguityReasonCodes.includes("MISSING_ACCESS_METADATA"));
 
   console.log("PASS: AC-5: normalizeOAuthClientFields is resilient with nulls, defaults, and custom metadata");
 }

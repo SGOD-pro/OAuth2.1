@@ -148,6 +148,14 @@ jobs:
         working-directory: backend
         run: npm run test:oauth-hardening
 
+      - name: Run Client Policy Enforcement Test Suite
+        working-directory: backend
+        run: npm run test:client-policy-enforcement
+
+      - name: Run Client Policy Four Class Compatibility Test Suite
+        working-directory: backend
+        run: npm run test:client-policy-compatibility
+
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine
 

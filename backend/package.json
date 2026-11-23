@@ -20,7 +20,7 @@
     "test:process-restart": "tsx tests/e2e/idp-process-restart.test.ts",
     "test:cross-process-refresh": "tsx tests/e2e/cross-process-refresh.test.ts",
     "test:browser-e2e": "tsx tests/e2e/browser-e2e.test.ts",
-    "test:unit": "npm-run-all2 test:admin-scoping test:runtime-resilience test:gateway-pipeline test:dev-isolation test:config-simplification test:isolation-policy test:audit-identities test:security-utils test:admin-store test:client-policy-classification test:client-policy-auth-methods test:client-policy-audit-cli test:refresh-lease-fencing test:cleanliness",
+    "test:unit": "npm-run-all2 test:admin-scoping test:runtime-resilience test:gateway-pipeline test:dev-isolation test:config-simplification test:isolation-policy test:audit-identities test:security-utils test:admin-store test:client-policy-classification test:client-policy-auth-methods test:client-policy-audit-cli test:refresh-lease-fencing test:client-policy-enforcement test:client-policy-compatibility test:cleanliness",
     "test:client-policy-classification": "tsx tests/unit/client-policy-classification.test.ts",
     "test:client-policy-auth-methods": "tsx tests/unit/client-policy-auth-methods.test.ts",
     "test:client-policy-audit-cli": "tsx tests/unit/client-policy-audit-cli.test.ts",
@@ -83,7 +83,8 @@
     "admin:migrate": "tsx --env-file=.env scripts/migrate-app-admins.ts",
     "test:p0-transactions": "node --import tsx tests/security/p0-engine-transactions.test.ts",
     "test:p0-sessions": "node --import tsx tests/security/p0-engine-sessions.test.ts",
-    "test:client-policy-enforcement": "node --jitless --import tsx tests/security/client-policy-enforcement.test.ts"
+    "test:client-policy-enforcement": "node --jitless --import tsx tests/security/client-policy-enforcement.test.ts",
+    "test:client-policy-compatibility": "node --jitless --import tsx tests/security/client-policy-compatibility.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",
