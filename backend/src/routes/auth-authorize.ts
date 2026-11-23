@@ -14,6 +14,7 @@ import {
 } from "../utils/security";
 import { checkAccountEligibility } from "../utils/account-eligibility";
 import { createOAuthTransaction, recordAuthEvent } from "../db/state";
+import { validatePkceAuthorizationParams, bindAuthorizationCode } from "../utils/pkce";
 
 export async function handleOAuthAuthorize(c: any): Promise<Response> {
     const state = c.req.query("state");
@@ -63,35 +64,42 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
 
     const canonicalClientId = client.clientId;
 
+    // Validate PKCE S256 parameters for authorization code flows
+    const pkceValidation = validatePkceAuthorizationParams({
+        codeChallenge: c.req.query("code_challenge"),
+        codeChallengeMethod: c.req.query("code_challenge_method"),
+        responseType: c.req.query("response_type"),
+    });
+
+    if (!pkceValidation.valid) {
+        const errorUrl = new URL(redirectUri);
+        errorUrl.searchParams.set("error", pkceValidation.error!);
+        errorUrl.searchParams.set("error_description", pkceValidation.description!);
+        errorUrl.searchParams.set("state", state);
+        return c.redirect(errorUrl.toString(), 302);
+    }
+
     // Create server-side OAuth transaction record for multi-tab isolation & tampering prevention
     const transactionId = crypto.randomUUID();
-    const codeChallenge = c.req.query("code_challenge");
-    const codeChallengeMethod = c.req.query("code_challenge_method");
 
     await createOAuthTransaction({
         transactionId,
         clientId: canonicalClientId,
         redirectUri,
         state,
-        codeChallenge,
-        codeChallengeMethod,
+        codeChallenge: pkceValidation.challenge,
+        codeChallengeMethod: pkceValidation.method,
     });
 
-    setCookie(c, "oauth_transaction_id", transactionId, {
+    const cookieOpts = {
         path: "/",
         httpOnly: true,
         secure: config.env === "production",
-        sameSite: "Lax",
+        sameSite: "Lax" as const,
         maxAge: 60 * 10,
-    });
-
-    setCookie(c, "current_client_id", canonicalClientId, {
-        path: "/",
-        httpOnly: true,
-        secure: config.env === "production",
-        sameSite: "Lax",
-        maxAge: 60 * 10,
-    });
+    };
+    setCookie(c, "oauth_transaction_id", transactionId, cookieOpts);
+    setCookie(c, "current_client_id", canonicalClientId, cookieOpts);
 
     // E. Determine authenticated user from session & MongoDB
     let sessionUser: any = null;
@@ -194,21 +202,24 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
             try {
                 const locUrl = new URL(location, config.auth.baseURL);
                 const code = locUrl.searchParams.get("code");
-                if (code && sessionUser) {
-                    const sessionUserId = String(sessionUser.id || sessionUser._id);
-                    const currentVersion = typeof sessionUser.tokenVersion === "number" ? sessionUser.tokenVersion : 1;
-                    await database.collection("oauthAuthorizationCode").updateOne(
-                        { code },
-                        {
-                            $set: {
-                                tokenVersion: currentVersion,
-                                userId: sessionUserId,
-                            },
-                        }
-                    ).catch(() => {});
+                if (code) {
+                    const sessionUserId = sessionUser ? String(sessionUser.id || sessionUser._id) : undefined;
+                    const currentVersion = sessionUser && typeof sessionUser.tokenVersion === "number" ? sessionUser.tokenVersion : 1;
+                    await bindAuthorizationCode(database, {
+                        code,
+                        clientId: canonicalClientId,
+                        redirectUri,
+                        codeChallenge: pkceValidation.challenge,
+                        codeChallengeMethod: pkceValidation.method,
+                        userId: sessionUserId,
+                        tokenVersion: currentVersion,
+                        transactionId,
+                    }).catch(() => {});
                 }
                 if (locUrl.pathname.includes("/auth")) {
                     locUrl.searchParams.set("client_id", canonicalClientId);
+                    locUrl.searchParams.set("transaction_id", transactionId);
+                    locUrl.searchParams.set("state", state);
                     if (!client.isPublic) {
                         locUrl.searchParams.set("is_public", "false");
                     }

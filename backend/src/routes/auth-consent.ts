@@ -4,6 +4,8 @@ import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { getOAuthTransaction } from "../db/state";
 import { getHeaders, resolveOAuthClient, checkUserHasAppAccess } from "../utils/security";
+import { config } from "../config";
+import { bindAuthorizationCode } from "../utils/pkce";
 
 /**
  * Handle OAuth 2.1 user consent endpoint (/oauth2/consent).
@@ -81,7 +83,9 @@ export async function handleOAuthConsent(c: Context) {
         }
     }
 
-    return authProvider.handler(c.req.raw);
+    const res = await authProvider.handler(c.req.raw);
+    await captureAndBindCode(res, tx, sessionUser, clientId);
+    return res;
 }
 
 /**
@@ -157,5 +161,46 @@ export async function handleOAuthContinue(c: Context) {
         }
     }
 
-    return authProvider.handler(c.req.raw);
+    const res = await authProvider.handler(c.req.raw);
+    await captureAndBindCode(res, tx, sessionUser, clientId);
+    return res;
+}
+
+async function captureAndBindCode(
+    res: Response,
+    tx: any,
+    sessionUser: any,
+    clientId: string | null
+): Promise<void> {
+    try {
+        let redirectTarget: string | null = res.headers.get("location");
+        if (!redirectTarget && res.status === 200) {
+            const clone = res.clone();
+            const json = await clone.json().catch(() => null);
+            if (json && typeof json.redirect_uri === "string") {
+                redirectTarget = json.redirect_uri;
+            } else if (json && typeof json.url === "string") {
+                redirectTarget = json.url;
+            }
+        }
+        if (redirectTarget) {
+            const parsed = new URL(redirectTarget, config.auth.baseURL);
+            const code = parsed.searchParams.get("code");
+            if (code && sessionUser) {
+                const sessionUserId = String(sessionUser.id || sessionUser._id);
+                const currentVersion = typeof sessionUser.tokenVersion === "number" ? sessionUser.tokenVersion : 1;
+                const database = await getDb();
+                await bindAuthorizationCode(database, {
+                    code,
+                    clientId: tx?.clientId || clientId || "",
+                    redirectUri: tx?.redirectUri || (parsed.origin + parsed.pathname),
+                    codeChallenge: tx?.codeChallenge,
+                    codeChallengeMethod: tx?.codeChallengeMethod || "S256",
+                    userId: sessionUserId,
+                    tokenVersion: currentVersion,
+                    transactionId: tx?.transactionId,
+                });
+            }
+        }
+    } catch {}
 }

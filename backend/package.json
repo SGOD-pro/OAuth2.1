@@ -78,16 +78,17 @@
     "test:dedup": "tsx tests/security/auth-deduplication-and-attribution.test.ts",
     "test:auth-telemetry": "tsx tests/security/auth-event-telemetry.test.ts",
     "test:oauth-hardening": "tsx tests/security/oauth-security-hardening.test.ts",
-    "test:all-security": "tsx scripts/run-all-security.ts",
-    "test:all-security:local": "tsx scripts/run-all-security.ts",
+    "test:all-security": "node --import tsx scripts/run-all-security.ts",
+    "test:all-security:local": "node --import tsx scripts/run-all-security.ts",
     "security:docs-check": "tsx scripts/check-security-doc-consistency.ts",
     "security:integration-check": "tsx ../scripts/security/check-integration-contract.ts",
     "admin:create": "tsx --env-file=.env scripts/create-admin.ts",
     "admin:migrate": "tsx --env-file=.env scripts/migrate-app-admins.ts",
     "test:p0-transactions": "node --import tsx tests/security/p0-engine-transactions.test.ts",
     "test:p0-sessions": "node --import tsx tests/security/p0-engine-sessions.test.ts",
-    "test:client-policy-enforcement": "node --jitless --import tsx tests/security/client-policy-enforcement.test.ts",
-    "test:client-policy-compatibility": "node --jitless --import tsx tests/security/client-policy-compatibility.test.ts"
+    "test:client-policy-enforcement": "node --import tsx tests/security/client-policy-enforcement.test.ts",
+    "test:client-policy-compatibility": "node --import tsx tests/security/client-policy-compatibility.test.ts",
+    "test:pkce-enforcement": "node --import tsx tests/security/pkce-enforcement.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

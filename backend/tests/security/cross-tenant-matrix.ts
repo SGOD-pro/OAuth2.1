@@ -278,9 +278,14 @@ await runTest("X-TENANT-5: User registered for Tenant A strictly denied on priva
   });
   const cookie = loginRes.headers.get("set-cookie") || "";
 
+  const verifierA = crypto.randomBytes(32).toString("base64url");
+  const challengeA = crypto.createHash("sha256").update(verifierA).digest("base64url");
+  const verifierB = crypto.randomBytes(32).toString("base64url");
+  const challengeB = crypto.createHash("sha256").update(verifierB).digest("base64url");
+
   // Authorize Tenant A -> SUCCESS (302 with code)
   const authResA = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${tenantA}&redirect_uri=https://${tenantA}.example.com/cb&response_type=code&state=legit123`,
+    `/api/auth/oauth2/authorize?client_id=${tenantA}&redirect_uri=https://${tenantA}.example.com/cb&response_type=code&code_challenge=${challengeA}&code_challenge_method=S256&state=legit123`,
     { method: "GET", headers: getTestHeaders({ Cookie: cookie }) }
   );
   // Either 302 to redirectUri or consent
@@ -288,7 +293,7 @@ await runTest("X-TENANT-5: User registered for Tenant A strictly denied on priva
 
   // Authorize Tenant B -> DENIED (302 with error=access_denied)
   const authResB = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${tenantB}&redirect_uri=https://${tenantB}.example.com/cb&response_type=code&state=attack123`,
+    `/api/auth/oauth2/authorize?client_id=${tenantB}&redirect_uri=https://${tenantB}.example.com/cb&response_type=code&code_challenge=${challengeB}&code_challenge_method=S256&state=attack123`,
     { method: "GET", headers: getTestHeaders({ Cookie: cookie }) }
   );
   assert.equal(authResB.status, 302);

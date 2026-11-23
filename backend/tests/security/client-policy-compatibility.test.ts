@@ -162,8 +162,9 @@ describe("OAuth V2 P1b: Client Policy Four Classes HTTP Compatibility Suite", ()
 
   it("verifies Class B: Private Confidential client code flow, membership gate, and token exchange", async () => {
     // Unassigned user is denied
+    const unassignedPkce = makePkce();
     const unassignedAuth = await app.request(
-      "/api/auth/oauth2/authorize?client_id=compat-priv-conf&redirect_uri=https%3A%2F%2Fpriv-conf.example.com%2Fcb&response_type=code&scope=openid+profile+email&state=denied_state",
+      `/api/auth/oauth2/authorize?client_id=compat-priv-conf&redirect_uri=https%3A%2F%2Fpriv-conf.example.com%2Fcb&response_type=code&scope=openid+profile+email&code_challenge=${unassignedPkce.challenge}&code_challenge_method=S256&state=denied_state`,
       { method: "GET", headers: { Cookie: unassignedSessionCookie }, redirect: "manual" }
     );
     assert.equal(unassignedAuth.status, 302);
@@ -228,8 +229,9 @@ describe("OAuth V2 P1b: Client Policy Four Classes HTTP Compatibility Suite", ()
 
   it("verifies Class E: Private Public client code flow, membership gate, and token exchange", async () => {
     // Unassigned user is denied
+    const unassignedPkce = makePkce();
     const unassignedAuth = await app.request(
-      "/api/auth/oauth2/authorize?client_id=compat-priv-pub&redirect_uri=http%3A%2F%2F127.0.0.1%3A8080%2Fcb&response_type=code&scope=openid+profile+email&state=denied_state_pub",
+      `/api/auth/oauth2/authorize?client_id=compat-priv-pub&redirect_uri=http%3A%2F%2F127.0.0.1%3A8080%2Fcb&response_type=code&scope=openid+profile+email&code_challenge=${unassignedPkce.challenge}&code_challenge_method=S256&state=denied_state_pub`,
       { method: "GET", headers: { Cookie: unassignedSessionCookie }, redirect: "manual" }
     );
     assert.equal(unassignedAuth.status, 302);

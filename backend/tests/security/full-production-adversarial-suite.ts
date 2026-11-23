@@ -240,14 +240,18 @@ await runTest("GATE-5: Multi-tab parallel OAuth flow resolves correct tenant per
 
   const stateA = "state_a_" + crypto.randomBytes(6).toString("hex");
   const stateB = "state_b_" + crypto.randomBytes(6).toString("hex");
+  const verifierA = crypto.randomBytes(32).toString("base64url");
+  const challengeA = crypto.createHash("sha256").update(verifierA).digest("base64url");
+  const verifierB = crypto.randomBytes(32).toString("base64url");
+  const challengeB = crypto.createHash("sha256").update(verifierB).digest("base64url");
 
   await app.request(
-    `/api/auth/oauth2/authorize?client_id=${clientA}&redirect_uri=https://${clientA}.example.com/cb&response_type=code&state=${stateA}`,
+    `/api/auth/oauth2/authorize?client_id=${clientA}&redirect_uri=https://${clientA}.example.com/cb&response_type=code&code_challenge=${challengeA}&code_challenge_method=S256&state=${stateA}`,
     { method: "GET", headers: getTestHeaders() }
   );
 
   await app.request(
-    `/api/auth/oauth2/authorize?client_id=${clientB}&redirect_uri=https://${clientB}.example.com/cb&response_type=code&state=${stateB}`,
+    `/api/auth/oauth2/authorize?client_id=${clientB}&redirect_uri=https://${clientB}.example.com/cb&response_type=code&code_challenge=${challengeB}&code_challenge_method=S256&state=${stateB}`,
     { method: "GET", headers: getTestHeaders() }
   );
 

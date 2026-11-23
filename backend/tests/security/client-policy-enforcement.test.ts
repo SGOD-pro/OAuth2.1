@@ -245,8 +245,10 @@ describe("OAuth V2 P1b: Client Policy Enforcement and Ambiguous Denial Suite", (
   });
 
   it("allows clean legacy clients to proceed through authorize endpoint", async () => {
+    const pkceVerifier = crypto.randomBytes(32).toString("base64url");
+    const pkceChallenge = crypto.createHash("sha256").update(pkceVerifier).digest("base64url");
     const res = await app.request(
-      "/api/auth/oauth2/authorize?client_id=c-open-pub&redirect_uri=https%3A%2F%2Fopen-pub.com%2Fcb&response_type=code&state=clean-state-123"
+      `/api/auth/oauth2/authorize?client_id=c-open-pub&redirect_uri=https%3A%2F%2Fopen-pub.com%2Fcb&response_type=code&code_challenge=${pkceChallenge}&code_challenge_method=S256&state=clean-state-123`
     );
     assert.equal(res.status, 302);
     const location = res.headers.get("location");

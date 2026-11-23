@@ -9,6 +9,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { ObjectId } from "mongodb";
+import {
+  sendToWorker,
+  waitForWorkerEvent,
+  terminateWorkerGracefully,
+} from "../fixtures/cors-worker-client";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -587,20 +592,8 @@ await runTest("CORS-11: Cross-process race condition: in-flight worker read reje
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
 
-  const sendToChild = (msg: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const handler = (res: any) => {
-        if (res.type === "ERROR") {
-          child.off("message", handler);
-          reject(new Error(res.error));
-        } else {
-          child.off("message", handler);
-          resolve(res);
-        }
-      };
-      child.on("message", handler);
-      child.send(msg);
-    });
+  const sendToChild = (msg: any, expectedType?: string): Promise<any> => {
+    return sendToWorker(child, msg, { stage: msg?.type, expectedType, timeoutMs: 5000 });
   };
 
   try {
@@ -677,19 +670,7 @@ await runTest("CORS-11: Cross-process race condition: in-flight worker read reje
     const sharedOutage = await getSharedRedisOutage(db);
     assert.equal(sharedOutage, true, "Parent process must detect Redis outage marked by worker process");
   } finally {
-    try {
-      child.send({ type: "EXIT" });
-      await new Promise<void>((r) => {
-        const timer = setTimeout(() => {
-          child.kill();
-          r();
-        }, 1000);
-        child.on("exit", () => {
-          clearTimeout(timer);
-          r();
-        });
-      });
-    } catch {}
+    await terminateWorkerGracefully(child, 2000);
     setRedisClientForTesting(null);
     await mockRedis.close();
     await markSharedRedisOutage(db, false);
@@ -1083,20 +1064,8 @@ await runTest("CORS-20: Two processes performing lookups and client changes conc
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
 
-  const sendToChild = (msg: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const handler = (res: any) => {
-        if (res.type === "ERROR") {
-          child.off("message", handler);
-          reject(new Error(res.error));
-        } else {
-          child.off("message", handler);
-          resolve(res);
-        }
-      };
-      child.on("message", handler);
-      child.send(msg);
-    });
+  const sendToChild = (msg: any, expectedType?: string): Promise<any> => {
+    return sendToWorker(child, msg, { stage: msg?.type, expectedType, timeoutMs: 5000 });
   };
 
   try {
@@ -1136,13 +1105,7 @@ await runTest("CORS-20: Two processes performing lookups and client changes conc
     const workerCacheRes = await sendToChild({ type: "CHECK_CACHE", origin: testOrigin });
     assert.notEqual(workerCacheRes.value, true, "Worker cache must not return stale true");
   } finally {
-    try {
-      child.send({ type: "EXIT" });
-      await new Promise<void>((r) => {
-        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
-        child.on("exit", () => { clearTimeout(timer); r(); });
-      });
-    } catch {}
+    await terminateWorkerGracefully(child, 2000);
     setRedisClientForTesting(null);
     await mockRedis.close();
   }
@@ -1693,20 +1656,8 @@ await runTest("CORS-29: Multi process stale write prevention with expired or rem
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
 
-  const sendToChild = (msg: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const handler = (res: any) => {
-        if (res.type === "ERROR") {
-          child.off("message", handler);
-          reject(new Error(res.error));
-        } else {
-          child.off("message", handler);
-          resolve(res);
-        }
-      };
-      child.on("message", handler);
-      child.send(msg);
-    });
+  const sendToChild = (msg: any, expectedType?: string): Promise<any> => {
+    return sendToWorker(child, msg, { stage: msg?.type, expectedType, timeoutMs: 5000 });
   };
 
   const origin = "https://cross-process-stale-expiry.example.com";
@@ -1758,13 +1709,7 @@ await runTest("CORS-29: Multi process stale write prevention with expired or rem
     const workerCacheRes = await sendToChild({ type: "CHECK_CACHE", origin });
     assert.notEqual(workerCacheRes.value, true, "Worker cache must not return stale true");
   } finally {
-    try {
-      child.send({ type: "EXIT" });
-      await new Promise<void>((r) => {
-        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
-        child.on("exit", () => { clearTimeout(timer); r(); });
-      });
-    } catch {}
+    await terminateWorkerGracefully(child, 2000);
     setRedisClientForTesting(null);
     await mockRedis.close();
     await db.collection("oauthClient").deleteOne({ clientId });
@@ -2040,20 +1985,8 @@ await runTest("CORS-34: Multi process stale write prevention with TTL removal an
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
 
-  const sendToChild = (msg: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const handler = (res: any) => {
-        if (res.type === "ERROR") {
-          child.off("message", handler);
-          reject(new Error(res.error));
-        } else {
-          child.off("message", handler);
-          resolve(res);
-        }
-      };
-      child.on("message", handler);
-      child.send(msg);
-    });
+  const sendToChild = (msg: any, expectedType?: string): Promise<any> => {
+    return sendToWorker(child, msg, { stage: msg?.type, expectedType, timeoutMs: 5000 });
   };
 
   const origin = "https://multi-proc-ttl-marker-loss.example.com";
@@ -2112,13 +2045,7 @@ await runTest("CORS-34: Multi process stale write prevention with TTL removal an
     const workerCacheRes = await sendToChild({ type: "CHECK_CACHE", origin });
     assert.notEqual(workerCacheRes.value, true, "Worker cache must not return stale true");
   } finally {
-    try {
-      child.send({ type: "EXIT" });
-      await new Promise<void>((r) => {
-        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
-        child.on("exit", () => { clearTimeout(timer); r(); });
-      });
-    } catch {}
+    await terminateWorkerGracefully(child, 2000);
     setRedisClientForTesting(null);
     await mockRedis.close();
     await db.collection("oauthClient").deleteOne({ clientId });
@@ -2316,20 +2243,8 @@ await runTest("CORS-38: Multi-process race: worker pauses after MongoDB check, p
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
 
-  const sendToChild = (msg: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const handler = (res: any) => {
-        if (res.type === "ERROR") {
-          child.off("message", handler);
-          reject(new Error(res.error));
-        } else {
-          child.off("message", handler);
-          resolve(res);
-        }
-      };
-      child.on("message", handler);
-      child.send(msg);
-    });
+  const sendToChild = (msg: any, expectedType?: string): Promise<any> => {
+    return sendToWorker(child, msg, { stage: msg?.type, expectedType, timeoutMs: 5000 });
   };
 
   const origin = "https://multiprocess-postcheck.example.com";
@@ -2359,31 +2274,8 @@ await runTest("CORS-38: Multi-process race: worker pauses after MongoDB check, p
     const check1 = await checkPromise;
     assert.equal(check1.type, "CHECK_STARTED");
 
-    // Worker begins write, which will pause at the post-Mongo-check hook
-    let workerPaused = false;
-    let writeCompleted = false;
-
-    const pausedPromise = new Promise<void>((resolve) => {
-      const handler = (msg: any) => {
-        if (msg?.type === "POST_MONGO_CHECK_PAUSED") {
-          workerPaused = true;
-          child.off("message", handler);
-          resolve();
-        }
-      };
-      child.on("message", handler);
-    });
-
-    const writePromise = new Promise<void>((resolve) => {
-      const handler = (msg: any) => {
-        if (msg?.type === "WRITE_COMPLETED") {
-          writeCompleted = true;
-          child.off("message", handler);
-          resolve();
-        }
-      };
-      child.on("message", handler);
-    });
+    const pausedPromise = waitForWorkerEvent(child, "POST_MONGO_CHECK_PAUSED", "worker paused post mongo check", 5000);
+    const writePromise = waitForWorkerEvent(child, "WRITE_COMPLETED", "worker write completion", 5000);
 
     child.send({
       type: "COMPLETE_WRITE",
@@ -2393,8 +2285,8 @@ await runTest("CORS-38: Multi-process race: worker pauses after MongoDB check, p
     });
 
     // Wait until worker is confirmed paused after MongoDB check
-    await pausedPromise;
-    assert.equal(workerPaused, true, "Worker confirmed paused after MongoDB check");
+    const pausedMsg = await pausedPromise;
+    assert.equal(pausedMsg?.type, "POST_MONGO_CHECK_PAUSED", "Worker confirmed paused after MongoDB check");
 
     // While worker is paused:
     // 1. Parent disables client and runs invalidation
@@ -2409,8 +2301,8 @@ await runTest("CORS-38: Multi-process race: worker pauses after MongoDB check, p
     child.send({ type: "RESUME_POST_MONGO_CHECK" });
 
     // Wait for worker write to finish
-    await writePromise;
-    assert.equal(writeCompleted, true, "Worker completed write attempt");
+    const writeMsg = await writePromise;
+    assert.equal(writeMsg?.type, "WRITE_COMPLETED", "Worker completed write attempt");
 
     // Verification: Stale allow MUST NOT be in Redis
     assert.equal(mockRedis.has(`swyra:origin:${origin}`), false, "Redis must not contain stale key from worker");
@@ -2420,13 +2312,7 @@ await runTest("CORS-38: Multi-process race: worker pauses after MongoDB check, p
     const workerCheck = await sendToChild({ type: "CHECK_CACHE", origin });
     assert.notEqual(workerCheck.value, true, "Worker cache check must not return true");
   } finally {
-    try {
-      child.send({ type: "EXIT" });
-      await new Promise<void>((r) => {
-        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
-        child.on("exit", () => { clearTimeout(timer); r(); });
-      });
-    } catch {}
+    await terminateWorkerGracefully(child, 2000);
     setRedisClientForTesting(null);
     await mockRedis.close();
     await db.collection("oauthClient").deleteOne({ clientId });
@@ -2933,20 +2819,8 @@ await runTest("CORS-47 [Real Redis 8.8.3 + Multi-process Worker]: Atomic Redis r
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
 
-  const sendToChild = (msg: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const handler = (res: any) => {
-        if (res.type === "ERROR") {
-          child.off("message", handler);
-          reject(new Error(res.error));
-        } else {
-          child.off("message", handler);
-          resolve(res);
-        }
-      };
-      child.on("message", handler);
-      child.send(msg);
-    });
+  const sendToChild = (msg: any, expectedType?: string): Promise<any> => {
+    return sendToWorker(child, msg, { stage: msg?.type, expectedType, timeoutMs: 5000 });
   };
 
   const origin = "https://real-multiprocess-concurrency.example.com";
@@ -2976,25 +2850,8 @@ await runTest("CORS-47 [Real Redis 8.8.3 + Multi-process Worker]: Atomic Redis r
     const check1 = await sendToChild({ type: "START_CHECK", origin });
     assert.equal(check1.type, "CHECK_STARTED");
 
-    const pausedPromise = new Promise<void>((resolve) => {
-      const handler = (msg: any) => {
-        if (msg?.type === "POST_MONGO_CHECK_PAUSED") {
-          child.off("message", handler);
-          resolve();
-        }
-      };
-      child.on("message", handler);
-    });
-
-    const writePromise = new Promise<void>((resolve) => {
-      const handler = (msg: any) => {
-        if (msg?.type === "WRITE_COMPLETED") {
-          child.off("message", handler);
-          resolve();
-        }
-      };
-      child.on("message", handler);
-    });
+    const pausedPromise = waitForWorkerEvent(child, "POST_MONGO_CHECK_PAUSED", "worker paused post mongo check", 5000);
+    const writePromise = waitForWorkerEvent(child, "WRITE_COMPLETED", "worker write completion", 5000);
 
     child.send({
       type: "COMPLETE_WRITE",
@@ -3023,13 +2880,7 @@ await runTest("CORS-47 [Real Redis 8.8.3 + Multi-process Worker]: Atomic Redis r
     const workerCheck = await sendToChild({ type: "CHECK_CACHE", origin });
     assert.notEqual(workerCheck.value, true, "Worker cache check returns null");
   } finally {
-    try {
-      child.send({ type: "EXIT" });
-      await new Promise<void>((r) => {
-        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
-        child.on("exit", () => { clearTimeout(timer); r(); });
-      });
-    } catch {}
+    await terminateWorkerGracefully(child, 2000);
     setRedisClientForTesting(null);
     await realRedis.clear();
     await realRedis.close();
@@ -3138,20 +2989,8 @@ await runTest("CORS-49 [Real Redis 8.8.3 + Multi-process Worker]: Global invalid
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
 
-  const sendToChild = (msg: any): Promise<any> => {
-    return new Promise((resolve, reject) => {
-      const handler = (res: any) => {
-        if (res.type === "ERROR") {
-          child.off("message", handler);
-          reject(new Error(res.error));
-        } else {
-          child.off("message", handler);
-          resolve(res);
-        }
-      };
-      child.on("message", handler);
-      child.send(msg);
-    });
+  const sendToChild = (msg: any, expectedType?: string): Promise<any> => {
+    return sendToWorker(child, msg, { stage: msg?.type, expectedType, timeoutMs: 5000 });
   };
 
   const origin = "https://real-multi-global-timing.example.com";
@@ -3199,15 +3038,7 @@ await runTest("CORS-49 [Real Redis 8.8.3 + Multi-process Worker]: Global invalid
       assert.equal(await realRedis.has("swyra:inv:global"), false, "Global marker evicted");
 
       // While paused here, parent instructs child worker to complete write
-      const writePromise = new Promise<void>((resolve) => {
-        const handler = (msg: any) => {
-          if (msg?.type === "WRITE_COMPLETED") {
-            child.off("message", handler);
-            resolve();
-          }
-        };
-        child.on("message", handler);
-      });
+      const writePromise = waitForWorkerEvent(child, "WRITE_COMPLETED", "worker write completion", 5000);
 
       child.send({
         type: "COMPLETE_WRITE",
@@ -3235,13 +3066,7 @@ await runTest("CORS-49 [Real Redis 8.8.3 + Multi-process Worker]: Global invalid
     assert.equal(await realRedis.has(`swyra:origin:lease:${origin}`), false, "Individual lease key cleaned up by scan loop");
   } finally {
     setGlobalInvalidationMidHookForTesting(null);
-    try {
-      child.send({ type: "EXIT" });
-      await new Promise<void>((r) => {
-        const timer = setTimeout(() => { child.kill(); r(); }, 1000);
-        child.on("exit", () => { clearTimeout(timer); r(); });
-      });
-    } catch {}
+    await terminateWorkerGracefully(child, 2000);
     setRedisClientForTesting(null);
     await realRedis.clear();
     await realRedis.close();

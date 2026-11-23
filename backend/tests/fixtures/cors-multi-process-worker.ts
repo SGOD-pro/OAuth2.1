@@ -97,6 +97,19 @@ async function handleMessage(msg: any) {
     return;
   }
 
+  if (msg.type === "TRIGGER_CRASH") {
+    process.exit(1);
+  }
+
+  if (msg.type === "TRIGGER_DISCONNECT") {
+    if (process.disconnect) process.disconnect();
+    return;
+  }
+
+  if (msg.type === "IGNORE_MESSAGE") {
+    return;
+  }
+
   if (msg.type === "EXIT") {
     await closeDb();
     process.exit(0);

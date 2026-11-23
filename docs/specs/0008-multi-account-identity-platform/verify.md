@@ -172,3 +172,53 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: Passed without errors
 7. Command: `git diff --check`
    * Result: Passed without whitespace or formatting errors
+
+
+## Security test runner hang repair and local recovery verification
+
+**Date:** 2026-11-23. **Result:** Verified resolution of the test runner stall and confirmed full local recovery across all 32 automated security test suites, 16 unit test suites, and 11 local consumer end to end flows using the shared Docker MongoDB harness.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `5b3463208c6b166b689d61b71c4a2fc7efca4470`
+* Worktree status: Working tree with hang repair and runtime reconciliation
+* Source scope:
+  * [cors-worker-client.ts](../../../backend/tests/fixtures/cors-worker-client.ts): Reusable worker IPC client with pre registered listeners, bounded deadlines, child error, exit, disconnect, and send callback handling, and graceful worker shutdown
+  * [cors-multi-process-worker.ts](../../../backend/tests/fixtures/cors-multi-process-worker.ts): Handlers for crash, disconnect, and silent worker simulation
+  * [cors-worker-ipc-resilience.test.ts](../../../backend/tests/security/cors-worker-ipc-resilience.test.ts): 5 dedicated test cases exercising worker crash, disconnect, missing reply timeout, sending to terminated child, and process cleanup
+  * [cors-cache-correctness.test.ts](../../../backend/tests/security/cors-cache-correctness.test.ts): Refactored all 7 worker test cases (CORS 11, CORS 20, CORS 29, CORS 34, CORS 38, CORS 47, CORS 49) to use bounded IPC helper and graceful worker termination
+  * [run-all-security.ts](../../../backend/scripts/run-all-security.ts): Configurable suite deadlines (default 60s, heavy suites 120s), process group termination with SIGTERM and fallback SIGKILL, exit confirmation prior to database cleanup, bounded database cleanup with timeouts and finally blocks, interruption signal handling for SIGINT and SIGTERM, and preservation of externally owned Docker MongoDB
+  * [admin-mfa-fixture.ts](../../../backend/tests/fixtures/admin-mfa-fixture.ts): Stable simulated IP allocation per fixture session, explicit caller header preservation for trusted proxy and rate limit assertions, HTTP status validation before parsing totpURI, and descriptive HTTP 429 error reporting
+* File length: All modified and new production and test source files are strictly under 300 lines
+
+### Distinguishing reproduced causes from hypotheses
+
+1. Reproduced cause: Unhandled worker IPC in `cors-cache-correctness.test.ts` where parent promises lacked deadlines, error listeners, and disconnect handling caused worker stalls, blocking the runner indefinitely because `run-all-security.ts` lacked execution timeouts. This was reproduced, localized, and resolved.
+2. Unconfirmed hypothesis: The hypothesis that Node v26 JIT or WASM compilation bugs caused the runner freeze is unconfirmed by evidence. Both Node 24 (matching CI) and Node 26 execute all 32 security test suites cleanly without segmentation faults once worker IPC and timeouts are bounded. The `--jitless` flag is treated as an optional documented workaround via `NODE_TEST_FLAGS` rather than an active requirement.
+3. Fixture rate limiting: Consecutive test logins sharing the default IP `127.0.0.1` intermittently triggered Better Auth rate limiting (HTTP 429) during TOTP enrollment. Allocating a stable simulated IP (`198.51.100.X`) per fixture session resolves rate limit collisions while preserving explicit caller headers for dedicated rate limit and proxy tests.
+
+### Verification commands and execution evidence
+
+1. Command: `cd backend && node --import tsx tests/security/cors-worker-ipc-resilience.test.ts`
+   * Result: 5 passed, 0 failed (2730ms)
+   * Worker crash during IPC: bounded error rejection with exit code details (< 300ms)
+   * Worker disconnect during IPC: bounded error rejection with disconnect info (< 300ms)
+   * Missing worker reply: bounded timeout with stage attribution (~1465ms)
+   * Send on dead child: immediate error rejection without hang (< 300ms)
+   * Graceful termination: verified zero surviving child processes
+2. Command: `cd backend && node --import tsx tests/security/cors-cache-correctness.test.ts`
+   * Result: 49 passed, 0 failed (12971ms)
+   * All 49 test cases passed cleanly, including multi process race and cache invalidation scenarios
+3. Command: `cd backend && npm run test:all-security`
+   * Result: 32 passed, 0 failed (100 percent pass rate across all security test files)
+4. Command: `npm run test:unit`
+   * Result: All 16 unit test suites passed with 0 failures
+5. Command: `npm run test:local-consumer-e2e`
+   * Result: All 11 local consumer flows passed with 0 failures
+6. Command: `npm run security:integration-check`
+   * Result: 0 violations
+7. Command: `npm run security:docs-check`
+   * Result: 0 errors
+8. Command: `ps aux | grep -E "cors|worker" | grep -v grep`
+   * Result: Zero orphaned node test worker processes surviving

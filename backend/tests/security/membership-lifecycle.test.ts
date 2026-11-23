@@ -459,8 +459,11 @@ await runTest("MEM-8: Real authorize route redirects with error=access_denied fo
     createdAt: new Date(),
   });
 
+  const memVerifier = crypto.randomBytes(32).toString("base64url");
+  const memChallenge = crypto.createHash("sha256").update(memVerifier).digest("base64url");
+
   const authRevokedRes = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=state_xyz`,
+    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=${memChallenge}&code_challenge_method=S256&state=state_xyz`,
     {
       method: "GET",
       headers: getTestHeaders({ Cookie: sessionCookie }),
@@ -475,7 +478,7 @@ await runTest("MEM-8: Real authorize route redirects with error=access_denied fo
   await db.collection("user").updateOne({ _id: new ObjectId(uid) }, { $set: { scopedClientId: privateClientId } });
 
   const authRemovedRes = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=state_xyz`,
+    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=${memChallenge}&code_challenge_method=S256&state=state_xyz`,
     {
       method: "GET",
       headers: getTestHeaders({ Cookie: sessionCookie }),
@@ -502,7 +505,7 @@ await runTest("MEM-8: Real authorize route redirects with error=access_denied fo
   const superCookie = (superLoginRes.headers.get("set-cookie") || "").split(";")[0];
 
   const superAuthRes = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=state_super`,
+    `/api/auth/oauth2/authorize?client_id=${privateClientId}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=${memChallenge}&code_challenge_method=S256&state=state_super`,
     {
       method: "GET",
       headers: getTestHeaders({ Cookie: superCookie }),

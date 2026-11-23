@@ -80,8 +80,11 @@ await runTest("TX-1: /oauth2/authorize creates authoritative server-side transac
     createdAt: new Date(),
   });
 
+  const codeVerifier = crypto.randomBytes(32).toString("base64url");
+  const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+
   const res = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&state=${state}`,
+    `/api/auth/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&code_challenge=${codeChallenge}&code_challenge_method=S256&state=${state}`,
     {
       method: "GET",
       headers: getTestHeaders(),
@@ -125,17 +128,21 @@ await runTest("TX-2: Multi-tab parallel OAuth flows maintain state-bound tenant 
 
   const stateA = "tab_a_state_" + crypto.randomBytes(6).toString("hex");
   const stateB = "tab_b_state_" + crypto.randomBytes(6).toString("hex");
+  const verifierA = crypto.randomBytes(32).toString("base64url");
+  const challengeA = crypto.createHash("sha256").update(verifierA).digest("base64url");
+  const verifierB = crypto.randomBytes(32).toString("base64url");
+  const challengeB = crypto.createHash("sha256").update(verifierB).digest("base64url");
 
   // Tab A initiates OAuth
   const tabARes = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${clientA}&redirect_uri=https://${clientA}.example.com/cb&response_type=code&state=${stateA}`,
+    `/api/auth/oauth2/authorize?client_id=${clientA}&redirect_uri=https://${clientA}.example.com/cb&response_type=code&code_challenge=${challengeA}&code_challenge_method=S256&state=${stateA}`,
     { method: "GET", headers: getTestHeaders() }
   );
   assert.equal(tabARes.status, 302);
 
   // Tab B initiates OAuth (overwriting any shared cookie jar current_client_id)
   const tabBRes = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${clientB}&redirect_uri=https://${clientB}.example.com/cb&response_type=code&state=${stateB}`,
+    `/api/auth/oauth2/authorize?client_id=${clientB}&redirect_uri=https://${clientB}.example.com/cb&response_type=code&code_challenge=${challengeB}&code_challenge_method=S256&state=${stateB}`,
     { method: "GET", headers: getTestHeaders() }
   );
   assert.equal(tabBRes.status, 302);

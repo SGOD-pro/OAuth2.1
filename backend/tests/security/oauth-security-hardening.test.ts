@@ -996,11 +996,15 @@ await runTest("SEC-01-H: Revocation wins code exchange and refresh with older cr
 
   // 1. Authorization Code issued at T0 cannot be exchanged at T2
   const authCode = "code-rev-wins-" + crypto.randomBytes(8).toString("hex");
+  const pkceVerifier = crypto.randomBytes(32).toString("base64url");
+  const pkceChallenge = crypto.createHash("sha256").update(pkceVerifier).digest("base64url");
   await db.collection("oauthAuthorizationCode").insertOne({
     code: authCode,
     clientId: "test-sec-client",
     userId: userId,
     redirectUri: "https://example.com/callback",
+    codeChallenge: pkceChallenge,
+    codeChallengeMethod: "S256",
     createdAt: t0,
     expiresAt: new Date(Date.now() + 60000),
   });
@@ -1011,7 +1015,7 @@ await runTest("SEC-01-H: Revocation wins code exchange and refresh with older cr
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization: `Basic ${basicAuth}`,
     }),
-    body: `grant_type=authorization_code&code=${authCode}&redirect_uri=https://example.com/callback&client_id=test-sec-client`,
+    body: `grant_type=authorization_code&code=${authCode}&redirect_uri=https://example.com/callback&client_id=test-sec-client&code_verifier=${pkceVerifier}`,
   });
   assert.equal(codeRes.status, 400, "Older authorization code must be rejected when tokens were revoked prior to exchange");
   const codeBody = await codeRes.json();

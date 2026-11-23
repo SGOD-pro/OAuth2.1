@@ -105,8 +105,10 @@ await runTest("CRED-1: Compromised user password cannot escalate to admin or bre
     createdAt: new Date(),
   });
 
+  const verifier = crypto.randomBytes(32).toString("base64url");
+  const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
   const authRes = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${privateClient}&redirect_uri=https://priv.example.com/cb&response_type=code&state=attack`,
+    `/api/auth/oauth2/authorize?client_id=${privateClient}&redirect_uri=https://priv.example.com/cb&response_type=code&code_challenge=${challenge}&code_challenge_method=S256&state=attack`,
     { method: "GET", headers: getTestHeaders({ Cookie: cookie }) }
   );
   assert.equal(authRes.status, 302);

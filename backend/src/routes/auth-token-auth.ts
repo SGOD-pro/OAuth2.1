@@ -99,6 +99,38 @@ export async function authenticateTokenClient(c: any): Promise<ClientAuthResult>
 
     const canonicalClientId = clientDoc.clientId;
 
+    const isPublicClient = clientDoc.clientType === "public" ||
+        (clientDoc.isPublic === true && !clientDoc.clientSecret && !clientDoc.client_secret);
+
+    // Public clients MUST NOT supply client credentials (RFC 6749 Section 2.1 & OAuth 2.1)
+    if (isPublicClient && (hasBasicAuth || bodyClientSecret)) {
+        return {
+            success: false,
+            response: c.json(
+                {
+                    error: "invalid_client",
+                    error_description: "Public clients must not supply client credentials",
+                },
+                400
+            ),
+        };
+    }
+
+    // Confidential clients MUST authenticate with credentials (RFC 6749 Section 2.3)
+    if (!isPublicClient && !hasBasicAuth && !bodyClientSecret) {
+        return {
+            success: false,
+            response: c.json(
+                {
+                    error: "invalid_client",
+                    error_description: "Confidential clients must authenticate with valid client credentials",
+                },
+                401,
+                { "WWW-Authenticate": 'Basic realm="OAuth"' }
+            ),
+        };
+    }
+
     // Prepare single authoritative request to forward to Better Auth
     let reqToForward = c.req.raw;
     params.delete("client_secret");

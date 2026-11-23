@@ -35,13 +35,13 @@ function getCookieFromHeaders(headers: any, nameSubstring: string): string {
   return "";
 }
 
-export async function enrollAndLoginAdminMfaWithSecret(
-  app: any,
-  email: string,
-  pass: string,
+let fixtureSessionCounter = 100;
+
+function createFixtureHeadersBuilder(
+  fixtureIp: string,
   getTestHeaders?: (custom?: Record<string, string>) => any
-): Promise<MfaEnrollmentResult> {
-  const getHeaders = (custom: Record<string, string> = {}) => {
+) {
+  return (custom: Record<string, string> = {}) => {
     const base = getTestHeaders ? getTestHeaders(custom) : {};
     const res: Record<string, string> = {};
     const setKey = (k: string, v: string) => {
@@ -54,62 +54,128 @@ export async function enrollAndLoginAdminMfaWithSecret(
     };
 
     setKey("Content-Type", "application/json");
-    setKey("x-forwarded-for", "127.0.0.1, 10.0.0.1");
     setKey("x-gateway-secret", process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32));
     setKey("Origin", process.env.FRONTEND_URL || "https://oauth21.vercel.app");
     setKey("x-csrf-token", "any");
 
+    let callerHasIp = false;
     if (base instanceof Headers) {
       base.forEach((v, k) => {
         setKey(k, v);
+        if (k.toLowerCase() === "x-forwarded-for") callerHasIp = true;
       });
     } else if (typeof base === "object" && base !== null) {
       for (const [k, v] of Object.entries(base)) {
         setKey(k, v as string);
+        if (k.toLowerCase() === "x-forwarded-for") callerHasIp = true;
       }
     }
+
     for (const [k, v] of Object.entries(custom)) {
       setKey(k, v);
+      if (k.toLowerCase() === "x-forwarded-for") callerHasIp = true;
     }
+
+    if (!callerHasIp) {
+      setKey("x-forwarded-for", `${fixtureIp}, 10.0.0.1`);
+    }
+
     return res;
   };
+}
+
+export async function enrollAndLoginAdminMfaWithSecret(
+  app: any,
+  email: string,
+  pass: string,
+  getTestHeaders?: (custom?: Record<string, string>) => any
+): Promise<MfaEnrollmentResult> {
+  const sessionIpIndex = (++fixtureSessionCounter % 240) + 1;
+  const fixtureIp = `198.51.100.${sessionIpIndex}`;
+  const buildHeaders = createFixtureHeadersBuilder(fixtureIp, getTestHeaders);
 
   const loginRes = await app.request("/api/auth/sign-in/email", {
     method: "POST",
-    headers: getHeaders(),
+    headers: buildHeaders(),
     body: JSON.stringify({ email, password: pass }),
   });
+  if (loginRes.status === 429) {
+    const text = await loginRes.text();
+    throw new Error(`Admin sign in rate limited (HTTP 429) for ${email}: ${text}`);
+  }
+  if (!loginRes.ok) {
+    const text = await loginRes.text();
+    throw new Error(`Admin sign in failed (HTTP ${loginRes.status}) for ${email}: ${text}`);
+  }
   const preCookie = (loginRes.headers.get("set-cookie") || "").split(";")[0];
 
   const enableRes = await app.request("/api/auth/two-factor/enable", {
     method: "POST",
-    headers: getHeaders({ Cookie: preCookie }),
+    headers: buildHeaders({ Cookie: preCookie }),
     body: JSON.stringify({ password: pass }),
   });
+  if (enableRes.status === 429) {
+    const text = await enableRes.text();
+    throw new Error(`Admin MFA enrollment rate limited (HTTP 429) for ${email}: ${text}`);
+  }
+  if (!enableRes.ok) {
+    const text = await enableRes.text();
+    throw new Error(`Admin MFA enrollment failed (HTTP ${enableRes.status}) for ${email}: ${text}`);
+  }
   const enableData = await enableRes.json();
-  const b32Secret = new URL(enableData.totpURI).searchParams.get("secret")!;
+  if (!enableData?.totpURI) {
+    throw new Error(`Admin MFA enrollment response missing totpURI for ${email}: ${JSON.stringify(enableData)}`);
+  }
+  const b32Secret = new URL(enableData.totpURI).searchParams.get("secret");
+  if (!b32Secret) {
+    throw new Error(`Admin MFA totpURI missing secret parameter for ${email}`);
+  }
   const rawSecret = Buffer.from(base32.decode(b32Secret)).toString();
 
   const enrollOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
-  await app.request("/api/auth/two-factor/verify-totp", {
+  const verifyEnrollRes = await app.request("/api/auth/two-factor/verify-totp", {
     method: "POST",
-    headers: getHeaders({ Cookie: preCookie }),
+    headers: buildHeaders({ Cookie: preCookie }),
     body: JSON.stringify({ code: enrollOtp }),
   });
+  if (verifyEnrollRes.status === 429) {
+    const text = await verifyEnrollRes.text();
+    throw new Error(`Admin MFA verify rate limited (HTTP 429) for ${email}: ${text}`);
+  }
+  if (!verifyEnrollRes.ok) {
+    const text = await verifyEnrollRes.text();
+    throw new Error(`Admin MFA verify failed (HTTP ${verifyEnrollRes.status}) for ${email}: ${text}`);
+  }
 
   const challengeLoginRes = await app.request("/api/auth/sign-in/email", {
     method: "POST",
-    headers: getHeaders(),
+    headers: buildHeaders(),
     body: JSON.stringify({ email, password: pass }),
   });
+  if (challengeLoginRes.status === 429) {
+    const text = await challengeLoginRes.text();
+    throw new Error(`Admin challenge sign in rate limited (HTTP 429) for ${email}: ${text}`);
+  }
+  if (!challengeLoginRes.ok) {
+    const text = await challengeLoginRes.text();
+    throw new Error(`Admin challenge sign in failed (HTTP ${challengeLoginRes.status}) for ${email}: ${text}`);
+  }
   const challengeCookie = getCookieFromHeaders(challengeLoginRes.headers, "two_factor=");
 
   const challengeOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
   const verifyChallengeRes = await app.request("/api/auth/two-factor/verify-totp", {
     method: "POST",
-    headers: getHeaders({ Cookie: challengeCookie }),
+    headers: buildHeaders({ Cookie: challengeCookie }),
     body: JSON.stringify({ code: challengeOtp }),
   });
+  if (verifyChallengeRes.status === 429) {
+    const text = await verifyChallengeRes.text();
+    throw new Error(`Admin challenge verify rate limited (HTTP 429) for ${email}: ${text}`);
+  }
+  if (!verifyChallengeRes.ok) {
+    const text = await verifyChallengeRes.text();
+    throw new Error(`Admin challenge verify failed (HTTP ${verifyChallengeRes.status}) for ${email}: ${text}`);
+  }
   const cookie = getCookieFromHeaders(verifyChallengeRes.headers, "session_token=");
 
   return { cookie, rawSecret, b32Secret };
@@ -122,30 +188,38 @@ export async function loginEnrolledAdminMfa(
   rawSecret: string,
   getTestHeaders?: (custom?: Record<string, string>) => any
 ): Promise<string> {
-  const getHeaders = (custom: Record<string, string> = {}) => {
-    if (getTestHeaders) return getTestHeaders(custom);
-    return {
-      "Content-Type": "application/json",
-      "x-forwarded-for": "127.0.0.1, 10.0.0.1",
-      "x-gateway-secret": process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32),
-      Origin: process.env.FRONTEND_URL || "https://oauth21.vercel.app",
-      "x-csrf-token": "any",
-      ...custom,
-    };
-  };
+  const sessionIpIndex = (++fixtureSessionCounter % 240) + 1;
+  const fixtureIp = `198.51.100.${sessionIpIndex}`;
+  const buildHeaders = createFixtureHeadersBuilder(fixtureIp, getTestHeaders);
 
   const challengeLoginRes = await app.request("/api/auth/sign-in/email", {
     method: "POST",
-    headers: getHeaders({ "content-type": "application/json" }),
+    headers: buildHeaders(),
     body: JSON.stringify({ email, password: pass }),
   });
+  if (challengeLoginRes.status === 429) {
+    const text = await challengeLoginRes.text();
+    throw new Error(`Admin MFA login rate limited (HTTP 429) for ${email}: ${text}`);
+  }
+  if (!challengeLoginRes.ok) {
+    const text = await challengeLoginRes.text();
+    throw new Error(`Admin MFA login failed (HTTP ${challengeLoginRes.status}) for ${email}: ${text}`);
+  }
   const challengeCookie = getCookieFromHeaders(challengeLoginRes.headers, "two_factor=");
 
   const challengeOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
   const verifyChallengeRes = await app.request("/api/auth/two-factor/verify-totp", {
     method: "POST",
-    headers: getHeaders({ Cookie: challengeCookie, "content-type": "application/json" }),
+    headers: buildHeaders({ Cookie: challengeCookie }),
     body: JSON.stringify({ code: challengeOtp }),
   });
+  if (verifyChallengeRes.status === 429) {
+    const text = await verifyChallengeRes.text();
+    throw new Error(`Admin MFA login verify rate limited (HTTP 429) for ${email}: ${text}`);
+  }
+  if (!verifyChallengeRes.ok) {
+    const text = await verifyChallengeRes.text();
+    throw new Error(`Admin MFA login verify failed (HTTP ${verifyChallengeRes.status}) for ${email}: ${text}`);
+  }
   return getCookieFromHeaders(verifyChallengeRes.headers, "session_token=");
 }

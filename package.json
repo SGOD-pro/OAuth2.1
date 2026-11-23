@@ -31,6 +31,7 @@
     "test:browser-e2e": "npm --prefix backend run test:browser-e2e",
     "test:client-policy-enforcement": "npm --prefix backend run test:client-policy-enforcement",
     "test:client-policy-compatibility": "npm --prefix backend run test:client-policy-compatibility",
+    "test:pkce-enforcement": "npm --prefix backend run test:pkce-enforcement",
     "audit:client-policies": "npm --prefix backend run audit:client-policies"
   }
 }

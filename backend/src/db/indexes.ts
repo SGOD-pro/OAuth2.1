@@ -29,6 +29,7 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("oauthRefreshToken", { token: 1 }),
       safeIndex("oauthAccessToken", { token: 1 }),
       safeIndex("oauthAuthorizationCode", { code: 1 }),
+      safeIndex("oauthAuthorizationCode", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("admin_audit", { timestamp: -1 }),
       safeIndex("auth_events", { timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 3600 }),
       safeIndex("auth_events", { timestamp: -1 }),

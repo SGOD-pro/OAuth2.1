@@ -2,9 +2,10 @@ import crypto from "crypto";
 import { ObjectId } from "mongodb";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
-import { hashToken } from "../utils/security";
+import { hashToken, checkUserHasAppAccess } from "../utils/security";
 import { checkAccountEligibility } from "../utils/account-eligibility";
 import { registerTokenFamily } from "../db/state";
+import { verifyAndConsumeAuthorizationCode } from "../utils/pkce";
 import { mintJwtAccessToken, resignIdTokenWithNewAtHash } from "./auth-jwt";
 import { getTokenBarrierHookForTesting } from "./auth-keys";
 import { AuthenticatedClientContext } from "./auth-token-auth";
@@ -27,46 +28,73 @@ export async function handleAuthorizationCodeGrant(
     const { canonicalClientId, reqToForward, params } = clientContext;
     const database = await getDb();
     const incomingCode = params.get("code");
+    if (!incomingCode) {
+        return c.json({ error: "invalid_request", error_description: "code is required" }, 400);
+    }
+
+    const codeVerifier = params.get("code_verifier");
+    const consumption = await verifyAndConsumeAuthorizationCode(database, {
+        code: incomingCode,
+        clientId: canonicalClientId,
+        redirectUri: params.get("redirect_uri"),
+        codeVerifier,
+    });
+
+    if (!consumption.success) {
+        return c.json(
+            { error: consumption.error, error_description: consumption.description },
+            consumption.status
+        );
+    }
 
     let preCodeUserId: string | undefined;
     let codeIssuedAtSec: number | undefined;
     let codeIssuedAtMs: number | undefined;
     let codeTokenVersion: number | undefined;
-    if (incomingCode) {
-        try {
-            const codeDoc = await database.collection("oauthAuthorizationCode").findOne({ code: incomingCode });
-            if (codeDoc) {
-                if (codeDoc.userId) {
-                    preCodeUserId = String(codeDoc.userId);
-                }
-                if (codeDoc.createdAt) {
-                    codeIssuedAtMs = new Date(codeDoc.createdAt).getTime();
-                    codeIssuedAtSec = Math.floor(codeIssuedAtMs / 1000);
-                }
-                if (codeDoc.tokenVersion !== undefined) {
-                    codeTokenVersion = codeDoc.tokenVersion;
-                }
-                if (preCodeUserId) {
-                    const userDoc = await database.collection("user").findOne({
-                        $or: [
-                            { id: preCodeUserId },
-                            ...(ObjectId.isValid(preCodeUserId) && preCodeUserId.length === 24 ? [{ _id: new ObjectId(preCodeUserId) }] : []),
-                        ],
-                    });
-                    const eligibility = checkAccountEligibility(userDoc, {
-                        tokenIssuedAtMs: codeIssuedAtMs,
-                        tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000),
-                        tokenVersion: codeTokenVersion,
-                    });
-                    if (!eligibility.eligible) {
-                        return c.json({
-                            error: "invalid_grant",
-                            error_description: `User account is not eligible for token exchange: ${eligibility.reason}`,
-                        }, 400);
-                    }
+
+    const codeDoc = consumption.codeDoc;
+    if (codeDoc) {
+        if (codeDoc.userId) {
+            preCodeUserId = String(codeDoc.userId);
+        }
+        if (codeDoc.createdAt) {
+            codeIssuedAtMs = new Date(codeDoc.createdAt).getTime();
+            codeIssuedAtSec = Math.floor(codeIssuedAtMs / 1000);
+        }
+        if (codeDoc.tokenVersion !== undefined) {
+            codeTokenVersion = codeDoc.tokenVersion;
+        }
+        if (preCodeUserId) {
+            const userDoc = await database.collection("user").findOne({
+                $or: [
+                    { id: preCodeUserId },
+                    ...(ObjectId.isValid(preCodeUserId) && preCodeUserId.length === 24 ? [{ _id: new ObjectId(preCodeUserId) }] : []),
+                ],
+            });
+            const eligibility = checkAccountEligibility(userDoc, {
+                tokenIssuedAtMs: codeIssuedAtMs,
+                tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000),
+                tokenVersion: codeTokenVersion,
+            });
+            if (!eligibility.eligible) {
+                return c.json({
+                    error: "invalid_grant",
+                    error_description: `User account is not eligible for token exchange: ${eligibility.reason}`,
+                }, 400);
+            }
+
+            const isPrivate = clientContext.clientDoc?.accessPolicy === "private" ||
+                (!clientContext.clientDoc?.clientType && clientContext.clientDoc?.isPublic === false);
+            if (isPrivate) {
+                const hasAccess = await checkUserHasAppAccess(database, userDoc, canonicalClientId);
+                if (!hasAccess) {
+                    return c.json({
+                        error: "invalid_grant",
+                        error_description: "User is not an authorized member of this private application",
+                    }, 400);
                 }
             }
-        } catch {}
+        }
     }
 
     const res = await authProvider.handler(reqToForward);
@@ -221,6 +249,13 @@ export async function handleAuthorizationCodeGrant(
 
                 if (tokenBarrierHook && resolvedUserId) {
                     await tokenBarrierHook("after_issuance_commit", resolvedUserId);
+                }
+
+                if (familyId) {
+                    await database.collection("oauthAuthorizationCode").updateOne(
+                        { code: incomingCode },
+                        { $set: { familyId } }
+                    ).catch(() => {});
                 }
 
                 tokenData.access_token = jwtAt;

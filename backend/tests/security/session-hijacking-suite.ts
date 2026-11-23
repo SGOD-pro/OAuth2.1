@@ -216,8 +216,10 @@ await runTest("SESS-4: Compromised session from App A cannot authorize access to
   const cookie = loginRes.headers.get("set-cookie") || "";
 
   // Attempt to authorize App B with the user's session
+  const verifierB = crypto.randomBytes(32).toString("base64url");
+  const challengeB = crypto.createHash("sha256").update(verifierB).digest("base64url");
   const authRes = await app.request(
-    `/api/auth/oauth2/authorize?client_id=${clientB}&redirect_uri=https://${clientB}.example.com/callback&response_type=code&state=attack123`,
+    `/api/auth/oauth2/authorize?client_id=${clientB}&redirect_uri=https://${clientB}.example.com/callback&response_type=code&code_challenge=${challengeB}&code_challenge_method=S256&state=attack123`,
     {
       method: "GET",
       headers: getTestHeaders({ Cookie: cookie }),
