@@ -117,4 +117,54 @@ export const config = {
         if (val === 'false') return false;
         throw new Error(`Invalid OPEN_APP_MEMBERSHIP_BYPASS_ENABLED value: "${val}". Expected "true" or "false".`);
     },
+
+    identity: {
+        get registrationMode(): 'disabled' | 'verified' {
+            const val = process.env.IDENTITY_REGISTRATION_MODE ?? (parsedEnv as any).IDENTITY_REGISTRATION_MODE ?? 'disabled';
+            if (val === 'disabled' || val === 'verified') return val;
+            throw new Error(`Invalid IDENTITY_REGISTRATION_MODE value: "${val}". Expected "disabled" or "verified".`);
+        },
+        get otpTtlSeconds(): number {
+            return Number(process.env.IDENTITY_OTP_TTL_SECONDS) || (parsedEnv as any).IDENTITY_OTP_TTL_SECONDS || 300;
+        },
+        get otpMaxAttempts(): number {
+            return Number(process.env.IDENTITY_OTP_MAX_ATTEMPTS) || (parsedEnv as any).IDENTITY_OTP_MAX_ATTEMPTS || 5;
+        },
+        get intentTtlSeconds(): number {
+            return Number(process.env.IDENTITY_INTENT_TTL_SECONDS) || (parsedEnv as any).IDENTITY_INTENT_TTL_SECONDS || 1800;
+        },
+        get proofTtlSeconds(): number {
+            return Number(process.env.IDENTITY_PROOF_TTL_SECONDS) || (parsedEnv as any).IDENTITY_PROOF_TTL_SECONDS || 600;
+        },
+        get mailResendSeconds(): number {
+            return Number(process.env.IDENTITY_MAIL_RESEND_SECONDS) || (parsedEnv as any).IDENTITY_MAIL_RESEND_SECONDS || 60;
+        },
+        get globalMailDailyBudget(): number {
+            return Number(process.env.IDENTITY_GLOBAL_MAIL_DAILY_BUDGET) || (parsedEnv as any).IDENTITY_GLOBAL_MAIL_DAILY_BUDGET || 1000;
+        },
+        get otpVerifierKeyRef(): string {
+            return process.env.IDENTITY_OTP_VERIFIER_KEY_REF || (parsedEnv as any).IDENTITY_OTP_VERIFIER_KEY_REF || `${config.auth.secret}-otp-verifier`;
+        },
+        get lookupKeyRef(): string {
+            return process.env.IDENTITY_LOOKUP_KEY_REF || (parsedEnv as any).IDENTITY_LOOKUP_KEY_REF || `${config.auth.secret}-lookup`;
+        },
+        get mailPayloadKeyRef(): string {
+            return process.env.IDENTITY_MAIL_PAYLOAD_KEY_REF || (parsedEnv as any).IDENTITY_MAIL_PAYLOAD_KEY_REF || `${config.auth.secret}-mail-payload`;
+        },
+        get mailWebhookKeyRef(): string {
+            return process.env.IDENTITY_MAIL_WEBHOOK_KEY_REF || (parsedEnv as any).IDENTITY_MAIL_WEBHOOK_KEY_REF || `${config.auth.secret}-mail-webhook`;
+        },
+        get mailTransport(): 'test_sink' | 'ses' | 'approved_smtp' | 'signed_webhook' {
+            return (process.env.IDENTITY_MAIL_TRANSPORT || (parsedEnv as any).IDENTITY_MAIL_TRANSPORT || 'test_sink') as any;
+        },
+        get mailFrom(): string {
+            return process.env.IDENTITY_MAIL_FROM || (parsedEnv as any).IDENTITY_MAIL_FROM || 'no-reply@swyra.local';
+        },
+        get mailTestSinkUrl(): string | undefined {
+            return process.env.IDENTITY_MAIL_TEST_SINK_URL || (parsedEnv as any).IDENTITY_MAIL_TEST_SINK_URL || undefined;
+        },
+        get mailProviderUrl(): string | undefined {
+            return process.env.IDENTITY_MAIL_PROVIDER_URL || (parsedEnv as any).IDENTITY_MAIL_PROVIDER_URL || undefined;
+        },
+    },
 }

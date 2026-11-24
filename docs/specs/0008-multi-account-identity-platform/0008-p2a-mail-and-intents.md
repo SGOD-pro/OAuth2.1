@@ -1,6 +1,6 @@
 # 0008-P2a. Registration intents, OTP budgets, durable mail outbox, and verification proof
 
-**Status:** Proposed / Planned (Implementation pending; leave account and session creation to P2b)
+**Status:** Locally verified with local test sink (P2b account creation and real provider delivery remain pending)
 **Date:** 2026-11-25
 
 ## 1. Purpose and scope boundary

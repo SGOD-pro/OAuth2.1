@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 
 import admin from "./routes/admin";
 import auth from "./routes/auth";
+import identity from "./routes/identity";
 import appAdminAuth from "./routes/app-admin-auth";
 import { dynamicCors } from "./middleware/cors";
 import { requireAdmin } from "./middleware/admin-auth";
@@ -180,6 +181,7 @@ app.get("/ready", (c) => c.json({ status: "ready" }, 200));
 app.get("/", (c) => c.json({ status: "ok", service: "OAuth 2.1 Identity Provider" }, 200));
 
 app.route("/api/auth/app-admin", appAdminAuth); // Application admin authentication & verification routes
+app.route("/api/identity", identity); // First-party V2 identity workflows (CSRF & same-origin locked)
 app.route("/api/admin", admin);  // all /api/admin/* routes
 app.route("/api/auth", auth);    // all /api/auth/* routes
 app.route("/.well-known", auth); // all /.well-known/* routes (JWKS, OIDC Discovery)

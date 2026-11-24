@@ -106,6 +106,8 @@ const securityTestFiles = [
   "tests/security/introspect-controlled-failures.test.ts",
   "tests/security/p1c-admin-policy-api.test.ts",
   "tests/security/p1c-credential-transition.test.ts",
+  "tests/security/p2a-intents-and-otp.test.ts",
+  "tests/security/p2a-outbox-worker-and-callbacks.test.ts",
 ];
 
 console.log("================================================================");

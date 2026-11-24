@@ -181,6 +181,11 @@ export async function dynamicCors(c: Context, next: Next) {
     return;
   }
 
+  // V2 Identity APIs never grant cross-origin access to third-party OAuth consumer origins
+  if (c.req.path.startsWith("/api/identity")) {
+    return c.json({ error: "Origin not allowed" }, 403);
+  }
+
   let allowed = await getCachedOrigin(normalizedOrigin);
 
   if (allowed === null) {

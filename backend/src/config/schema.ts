@@ -38,6 +38,23 @@ export const envSchema = z.object({
 
     // When true, eligible authenticated users authorize open apps without ambient user_app_registrations writes
     OPEN_APP_MEMBERSHIP_BYPASS_ENABLED: z.enum(['true', 'false']).default('false'),
+
+    // V2 P2a pre-account verified registration & mail delivery settings
+    IDENTITY_REGISTRATION_MODE: z.enum(['disabled', 'verified']).default('disabled'),
+    IDENTITY_OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+    IDENTITY_OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+    IDENTITY_INTENT_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
+    IDENTITY_PROOF_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+    IDENTITY_MAIL_RESEND_SECONDS: z.coerce.number().int().positive().default(60),
+    IDENTITY_OTP_VERIFIER_KEY_REF: z.string().optional(),
+    IDENTITY_LOOKUP_KEY_REF: z.string().optional(),
+    IDENTITY_MAIL_PAYLOAD_KEY_REF: z.string().optional(),
+    IDENTITY_MAIL_TRANSPORT: z.enum(['test_sink', 'ses', 'approved_smtp', 'signed_webhook']).default('test_sink'),
+    IDENTITY_MAIL_FROM: z.string().optional(),
+    IDENTITY_MAIL_WEBHOOK_KEY_REF: z.string().optional(),
+    IDENTITY_MAIL_TEST_SINK_URL: z.string().optional(),
+    IDENTITY_MAIL_PROVIDER_URL: z.string().optional(),
+    IDENTITY_GLOBAL_MAIL_DAILY_BUDGET: z.coerce.number().int().positive().default(1000),
 }).superRefine((data, ctx) => {
     if (data.NODE_ENV === 'production') {
         const validateProductionUrl = (val: string, fieldName: 'BETTER_AUTH_URL' | 'FRONTEND_URL') => {
@@ -76,6 +93,29 @@ export const envSchema = z.object({
                 message: 'INTERNAL_GATEWAY_SECRET is required in production and must be at least 32 characters',
                 path: ['INTERNAL_GATEWAY_SECRET'],
             });
+        }
+        if (data.IDENTITY_REGISTRATION_MODE === 'verified') {
+            for (const reqKey of [
+                'IDENTITY_OTP_VERIFIER_KEY_REF',
+                'IDENTITY_LOOKUP_KEY_REF',
+                'IDENTITY_MAIL_PAYLOAD_KEY_REF',
+                'IDENTITY_MAIL_FROM',
+            ] as const) {
+                if (!data[reqKey] || data[reqKey]!.trim().length === 0) {
+                    ctx.addIssue({
+                        code: z.ZodIssueCode.custom,
+                        message: `${reqKey} is required in production when IDENTITY_REGISTRATION_MODE=verified`,
+                        path: [reqKey],
+                    });
+                }
+            }
+            if (data.IDENTITY_MAIL_TRANSPORT === 'test_sink') {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: 'IDENTITY_MAIL_TRANSPORT cannot be test_sink in production',
+                    path: ['IDENTITY_MAIL_TRANSPORT'],
+                });
+            }
         }
     }
 

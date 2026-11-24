@@ -50,6 +50,17 @@ export async function ensureTtlIndexes(): Promise<void> {
       safeIndex("oauth_transactions", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
       safeIndex("oauth_transactions", { transactionId: 1 }, { unique: true }),
       safeIndex("oauth_transactions", { state: 1 }),
+      safeIndex("registration_intents", { intentId: 1 }, { unique: true }),
+      safeIndex("registration_intents", { emailLookup: 1, status: 1 }),
+      safeIndex("registration_intents", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      safeIndex("mail_outbox", { jobId: 1 }, { unique: true }),
+      safeIndex("mail_outbox", { idempotencyKey: 1 }, { unique: true, sparse: true }),
+      safeIndex("mail_outbox", { status: 1, nextAttemptAt: 1, deadline: 1 }),
+      safeIndex("mail_outbox", { intentId: 1, generation: 1 }),
+      safeIndex("mail_budgets", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      safeIndex("mail_suppressions", { emailLookup: 1 }, { unique: true }),
+      safeIndex("mail_callback_events", { eventId: 1 }, { unique: true }),
+      safeIndex("mail_callback_events", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
 
     // Automatically synchronize app administrators into centralized user & account collections

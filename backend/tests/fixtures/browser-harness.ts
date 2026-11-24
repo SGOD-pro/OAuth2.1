@@ -64,6 +64,7 @@ export async function startIdpAndFrontendHarness(options: {
   mongoUri: string;
   gatewaySecret: string;
   betterAuthSecret: string;
+  extraEnv?: Record<string, string>;
 }): Promise<BrowserTestEnvironment> {
   const usedPorts = new Set<number>();
   const idpPort = await getAvailablePort(usedPorts);
@@ -102,6 +103,7 @@ export async function startIdpAndFrontendHarness(options: {
         GOOGLE_CLIENT_SECRET: "test-google-secret",
         INTERNAL_GATEWAY_SECRET: options.gatewaySecret,
         TRUSTED_PROXY_CIDRS: "127.0.0.1/32,10.0.0.0/8",
+        ...(options.extraEnv || {}),
       },
       stdio: "pipe",
     }

@@ -13,7 +13,7 @@ Record actual commands and results in the documentation PR: relative links, anch
 |---|---|---|---|
 | Engine transaction rollback and writer inventory | 01-03,16 | Real engine + Mongo replica set transaction | P0 isolated proof passed, 10 cases; production P2 pending |
 | Request local selected engine sessions | 07-09 | In process engine HTTP + real Mongo replica set | P0 proof passed, 6 cases; browser and workers and P3 wiring pending |
-| OTP start, verify, resend, finalize and wrong code zero writes | 02-04,15 | Real API + disposable DB and mail sink; concurrency workers | Pending |
+| OTP start, verify, resend, finalize and wrong code zero writes | 02-04,15 | Real API + disposable DB and mail sink; concurrency workers | P2a intents, OTP limits, atomic budgets, encrypted outbox, leased worker with local test sink, authenticated callbacks, and browser UI verified locally (zero accounts or sessions created); real cloud mail provider delivery and P2b finalization remain pending |
 | New user, profile, key, session and lost response recovery | 03,16 | Real engine finalization + idempotency | Pending |
 | Client policy backfill and open, private matrix | 05-06,14 | Old and new schema and real consumer fixtures | P1a classification and audit (32 cases), refresh lease fencing (2 cases), P1b canonical resolution, open app bypass, token enforcement, introspection gating, and P1c admin registration, editing, and BAC P1C 01 through 06 browser acceptance checks locally verified; P2 through P9 remain pending |
 | Browser A and B login, tab interleave, expiry, logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | Pending |
@@ -572,5 +572,46 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: All 43 security test files passed, 0 failed
 7. Command: `npm run security:integration-check && npm run security:docs-check`
    * Result: 0 violations and 0 errors
+
+
+## Slice P2a email verification intents, atomic budgets, encrypted outbox, worker, and UI
+
+**Date:** 2026-11-25. **Result:** Verified Slice P2a pre account email verification backend and React UI against shared Docker MongoDB (`rs0`), Hono APIs, Playwright Chromium, and the loopback `test_sink` mail transport. Both failed and successful OTP verifications create zero `user`, `account`, `session`, `oauthConsent`, `user_app_registrations`, `oauthAccessToken`, or `oauthRefreshToken` documents. Live cloud mail provider execution (SES/SMTP) and P2b account/session finalization remain pending.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `238d125f4e7414a4f8e2302b32362292268e8ee2`
+* Worktree status: Working tree with typed P2a configuration, MongoDB collection indexes, HMAC/AEAD cryptography, transactional budget reservation, encrypted outbox and leased fenced worker, authenticated bounce/complaint callback route, `/api/identity/*` registration endpoints, `/register` and `/register/verify` UI routes, P2a API/worker/browser tests, and review record
+* Evidence distinction:
+  * Local sink & loopback transport (`IDENTITY_MAIL_TRANSPORT=test_sink`, in process sink and local HTTP sink server): Exercised and verified in API, worker, and Playwright browser runs
+  * Production cloud provider (`ses`, `approved_smtp`, external DNS DKIM/SPF/DMARC): Config and authenticated client scaffolding implemented only; live provider sending remains pending
+* Source scope:
+  * [config/schema.ts](../../../backend/src/config/schema.ts) & [config/index.ts](../../../backend/src/config/index.ts): Typed `IDENTITY_*` config defaulting `IDENTITY_REGISTRATION_MODE` to `disabled` and validating production key/transport bounds
+  * [db/indexes.ts](../../../backend/src/db/indexes.ts): Indexes for `registration_intents`, `mail_outbox`, `mail_budgets`, `mail_suppressions`, and `mail_callback_events`
+  * [identity/registration-crypto.ts](../../../backend/src/identity/registration-crypto.ts) & [identity/registration-budgets.ts](../../../backend/src/identity/registration-budgets.ts): HMAC lookup/OTP/proof digests, AES256GCM mail payload and contact encryption, and transactional send/verify budget enforcement
+  * [identity/mail-service.ts](../../../backend/src/identity/mail-service.ts) & [identity/mail-webhooks.ts](../../../backend/src/identity/mail-webhooks.ts): `EmailSender` with `test_sink`, leased worker with monotonic fencing, deadline/generation/suppression checks, 3 attempt bounded retries including `TimeoutError` handling, payload scrubbing, and signed callback replay/suppression handler
+  * [routes/identity.ts](../../../backend/src/routes/identity.ts), [routes/identity-registration-shared.ts](../../../backend/src/routes/identity-registration-shared.ts), [routes/identity-registration.ts](../../../backend/src/routes/identity-registration.ts), [routes/identity-registration-verify.ts](../../../backend/src/routes/identity-registration-verify.ts), [middleware/cors.ts](../../../backend/src/middleware/cors.ts), [app.ts](../../../backend/src/app.ts): Same origin CSRF/no store `/api/identity/*` endpoints and conditional `HttpOnly` proof issuance
+  * [frontend/pages/Register.tsx](../../../frontend/pages/Register.tsx), [frontend/pages/VerifyEmail.tsx](../../../frontend/pages/VerifyEmail.tsx), [frontend/src/App.tsx](../../../frontend/src/App.tsx): Default off gated `/register` and `/register/verify` screens stopping cleanly at verified proof state
+  * [tests/security/p2a-intents-and-otp.test.ts](../../../backend/tests/security/p2a-intents-and-otp.test.ts), [tests/security/p2a-outbox-worker-and-callbacks.test.ts](../../../backend/tests/security/p2a-outbox-worker-and-callbacks.test.ts), [tests/e2e/p2a-registration-browser.test.ts](../../../backend/tests/e2e/p2a-registration-browser.test.ts), [tests/fixtures/browser-harness.ts](../../../backend/tests/fixtures/browser-harness.ts), [scripts/run-all-security.ts](../../../backend/scripts/run-all-security.ts), [.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
+* File length: All new and modified source and test files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck` (`tsc --project tsconfig.json --noEmit`)
+   * Result: 0 diagnostics across backend source tree
+2. Command: `npm --prefix frontend run lint && npm --prefix frontend run build:ui`
+   * Result: 0 ESLint errors and clean Vite TypeScript build
+3. Command: `npm run test:p2a-intents`
+   * Result: 3 passed, 0 failed (default off gate, same origin CORS rejection, missing browser cookie rejection, store failure 503 with 0 intents/outbox/sends, malformed OTP attempt consumption, 5 attempt exhaustion, inline expiry, resend invalidating gen 1 code and prior proof without extending intent expiry, concurrent verify minting 1 proof in `HttpOnly` cookie, 0 identities/sessions across failed and successful cases)
+4. Command: `npm run test:p2a-outbox`
+   * Result: 3 passed, 0 failed (outbox tx failure rolling back budget and intent, `Idempotency-Key` dedup, lost lease recovery with fence bump, 3 retry bound reusing single key + dead letter payload scrub, inline deadline drop, signed bounce callback replay/forged check and silent suppression)
+5. Command: `npm run test:p2a-browser`
+   * Result: Passed against built UI, live backend, shared Docker MongoDB, and loopback HTTP mail sink (default off `/register` block + `/register` -> `/register/verify` with wrong and valid OTP assertions leaving 0 user/account/session/token/membership documents)
+6. Command: `npm run test:unit && npm run test:local-consumer-e2e && npm run test:all-security`
+   * Result: All 16 unit suites passed, all 11 local consumer E2E flows passed, and all 45 security suites passed with 0 failures
+7. Command: `npm run security:integration-check && npm run security:docs-check`
+   * Result: 0 violations and 0 errors
+
 
 
