@@ -90,21 +90,26 @@ export async function dropDatabaseBounded(
     connectTimeoutMS: deadlineMs,
   });
 
+  let timer: NodeJS.Timeout | null = null;
   try {
     await cleanupClient.connect();
     await Promise.race([
       cleanupClient.db(dbName).dropDatabase({ maxTimeMS: deadlineMs }),
-      new Promise((_, reject) =>
-        setTimeout(
+      new Promise((_, reject) => {
+        timer = setTimeout(
           () => reject(new Error(`Database drop timed out after ${deadlineMs}ms`)),
           deadlineMs
-        )
-      ),
+        );
+      }),
     ]);
   } catch (err: any) {
     console.error(`[DATABASE_CLEANUP_FAILURE] Cleanup failed for ${dbName}: ${err?.message || err}`);
     throw err;
   } finally {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
     await cleanupClient.close().catch((closeErr: any) => {
       console.error(`[DATABASE_CLEANUP_CLOSE_ERROR] Failed closing client for ${dbName}: ${closeErr?.message || closeErr}`);
     });
@@ -123,15 +128,19 @@ export async function coordinateSuiteCleanup(options: {
 }): Promise<void> {
   const { child, uri, dbName, gracePeriodMs = 2000, deadlineMs = 5000 } = options;
 
+  let processGroupCleaned = true;
   if (child) {
     await terminateProcessGroup(child.pid, child, gracePeriodMs);
+    if (child.pid && process.platform !== "win32" && isProcessGroupAlive(child.pid)) {
+      processGroupCleaned = false;
+    }
   }
 
   if (uri && dbName) {
-    try {
-      await dropDatabaseBounded(uri, dbName, deadlineMs);
-    } catch (err: any) {
-      console.error(`[SUITE_CLEANUP_ERROR] Coordinated database removal failed for ${dbName}: ${err?.message || err}`);
-    }
+    await dropDatabaseBounded(uri, dbName, deadlineMs);
+  }
+
+  if (!processGroupCleaned) {
+    throw new Error(`Process group for pid ${child?.pid} survived SIGKILL escalation`);
   }
 }

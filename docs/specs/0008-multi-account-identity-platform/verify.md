@@ -267,3 +267,69 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 8. Command: `npm run test:all-security`
    * Result: All 34 security test files passed (100 percent)
 9. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose
+
+
+## Open app membership bypass and client secret post engine authentication verification
+
+**Date:** 2026-11-24. **Result:** Verified open application authorization with zero ambient user_app_registrations writes across login, signup, social callbacks, MFA continuation, authorize, and consent when OPEN_APP_MEMBERSHIP_BYPASS_ENABLED is set to true. Verified that private applications always require active assignment, denying unassigned users and immediately revoking access across authorize, code exchange, refresh, UserInfo, and introspection upon revocation. Verified client_secret_post client authentication through the installed engine probe with full credential preservation and zero code or family mutations on invalid secrets. Verified runner lifecycle cleanup with explicit failed outcome reporting on database drop failures and reliable deadline timer clearing. Slice P1c administrative controls and UI remain pending.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `8431e7f26f31904a26eb7c6658981aec8acab42e`
+* Worktree status: Working tree with open app membership bypass and client secret post verification
+* Source scope:
+  * [config/schema.ts](../../../backend/src/config/schema.ts): Typed OPEN_APP_MEMBERSHIP_BYPASS_ENABLED configuration with strict boolean parsing
+  * [config/index.ts](../../../backend/src/config/index.ts): Strict boolean accessor defaulting to false in production
+  * [routes/auth-token-auth.ts](../../../backend/src/routes/auth-token-auth.ts): Preserves client_secret_post body credentials for genuine engine verification
+  * [routes/auth-authorize.ts](../../../backend/src/routes/auth-authorize.ts): Skips ambient registration writes for open apps when bypass is enabled
+  * [routes/auth-consent.ts](../../../backend/src/routes/auth-consent.ts): Skips ambient registration writes on consent completion when bypass is enabled
+  * [routes/auth-sign-in.ts](../../../backend/src/routes/auth-sign-in.ts): Skips ambient registration writes on password login when bypass is enabled
+  * [routes/auth-sign-up.ts](../../../backend/src/routes/auth-sign-up.ts): Skips ambient registration writes on signup when bypass is enabled
+  * [routes/auth-interceptors.ts](../../../backend/src/routes/auth-interceptors.ts): Skips ambient registration writes on social callbacks when bypass is enabled
+  * [routes/auth-two-factor-context.ts](../../../backend/src/routes/auth-two-factor-context.ts): Skips ambient registration writes on MFA continuation when bypass is enabled
+  * [routes/auth-token-code.ts](../../../backend/src/routes/auth-token-code.ts): Enforces private application active assignment at code exchange
+  * [routes/auth-token-refresh-validate.ts](../../../backend/src/routes/auth-token-refresh-validate.ts): Enforces private application active assignment during refresh validation
+  * [routes/auth-userinfo.ts](../../../backend/src/routes/auth-userinfo.ts): Enforces private application policy and denies revoked members at UserInfo
+  * [routes/auth-introspect.ts](../../../backend/src/routes/auth-introspect.ts): Enforces private application policy and returns active false for revoked members
+  * [utils/app-access.ts](../../../backend/src/utils/app-access.ts): Implements checkPrivateAppTokenAccess for post issuance token validation
+  * [scripts/security-runner-lifecycle.ts](../../../backend/scripts/security-runner-lifecycle.ts): Clears database drop timer when settled and propagates cleanup errors
+  * [scripts/run-all-security.ts](../../../backend/scripts/run-all-security.ts): Flags failed test suite outcome when cleanup fails
+  * [tests/security/open-app-membership-bypass.test.ts](../../../backend/tests/security/open-app-membership-bypass.test.ts): Regression suite for open app membership bypass behavior
+  * [tests/security/private-app-policy-enforcement.test.ts](../../../backend/tests/security/private-app-policy-enforcement.test.ts): Regression suite for private app active assignment and revocation
+  * [tests/security/client-secret-post-auth.test.ts](../../../backend/tests/security/client-secret-post-auth.test.ts): Regression suite for client_secret_post credential preservation and verification
+  * [tests/security/runner-lifecycle-cleanup.test.ts](../../../backend/tests/security/runner-lifecycle-cleanup.test.ts): Tests for cleanup failure propagation and timeout clearing
+* File length: All modified and new production and test source files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `cd backend && node --import tsx tests/security/open-app-membership-bypass.test.ts`
+   * Result: 4 passed, 0 failed (2542ms)
+   * Open public client: Authorizes user with zero rows in user_app_registrations when bypass is enabled
+   * Open confidential client: Authorizes user with zero rows in user_app_registrations when bypass is enabled
+   * Backward compatibility: Writes legacy compatibility row to user_app_registrations when bypass is disabled
+   * Ambient skips: Skips ambient registration writes during email signup and signin when bypass is enabled
+2. Command: `cd backend && node --import tsx tests/security/private-app-policy-enforcement.test.ts`
+   * Result: 3 passed, 0 failed (2381ms)
+   * Private client access denied: Unassigned user is rejected with 302 access_denied redirect
+   * Super admin exclusion: Super admin without explicit assignment is rejected with 302 access_denied
+   * Immediate revocation propagation: Active member authorizes cleanly, then revoking registration immediately invalidates refresh exchange with HTTP 401, UserInfo with HTTP 403, and token introspection with active false
+3. Command: `cd backend && node --import tsx tests/security/client-secret-post-auth.test.ts`
+   * Result: 2 passed, 0 failed (1925ms)
+   * Invalid secret rejection: Requests supplying invalid client_secret in POST body fail with HTTP 400 invalid_client; authorization code remains pending; legitimate exchange succeeds with HTTP 200
+   * Replay protection: Replay of consumed code with wrong secret returns HTTP 400 invalid_client; existing token family remains active
+4. Command: `cd backend && node --import tsx tests/security/runner-lifecycle-cleanup.test.ts`
+   * Result: 5 passed, 0 failed (801ms)
+   * Failure propagation: Database drop failure in coordinateSuiteCleanup is thrown and causes an explicit failed suite outcome
+   * Timeout clearing: Timeout timers are cleared when database drop operations settle
+5. Command: `npm run test:unit`
+   * Result: All 16 unit test suites passed with 0 failures
+6. Command: `npm run test:local-consumer-e2e`
+   * Result: All 11 local consumer flows passed with 0 failures
+7. Command: `npm run security:integration-check`
+   * Result: 0 violations
+8. Command: `npm run security:docs-check`
+   * Result: 0 errors
+9. Command: `npm run test:all-security`
+   * Result: All 37 security test files passed (100 percent)
+10. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose

@@ -96,7 +96,7 @@ export async function handleAuthorizationCodeGrant(
             }
 
             const isPrivate = clientContext.clientDoc?.accessPolicy === "private" ||
-                (!clientContext.clientDoc?.clientType && clientContext.clientDoc?.isPublic === false);
+                (clientContext.clientDoc?.accessPolicy !== "open" && clientContext.clientDoc?.isPublic === false);
             if (isPrivate) {
                 const hasAccess = await checkUserHasAppAccess(database, userDoc, canonicalClientId);
                 if (!hasAccess) {

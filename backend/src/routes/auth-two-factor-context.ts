@@ -6,6 +6,7 @@ import { getDb } from "../db/mongo";
 import { getOAuthTransaction } from "../db/state";
 import { getHeaders } from "../utils/security";
 import { isSuperAdmin } from "../middleware/admin-auth";
+import { config } from "../config";
 
 export interface ValidatedMfaOauthContext {
     transactionId: string;
@@ -142,16 +143,22 @@ export async function recordMfaPublicAppMembership(
     }
 
     const clientDoc = await database.collection("oauthClient").findOne({ clientId: validatedContext.clientId });
-    if (!clientDoc || clientDoc.disabled === true || !clientDoc.isPublic) {
+    if (!clientDoc || clientDoc.disabled === true) {
+        return;
+    }
+    const isPrivate = clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false);
+    if (isPrivate) {
         return;
     }
 
     const canonicalClientId = clientDoc.clientId;
-    await database.collection("user_app_registrations").updateOne(
-        { userId: completedUserId, clientId: canonicalClientId },
-        { $setOnInsert: { userId: completedUserId, clientId: canonicalClientId, registeredAt: new Date() } },
-        { upsert: true }
-    );
+    if (!config.openAppMembershipBypassEnabled) {
+        await database.collection("user_app_registrations").updateOne(
+            { userId: completedUserId, clientId: canonicalClientId },
+            { $setOnInsert: { userId: completedUserId, clientId: canonicalClientId, registeredAt: new Date() } },
+            { upsert: true }
+        );
+    }
 
     await database.collection("oauth_transactions").updateOne(
         { transactionId: validatedContext.transactionId, status: "pending" },

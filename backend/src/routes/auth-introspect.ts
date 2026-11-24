@@ -5,7 +5,7 @@ import { getDb } from "../db/mongo";
 import { config } from "../config";
 import { getIdpPublicKey } from "../middleware/admin-auth";
 import { checkAccountEligibility } from "../utils/account-eligibility";
-import { resolveOAuthClient } from "../utils/security";
+import { resolveOAuthClient, checkPrivateAppTokenAccess } from "../utils/security";
 import { resolveUserRoleForClient } from "./auth-keys";
 
 export async function handleOAuthIntrospect(c: any): Promise<Response> {
@@ -75,6 +75,10 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
                 if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
                     return c.json({ active: false }, 200);
                 }
+                const hasAccess = await checkPrivateAppTokenAccess(database, tokenSub, clientDoc);
+                if (!hasAccess) {
+                    return c.json({ active: false }, 200);
+                }
             }
 
             return res;
@@ -126,6 +130,10 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
                     if (tokenClientId) {
                         const clientDoc = await resolveOAuthClient(database, tokenClientId);
                         if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+                            return c.json({ active: false }, 200);
+                        }
+                        const hasAccess = await checkPrivateAppTokenAccess(database, payload.sub, clientDoc);
+                        if (!hasAccess) {
                             return c.json({ active: false }, 200);
                         }
                     }

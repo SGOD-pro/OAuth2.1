@@ -52,7 +52,8 @@ export async function validatePreRefreshEligibility(
         };
     }
 
-    if (!clientDoc.isPublic) {
+    const isPrivatePre = clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false);
+    if (isPrivatePre) {
         const hasAccess = await checkUserHasAppAccess(database, userDoc || preRefreshUserId, canonicalClientId);
         if (!hasAccess) {
             await Promise.all([
@@ -121,7 +122,8 @@ export async function validatePostRefreshEligibility(
         };
     }
 
-    if (!clientDoc.isPublic) {
+    const isPrivatePost = clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false);
+    if (isPrivatePost) {
         const hasAccess = await checkUserHasAppAccess(database, userDoc || resolvedUserId, canonicalClientId);
         if (!hasAccess) {
             await Promise.all([

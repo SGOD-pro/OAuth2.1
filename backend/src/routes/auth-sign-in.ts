@@ -132,7 +132,7 @@ export async function handleSignInEmail(c: any): Promise<Response> {
                 },
                 401
             );
-        } else if (clientDoc && !clientDoc.isPublic && canonicalClientId && clientCtx.isBoundOAuthFlow) {
+        } else if (clientDoc && (clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false)) && canonicalClientId && clientCtx.isBoundOAuthFlow) {
             // Private application: verify authorization boundary before proceeding
             const hasAccess = await checkUserHasAppAccess(database, user, canonicalClientId);
 
@@ -236,7 +236,8 @@ export async function handleSignInEmail(c: any): Promise<Response> {
             }
         } catch {}
 
-        if (authUserId && clientDoc && clientDoc.isPublic && canonicalClientId) {
+        const isOpen = clientDoc?.accessPolicy === "open" || clientDoc?.isPublic === true;
+        if (authUserId && clientDoc && isOpen && canonicalClientId && !config.openAppMembershipBypassEnabled) {
             try {
                 const isRegistered = await checkUserAppRegistration(database, authUserId, canonicalClientId);
                 if (!isRegistered) {

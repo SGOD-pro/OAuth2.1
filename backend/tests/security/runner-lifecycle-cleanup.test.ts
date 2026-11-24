@@ -118,4 +118,20 @@ describe("Security Runner Lifecycle and Process Cleanup Suite", () => {
 
     assert.ok(cleanupFinished, "Coordinated cleanup must complete cleanly");
   });
+
+  it("propagates database cleanup failure from coordinateSuiteCleanup", async () => {
+    const unreachableUri = "mongodb://192.0.2.1:27017/unreachable_db";
+    await assert.rejects(
+      async () => {
+        await coordinateSuiteCleanup({
+          child: null,
+          uri: unreachableUri,
+          dbName: "unreachable_test_db",
+          gracePeriodMs: 100,
+          deadlineMs: 300,
+        });
+      },
+      /Cleanup failed|timed out/
+    );
+  });
 });

@@ -7,6 +7,8 @@ export interface AuthenticatedClientContext {
     clientDoc: any;
     reqToForward: Request;
     params: URLSearchParams;
+    authMethod: "client_secret_basic" | "client_secret_post" | "none";
+    clientSecret?: string;
 }
 
 export type ClientAuthResult =
@@ -132,25 +134,36 @@ export async function authenticateTokenClient(c: any): Promise<ClientAuthResult>
         };
     }
 
+    const registeredPostAuth = clientDoc?.tokenEndpointAuthMethod === "client_secret_post" ||
+        clientDoc?.token_endpoint_auth_method === "client_secret_post";
+
+    const authMethod: "client_secret_basic" | "client_secret_post" | "none" = hasBasicAuth
+        ? "client_secret_basic"
+        : bodyClientSecret
+        ? (registeredPostAuth ? "client_secret_post" : "client_secret_basic")
+        : "none";
+    const clientSecret = hasBasicAuth ? (basicClientSecret || undefined) : (bodyClientSecret || undefined);
+
     // Prepare single authoritative request to forward to Better Auth
     let reqToForward = c.req.raw;
-    params.delete("client_secret");
-    if (hasBasicAuth || bodyClientSecret) {
+    const forwardHeaders = new Headers(c.req.raw.headers);
+
+    if (authMethod === "client_secret_basic") {
+        params.delete("client_secret");
         params.delete("client_id");
-    } else {
-        // Preserve canonical client_id in body for public clients
+        const canonicalBasic = Buffer.from(`${canonicalClientId}:${clientSecret}`).toString("base64");
+        forwardHeaders.set("Authorization", `Basic ${canonicalBasic}`);
+    } else if (authMethod === "client_secret_post") {
         params.set("client_id", canonicalClientId);
+        params.set("client_secret", bodyClientSecret || "");
+        forwardHeaders.delete("authorization");
+    } else {
+        // Public client
+        params.delete("client_secret");
+        params.set("client_id", canonicalClientId);
+        forwardHeaders.delete("authorization");
     }
     const updatedBody = params.toString();
-
-    const forwardHeaders = new Headers(c.req.raw.headers);
-    if (hasBasicAuth) {
-        const canonicalBasic = Buffer.from(`${canonicalClientId}:${basicClientSecret}`).toString("base64");
-        forwardHeaders.set("Authorization", `Basic ${canonicalBasic}`);
-    } else if (bodyClientSecret) {
-        const canonicalBasic = Buffer.from(`${canonicalClientId}:${bodyClientSecret}`).toString("base64");
-        forwardHeaders.set("Authorization", `Basic ${canonicalBasic}`);
-    }
 
     reqToForward = new Request(c.req.raw.url, {
         method: c.req.raw.method,
@@ -165,6 +178,8 @@ export async function authenticateTokenClient(c: any): Promise<ClientAuthResult>
             clientDoc,
             reqToForward,
             params,
+            authMethod,
+            clientSecret,
         },
     };
 }
@@ -176,21 +191,26 @@ export async function verifyConfidentialClientCredentials(
     c: any,
     clientContext: AuthenticatedClientContext
 ): Promise<{ success: true } | { success: false; response: Response }> {
-    const { canonicalClientId, clientDoc, reqToForward, params } = clientContext;
+    const { canonicalClientId, clientDoc, reqToForward, authMethod, clientSecret } = clientContext;
     const probeUrl = new URL("/api/auth/oauth2/introspect", c.req.raw.url).toString();
-    const isPostAuth = clientDoc?.tokenEndpointAuthMethod === "client_secret_post";
-    const bodyClientSecret = params.get("client_secret");
+    const isPostAuth = authMethod === "client_secret_post" ||
+        clientDoc?.tokenEndpointAuthMethod === "client_secret_post" ||
+        clientDoc?.token_endpoint_auth_method === "client_secret_post";
 
-    const probeBody = isPostAuth
-        ? new URLSearchParams({
-            token: "swyra_credential_probe_sentinel",
-            client_id: canonicalClientId,
-            client_secret: bodyClientSecret || "",
-        }).toString()
-        : "token=swyra_credential_probe_sentinel";
-
+    let probeBody: string;
     const probeHeaders = new Headers(reqToForward.headers);
     probeHeaders.set("Content-Type", "application/x-www-form-urlencoded");
+
+    if (isPostAuth) {
+        probeHeaders.delete("authorization");
+        probeBody = new URLSearchParams({
+            token: "swyra_credential_probe_sentinel",
+            client_id: canonicalClientId,
+            client_secret: clientSecret || "",
+        }).toString();
+    } else {
+        probeBody = "token=swyra_credential_probe_sentinel";
+    }
 
     const probeRequest = new Request(probeUrl, {
         method: "POST",
@@ -208,7 +228,7 @@ export async function verifyConfidentialClientCredentials(
         const wwwAuth = probeRes.headers.get("www-authenticate");
         if (wwwAuth) {
             headers["WWW-Authenticate"] = wwwAuth;
-        } else if (reqToForward.headers.get("authorization")?.toLowerCase().startsWith("basic ")) {
+        } else if (!isPostAuth && reqToForward.headers.get("authorization")?.toLowerCase().startsWith("basic ")) {
             headers["WWW-Authenticate"] = 'Basic realm="OAuth"';
         }
         return {

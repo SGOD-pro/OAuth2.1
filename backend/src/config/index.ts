@@ -110,4 +110,11 @@ export const config = {
         const val = process.env.ALLOW_DEV_CLIENTS_IN_PRODUCTION ?? parsedEnv.ALLOW_DEV_CLIENTS_IN_PRODUCTION ?? 'false'
         return val === 'true'
     },
+
+    get openAppMembershipBypassEnabled(): boolean {
+        const val = process.env.OPEN_APP_MEMBERSHIP_BYPASS_ENABLED ?? (parsedEnv as any).OPEN_APP_MEMBERSHIP_BYPASS_ENABLED ?? 'false';
+        if (val === 'true') return true;
+        if (val === 'false') return false;
+        throw new Error(`Invalid OPEN_APP_MEMBERSHIP_BYPASS_ENABLED value: "${val}". Expected "true" or "false".`);
+    },
 }

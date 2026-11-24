@@ -138,7 +138,8 @@ export async function handleSignUpEmail(c: any): Promise<Response> {
             const createdUser = updatedResult?.value || updatedResult;
             if (createdUser) {
                 createdUserId = String(createdUser.id || createdUser._id);
-                if (canonicalClientId && clientDoc?.isPublic) {
+                const isOpen = clientDoc?.accessPolicy === "open" || clientDoc?.isPublic === true;
+                if (canonicalClientId && isOpen && !config.openAppMembershipBypassEnabled) {
                     await database.collection("user_app_registrations").updateOne(
                         { userId: createdUserId, clientId: canonicalClientId },
                         { $setOnInsert: { userId: createdUserId, clientId: canonicalClientId, registeredAt: new Date() } },

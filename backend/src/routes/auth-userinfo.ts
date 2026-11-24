@@ -5,7 +5,7 @@ import { getDb } from "../db/mongo";
 import { config } from "../config";
 import { getIdpPublicKey } from "../middleware/admin-auth";
 import { checkAccountEligibility } from "../utils/account-eligibility";
-import { hashToken } from "../utils/security";
+import { hashToken, resolveOAuthClient, checkPrivateAppTokenAccess } from "../utils/security";
 import { resolveUserRoleForClient } from "./auth-keys";
 
 export async function handleOAuthUserInfo(c: any): Promise<Response> {
@@ -58,6 +58,17 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                         }
 
                         const targetClientId = (payload.client_id || payload.azp || (typeof payload.aud === "string" ? payload.aud : payload.aud?.[0]) || "") as string;
+
+                        if (targetClientId) {
+                            const clientDoc = await resolveOAuthClient(database, targetClientId);
+                            const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
+                            if (!hasAccess) {
+                                return c.json(
+                                    { error: "forbidden", error_description: "User is not an authorized member of this private application" },
+                                    403
+                                );
+                            }
+                        }
 
                         if (payload && (payload as any).family_id) {
                             const familyDoc = await database.collection("oauth_token_families").findOne({
@@ -170,6 +181,16 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                             const decoded: any = decodeJwt(bearerToken);
                             targetClientId = (decoded?.client_id || decoded?.azp || (typeof decoded?.aud === "string" ? decoded.aud : decoded?.aud?.[0]) || "") as string;
                         } catch {}
+                    }
+                    if (targetClientId) {
+                        const clientDoc = await resolveOAuthClient(database, targetClientId);
+                        const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
+                        if (!hasAccess) {
+                            return c.json(
+                                { error: "forbidden", error_description: "User is not an authorized member of this private application" },
+                                403
+                            );
+                        }
                     }
                     const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
                     data.role = resolved.role;

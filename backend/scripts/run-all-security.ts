@@ -94,6 +94,9 @@ const securityTestFiles = [
   "tests/security/client-policy-compatibility.test.ts",
   "tests/security/pkce-enforcement.test.ts",
   "tests/security/auth-before-mutation-repro.test.ts",
+  "tests/security/client-secret-post-auth.test.ts",
+  "tests/security/open-app-membership-bypass.test.ts",
+  "tests/security/private-app-policy-enforcement.test.ts",
   "tests/security/runner-lifecycle-cleanup.test.ts",
   "tests/security/session-expiry-and-isolation.test.ts",
 ];
@@ -164,13 +167,17 @@ for (const testFile of securityTestFiles) {
     const timer = setTimeout(async () => {
       timeoutFired = true;
       console.error(`\n[TIMEOUT] ${testFile} exceeded ${timeoutMs}ms timeout. Terminating process tree.`);
-      await coordinateSuiteCleanup({
-        child,
-        uri: suiteUri,
-        dbName: suiteDbName,
-        gracePeriodMs: 3000,
-        deadlineMs: 5000,
-      });
+      try {
+        await coordinateSuiteCleanup({
+          child,
+          uri: suiteUri,
+          dbName: suiteDbName,
+          gracePeriodMs: 3000,
+          deadlineMs: 5000,
+        });
+      } catch (err: any) {
+        cleanupError = err;
+      }
       currentChild = null;
       currentSuiteDbName = null;
       currentSuiteUri = null;
@@ -189,27 +196,36 @@ for (const testFile of securityTestFiles) {
     });
   });
 
+  let cleanupError: Error | null = null;
   if (currentChild || currentSuiteDbName) {
-    await coordinateSuiteCleanup({
-      child: currentChild,
-      uri: currentSuiteUri,
-      dbName: currentSuiteDbName,
-      gracePeriodMs: 1000,
-      deadlineMs: 5000,
-    });
+    try {
+      await coordinateSuiteCleanup({
+        child: currentChild,
+        uri: currentSuiteUri,
+        dbName: currentSuiteDbName,
+        gracePeriodMs: 1000,
+        deadlineMs: 5000,
+      });
+    } catch (err: any) {
+      cleanupError = err;
+    }
     currentChild = null;
     currentSuiteDbName = null;
     currentSuiteUri = null;
   }
 
   const durationMs = Date.now() - startTime;
-  if (exitCode === 0 && !timeoutFired) {
+  if (exitCode === 0 && !timeoutFired && !cleanupError) {
     passedCount++;
     results.push({ file: testFile, passed: true, durationMs });
     console.log(`>>> PASSED: ${testFile} (${durationMs}ms)`);
   } else {
     failedCount++;
-    const errMsg = timeoutFired ? "timeout exceeded" : `exit code ${exitCode}`;
+    const errMsg = timeoutFired
+      ? "timeout exceeded"
+      : cleanupError
+      ? `cleanup failed: ${cleanupError.message || cleanupError}`
+      : `exit code ${exitCode}`;
     results.push({ file: testFile, passed: false, durationMs, error: errMsg });
     console.error(`>>> FAILED: ${testFile} (${errMsg})`);
   }

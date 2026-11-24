@@ -242,7 +242,8 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
     };
 
     // F. Enforce Private Application Mode at OAuth Boundary
-    if (!client.isPublic) {
+    const isPrivate = client.accessPolicy === "private" || (client.accessPolicy !== "open" && client.isPublic === false);
+    if (isPrivate) {
         if (sessionUser) {
             // User is already authenticated with a valid global session
             const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
@@ -275,7 +276,7 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
         }
     } else {
         // Public Application Mode:
-        if (sessionUser) {
+        if (sessionUser && !config.openAppMembershipBypassEnabled) {
             const userId = String(sessionUser.id || (sessionUser as any)._id);
             const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
             if (!isRegistered) {

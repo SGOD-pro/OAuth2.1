@@ -70,7 +70,8 @@ export async function handleOAuthConsent(c: Context) {
             return c.json({ error: "invalid_client", error_description: "Client application not found, disabled, or ambiguous" }, 400);
         }
 
-        if (!clientDoc.isPublic) {
+        const isPrivateConsent = clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false);
+        if (isPrivateConsent) {
             const canonicalClientId = clientDoc.clientId;
             const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 
@@ -147,7 +148,8 @@ export async function handleOAuthContinue(c: Context) {
             if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
                 return c.json({ error: "invalid_client", error_description: "Client application not found, disabled, or ambiguous" }, 400);
             }
-            if (!clientDoc.isPublic) {
+            const isPrivateContinue = clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false);
+            if (isPrivateContinue) {
                 const canonicalClientId = clientDoc.clientId;
                 const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 

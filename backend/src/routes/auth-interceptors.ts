@@ -165,7 +165,8 @@ export async function handleSocialCallback(c: Context) {
             if (sessionUser) {
                 const userId = String(sessionUser.id || (sessionUser as any)._id);
 
-                if (!clientDoc.isPublic) {
+                const isPrivate = clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false);
+                if (isPrivate) {
                     // Private application: verify authorization boundary
                     const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
 
@@ -202,7 +203,7 @@ export async function handleSocialCallback(c: Context) {
                             headers,
                         });
                     }
-                } else {
+                } else if (!config.openAppMembershipBypassEnabled) {
                     // Public application: record membership idempotently
                     await database.collection("user_app_registrations").updateOne(
                         { userId, clientId: canonicalClientId },

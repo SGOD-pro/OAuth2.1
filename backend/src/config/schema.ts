@@ -35,6 +35,9 @@ export const envSchema = z.object({
 
     // In production, whether development OAuth clients with loopback URIs are permitted (defaults to false)
     ALLOW_DEV_CLIENTS_IN_PRODUCTION: z.string().default('false'),
+
+    // When true, eligible authenticated users authorize open apps without ambient user_app_registrations writes
+    OPEN_APP_MEMBERSHIP_BYPASS_ENABLED: z.enum(['true', 'false']).default('false'),
 }).superRefine((data, ctx) => {
     if (data.NODE_ENV === 'production') {
         const validateProductionUrl = (val: string, fieldName: 'BETTER_AUTH_URL' | 'FRONTEND_URL') => {
