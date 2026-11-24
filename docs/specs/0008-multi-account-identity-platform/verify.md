@@ -14,7 +14,7 @@ Record actual commands and results in the documentation PR: relative links, anch
 | Engine transaction rollback and writer inventory | 01-03,16 | Real engine + Mongo replica set transaction | P0 isolated proof passed, 10 cases; production P2 pending |
 | Request local selected engine sessions | 07-09 | In process engine HTTP + real Mongo replica set | P0 proof passed, 6 cases; browser and workers and P3 wiring pending |
 | OTP start, verify, resend, finalize and wrong code zero writes | 02-04,15 | Real API + disposable DB and mail sink; concurrency workers | P2a intents, OTP limits, atomic budgets, encrypted outbox, leased worker with local test sink, authenticated callbacks, and browser UI verified locally (zero accounts or sessions created); real cloud mail provider delivery and P2b finalization remain pending |
-| New user, profile, key, session and lost response recovery | 03,16 | Real engine finalization + idempotency | Pending |
+| New user, profile, key, session and lost response recovery | 03,16 | Real engine finalization + idempotency | P2b verified email account creation, normalized unique username transaction, idempotent retry, post commit session fallback, `/register/profile`, and provisioning bypass closure verified locally (account `keyRef` remains `null` until P6 and live cloud mail provider delivery remains pending) |
 | Client policy backfill and open, private matrix | 05-06,14 | Old and new schema and real consumer fixtures | P1a classification and audit (32 cases), refresh lease fencing (2 cases), P1b canonical resolution, open app bypass, token enforcement, introspection gating, and P1c admin registration, editing, and BAC P1C 01 through 06 browser acceptance checks locally verified; P2 through P9 remain pending |
 | Browser A and B login, tab interleave, expiry, logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | Pending |
 | Account list CORS, CSRF, fixation, context misuse | 08 | Browser and direct HTTP negatives | Pending |
@@ -612,6 +612,45 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: All 16 unit suites passed, all 11 local consumer E2E flows passed, and all 45 security suites passed with 0 failures
 7. Command: `npm run security:integration-check && npm run security:docs-check`
    * Result: 0 violations and 0 errors
+
+
+## Slice P2b verified account completion, profile UI, and bypass closure
+
+**Date:** 2026-11-25. **Result:** Verified Slice P2b transactional verified account creation, `/register/profile` completion screen, `/register/verify` continuation link, idempotent recovery, post commit ordinary session establishment/fallback, and unverified provisioning bypass closure in `verified` mode against shared Docker MongoDB (`rs0`), Redis, Hono APIs, Playwright Chromium, and the loopback `test_sink` transport. `IDENTITY_REGISTRATION_MODE` defaults to `disabled`; per account encryption (`keyRef`), live cloud mail delivery (SES/SMTP), and P3 multi account sessions remain pending.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `71802ebc7bcb1c7fdd1ad2bcfb5a56dc05508046`
+* Worktree status: Working tree with transactional account completion service and Better Auth transaction engine, `POST /api/identity/registration/complete`, proof bound `POST /api/identity/username/check`, MongoDB collection/unique indexes, verified creation hook guard and legacy signup/admin bypass closures, `/register/profile` and `/register/verify` UI updates, P2b security/bypass/browser suites, review record, and synced ledger docs
+* Source scope:
+  * [identity/registration-context.ts](../../../backend/src/identity/registration-context.ts): `AsyncLocalStorage` verified creation boundary context
+  * [identity/registration-crypto.ts](../../../backend/src/identity/registration-crypto.ts): Username syntax normalization and keyed `username-lookup-v1` HMAC computation
+  * [identity/registration-tx-engine.ts](../../../backend/src/identity/registration-tx-engine.ts): Transaction enabled Better Auth engine with pre created schema indexes and atomic replica set transaction execution
+  * [identity/registration-complete.ts](../../../backend/src/identity/registration-complete.ts): Pre hash proof/syntax validation, idempotency replay handling, concurrent write conflict recovery, and post commit `signInEmail` ordinary session establishment with sign in fallback
+  * [routes/identity-registration-complete.ts](../../../backend/src/routes/identity-registration-complete.ts) & [routes/identity.ts](../../../backend/src/routes/identity.ts): Same origin CSRF protected `POST /api/identity/registration/complete` and `POST /api/identity/username/check` handlers
+  * [db/indexes.ts](../../../backend/src/db/indexes.ts), [routes/auth-sign-up.ts](../../../backend/src/routes/auth-sign-up.ts), [routes/auth.ts](../../../backend/src/routes/auth.ts), [utils/auth.ts](../../../backend/src/utils/auth.ts): Unique partial lookup indexes, `/api/auth/sign-up/email` and `/api/auth/admin/create-user` gates, and `databaseHooks.user.create.before` verified guard
+  * [frontend/pages/CompleteRegistration.tsx](../../../frontend/pages/CompleteRegistration.tsx), [frontend/pages/VerifyEmail.tsx](../../../frontend/pages/VerifyEmail.tsx), [frontend/src/App.tsx](../../../frontend/src/App.tsx): Default off gated `/register/profile` UI and `/register/verify` continuation link
+  * [tests/security/p2b-account-completion.test.ts](../../../backend/tests/security/p2b-account-completion.test.ts), [tests/security/p2b-provisioning-bypasses.test.ts](../../../backend/tests/security/p2b-provisioning-bypasses.test.ts), [tests/e2e/p2b-complete-browser.test.ts](../../../backend/tests/e2e/p2b-complete-browser.test.ts), [scripts/run-all-security.ts](../../../backend/scripts/run-all-security.ts), [.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
+* File length: All new and modified source and test files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend` (`tsc --project tsconfig.json --noEmit`)
+   * Result: 0 diagnostics across backend source tree
+2. Command: `npm --prefix frontend run lint && npm --prefix frontend run build:ui`
+   * Result: 0 ESLint errors and clean Vite TypeScript build
+3. Command: `npm run test:p2b-complete`
+   * Result: 4 test groups passed, 0 failed (atomic commit of derived intent email user, credential, profile, lookups, non PII audit, and outbox event with ordinary session; zero password hashing before valid browser/proof/syntax checks and commit time proof expiry recheck; normalized username collision preserving proof plus two intent concurrent username race returning `ERR_USERNAME_TAKEN` and duplicate email rejection; mid transaction rollback leaving zero partial state, idempotent `Idempotency-Key` replay without duplicate accounts or sessions, and post commit session failure survival)
+4. Command: `npm run test:p2b-bypasses`
+   * Result: 2 test groups passed, 0 failed (default `disabled` backward compatibility + `/complete` 403 gate; `verified` mode blocks `/api/auth/sign-up/email`, direct `authProvider.api.signUpEmail`, `/api/auth/admin/create-user`, simulated social auto provisioning, and forged `invitationHandle` escalation while preserving existing user sign in)
+5. Command: `npm run test:p2b-browser && npm run test:p2a-browser`
+   * Result: Passed against built UI, live backend, shared Docker MongoDB, and loopback HTTP mail sink (default off `/register/profile` block plus `/register` to `/register/verify` to `/register/profile` with username collision retry and ordinary user verification leaving 0 memberships)
+6. Command: `npm run test:unit && npm run test:local-consumer-e2e && npm run test:all-security && npm run build && npm run build:node`
+   * Result: All 16 unit suites passed, all 11 local consumer E2E flows passed, all 47 security suites passed with 0 failures, and Lambda/Node production bundles built cleanly
+7. Command: `npm run security:integration-check && npm run security:docs-check`
+   * Result: 0 violations and 0 errors
+
 
 
 

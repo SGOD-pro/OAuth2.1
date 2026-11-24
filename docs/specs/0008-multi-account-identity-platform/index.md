@@ -1,6 +1,6 @@
 # 0008. Verified multi-account identity platform
 
-**Status:** Proposed program; P0 proof, P1 (Slices P1a, P1b, and P1c), and P2a (with local test sink) locally verified. P2b through P9 pending. Updated 2026-11-25.
+**Status:** Proposed program; P0 proof, P1 (Slices P1a, P1b, and P1c), P2a (with local test sink), and P2b locally verified. Live mail provider delivery and P3 through P9 pending. Updated 2026-11-25.
 **Baseline:** integrated main `828acc5`, including security PR #2 reviewed at `66738b0` plus report correction `0a5727e`.
 **Scope:** Full V2 product/architecture plan, delivered as bounded vertical slices. P0 adds isolated compatibility adapters/tests, not production identity routes, deployment or data migration.
 
@@ -56,8 +56,8 @@ This spec owns requirement IDs and acceptance, not duplicate API/schema text. [R
 - [x] Incorporate main with reviewed security baseline, reconcile docs without runtime downgrade.
 - [x] P0: transaction-aware engine creation and request-local session compatibility proof, [local evidence and limitations](p0-evidence.md). Production wiring belongs to P2/P3.
 - [x] P1: additive client policy migration and open access without membership, see [0008-p1-client-policy-migration.md](0008-p1-client-policy-migration.md).
-- [x] P2a: mail budgets/outbox, intent/OTP/proof and verification pages (Locally verified with test sink; P2b and live mail provider pending), see [0008-p2a-mail-and-intents.md](0008-p2a-mail-and-intents.md).
-- [ ] P2b: username/password finalization transaction and all provisioning bypass closure.
+- [x] P2a: mail budgets/outbox, intent/OTP/proof and verification pages (Locally verified with test sink; live mail provider pending), see [0008-p2a-mail-and-intents.md](0008-p2a-mail-and-intents.md).
+- [x] P2b: username/password finalization transaction, `/register/profile` UI, and provisioning bypass closure behind default disabled mode (Locally verified).
 - [ ] P3: session registry, transaction/dashboard contexts, chooser and independent logout.
 - [ ] P4: verified invitation, MFA lifecycle, step-up and recovery custody.
 - [ ] P5: owner dashboard, minimized privacy/claims/admin views and export preparation.

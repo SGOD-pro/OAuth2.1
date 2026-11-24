@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { config } from "../config";
 import { authProvider } from "../utils/auth";
 import { requireSuperAdmin, requireRecentMfa } from "../middleware/admin-auth";
 import { handleOAuthInitiate, handleSignInEmail, handleSignUpEmail } from "./auth-credentials";
@@ -65,6 +66,19 @@ auth.use("/admin/*", async (c, next) => {
     return next();
 });
 auth.all("/admin/list-users", handleAdminListUsers);
+auth.post("/admin/create-user", (c) => {
+    if (config.identity.registrationMode === "verified") {
+        return c.json(
+            {
+                error: "registration_disabled",
+                code: "ERR_VERIFIED_REGISTRATION_REQUIRED",
+                message: "Direct engine user creation is disabled in verified registration mode.",
+            },
+            403
+        );
+    }
+    return authProvider.handler(c.req.raw);
+});
 
 // 6. OAuth 2.1 Token Revocation (RFC 7009)
 auth.post("/oauth2/revoke", handleOAuthRevoke);

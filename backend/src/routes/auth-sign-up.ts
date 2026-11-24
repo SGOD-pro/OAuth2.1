@@ -19,6 +19,24 @@ export async function handleSignUpEmail(c: any): Promise<Response> {
     const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
     const userAgent = c.req.header("user-agent");
     const safeUserAgent = userAgent ? userAgent.slice(0, 128) : null;
+    if (config.identity.registrationMode === "verified") {
+        await recordAuthEvent({
+            eventType: "sign_up",
+            outcome: "denied",
+            ipAddress: safeIp,
+            userAgent: safeUserAgent,
+            reason: "verified_registration_required",
+        }).catch(() => {});
+        return c.json(
+            {
+                status: false,
+                error: "registration_disabled",
+                code: "ERR_VERIFIED_REGISTRATION_REQUIRED",
+                message: "Public password signup is disabled. Complete verified email registration instead.",
+            },
+            403
+        );
+    }
     const body = await c.req.raw.clone().json().catch(() => null);
     const targetIdentifier = typeof body?.email === "string" ? body.email.trim() : null;
 

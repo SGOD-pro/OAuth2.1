@@ -209,8 +209,9 @@ export const VerifyEmail: React.FC = () => {
               <div className="space-y-4">
                 <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-xs text-emerald-700 dark:text-emerald-300 space-y-1.5">
                   <p className="font-semibold">Mailbox ownership confirmed</p>
-                  <p>Your one use verification proof is stored safely. Account credential creation is deferred to P2b; no account or session has been created.</p>
+                  <p>Your one use verification proof is ready. Choose a username and password to finish creating your account.</p>
                 </div>
+                <Button asChild className="w-full h-10"><Link to="/register/profile">Continue to profile</Link></Button>
                 <Button asChild variant="outline" className="w-full h-10"><Link to="/auth">Return to sign in</Link></Button>
               </div>
             ) : (

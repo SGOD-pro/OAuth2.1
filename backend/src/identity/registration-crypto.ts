@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { config } from "../config";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const USERNAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{2,31}$/;
 
 function deriveKey(secretRef: string, domain: string, lengthBytes = 32): Buffer {
   return Buffer.from(crypto.hkdfSync("sha256", Buffer.from(secretRef, "utf8"), Buffer.from("swyra-p2a-v2", "utf8"), Buffer.from(domain, "utf8"), lengthBytes));
@@ -18,6 +19,21 @@ export function normalizeRegistrationEmail(raw: unknown): string | null {
 export function computeEmailLookup(normalizedEmail: string): string {
   const key = deriveKey(config.identity.lookupKeyRef, "email-lookup-v1");
   return crypto.createHmac("sha256", key).update(`lookup:${normalizedEmail}`).digest("hex");
+}
+
+export function normalizeUsername(raw: unknown): { display: string; normalized: string } | null {
+  if (typeof raw !== "string") return null;
+  if (/[\r\n\0\t]/.test(raw)) return null;
+  const display = raw.trim();
+  if (!display || display.includes("@") || display.includes("..") || display.endsWith(".") || !USERNAME_RE.test(display)) {
+    return null;
+  }
+  return { display, normalized: display.toLowerCase() };
+}
+
+export function computeUsernameLookup(normalizedUsername: string): string {
+  const key = deriveKey(config.identity.lookupKeyRef, "username-lookup-v1");
+  return crypto.createHmac("sha256", key).update(`username:${normalizedUsername}`).digest("hex");
 }
 
 export function computeBrowserBindingHash(rawCookie: string): string {

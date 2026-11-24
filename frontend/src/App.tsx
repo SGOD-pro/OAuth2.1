@@ -9,6 +9,9 @@ import './index.css';
 const SignIn = lazy(() => import('@/pages/SignIn').then((module) => ({ default: module.SignIn })));
 const Register = lazy(() => import('@/pages/Register').then((module) => ({ default: module.Register })));
 const VerifyEmail = lazy(() => import('@/pages/VerifyEmail').then((module) => ({ default: module.VerifyEmail })));
+const CompleteRegistration = lazy(() =>
+  import('@/pages/CompleteRegistration').then((module) => ({ default: module.CompleteRegistration }))
+);
 const TwoFactor = lazy(() => import('@/pages/TwoFactor').then((module) => ({ default: module.TwoFactor })));
 const ForgotPassword = lazy(() =>
   import('@/pages/ForgotPassword').then((module) => ({ default: module.ForgotPassword }))
@@ -59,6 +62,7 @@ const router = createBrowserRouter([
   { path: '/auth', element: withLayout(<SignIn />) },
   { path: '/register', element: withLayout(<Register />) },
   { path: '/register/verify', element: withLayout(<VerifyEmail />) },
+  { path: '/register/profile', element: withLayout(<CompleteRegistration />) },
   { path: '/two-factor', element: withLayout(<TwoFactor />) },
   { path: '/forgot-password', element: withLayout(<ForgotPassword />) },
   { path: '/reset-password', element: withLayout(<ResetPassword />) },

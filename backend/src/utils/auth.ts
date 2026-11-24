@@ -1,10 +1,11 @@
 import { config } from "../config";
-import { betterAuth } from "better-auth";
+import { betterAuth, APIError } from "better-auth";
 import { admin, jwt, twoFactor } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { client, database } from "../db/mongo";
 import { isStrongPassword } from "./security";
+import { isVerifiedCreationActive } from "../identity/registration-context";
 import {
   superAdminRole,
   legacyAdminRole,
@@ -100,6 +101,30 @@ export const authProvider = betterAuth({
                 defaultValue: 1,
                 input: false,
             },
+            username: {
+                type: "string",
+                required: false,
+                defaultValue: null,
+                input: false,
+            },
+            usernameLookup: {
+                type: "string",
+                required: false,
+                defaultValue: null,
+                input: false,
+            },
+            emailLookup: {
+                type: "string",
+                required: false,
+                defaultValue: null,
+                input: false,
+            },
+            acceptedTermsVersion: {
+                type: "string",
+                required: false,
+                defaultValue: null,
+                input: false,
+            },
         },
     },
 
@@ -107,6 +132,11 @@ export const authProvider = betterAuth({
         user: {
             create: {
                 before: async (user: any) => {
+                    if (config.identity.registrationMode === "verified" && !isVerifiedCreationActive()) {
+                        throw new APIError("FORBIDDEN", {
+                            message: "Verified email proof is required before creating an identity.",
+                        });
+                    }
                     return {
                         data: {
                             ...user,

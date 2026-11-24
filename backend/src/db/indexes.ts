@@ -1,11 +1,47 @@
 import { getDb } from "./mongo";
 import { selfHealAppAdmins } from "../utils/admin-sync";
 
+export async function ensureIdentityCollectionIndexes(db: Awaited<ReturnType<typeof getDb>>): Promise<void> {
+  const cols = [
+    "user",
+    "account",
+    "session",
+    "registration_intents",
+    "identity_lookup",
+    "identity_profiles",
+    "identity_outbox",
+    "auth_events",
+  ];
+  await Promise.all(cols.map((col) => db.createCollection(col).catch(() => {})));
+  const safeCreate = async (col: string, spec: any, options?: any) => {
+    try {
+      await db.collection(col).createIndex(spec, options);
+    } catch (err: any) {
+      if (err?.code !== 85 && err?.codeName !== "IndexOptionsConflict" && err?.code !== 86) {
+        console.warn(`[INDEX] Warning creating index on ${col}:`, err?.message || err);
+      }
+    }
+  };
+  await Promise.all([
+    safeCreate("user", { email: 1 }),
+    safeCreate("user", { usernameLookup: 1 }, { unique: true, partialFilterExpression: { usernameLookup: { $type: "string" } } }),
+    safeCreate("account", { userId: 1 }),
+    safeCreate("registration_intents", { intentId: 1 }, { unique: true }),
+    safeCreate("registration_intents", { completeIdempotencyKey: 1 }, { unique: true, partialFilterExpression: { completeIdempotencyKey: { $type: "string" } } }),
+    safeCreate("identity_lookup", { kind: 1, keyVersion: 1, keyedLookup: 1 }, { unique: true }),
+    safeCreate("identity_lookup", { userId: 1 }),
+    safeCreate("identity_profiles", { userId: 1 }, { unique: true }),
+    safeCreate("identity_outbox", { eventId: 1 }, { unique: true }),
+    safeCreate("identity_outbox", { status: 1, createdAt: 1 }),
+  ]);
+}
+
 let indexPromise: Promise<void> | null = null;
 
 export async function ensureTtlIndexes(): Promise<void> {
   indexPromise ??= (async () => {
     const db = await getDb();
+    await ensureIdentityCollectionIndexes(db);
 
     const safeIndex = async (col: string, spec: any, options?: any) => {
       try {

@@ -13,11 +13,9 @@ Read [docs/README.md](docs/README.md), [docs/PHASES.md](docs/PHASES.md),
 V2 user-facing flows remain planned. P0 isolated adapters/tests are
 [locally verified](docs/specs/0008-multi-account-identity-platform/p0-evidence.md). Slices P1a, P1b, and P1c (client policy classification, audit, canonical policy resolution,
 open app bypass, private token access, introspection gating, admin client policy UI and API,
-and transactional credential transition and commit fences) are locally verified. Slice P2a
-(registration intents, OTP budgets, encrypted mail outbox, leased worker with local test sink,
-authenticated callbacks, and verification UI behind default disabled mode) is
-[locally verified](docs/specs/0008-multi-account-identity-platform/0008-p2a-mail-and-intents.md)
-with live mail provider delivery and P2b through P9 remaining pending. Security PR #2 is integrated into main at `828acc5`;
+and transactional credential transition and commit fences) are locally verified. Slices P2a and P2b (registration intents, OTP budgets, encrypted mail outbox, leased worker with local test sink, authenticated callbacks, transactional verified account completion, `/register/profile`, and verified mode provisioning bypass closure behind default disabled mode) are
+[locally verified](docs/specs/0008-multi-account-identity-platform/verify.md)
+with live mail provider delivery and P3 through P9 remaining pending. Security PR #2 is integrated into main at `828acc5`;
 preserve its eligibility/MFA hardening rather than rebuilding it as the next feature.
 After P0 acceptance, follow bounded P1-P9 slices, preserving private/admin isolation, stable subjects
 and protocol endpoints. New identity pages/APIs require a full-stack slice; a UI-only

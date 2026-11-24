@@ -108,6 +108,8 @@ const securityTestFiles = [
   "tests/security/p1c-credential-transition.test.ts",
   "tests/security/p2a-intents-and-otp.test.ts",
   "tests/security/p2a-outbox-worker-and-callbacks.test.ts",
+  "tests/security/p2b-account-completion.test.ts",
+  "tests/security/p2b-provisioning-bypasses.test.ts",
 ];
 
 console.log("================================================================");

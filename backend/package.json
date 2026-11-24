@@ -95,7 +95,10 @@
     "test:p1c-credential-transition": "node --import tsx tests/security/p1c-credential-transition.test.ts",
     "test:p2a-intents": "node --import tsx tests/security/p2a-intents-and-otp.test.ts",
     "test:p2a-outbox": "node --import tsx tests/security/p2a-outbox-worker-and-callbacks.test.ts",
-    "test:p2a-browser": "node --import tsx tests/e2e/p2a-registration-browser.test.ts"
+    "test:p2a-browser": "node --import tsx tests/e2e/p2a-registration-browser.test.ts",
+    "test:p2b-complete": "node --import tsx tests/security/p2b-account-completion.test.ts",
+    "test:p2b-bypasses": "node --import tsx tests/security/p2b-provisioning-bypasses.test.ts",
+    "test:p2b-browser": "node --import tsx tests/e2e/p2b-complete-browser.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",
