@@ -85,6 +85,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Run Backend TypeScript Typecheck
+        working-directory: backend
+        run: npm run typecheck
+
       - name: Start Shared Test MongoDB Service (Docker)
         run: npm run test:mongo:start
 

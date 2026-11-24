@@ -103,6 +103,7 @@ const securityTestFiles = [
   "tests/security/private-token-access.test.ts",
   "tests/security/open-app-bypass-flows.test.ts",
   "tests/security/userinfo-introspect-auth.test.ts",
+  "tests/security/introspect-controlled-failures.test.ts",
 ];
 
 console.log("================================================================");

@@ -172,9 +172,27 @@ describe("UserInfo Engine-Success & Introspection Auth Gating Suite", () => {
     assert.equal(body.client_id, privClientId);
   });
 
-  it("Introspection fails closed and never returns active:true on engine error", async () => {
-    const res = await app.request("/api/auth/oauth2/introspect", { method: "POST", headers: getHeaders({ "Content-Type": "application/x-www-form-urlencoded" }), body: `token=${validJwtToken}&client_id=nonexistent_client&client_secret=foo` });
-    assert.notEqual(res.status, 200);
-    assert.notEqual((await res.json()).active, true);
+  it("Introspection fails closed and never returns active:true on engine outage", async () => {
+    const authModule = await import("../../src/utils/auth");
+    const originalHandler = authModule.authProvider.handler;
+    try {
+      authModule.authProvider.handler = async () => {
+        throw new Error("Simulated engine connection outage");
+      };
+      const res = await app.request("/api/auth/oauth2/introspect", {
+        method: "POST",
+        headers: getHeaders({
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${basicAuth}`,
+        }),
+        body: `token=${validJwtToken}`,
+      });
+      assert.equal(res.status, 503);
+      const body = await res.json();
+      assert.notEqual(body.active, true);
+      assert.equal(body.error, "server_error");
+    } finally {
+      authModule.authProvider.handler = originalHandler;
+    }
   });
 });

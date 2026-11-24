@@ -60,24 +60,24 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
         const isCustomJwt = typeof token === "string" && token.includes(".");
 
         let res: Response;
-        if (isCustomJwt) {
-            // Establish caller authentication through supported engine mechanism using sentinel token probe
-            const probeParams = new URLSearchParams(params);
-            probeParams.set("token", "swyra_credential_probe_sentinel");
-            const probeReq = new Request(c.req.raw.url, {
-                method: "POST",
-                headers: c.req.raw.headers,
-                body: probeParams.toString(),
-            });
-            res = await authProvider.handler(probeReq);
-        } else {
-            // Forward raw request to engine for opaque / engine-managed tokens
-            res = await authProvider.handler(c.req.raw);
-        }
-
-        // Preserve engine authentication failures (including body secret HTTP 400 and Basic 401)
-        if (res.status === 401 || res.status === 400) {
-            return res;
+        try {
+            if (isCustomJwt) {
+                // Establish caller authentication through supported engine mechanism using sentinel token probe
+                const probeParams = new URLSearchParams(params);
+                probeParams.set("token", "swyra_credential_probe_sentinel");
+                const probeReq = new Request(c.req.raw.url, {
+                    method: "POST",
+                    headers: c.req.raw.headers,
+                    body: probeParams.toString(),
+                });
+                res = await authProvider.handler(probeReq);
+            } else {
+                // Forward raw request to engine for opaque / engine-managed tokens
+                res = await authProvider.handler(c.req.raw);
+            }
+        } catch (err) {
+            console.error("[INTROSPECT_ENGINE_ERR]", err);
+            return c.json({ error: "server_error", error_description: "Authentication engine failure" }, 503);
         }
 
         // Engine errors and outages must never become active:true responses
@@ -85,7 +85,22 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
             return c.json({ error: "server_error", error_description: "Authentication engine failure" }, res.status);
         }
 
+        // Preserve all engine rejections and rate limits (400, 401, 403, 429, etc.), including headers
+        if (res.status !== 200) {
+            return res;
+        }
+
         const data = await res.clone().json().catch(() => null);
+
+        // Validate expected response shape: must be an object with a boolean active property
+        if (!data || typeof data !== "object" || typeof data.active !== "boolean") {
+            return c.json({ error: "server_error", error_description: "Invalid engine authentication response" }, 502);
+        }
+
+        // For custom JWT sentinel probe, require explicit inactive probe result (active: false)
+        if (isCustomJwt && data.active !== false) {
+            return c.json({ error: "server_error", error_description: "Invalid engine authentication response" }, 502);
+        }
 
         // If Better Auth identified it as active, verify account and client status before returning active=true
         if (data && data.active === true) {

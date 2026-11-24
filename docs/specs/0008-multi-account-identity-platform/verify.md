@@ -429,3 +429,53 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 7. Command: `npm run test:all-security`
    * Result: All 40 security test files passed (100 percent)
 8. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose
+
+
+## Introspection authentication gating, controlled failures, and CI typecheck
+
+**Date:** 2026-11-24. **Result:** Verified introspection caller authentication gating and response shape validation. Preserves engine rejections (HTTP 401, HTTP 400, HTTP 403) and rate limits (HTTP 429 with Retry-After header) directly. Fails closed with HTTP 502 on malformed responses or unexpected active probe outcomes. Fails closed with HTTP 503 on engine errors and thrown exceptions. Never returns active true for an otherwise valid stored JWT during engine outages or non-200 responses. Replaced misleading nonexistent client test with authentic engine outage fixture. Added declared typescript compiler dependency and separate CI typecheck command. Slice P1c administrative controls and UI remain pending.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `73ad4c26d358307f6c5ccd624bb202f8b4635b5c`
+* Worktree status: Working tree with introspection authentication gating, controlled failure suite, and CI typecheck
+* Source scope:
+  * [routes/auth-introspect.ts](../../../backend/src/routes/auth-introspect.ts): Preserves engine non-200 responses including 403 and 429 with Retry-After, enforces object shape with boolean active, fails closed with 502 on malformed or unexpected active probe responses, fails closed with 503 on exceptions
+  * [tests/security/introspect-controlled-failures.test.ts](../../../backend/tests/security/introspect-controlled-failures.test.ts): Controlled engine response regression suite exercising 403, 429 with Retry-After, 500, malformed 200, unexpected probe active true, and thrown exceptions alongside genuine engine executions (9 tests)
+  * [tests/security/userinfo-introspect-auth.test.ts](../../../backend/tests/security/userinfo-introspect-auth.test.ts): Replaced misleading nonexistent client credential rejection test with authentic engine outage fixture
+  * [scripts/run-all-security.ts](../../../backend/scripts/run-all-security.ts): Registers introspect-controlled-failures regression suite in runner (41 total suites)
+  * [package.json](../../../backend/package.json): Added declared typescript compiler dependency and typecheck script
+  * [.github/workflows/ci.yml](../../../.github/workflows/ci.yml): Added dedicated backend typecheck step before build
+* File length: All modified and new production and test source files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `cd backend && node --import tsx --test tests/security/introspect-controlled-failures.test.ts`
+   * Result: 9 passed, 0 failed
+   * Controlled engine failures:
+     * Introspection preserves engine HTTP 403 response and headers, never active true (passed)
+     * Introspection preserves engine HTTP 429 rate limit response and Retry-After header, never active true (passed)
+     * Introspection fails closed on engine HTTP 500 error, never active true (passed)
+     * Introspection fails closed (502) on malformed engine HTTP 200 payload lacking active boolean (passed)
+     * Introspection fails closed (502) when sentinel probe unexpectedly returns active true (passed)
+     * Introspection fails closed (503) when engine handler throws unexpected exception (passed)
+   * Genuine engine executions:
+     * Introspection succeeds with genuine engine probe for valid Basic credentials (200 active true) (passed)
+     * Introspection rejects with genuine engine for invalid Basic credentials (401) (passed)
+     * Introspection rejects with genuine engine for invalid body credentials (400) (passed)
+2. Command: `cd backend && node --import tsx --test tests/security/userinfo-introspect-auth.test.ts`
+   * Result: 11 passed, 0 failed (including replaced genuine engine outage fixture)
+3. Command: `npm run typecheck` (`tsc --project tsconfig.json --noEmit`)
+   * Result: 0 diagnostics across entire backend source tree using declared compiler dependency
+4. Command: `npm run test:unit`
+   * Result: All 16 unit test suites passed with 0 failures
+5. Command: `npm run test:local-consumer-e2e`
+   * Result: All 11 local consumer flows passed with 0 failures
+6. Command: `npm run security:integration-check`
+   * Result: 0 violations
+7. Command: `npm run security:docs-check`
+   * Result: 0 errors
+8. Command: `npm run test:all-security`
+   * Result: All 41 security test files passed (100 percent)
+9. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose

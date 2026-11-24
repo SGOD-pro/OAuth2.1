@@ -5,6 +5,7 @@
   "scripts": {
     "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && esbuild --bundle --outfile=./dist/index.cjs --platform=node --target=node24 --format=cjs ./src/lambda.ts",
     "build:node": "esbuild --bundle --outfile=./dist/index.cjs --platform=node --target=node24 --format=cjs ./src/node-server.ts",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
     "start": "node dist/index.cjs",
     "build:vercel": "esbuild --bundle --outfile=./dist/index.cjs --platform=node --target=node24 --format=cjs ./src/vercel.ts",
     "db:setup": "tsx --env-file=.env scripts/db-setup.ts",
@@ -95,7 +96,8 @@
     "esbuild": "^0.21.4",
     "npm-run-all2": "^6.2.0",
     "playwright": "^1.64.1",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "typescript": "~5.8.2"
   },
   "dependencies": {
     "@better-auth/core": "1.7.1",
