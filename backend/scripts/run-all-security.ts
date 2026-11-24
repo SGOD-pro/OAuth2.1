@@ -55,6 +55,7 @@ const suiteTimeoutsMs: Record<string, number> = {
   "tests/security/final-adversarial-gate.ts": 90000,
   "tests/security/full-production-adversarial-suite.ts": 90000,
   "tests/security/oauth-security-hardening.test.ts": 90000,
+  "tests/security/membership-lifecycle.test.ts": 90000,
   "tests/security/client-policy-enforcement.test.ts": 60000,
   "tests/security/pkce-enforcement.test.ts": 60000,
 };
@@ -99,6 +100,8 @@ const securityTestFiles = [
   "tests/security/private-app-policy-enforcement.test.ts",
   "tests/security/runner-lifecycle-cleanup.test.ts",
   "tests/security/session-expiry-and-isolation.test.ts",
+  "tests/security/private-token-access.test.ts",
+  "tests/security/open-app-bypass-flows.test.ts",
 ];
 
 console.log("================================================================");

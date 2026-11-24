@@ -149,6 +149,7 @@ await runTest("EXP-2: Expired RS256 access token is strictly rejected (exp claim
     clientSecret: "secret123",
     name: "Test OAuth Client",
     redirectUris: ["https://example.com/callback"],
+    isPublic: true,
     disabled: false,
     createdAt: new Date(),
   });

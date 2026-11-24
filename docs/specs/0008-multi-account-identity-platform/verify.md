@@ -333,3 +333,51 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 9. Command: `npm run test:all-security`
    * Result: All 37 security test files passed (100 percent)
 10. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose
+
+
+## Private token access closure and open app bypass flows verification
+
+**Date:** 2026-11-24. **Result:** Verified authoritative active assignment requirements across all private clients, removing the isExplicit loophole and ensuring empty assignment collections deny access. Verified token derived client binding in UserInfo and rejection of query client_id substitution. Verified independent membership removal before refresh, followed by refresh denial with HTTP 401 and token family revocation. Completed open app bypass evidence for consent required authorization, MFA continuation, and social callback flows with zero ambient writes when enabled and reliable compatibility writes when disabled. Slice P1c administrative controls and UI remain pending.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `c00aa8d600b2fc101711afe841c76a685fe7410a`
+* Worktree status: Working tree with private token access and bypass flows verification
+* Source scope:
+  * [utils/app-access.ts](../../../backend/src/utils/app-access.ts): Removes isExplicit loophole and enforces checkUserHasAppAccess for all private clients
+  * [routes/auth-userinfo.ts](../../../backend/src/routes/auth-userinfo.ts): Derives target client from token claims or authoritative engine record, rejects query substitution, fails closed on missing, disabled, or ambiguous clients
+  * [routes/auth-introspect.ts](../../../backend/src/routes/auth-introspect.ts): Preserves client credential error handling and validates client validity
+  * [routes/auth-consent.ts](../../../backend/src/routes/auth-consent.ts): Records compatibility registration for open apps when bypass is disabled and skips writes when enabled
+  * [scripts/run-all-security.ts](../../../backend/scripts/run-all-security.ts): Registers new test suites and adjusts suite timeout
+  * [tests/fixtures/test-docker-mongo.ts](../../../backend/tests/fixtures/test-docker-mongo.ts): Allocates 1536m memory limit for test MongoDB container
+  * [tests/security/private-token-access.test.ts](../../../backend/tests/security/private-token-access.test.ts): Regression suite for authoritative assignment, client binding, and independent membership removal
+  * [tests/security/open-app-bypass-flows.test.ts](../../../backend/tests/security/open-app-bypass-flows.test.ts): Regression suite for consent, MFA continuation, and social callback bypass flows
+* File length: All modified and new production and test source files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `cd backend && node --import tsx --test tests/security/private-token-access.test.ts`
+   * Result: 6 passed, 0 failed (1810ms)
+   * Legacy private client assignment deletion: UserInfo returns 403, introspection returns active false before refresh; refresh is denied 401 and family is revoked
+   * Explicit private client assignment revocation: UserInfo returns 403, introspection returns active false before refresh; refresh is denied 401 and family is revoked
+   * Client substitution rejection: Query client_id cannot override token client context
+   * Target client validation: Missing, disabled, or ambiguous target clients fail closed
+   * App admin assignment: Admin role granted; access denied immediately when assignment is deleted
+   * Super admin exclusion: Super admin strictly excluded from private app token access
+2. Command: `cd backend && node --import tsx --test tests/security/open-app-bypass-flows.test.ts`
+   * Result: 3 passed, 0 failed (2421ms)
+   * Consent flow: Zero ambient writes when bypass enabled; compatibility row written when disabled
+   * MFA continuation: Zero ambient writes when bypass enabled; compatibility row written when disabled
+   * Social callback: Zero ambient writes when bypass enabled; compatibility row written when disabled
+3. Command: `npm run test:unit`
+   * Result: All 16 unit test suites passed with 0 failures
+4. Command: `npm run test:local-consumer-e2e`
+   * Result: All 11 local consumer flows passed with 0 failures
+5. Command: `npm run security:integration-check`
+   * Result: 0 violations
+6. Command: `npm run security:docs-check`
+   * Result: 0 errors
+7. Command: `npm run test:all-security`
+   * Result: All 39 security test files passed (100 percent)
+8. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose

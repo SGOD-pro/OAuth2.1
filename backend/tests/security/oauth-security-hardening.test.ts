@@ -274,6 +274,13 @@ await runTest("SEC-01-J: Same-second credential issuance and revocation handling
     tokenVersion: 1,
     createdAt: new Date(),
   });
+  await db.collection("user_app_registrations").insertOne({
+    userId: sameSecUserId,
+    clientId: "test-sec-client",
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
+  });
 
   // Mint older version token and token issued at T0 (before revocation)
   const tokenOldVersion = await mintJwtAccessToken({
@@ -464,6 +471,13 @@ await runTest("SEC-01-E: /oauth2/userinfo rejects tokens for banned or revoked a
     banned: false,
     createdAt: new Date(),
   });
+  await db.collection("user_app_registrations").insertOne({
+    userId: victimUserId,
+    clientId: "test-sec-client",
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
+  });
 
   // Mint valid token
   const token = await mintJwtAccessToken({
@@ -501,6 +515,13 @@ await runTest("SEC-02-A: Introspection rejects banned, disabled, revoked or miss
     role: "user",
     banned: false,
     createdAt: new Date(),
+  });
+  await db.collection("user_app_registrations").insertOne({
+    userId: introUserId,
+    clientId: "test-sec-client",
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
   });
 
   const token = await mintJwtAccessToken({
@@ -555,6 +576,13 @@ await runTest("SEC-05-B: UserInfo claim release minimizes claims strictly accord
     role: "user",
     emailVerified: true,
     createdAt: new Date(),
+  });
+  await db.collection("user_app_registrations").insertOne({
+    userId: claimUserId,
+    clientId: "test-sec-client",
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
   });
 
   // Scope: openid only
@@ -2203,6 +2231,13 @@ await runTest("SEC-07-E: Concurrent revocation plus issuance: conditional state 
     tokenVersion: 3,
     emailVerified: true,
     createdAt: new Date(),
+  });
+  await db.collection("user_app_registrations").insertOne({
+    userId: coordUserId,
+    clientId: "test-sec-client",
+    status: "active",
+    isActive: true,
+    registeredAt: new Date(),
   });
 
   // Ordering 1: Revocation advances tokenVersion before issuance final conditional commit

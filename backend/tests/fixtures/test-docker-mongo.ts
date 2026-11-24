@@ -9,7 +9,7 @@ export const DEFAULT_HOST_PORT = 27018;
 export const ADMIN_USER = "testAdmin";
 export const ADMIN_PASS = "testAdminPassword123";
 export const WIREDTIGER_CACHE_GB = "0.25";
-export const CONTAINER_MEM_LIMIT = "768m";
+export const CONTAINER_MEM_LIMIT = "1536m";
 
 export function getHarnessPort(): number {
   const envPort = process.env.TEST_MONGO_PORT;

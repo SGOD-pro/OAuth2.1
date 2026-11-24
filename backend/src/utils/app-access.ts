@@ -153,65 +153,27 @@ export async function checkUserHasAppAccess(
 
 /**
  * Validates post-issuance token access for private applications at UserInfo and Introspection.
- * For explicit private applications, active assignment is strictly required.
- * For legacy clients without explicit policy, denies super admins and revoked members.
+ * For every private application (explicit V2 or legacy compatible), authoritative active assignment is required.
+ * Missing, disabled, or ambiguous target clients fail closed.
  */
 export async function checkPrivateAppTokenAccess(
   db: any,
   userOrId: any,
   clientDoc: any
 ): Promise<boolean> {
-  if (!clientDoc) return true;
-  const isPrivate = clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false);
-  if (!isPrivate) return true;
-
-  const canonicalClientId = clientDoc.clientId || clientDoc.client_id;
-  if (!canonicalClientId) return false;
-
-  // Explicit private policy strictly requires active assignment
-  if (clientDoc.isExplicit === true) {
-    return checkUserHasAppAccess(db, userOrId, canonicalClientId);
-  }
-
-  const userDoc = typeof userOrId === "object" ? userOrId : null;
-  const userIdStr = (
-    typeof userOrId === "string"
-      ? userOrId
-      : (userDoc?.id || userDoc?._id || userDoc?.userId)?.toString()
-  ) || "";
-  const cleanUserId = userIdStr.trim();
-
-  let user = userDoc;
-  if (!user && db && cleanUserId) {
-    const userQueries: any[] = [{ id: cleanUserId }];
-    if (ObjectId.isValid(cleanUserId) && cleanUserId.length === 24) {
-      try { userQueries.push({ _id: new ObjectId(cleanUserId) }); } catch {}
-    }
-    user = await db.collection("user").findOne({ $or: userQueries });
-  }
-
-  if (user && user.role === "super-admin" && !user.scopedClientId) {
+  if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
     return false;
   }
 
-  // Deny if explicit revoked registration or admin assignment exists
-  const userConditions: any[] = [{ userId: cleanUserId }];
-  if (ObjectId.isValid(cleanUserId) && cleanUserId.length === 24) {
-    try { userConditions.push({ userId: new ObjectId(cleanUserId) }); } catch {}
+  const isPrivate = clientDoc.accessPolicy === "private" || (clientDoc.accessPolicy !== "open" && clientDoc.isPublic === false);
+  if (!isPrivate) {
+    return true;
   }
 
-  const [regRecords, adminRecords] = await Promise.all([
-    db.collection("user_app_registrations").find({ clientId: canonicalClientId, $or: userConditions }).toArray(),
-    db.collection("app_admins").find({ clientId: canonicalClientId, $or: userConditions }).toArray(),
-  ]);
+  const canonicalClientId = clientDoc.clientId || clientDoc.client_id;
+  if (!canonicalClientId) {
+    return false;
+  }
 
-  const hasRevoked = regRecords.some((r: any) =>
-    r.isActive === false || r.active === false || r.disabled === true || r.revoked === true ||
-    ["inactive", "revoked", "suspended", "disabled"].includes(r.status)
-  ) || adminRecords.some((a: any) =>
-    a.isActive === false || a.active === false || a.disabled === true || a.revoked === true ||
-    ["inactive", "revoked", "suspended", "disabled"].includes(a.status)
-  );
-
-  return !hasRevoked;
+  return checkUserHasAppAccess(db, userOrId, canonicalClientId);
 }

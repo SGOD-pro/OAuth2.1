@@ -81,6 +81,13 @@ export async function handleOAuthConsent(c: Context) {
                     error_description: "Access restricted: Your account is not authorized for this private application"
                 }, 403);
             }
+        } else if (!config.openAppMembershipBypassEnabled) {
+            const userId = String(sessionUser.id || (sessionUser as any)._id);
+            await database.collection("user_app_registrations").updateOne(
+                { userId, clientId: clientDoc.clientId },
+                { $setOnInsert: { userId, clientId: clientDoc.clientId, registeredAt: new Date() } },
+                { upsert: true }
+            ).catch(() => {});
         }
     }
 
@@ -159,6 +166,13 @@ export async function handleOAuthContinue(c: Context) {
                         error_description: "Access restricted: Your account is not authorized for this private application"
                     }, 403);
                 }
+            } else if (!config.openAppMembershipBypassEnabled) {
+                const userId = String(sessionUser.id || (sessionUser as any)._id);
+                await database.collection("user_app_registrations").updateOne(
+                    { userId, clientId: clientDoc.clientId },
+                    { $setOnInsert: { userId, clientId: clientDoc.clientId, registeredAt: new Date() } },
+                    { upsert: true }
+                ).catch(() => {});
             }
         }
     }

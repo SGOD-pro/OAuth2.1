@@ -59,15 +59,36 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
 
                         const targetClientId = (payload.client_id || payload.azp || (typeof payload.aud === "string" ? payload.aud : payload.aud?.[0]) || "") as string;
 
-                        if (targetClientId) {
-                            const clientDoc = await resolveOAuthClient(database, targetClientId);
-                            const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
-                            if (!hasAccess) {
-                                return c.json(
-                                    { error: "forbidden", error_description: "User is not an authorized member of this private application" },
-                                    403
-                                );
-                            }
+                        const queryClientId = c.req.query("client_id");
+                        if (queryClientId && queryClientId !== targetClientId) {
+                            return c.json(
+                                { error: "invalid_request", error_description: "Query client_id does not match authenticated token client" },
+                                400
+                            );
+                        }
+
+                        if (!targetClientId) {
+                            return c.json(
+                                { error: "invalid_token", error_description: "Token is missing required client audience" },
+                                401,
+                                { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Token is missing required client audience"' }
+                            );
+                        }
+
+                        const clientDoc = await resolveOAuthClient(database, targetClientId);
+                        if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+                            return c.json(
+                                { error: "invalid_client", error_description: "Target client is disabled, ambiguous, or not found" },
+                                401
+                            );
+                        }
+
+                        const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
+                        if (!hasAccess) {
+                            return c.json(
+                                { error: "forbidden", error_description: "User is not an authorized member of this private application" },
+                                403
+                            );
                         }
 
                         if (payload && (payload as any).family_id) {
@@ -175,15 +196,30 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                         );
                     }
 
-                    let targetClientId = c.req.query("client_id") || "";
+                    let targetClientId = (accDoc?.clientId || data.client_id || data.clientId || "") as string;
                     if (!targetClientId && bearerToken) {
                         try {
                             const decoded: any = decodeJwt(bearerToken);
                             targetClientId = (decoded?.client_id || decoded?.azp || (typeof decoded?.aud === "string" ? decoded.aud : decoded?.aud?.[0]) || "") as string;
                         } catch {}
                     }
+
+                    const queryClientId = c.req.query("client_id");
+                    if (queryClientId && targetClientId && queryClientId !== targetClientId) {
+                        return c.json(
+                            { error: "invalid_request", error_description: "Query client_id does not match authenticated token client" },
+                            400
+                        );
+                    }
+
                     if (targetClientId) {
                         const clientDoc = await resolveOAuthClient(database, targetClientId);
+                        if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+                            return c.json(
+                                { error: "invalid_client", error_description: "Target client is disabled, ambiguous, or not found" },
+                                401
+                            );
+                        }
                         const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
                         if (!hasAccess) {
                             return c.json(

@@ -42,7 +42,7 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
         const res = await authProvider.handler(c.req.raw);
 
         // If Better Auth rejected client credentials (e.g. 401), preserve the security gate
-        if (res.status !== 200) {
+        if (res.status === 401) {
             return res;
         }
 
@@ -127,15 +127,13 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
 
                     const database = await getDb();
                     // Check client validity
-                    if (tokenClientId) {
-                        const clientDoc = await resolveOAuthClient(database, tokenClientId);
-                        if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
-                            return c.json({ active: false }, 200);
-                        }
-                        const hasAccess = await checkPrivateAppTokenAccess(database, payload.sub, clientDoc);
-                        if (!hasAccess) {
-                            return c.json({ active: false }, 200);
-                        }
+                    const clientDoc = tokenClientId ? await resolveOAuthClient(database, tokenClientId) : null;
+                    if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+                        return c.json({ active: false }, 200);
+                    }
+                    const hasAccess = await checkPrivateAppTokenAccess(database, payload.sub, clientDoc);
+                    if (!hasAccess) {
+                        return c.json({ active: false }, 200);
                     }
 
                     // Check active state in database (revocation check)
