@@ -158,7 +158,7 @@ export function resolveClientPolicy(clientDoc: Record<string, any>): ResolvedCli
     }
   }
 
-  if (appType === "native" && hasSecret) {
+  if (appType === "native" && !isDev && hasSecret) {
     reasonCodes.push("CONFLICTING_METADATA");
     reasons.push("Native application type registered with a client secret");
   }

@@ -29,6 +29,15 @@ export interface OAuthClient {
   isDev?: boolean;
   is_public?: boolean;
   isPublic?: boolean;
+  clientType?: 'public' | 'confidential';
+  accessPolicy?: 'open' | 'private';
+  classification?: string;
+  isExplicit?: boolean;
+  isAmbiguous?: boolean;
+  ambiguityReasonCodes?: string[];
+  ambiguityReasons?: string[];
+  hasClientSecret?: boolean;
+  token_endpoint_auth_method?: string;
   metadata?: {
     allowedOrigins?: string[];
     allowed_origins?: string[];

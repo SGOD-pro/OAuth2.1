@@ -104,6 +104,7 @@ const securityTestFiles = [
   "tests/security/open-app-bypass-flows.test.ts",
   "tests/security/userinfo-introspect-auth.test.ts",
   "tests/security/introspect-controlled-failures.test.ts",
+  "tests/security/p1c-admin-policy-api.test.ts",
 ];
 
 console.log("================================================================");

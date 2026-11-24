@@ -12,6 +12,7 @@ import {
 import { isSuperAdmin } from "../middleware/admin-auth";
 import { recordAdminAudit } from "../db/state";
 import { invalidateClientOrigins } from "../cache/origin-cache";
+import { hasV2PolicyMutationFields } from "./admin-client-policy-helper";
 
 const authApi = authProvider.api as any;
 
@@ -42,6 +43,17 @@ export async function handlePatchAppConfig(c: any): Promise<Response> {
   const clientId = c.req.param("clientId");
   const body = await c.req.json().catch(() => ({}));
   const sessionUser = c.get("user") as any;
+
+  if (!isSuperAdmin(sessionUser) && hasV2PolicyMutationFields(body)) {
+    return c.json(
+      {
+        error: "forbidden",
+        code: "ERR_POLICY_FORBIDDEN",
+        message: "Only platform super administrators can modify client policy dimensions",
+      },
+      403
+    );
+  }
 
   // Disallow forbidden privilege and identity fields
   const forbiddenFields = [

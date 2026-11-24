@@ -15,7 +15,7 @@ Record actual commands and results in the documentation PR: relative links, anch
 | Request local selected engine sessions | 07-09 | In process engine HTTP + real Mongo replica set | P0 proof passed, 6 cases; browser and workers and P3 wiring pending |
 | OTP start, verify, resend, finalize and wrong code zero writes | 02-04,15 | Real API + disposable DB and mail sink; concurrency workers | Pending |
 | New user, profile, key, session and lost response recovery | 03,16 | Real engine finalization + idempotency | Pending |
-| Client policy backfill and open, private matrix | 05-06,14 | Old and new schema and real consumer fixtures | P1a classification and audit (32 cases), refresh lease fencing (2 cases), P1b canonical resolution and ambiguous denial (10 cases), and four class HTTP compatibility (4 cases) verified; later P1b enforcement and P1c UI pending |
+| Client policy backfill and open, private matrix | 05-06,14 | Old and new schema and real consumer fixtures | P1a classification and audit (32 cases), refresh lease fencing (2 cases), P1b canonical resolution, open app bypass, token enforcement, introspection gating, and P1c admin registration, editing, and BAC P1C 01 through 06 browser acceptance checks locally verified; P2 through P9 remain pending |
 | Browser A and B login, tab interleave, expiry, logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | Pending |
 | Account list CORS, CSRF, fixation, context misuse | 08 | Browser and direct HTTP negatives | Pending |
 | Genuine user, admin MFA, recovery, promotion, step up, plugin paths | 10-11 | Real password, TOTP, backup protocol | Pending |
@@ -479,3 +479,55 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 8. Command: `npm run test:all-security`
    * Result: All 41 security test files passed (100 percent)
 9. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose
+
+
+## Slice P1c administrative client policy registration, editing, and browser acceptance
+
+**Date:** 2026-11-25. **Result:** Verified Slice P1c server policy enforcement and administrative React UI. Default registration sets Confidential, Private, and Production while supporting all four client type and access policy combinations cleanly, including Confidential Development clients without false ambiguity. Plaintext client secrets appear once only on Confidential creation or Public to Confidential transitions and are never shown or stored for Public clients. Confidential to Public transitions require confirmation, delete stored secrets, set auth method `none`, and revoke active tokens and families. Scoped app admins attempting V2 policy field mutations receive HTTP 403 Forbidden with unchanged stored policy. Server validation blocks Migrated promotion on ambiguous records until configuration validation passes. All six browser acceptance cases (`BAC-P1C-01` through `BAC-P1C-06`) pass against a real IdP backend, MongoDB replica set container, and Vite production frontend bundle. Production P2 through P9 flows remain pending.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `4b2f0f87e3b39077544a004b2d8cb89385e13a00`
+* Worktree status: Working tree with Slice P1c backend API policy enforcement, admin React UI updates, API regression suite, Playwright browser suite, and CI wiring
+* Source scope:
+  * [identity/client-policy.ts](../../../backend/src/identity/client-policy.ts): Exempts valid `isDev` native mapped Confidential clients from false ambiguity classification
+  * [utils/client-resolver.ts](../../../backend/src/utils/client-resolver.ts): Exposes `isExplicit` and `hasClientSecret` on canonical client normalization
+  * [routes/admin-client-policy-helper.ts](../../../backend/src/routes/admin-client-policy-helper.ts): Validates client policy combinations, credential transitions, secret hashing, and sensitive field stripping
+  * [routes/admin-clients.ts](../../../backend/src/routes/admin-clients.ts): Enforces V2 policy defaults, Public secret exclusion, and sanitized list projections
+  * [routes/admin-client-detail.ts](../../../backend/src/routes/admin-client-detail.ts): Enforces HTTP 403 scoped admin policy block, candidate `MIGRATED` gate, secret rotation, and revocation on Public downgrade
+  * [routes/admin-app-config.ts](../../../backend/src/routes/admin-app-config.ts): Blocks scoped admin V2 policy field updates with HTTP 403
+  * [frontend/pages/admin/AdminClients.tsx](../../../frontend/pages/admin/AdminClients.tsx): Splits applications registry with search and policy filter toolbar and table
+  * [frontend/pages/admin/RegisterAppModal.tsx](../../../frontend/pages/admin/RegisterAppModal.tsx): Defaults Confidential, Private, Production controls and one time secret view
+  * [frontend/pages/admin/EditAppModal.tsx](../../../frontend/pages/admin/EditAppModal.tsx): Ambiguity remediation banner, confirmation prompts, and server validated Migrated status
+  * [tests/security/p1c-admin-policy-api.test.ts](../../../backend/tests/security/p1c-admin-policy-api.test.ts): HTTP API tests for policy defaults, four combinations, credential transitions, ambiguity block, and scoped admin 403 denial (5 tests)
+  * [tests/e2e/p1c-admin-browser.test.ts](../../../backend/tests/e2e/p1c-admin-browser.test.ts): Real Playwright browser suite covering `BAC-P1C-01` through `BAC-P1C-06`, redirect URI blur validation, and credential transitions
+* File length: All modified and new backend, frontend, and test source files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck` (`tsc --project tsconfig.json --noEmit`)
+   * Result: 0 diagnostics across backend source tree
+2. Command: `npm --prefix frontend run lint && npm --prefix frontend run build:ui`
+   * Result: 0 ESLint errors and clean Vite TypeScript build
+3. Command: `npm run test:unit`
+   * Result: All 16 unit test suites passed with 0 failures
+4. Command: `npm run test:p1c-admin-api`
+   * Result: 5 passed, 0 failed
+   * Registration defaults to Confidential, Private, Production and omits secret hashes in list responses (passed)
+   * Creates all four client policy combinations including Confidential Development cleanly (passed)
+   * Handles Confidential to Public revocation and Public to Confidential secret generation cleanly (passed)
+   * Blocks ambiguous client migration until redirect configuration passes validation (passed)
+   * Rejects scoped App Admin V2 policy mutations on both admin PATCH endpoints with HTTP 403 and unchanged DB policy (passed)
+5. Command: `npm run test:p1c-admin-browser`
+   * Result: Exited 0; all six browser acceptance cases (`BAC-P1C-01` through `BAC-P1C-06`) plus credential transition and inline redirect blur validation checks passed against live IdP and built UI
+6. Command: `npm run test:local-consumer-e2e`
+   * Result: All 11 local consumer flows passed with 0 failures
+7. Command: `npm run test:browser-e2e`
+   * Result: All 5 Playwright browser E2E phases passed with 0 failures
+8. Command: `npm run test:all-security`
+   * Result: All 42 security test files passed (0 failures)
+9. Command: `npm run security:integration-check && npm run security:docs-check`
+   * Result: 0 violations and 0 errors
+10. Prose check: Verified zero punctuation hyphens or dashes in added documentation and review prose
+

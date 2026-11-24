@@ -136,6 +136,9 @@ jobs:
       - name: Run Live Browser E2E Test Suite (Playwright)
         run: npm run test:browser-e2e
 
+      - name: Run P1c Admin Browser E2E Suite (Playwright)
+        run: npm run test:p1c-admin-browser
+
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine
 

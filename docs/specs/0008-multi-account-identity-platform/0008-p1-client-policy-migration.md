@@ -1,6 +1,6 @@
 # 0008-P1. Client policy migration and open access without membership
 
-**Status:** In Progress (Slice P1a verified; Slices P1b and P1c pending)
+**Status:** Verified (Slices P1a, P1b, and P1c locally verified; P2 through P9 remain pending)
 **Date:** 2026-11-22
 
 ## Summary

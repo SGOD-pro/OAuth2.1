@@ -1,4 +1,3 @@
-import { ObjectId } from "mongodb";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { config } from "../config";
@@ -13,6 +12,13 @@ import {
 import { isSuperAdmin } from "../middleware/admin-auth";
 import { recordAdminAudit } from "../db/state";
 import { invalidateClientOrigins } from "../cache/origin-cache";
+import { resolveClientPolicy } from "../identity/client-policy";
+import {
+  hasV2PolicyMutationFields,
+  resolvePatchClientPolicy,
+  stripSensitiveClientFields,
+  extractClientTimestamps,
+} from "./admin-client-policy-helper";
 
 const authApi = authProvider.api as any;
 
@@ -27,21 +33,17 @@ export async function handleGetClientById(c: any): Promise<Response> {
 
     if (!clientDoc) return c.json({ error: "Client not found" }, 404);
 
-    const { clientSecret, client_secret, _id, ...rest } = clientDoc;
-    const rawDate = rest.createdAt || rest.created_at || (ObjectId.isValid(_id) ? new ObjectId(_id).getTimestamp() : new Date());
-    const createdAtIso = rawDate instanceof Date ? rawDate.toISOString() : (typeof rawDate === "string" ? rawDate : new Date(rawDate).toISOString());
-    const rawUpdateDate = rest.updatedAt || rest.updated_at || rawDate;
-    const updatedAtIso = rawUpdateDate instanceof Date ? rawUpdateDate.toISOString() : (typeof rawUpdateDate === "string" ? rawUpdateDate : new Date(rawUpdateDate).toISOString());
-
-    const normalized = normalizeOAuthClientFields({ ...clientDoc, ...rest, id: rest.clientId || rest.client_id || rest.id || String(_id) });
-    return c.json({
+    const { createdDate: createdAtIso, updatedDate: updatedAtIso } = extractClientTimestamps(clientDoc);
+    const canonicalId = clientDoc.clientId || clientDoc.client_id || clientDoc.id || String(clientDoc._id);
+    const normalized = normalizeOAuthClientFields({ ...clientDoc, id: canonicalId, clientId: canonicalId });
+    return c.json(stripSensitiveClientFields({
       ...normalized,
       client_id: normalized.clientId,
       createdAt: createdAtIso,
       created_at: createdAtIso,
       updatedAt: updatedAtIso,
       updated_at: updatedAtIso,
-    });
+    }));
   } catch (err: any) {
     return c.json({ error: "Client not found" }, 404);
   }
@@ -59,20 +61,22 @@ export async function handlePatchClientById(c: any): Promise<Response> {
   delete body.userId;
   delete body.role;
 
-  if (!isSuperAdmin(sessionUser)) {
-    delete body.isPublic;
-    delete body.is_public;
-    delete body.isDev;
-    delete body.is_dev;
-    delete body.disabled;
-    delete body.is_active;
-    delete body.clientId;
-    delete body.clientSecret;
-    delete body.client_secret;
-    delete body.adminEmail;
-    delete body.admin_email;
-    delete body.adminUserId;
-    delete body.admin_user_id;
+  const isSuper = isSuperAdmin(sessionUser);
+  if (!isSuper && hasV2PolicyMutationFields(body)) {
+    return c.json(
+      {
+        error: "forbidden",
+        code: "ERR_POLICY_FORBIDDEN",
+        message: "Only platform super administrators can modify client policy dimensions",
+      },
+      403
+    );
+  }
+
+  if (!isSuper) {
+    for (const k of ["isPublic", "is_public", "isDev", "is_dev", "disabled", "is_active", "clientId", "clientSecret", "client_secret", "adminEmail", "admin_email", "adminUserId", "admin_user_id"]) {
+      delete body[k];
+    }
   }
 
   let oldClient: any = null;
@@ -105,15 +109,16 @@ export async function handlePatchClientById(c: any): Promise<Response> {
     targetAllowedOrigins = deriveAllowedOriginsFromRedirectUris(targetRedirectUris);
   }
 
-  const targetIsDev = isSuperAdmin(sessionUser) && typeof (body.isDev ?? body.is_dev) === "boolean"
-    ? Boolean(body.isDev ?? body.is_dev)
-    : Boolean(oldClient.isDev ?? oldClient.is_dev);
+  const policyPlan = resolvePatchClientPolicy(oldClient, body, isSuper);
+  if (!policyPlan.valid) {
+    return c.json({ error: policyPlan.error }, 400);
+  }
 
-  const targetIsPublic = isSuperAdmin(sessionUser) && typeof (body.isPublic ?? body.is_public) === "boolean"
-    ? Boolean(body.isPublic ?? body.is_public)
-    : Boolean(oldClient.isPublic ?? oldClient.is_public ?? true);
-
-  const targetClientName = typeof body.client_name === "string" ? body.client_name.trim() : (typeof body.name === "string" ? body.name.trim() : oldClient.name);
+  const targetIsDev = policyPlan.targetIsDev;
+  const targetIsPublic = policyPlan.targetIsPublic;
+  const targetClientName = typeof body.client_name === "string"
+    ? body.client_name.trim()
+    : (typeof body.name === "string" ? body.name.trim() : oldClient.name);
 
   // Construct target state to validate final desired client configuration atomically
   const targetState = {
@@ -131,18 +136,78 @@ export async function handlePatchClientById(c: any): Promise<Response> {
   };
 
   let applicationType = oldClient.applicationType || oldClient.application_type || "web";
-  if (hasNewRedirectUris || targetIsDev !== Boolean(oldClient.isDev ?? oldClient.is_dev) || hasNewAllowedOrigins) {
+  if (
+    hasNewRedirectUris ||
+    hasNewAllowedOrigins ||
+    policyPlan.isPolicyChange ||
+    targetIsDev !== Boolean(oldClient.isDev ?? oldClient.is_dev)
+  ) {
     const validation = validateOAuthClientConfiguration(targetState, {
       serverEnvironment: config.env,
       isNewClient: false,
       allowDevClientsInProduction: config.allowDevClientsInProduction,
-      isSuperAdminOp: isSuperAdmin(sessionUser),
+      isSuperAdminOp: isSuper,
     });
 
     if (!validation.valid) {
       return c.json({ error: validation.error }, 400);
     }
     applicationType = validation.effectiveApplicationType;
+  }
+
+  const now = new Date();
+  const dbUpdates: any = { updatedAt: now };
+  const dbUnsets: Record<string, string> = {};
+  if (hasNewRedirectUris) {
+    dbUpdates.redirectUris = targetRedirectUris;
+    dbUpdates.redirect_uris = targetRedirectUris;
+  }
+  if (applicationType) {
+    dbUpdates.applicationType = applicationType;
+    dbUpdates.application_type = applicationType;
+  }
+  if (targetClientName) dbUpdates.name = targetClientName;
+  if (hasNewAllowedOrigins || (hasNewRedirectUris && targetAllowedOrigins.length > 0)) {
+    dbUpdates.allowedOrigins = targetAllowedOrigins;
+    dbUpdates.allowed_origins = targetAllowedOrigins;
+  }
+  if (isSuper && policyPlan.isPolicyChange) {
+    dbUpdates.isDev = targetIsDev;
+    dbUpdates.is_dev = targetIsDev;
+    dbUpdates.isPublic = targetIsPublic;
+    dbUpdates.is_public = targetIsPublic;
+    dbUpdates.clientType = policyPlan.targetClientType;
+    dbUpdates.accessPolicy = policyPlan.targetAccessPolicy;
+    dbUpdates.tokenEndpointAuthMethod = policyPlan.targetAuthMethod;
+    dbUpdates.token_endpoint_auth_method = policyPlan.targetAuthMethod;
+    if (policyPlan.isExplicitMigration) {
+      dbUpdates.policyVersion = 2;
+      dbUpdates.policyMigratedAt = now;
+      dbUpdates.policyMigratedBy = sessionUser?.id || null;
+    }
+    if (policyPlan.deleteSecret) {
+      dbUnsets.clientSecret = "";
+      dbUnsets.client_secret = "";
+    } else if (policyPlan.freshSecretHash) {
+      dbUpdates.clientSecret = policyPlan.freshSecretHash;
+      dbUnsets.client_secret = "";
+    }
+  }
+
+  const candidateDoc: Record<string, any> = { ...oldClient, ...dbUpdates };
+  for (const k of Object.keys(dbUnsets)) delete candidateDoc[k];
+  if (policyPlan.isExplicitMigration) {
+    const candidatePolicy = resolveClientPolicy(candidateDoc);
+    if (candidatePolicy.classification !== "MIGRATED") {
+      return c.json(
+        {
+          error: candidatePolicy.reasons[0] || "Client policy validation failed",
+          reasonCodes: candidatePolicy.reasonCodes,
+          reasons: candidatePolicy.reasons,
+        },
+        400
+      );
+    }
   }
 
   const updatePayload: any = {};
@@ -166,38 +231,15 @@ export async function handlePatchClientById(c: any): Promise<Response> {
     console.warn("[ADMIN_PATCH_CLIENT] Better-Auth update error, proceeding with direct DB update:", err?.body || err?.message);
   }
 
-  // Fallback / sync direct update to DB for custom fields (allowedOrigins, isDev, etc.)
-  const dbUpdates: any = { updatedAt: new Date() };
-  if (hasNewAllowedOrigins || (hasNewRedirectUris && targetAllowedOrigins.length > 0)) {
-    dbUpdates.allowedOrigins = targetAllowedOrigins;
-    dbUpdates.allowed_origins = targetAllowedOrigins;
-  }
-  if (isSuperAdmin(sessionUser)) {
-    if (typeof (body.isDev ?? body.is_dev) === "boolean") {
-      dbUpdates.isDev = targetIsDev;
-      dbUpdates.is_dev = targetIsDev;
-    }
-    if (typeof (body.isPublic ?? body.is_public) === "boolean") {
-      dbUpdates.isPublic = targetIsPublic;
-      dbUpdates.is_public = targetIsPublic;
-    }
-  }
   if (typeof updatePayload.skip_consent === "boolean") dbUpdates.skipConsent = updatePayload.skip_consent;
   if (typeof updatePayload.enable_end_session === "boolean") dbUpdates.enableEndSession = updatePayload.enable_end_session;
   if (typeof updatePayload.disabled === "boolean") dbUpdates.disabled = updatePayload.disabled;
-  if (hasNewRedirectUris) {
-    dbUpdates.redirectUris = targetRedirectUris;
-    dbUpdates.redirect_uris = targetRedirectUris;
-  }
-  if (applicationType) {
-    dbUpdates.applicationType = applicationType;
-    dbUpdates.application_type = applicationType;
-  }
-  if (targetClientName) dbUpdates.name = targetClientName;
 
+  const mongoUpdate: Record<string, any> = { $set: dbUpdates };
+  if (Object.keys(dbUnsets).length > 0) mongoUpdate.$unset = dbUnsets;
   await database.collection("oauthClient").updateOne(
     { $or: [{ clientId: id }, { client_id: id }, { id }] },
-    { $set: dbUpdates }
+    mongoUpdate
   );
   const updatedDoc = await database.collection("oauthClient").findOne({
     $or: [{ clientId: id }, { client_id: id }, { id }],
@@ -208,13 +250,14 @@ export async function handlePatchClientById(c: any): Promise<Response> {
   // Invalidate CORS origin cache across Redis and MongoDB after database update (prevents races)
   await invalidateClientOrigins(oldClient, updatedDoc || { ...oldClient, ...dbUpdates, ...body });
 
-  // Token revocation on client disable
-  if (body.disabled === true || body.is_active === false) {
+  // Token revocation on client disable or Confidential -> Public secret revocation
+  const canonicalId = updatedDoc?.clientId || oldClient.clientId || id;
+  if (body.disabled === true || body.is_active === false || policyPlan.deleteSecret) {
     await Promise.all([
-      database.collection("oauthAccessToken").deleteMany({ clientId: id }),
-      database.collection("oauthRefreshToken").deleteMany({ clientId: id }),
-      database.collection("oauthAuthorizationCode").deleteMany({ clientId: id }),
-      database.collection("oauth_token_families").deleteMany({ clientId: id }),
+      database.collection("oauthAccessToken").deleteMany({ clientId: canonicalId }),
+      database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalId }),
+      database.collection("oauthAuthorizationCode").deleteMany({ clientId: canonicalId }),
+      database.collection("oauth_token_families").deleteMany({ clientId: canonicalId }),
     ]);
   }
 
@@ -223,44 +266,29 @@ export async function handlePatchClientById(c: any): Promise<Response> {
     actorEmail: sessionUser?.email,
     actorScope: sessionUser?.scopedClientId || "super_admin",
     action: "client_patched",
-    targetClientId: id,
+    targetClientId: canonicalId,
     details: { modifiedFields: Object.keys(body) },
     ipAddress: getTrustedClientIp(c),
-    timestamp: new Date(),
+    timestamp: now,
   });
 
-  const docIdStr = updatedDoc?._id ? String(updatedDoc._id) : "";
-  const createdDate = updatedDoc?.createdAt instanceof Date
-    ? updatedDoc.createdAt.toISOString()
-    : typeof updatedDoc?.createdAt === "string"
-      ? updatedDoc.createdAt
-      : (docIdStr && ObjectId.isValid(docIdStr))
-        ? new ObjectId(docIdStr).getTimestamp().toISOString()
-        : new Date().toISOString();
-  const updatedDate = updatedDoc?.updatedAt instanceof Date
-    ? updatedDoc.updatedAt.toISOString()
-    : typeof updatedDoc?.updatedAt === "string"
-      ? updatedDoc.updatedAt
-      : new Date().toISOString();
+  const { createdDate, updatedDate } = extractClientTimestamps(updatedDoc);
 
   const normalized = normalizeOAuthClientFields({
-    ...(result || {}),
-    ...(updatedDoc || {}),
-    id: updatedDoc?.clientId || id,
-    clientId: updatedDoc?.clientId || id,
+    ...(updatedDoc || result || {}),
+    id: canonicalId,
+    clientId: canonicalId,
     redirectUris: updatedDoc?.redirectUris || targetRedirectUris || [],
     allowedOrigins: updatedDoc?.allowedOrigins || targetAllowedOrigins || [],
   });
 
-  const finalResult = {
+  const safeResult = stripSensitiveClientFields({
     ...normalized,
     client_id: normalized.clientId,
     createdAt: createdDate,
     created_at: createdDate,
     updatedAt: updatedDate,
     updated_at: updatedDate,
-  };
-
-  const { client_secret: _omit, clientSecret: _omit2, _id: _omit3, ...safeResult } = finalResult as any;
-  return c.json(safeResult);
+  });
+  return c.json(policyPlan.freshSecret ? { ...safeResult, client_secret: policyPlan.freshSecret } : safeResult);
 }

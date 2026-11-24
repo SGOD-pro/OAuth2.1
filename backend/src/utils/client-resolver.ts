@@ -30,10 +30,12 @@ export interface CanonicalOAuthClient {
   skip_consent?: boolean;
   clientType: ClientType;
   accessPolicy: AccessPolicy;
+  isExplicit?: boolean;
   classification: ClientClassification;
   isAmbiguous: boolean;
   ambiguityReasonCodes: AmbiguityReasonCode[];
   ambiguityReasons: string[];
+  hasClientSecret?: boolean;
   [key: string]: any;
 }
 
@@ -188,10 +190,12 @@ export function normalizeOAuthClientFields<T extends Record<string, any>>(rawCli
     skip_consent: skipConsent,
     clientType: policy.clientType,
     accessPolicy: policy.accessPolicy,
+    isExplicit: policy.isExplicit,
     classification: policy.classification,
     isAmbiguous: policy.isAmbiguous,
     ambiguityReasonCodes: policy.reasonCodes,
     ambiguityReasons: policy.reasons,
+    hasClientSecret: Boolean(clientSecret),
     ...(clientSecret ? { clientSecret, client_secret: clientSecret } : {}),
   } as any;
 }

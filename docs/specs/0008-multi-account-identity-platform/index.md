@@ -1,6 +1,6 @@
 # 0008. Verified multi-account identity platform
 
-**Status:** Proposed program; P0 proof and P1a classification/audit verified. P1b-P9 pending. Updated 2026-11-22.
+**Status:** Proposed program; P0 proof and P1 (Slices P1a, P1b, and P1c) locally verified. P2 through P9 pending. Updated 2026-11-25.
 **Baseline:** integrated main `828acc5`, including security PR #2 reviewed at `66738b0` plus report correction `0a5727e`.
 **Scope:** Full V2 product/architecture plan, delivered as bounded vertical slices. P0 adds isolated compatibility adapters/tests, not production identity routes, deployment or data migration.
 
@@ -55,7 +55,7 @@ This spec owns requirement IDs and acceptance, not duplicate API/schema text. [R
 
 - [x] Incorporate main with reviewed security baseline, reconcile docs without runtime downgrade.
 - [x] P0: transaction-aware engine creation and request-local session compatibility proof, [local evidence and limitations](p0-evidence.md). Production wiring belongs to P2/P3.
-- [ ] P1: additive client-policy migration and open access without membership, see [0008-p1-client-policy-migration.md](0008-p1-client-policy-migration.md).
+- [x] P1: additive client policy migration and open access without membership, see [0008-p1-client-policy-migration.md](0008-p1-client-policy-migration.md).
 - [ ] P2a: mail budgets/outbox, intent/OTP/proof and verification pages.
 - [ ] P2b: username/password finalization transaction and all provisioning bypass closure.
 - [ ] P3: session registry, transaction/dashboard contexts, chooser and independent logout.

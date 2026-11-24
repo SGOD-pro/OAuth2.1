@@ -31,6 +31,8 @@
     "test:dashboard-stats": "npm --prefix backend run test:dashboard-stats",
     "test:rate-limit-failure": "npm --prefix backend run test:rate-limit-failure",
     "test:browser-e2e": "npm --prefix backend run test:browser-e2e",
+    "test:p1c-admin-api": "npm --prefix backend run test:p1c-admin-api",
+    "test:p1c-admin-browser": "npm --prefix backend run test:p1c-admin-browser",
     "test:client-policy-enforcement": "npm --prefix backend run test:client-policy-enforcement",
     "test:client-policy-compatibility": "npm --prefix backend run test:client-policy-compatibility",
     "test:pkce-enforcement": "npm --prefix backend run test:pkce-enforcement",

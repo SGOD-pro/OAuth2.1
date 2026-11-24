@@ -13,6 +13,7 @@ import {
 import { isSuperAdmin } from "../middleware/admin-auth";
 import { recordAdminAudit } from "../db/state";
 import { invalidateClientOrigins } from "../cache/origin-cache";
+import { parseNewClientPolicy, stripSensitiveClientFields } from "./admin-client-policy-helper";
 
 const authApi = authProvider.api as any;
 
@@ -44,7 +45,7 @@ export async function handleGetClients(c: any): Promise<Response> {
       const updatedAtIso = rawUpdateDate instanceof Date ? rawUpdateDate.toISOString() : (typeof rawUpdateDate === "string" ? rawUpdateDate : new Date(rawUpdateDate).toISOString());
 
       const normalized = normalizeOAuthClientFields({ ...doc, ...rest, id: canonicalClientId, clientId: canonicalClientId });
-      return {
+      return stripSensitiveClientFields({
         ...normalized,
         client_id: canonicalClientId,
         clientId: canonicalClientId,
@@ -56,7 +57,7 @@ export async function handleGetClients(c: any): Promise<Response> {
         created_at: createdAtIso,
         updatedAt: updatedAtIso,
         updated_at: updatedAtIso,
-      };
+      });
     });
 
     safeClients.sort((a, b) => {
@@ -76,7 +77,12 @@ export async function handlePostClients(c: any): Promise<Response> {
   const body = await c.req.json();
   const sessionUser = c.get("user") as any;
 
-  const isDev = Boolean(body.isDev || body.is_dev);
+  const policy = parseNewClientPolicy(body);
+  if (!policy.valid) {
+    return c.json({ error: policy.error }, 400);
+  }
+  const isDev = policy.isDev;
+  const isPublic = policy.isPublic;
   const clientName = (body.name || body.client_name || "").trim();
   if (!clientName) {
     return c.json({ error: "Application name is required" }, 400);
@@ -87,7 +93,6 @@ export async function handlePostClients(c: any): Promise<Response> {
   if (allowedOrigins.length === 0 && redirectUris.length > 0) {
     allowedOrigins = deriveAllowedOriginsFromRedirectUris(redirectUris);
   }
-  const isPublic = typeof body.isPublic === "boolean" ? body.isPublic : (typeof body.is_public === "boolean" ? body.is_public : true);
 
   if (allowedOrigins.length === 0) {
     return c.json({ error: "At least one allowed origin is required" }, 400);
@@ -122,6 +127,7 @@ export async function handlePostClients(c: any): Promise<Response> {
     client_name: clientName,
     redirect_uris: redirectUris,
     application_type: applicationType,
+    token_endpoint_auth_method: policy.tokenEndpointAuthMethod,
     skip_consent: Boolean(body.skip_consent ?? body.skipConsent),
     enable_end_session: body.enable_end_session !== false && body.enableEndSession !== false,
     metadata: {
@@ -152,29 +158,45 @@ export async function handlePostClients(c: any): Promise<Response> {
   const now = new Date();
   // Persist extra fields in MongoDB oauthClient collection
   const database = await getDb();
+  const updateDoc: Record<string, any> = {
+    $set: {
+      allowedOrigins: effectiveOrigins,
+      allowed_origins: effectiveOrigins,
+      redirectUris,
+      redirect_uris: redirectUris,
+      isDev,
+      is_dev: isDev,
+      isPublic,
+      is_public: isPublic,
+      clientType: policy.clientType,
+      accessPolicy: policy.accessPolicy,
+      tokenEndpointAuthMethod: policy.tokenEndpointAuthMethod,
+      token_endpoint_auth_method: policy.tokenEndpointAuthMethod,
+      policyVersion: 2,
+      policyMigratedAt: now,
+      policyMigratedBy: sessionUser?.id || null,
+      skipConsent: Boolean(body.skip_consent ?? body.skipConsent),
+      enableEndSession: body.enable_end_session !== false && body.enableEndSession !== false,
+      updatedAt: now,
+    },
+    $setOnInsert: { createdAt: now },
+  };
+  if (policy.clientType === "public") {
+    updateDoc.$unset = { clientSecret: "", client_secret: "" };
+  }
   await database.collection("oauthClient").updateOne(
     { $or: [{ clientId }, { id: clientId }, { client_id: clientId }] },
-    {
-      $set: {
-        allowedOrigins: effectiveOrigins,
-        allowed_origins: effectiveOrigins,
-        redirectUris,
-        redirect_uris: redirectUris,
-        isDev,
-        isPublic,
-        skipConsent: Boolean(body.skip_consent ?? body.skipConsent),
-        enableEndSession: body.enable_end_session !== false && body.enableEndSession !== false,
-        updatedAt: now,
-      },
-      $setOnInsert: {
-        createdAt: now,
-      },
-    },
+    updateDoc,
   );
   await database.collection("oauthClient").updateOne(
     { $or: [{ clientId }, { id: clientId }, { client_id: clientId }], createdAt: { $exists: false } },
     { $set: { createdAt: now } }
   );
+
+  const savedDoc = await database.collection("oauthClient").findOne({
+    $or: [{ clientId }, { id: clientId }, { client_id: clientId }],
+  });
+  const normalizedSaved = normalizeOAuthClientFields(savedDoc || { ...result, clientId, ...updateDoc.$set });
 
   await invalidateClientOrigins(null, {
     allowedOrigins: effectiveOrigins,
@@ -187,15 +209,16 @@ export async function handlePostClients(c: any): Promise<Response> {
     actorScope: sessionUser?.scopedClientId || "super_admin",
     action: "client_created",
     targetClientId: String(clientId),
-    details: { name: clientName, client_id: clientId },
+    details: { name: clientName, client_id: clientId, clientType: policy.clientType, accessPolicy: policy.accessPolicy },
     ipAddress: getTrustedClientIp(c),
     timestamp: now,
   });
 
-  const responsePayload = {
+  const rawOneTimeSecret = policy.clientType === "confidential" ? (result.client_secret || result.clientSecret) : undefined;
+  const responsePayload = stripSensitiveClientFields({
     ...result,
+    ...normalizedSaved,
     client_id: clientId,
-    client_secret: result.client_secret || result.clientSecret,
     client_name: clientName,
     redirect_uris: redirectUris,
     redirectUris: redirectUris,
@@ -210,9 +233,9 @@ export async function handlePostClients(c: any): Promise<Response> {
     created_at: now.toISOString(),
     updatedAt: now.toISOString(),
     updated_at: now.toISOString(),
-  };
+  });
 
-  return c.json(responsePayload, 201);
+  return c.json(rawOneTimeSecret ? { ...responsePayload, client_secret: rawOneTimeSecret } : responsePayload, 201);
 }
 
 export async function handleDeleteClient(c: any): Promise<Response> {

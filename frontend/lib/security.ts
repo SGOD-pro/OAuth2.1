@@ -2,12 +2,42 @@ export function validateUri(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-    if (value.includes('*')) return false;
+    if (value.includes('*') || value.includes('#')) return false;
     if (url.username || url.password) return false;
     if (!url.hostname) return false;
     return true;
   } catch {
     return false;
+  }
+}
+
+function isLoopbackAddress(hostname: string): boolean {
+  const clean = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return clean === 'localhost' || clean === '127.0.0.1' || clean === '::1' || clean.endsWith('.localhost');
+}
+
+export function validateClientRedirectUri(value: string, isDev: boolean): string | null {
+  if (!validateUri(value)) {
+    return 'Enter a valid HTTP or HTTPS URL without wildcards, fragments, or credentials';
+  }
+  try {
+    const parsed = new URL(value);
+    const isLoopback = isLoopbackAddress(parsed.hostname);
+    if (isDev) {
+      if (!isLoopback && parsed.protocol !== 'https:') {
+        return 'Non loopback redirect URIs require HTTPS';
+      }
+      return null;
+    }
+    if (isLoopback) {
+      return 'Loopback URIs require Development callback mode';
+    }
+    if (parsed.protocol !== 'https:') {
+      return 'Production applications require HTTPS redirect URIs';
+    }
+    return null;
+  } catch {
+    return 'Enter a valid URL';
   }
 }
 

@@ -2,35 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { csrfHeaders } from '@/lib/csrf';
-import { validateUri, deriveOrigins } from '@/lib/security';
+import { validateClientRedirectUri, validateUri, deriveOrigins } from '@/lib/security';
 import { apiFetch } from '@/lib/api';
-
-interface OAuthClient {
-  client_id: string;
-  client_name: string;
-  redirect_uris?: string[];
-  redirectUris?: string[];
-  allowed_origins?: string[];
-  allowedOrigins?: string[];
-  is_dev?: boolean;
-  isDev?: boolean;
-  is_public?: boolean;
-  isPublic?: boolean;
-  metadata?: {
-    allowedOrigins?: string[];
-    allowed_origins?: string[];
-    isDev?: boolean;
-    is_dev?: boolean;
-  };
-  skip_consent?: boolean;
-  skipConsent?: boolean;
-  enable_end_session?: boolean;
-  enableEndSession?: boolean;
-  disabled?: boolean;
-  is_active?: boolean;
-}
+import { useSession } from '@/lib/auth-client';
+import { isSuperAdminUser } from '@/lib/role-predicates';
+import type { OAuthClient } from '@/lib/adminStore-types';
+import { ClientTagInput } from './ClientTagInput';
+import { ClientPolicyControls, ClientSecretOneTimeCard } from './ClientPolicyControls';
+import { resolveDisplayPolicy } from './ClientPolicyBadges';
+import { ClientAmbiguityBanner, ClientTransitionWarnings } from './EditAppTransitionBanners';
 
 interface EditAppModalProps {
   client: OAuthClient;
@@ -38,130 +20,71 @@ interface EditAppModalProps {
   onSuccess: (client: OAuthClient) => void;
 }
 
-const TagInput: React.FC<{
-  tags: string[];
-  placeholder: string;
-  validate: (val: string) => boolean;
-  onAdd: (val: string) => void;
-  onRemove: (val: string) => void;
-}> = ({ tags, placeholder, validate, onAdd, onRemove }) => {
-  const [input, setInput] = useState('');
-  const [err, setErr] = useState('');
-
-  const add = () => {
-    const val = input.trim();
-    if (!val) return;
-    if (!validate(val)) { setErr('Enter a valid URL without wildcards or credentials'); return; }
-    if (tags.includes(val)) { setErr('Already added'); return; }
-    onAdd(val);
-    setInput('');
-    setErr('');
-  };
-
-  return (
-    <div>
-      <div className="flex gap-2">
-        <Input
-          type="text"
-          placeholder={placeholder}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
-          className="h-9"
-        />
-        <Button type="button" variant="outline" size="sm" onClick={add} className="h-9 px-3">Add</Button>
-      </div>
-      {err && <p className="mt-1 font-sans text-xs text-destructive">{err}</p>}
-      {tags.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {tags.map((t) => (
-            <span key={t} className="flex items-center gap-1.5 rounded-md bg-secondary border border-border px-2.5 py-0.5 font-mono text-xs text-foreground">
-              {t}
-              <button type="button" className="text-muted-foreground hover:text-foreground ml-1" onClick={() => onRemove(t)} aria-label={`Remove ${t}`}>
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
 export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onSuccess }) => {
-  const initialRedirectUris = client.redirect_uris ?? client.redirectUris ?? [];
-  const initialAllowedOrigins =
-    client.allowed_origins ??
-    client.allowedOrigins ??
-    client.metadata?.allowedOrigins ??
-    client.metadata?.allowed_origins ??
-    [];
+  const { data: session } = useSession();
+  const canEditPolicy = isSuperAdminUser((session as { user?: { role?: string; scopedClientId?: string | null } } | null)?.user);
+  const initialPolicy = resolveDisplayPolicy(client);
 
-  const [redirectUris, setRedirectUris] = useState<string[]>(initialRedirectUris);
-  const [allowedOrigins, setAllowedOrigins] = useState<string[]>(initialAllowedOrigins);
-  const [isDev, setIsDev] = useState<boolean>(
-    client.is_dev ?? client.isDev ?? client.metadata?.isDev ?? client.metadata?.is_dev ?? false
-  );
-  const [isPublic, setIsPublic] = useState<boolean>(
-    client.is_public ?? client.isPublic ?? true
-  );
-  const [skipConsent, setSkipConsent] = useState<boolean>(
-    client.skip_consent ?? client.skipConsent ?? false
-  );
-  const [enableEndSession, setEnableEndSession] = useState<boolean>(
-    client.enable_end_session ?? client.enableEndSession ?? false
-  );
-  const [isActive, setIsActive] = useState<boolean>(
-    client.is_active ?? !client.disabled
-  );
+  const initialUris = client.redirect_uris ?? client.redirectUris ?? [];
+  const initialOrigins = client.allowed_origins ?? client.allowedOrigins ?? client.metadata?.allowedOrigins ?? [];
+
+  const [redirectUris, setRedirectUris] = useState<string[]>(initialUris);
+  const [allowedOrigins, setAllowedOrigins] = useState<string[]>(initialOrigins);
+  const [clientType, setClientType] = useState<'public' | 'confidential'>(initialPolicy.clientType);
+  const [accessPolicy, setAccessPolicy] = useState<'open' | 'private'>(initialPolicy.accessPolicy);
+  const [isDev, setIsDev] = useState<boolean>(initialPolicy.isDev);
+  const [skipConsent, setSkipConsent] = useState<boolean>(Boolean(client.skip_consent));
+  const [enableEndSession, setEnableEndSession] = useState<boolean>(Boolean(client.enable_end_session));
+  const [isActive, setIsActive] = useState<boolean>(!client.disabled);
+
+  const [confirmSecretRevoke, setConfirmSecretRevoke] = useState(false);
+  const [confirmWideningOpen, setConfirmWideningOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [reasonCodes, setReasonCodes] = useState<string[]>(client.ambiguityReasonCodes || []);
+  const [reasons, setReasons] = useState<string[]>(client.ambiguityReasons || []);
+  const [generatedSecret, setGeneratedSecret] = useState<string | null>(null);
+  const [savedClient, setSavedClient] = useState<OAuthClient | null>(null);
   const [success, setSuccess] = useState(false);
 
-  // If redirect URIs or allowed origins were not loaded in list view, fetch full client details
+  const needsSecretRevokeConfirm = initialPolicy.clientType === 'confidential' && clientType === 'public' && Boolean(client.hasClientSecret);
+  const needsWideningOpenConfirm = initialPolicy.accessPolicy === 'private' && accessPolicy === 'open' && !initialPolicy.isAmbiguous;
+  const needsPublicToConfidential = initialPolicy.clientType === 'public' && clientType === 'confidential';
+
   useEffect(() => {
-    let isMounted = true;
-    if (initialRedirectUris.length === 0 || initialAllowedOrigins.length === 0) {
-      apiFetch(`/api/admin/clients/${client.client_id}`)
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (!isMounted || !data) return;
-          const uris = (data.redirect_uris ?? data.redirectUris ?? []) as string[];
-          const origins = (data.allowed_origins ?? data.allowedOrigins ?? data.metadata?.allowedOrigins ?? []) as string[];
-          if (uris.length > 0) {
-            setRedirectUris((prev) => (prev.length === 0 ? uris : prev));
-          }
-          if (origins.length > 0) {
-            setAllowedOrigins((prev) => (prev.length === 0 ? origins : prev));
-          }
-        })
-        .catch(() => {});
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [client.client_id, initialRedirectUris.length, initialAllowedOrigins.length]);
+    let mounted = true;
+    apiFetch(`/api/admin/clients/${client.client_id}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!mounted || !data) return;
+        const uris = (data.redirect_uris ?? data.redirectUris ?? []) as string[];
+        const origins = (data.allowed_origins ?? data.allowedOrigins ?? data.metadata?.allowedOrigins ?? []) as string[];
+        if (uris.length > 0) setRedirectUris((prev) => (prev.length === 0 ? uris : prev));
+        if (origins.length > 0) setAllowedOrigins((prev) => (prev.length === 0 ? origins : prev));
+        if (Array.isArray(data.ambiguityReasonCodes)) setReasonCodes(data.ambiguityReasonCodes);
+        if (Array.isArray(data.ambiguityReasons)) setReasons(data.ambiguityReasons);
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, [client.client_id]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // In edit mode, redirect URIs and allowed origins are optional if only updating checkboxes.
-    // If provided, format validation is applied.
-    if (redirectUris.length > 0) {
-      for (const uri of redirectUris) {
-        if (!validateUri(uri)) {
-          setError(`Invalid redirect URI format: "${uri}"`);
-          return;
-        }
-      }
+    if (redirectUris.length === 0) { setError('At least one redirect URI is required.'); return; }
+    for (const uri of redirectUris) {
+      const errMsg = validateClientRedirectUri(uri, isDev);
+      if (errMsg) { setError(errMsg); return; }
     }
-    if (allowedOrigins.length > 0) {
-      for (const origin of allowedOrigins) {
-        if (!validateUri(origin)) {
-          setError(`Invalid allowed origin format: "${origin}"`);
-          return;
-        }
-      }
+    for (const origin of allowedOrigins) {
+      if (!validateUri(origin)) { setError(`Invalid allowed origin format: "${origin}"`); return; }
+    }
+    if (needsSecretRevokeConfirm && !confirmSecretRevoke) {
+      setError('Confirm client secret revocation before switching to Public client type.');
+      return;
+    }
+    if (needsWideningOpenConfirm && !confirmWideningOpen) {
+      setError('Confirm widening access policy from Private to Open before saving.');
+      return;
     }
 
     setLoading(true);
@@ -170,47 +93,50 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
 
     try {
       const payload: Record<string, unknown> = {
-        is_dev: isDev,
-        isDev: isDev,
-        is_public: isPublic,
-        isPublic: isPublic,
         skip_consent: skipConsent,
-        skipConsent: skipConsent,
+        skipConsent,
         enable_end_session: enableEndSession,
-        enableEndSession: enableEndSession,
+        enableEndSession,
         is_active: isActive,
         disabled: !isActive,
+        redirect_uris: redirectUris,
+        redirectUris,
+        ...(allowedOrigins.length > 0 ? { allowed_origins: allowedOrigins, allowedOrigins } : {}),
       };
-
-      if (redirectUris.length > 0) {
-        payload.redirect_uris = redirectUris;
-        payload.redirectUris = redirectUris;
-      }
-
-      if (allowedOrigins.length > 0) {
-        payload.allowed_origins = allowedOrigins;
-        payload.allowedOrigins = allowedOrigins;
+      if (canEditPolicy) {
+        payload.clientType = clientType;
+        payload.accessPolicy = accessPolicy;
+        payload.isDev = isDev;
+        payload.is_dev = isDev;
+        payload.isPublic = accessPolicy === 'open';
+        payload.is_public = accessPolicy === 'open';
       }
 
       const res = await apiFetch(`/api/admin/clients/${client.client_id}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...csrfHeaders(),
-        },
+        headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
         body: JSON.stringify(payload),
       });
-
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const msg = (body as { error?: string; message?: string }).error || (body as { error?: string; message?: string }).message || `Server returned HTTP ${res.status}`;
-        throw new Error(msg);
+        if (Array.isArray((body as { reasonCodes?: string[] }).reasonCodes)) {
+          setReasonCodes((body as { reasonCodes: string[] }).reasonCodes);
+        }
+        if (Array.isArray((body as { reasons?: string[] }).reasons)) {
+          setReasons((body as { reasons: string[] }).reasons);
+        }
+        throw new Error((body as { error?: string; message?: string }).error || (body as { message?: string }).message || `Server returned HTTP ${res.status}`);
       }
 
-      const updatedClient = await res.json();
-      setSuccess(true);
-      onSuccess(updatedClient);
-      setTimeout(() => onClose(), 1200);
+      const updated = body as OAuthClient & { client_secret?: string };
+      if (updated.client_secret) {
+        setSavedClient(updated);
+        setGeneratedSecret(updated.client_secret);
+      } else {
+        setSuccess(true);
+        onSuccess(updated);
+        setTimeout(() => onClose(), 800);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -218,186 +144,125 @@ export const EditAppModal: React.FC<EditAppModalProps> = ({ client, onClose, onS
     }
   };
 
+  const canSave = !loading && (!needsSecretRevokeConfirm || confirmSecretRevoke) && (!needsWideningOpenConfirm || confirmWideningOpen);
+
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-155 w-full">
+      <DialogContent className="sm:max-w-[640px] w-full max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Edit {client.client_name}</DialogTitle>
+          <div className="flex items-center gap-2 flex-wrap">
+            <DialogTitle>Edit {client.client_name}</DialogTitle>
+            {initialPolicy.isLegacy && <Badge variant="secondary" className="text-[11px]">Legacy Compatible</Badge>}
+            {initialPolicy.isMigrated && <Badge variant="success" className="text-[11px]">Migrated</Badge>}
+            {initialPolicy.isAmbiguous && <Badge variant="warning" className="text-[11px]">Ambiguous</Badge>}
+          </div>
           <DialogDescription>
-            Modify OAuth 2.1 client endpoints, active status, and CORS parameters.
+            Manage client authentication policy, tenant access boundary, endpoints, and active status.
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={submit} className="space-y-4 py-2">
-          {error && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-sans text-xs text-destructive">
-              {error}
-            </div>
-          )}
-          {success && (
-            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 font-sans text-xs text-emerald-500 dark:text-emerald-400">
-              Application configuration updated.
-            </div>
-          )}
+        {generatedSecret && savedClient ? (
+          <ClientSecretOneTimeCard
+            clientId={savedClient.client_id}
+            clientSecret={generatedSecret}
+            onDone={() => { onSuccess(savedClient); onClose(); }}
+          />
+        ) : (
+          <form onSubmit={submit} className="space-y-4 py-2">
+            <ClientAmbiguityBanner
+              isAmbiguous={initialPolicy.isAmbiguous}
+              reasonCodes={reasonCodes}
+              reasons={reasons}
+            />
 
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="font-sans text-xs font-medium text-foreground">
-                Redirect URIs
-              </label>
-              <span className="font-sans text-xs text-muted-foreground">
-                OAuth callback endpoints
-              </span>
-            </div>
-            <TagInput
-              tags={redirectUris}
-              placeholder="https://app.example.com/auth/callback"
-              validate={validateUri}
-              onAdd={(v) => {
-                setRedirectUris((u) => {
-                  const next = [...u, v];
+            {error && (
+              <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 font-sans text-xs text-destructive">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 font-sans text-xs text-emerald-500 dark:text-emerald-400">
+                Application configuration updated.
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label htmlFor="edit-redirect-uri" className="font-sans text-xs font-medium text-foreground">Redirect URIs</label>
+              <ClientTagInput
+                id="edit-redirect-uri"
+                tags={redirectUris}
+                placeholder={isDev ? 'http://localhost:3000/callback' : 'https://app.example.com/auth/callback'}
+                validate={(val) => validateClientRedirectUri(val, isDev)}
+                onAdd={(v) => {
+                  setRedirectUris((u) => [...u, v]);
                   const derived = deriveOrigins([v]);
-                  setAllowedOrigins((o) => (o.length === 0 ? derived : Array.from(new Set([...o, ...derived]))));
-                  return next;
-                });
-              }}
-              onRemove={(v) => setRedirectUris((u) => u.filter((r) => r !== v))}
-            />
-            {redirectUris.length === 0 && (
-              <p className="font-sans text-[11px] text-muted-foreground mt-1">
-                Existing redirect URIs are preserved if left empty.
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="font-sans text-xs font-medium text-foreground block">
-                  Allowed CORS Origins
-                </label>
-                <span className="font-sans text-xs text-muted-foreground">
-                  Web origins permitted for browser token requests
-                </span>
-              </div>
-              {redirectUris.length > 0 && (
-                <button
-                  type="button"
-                  className="font-sans text-[11px] text-primary hover:underline"
-                  onClick={() => {
-                    const derived = deriveOrigins(redirectUris);
-                    setAllowedOrigins((prev) => Array.from(new Set([...prev, ...derived])));
-                  }}
-                >
-                  Auto derive from redirect URIs
-                </button>
-              )}
+                  setAllowedOrigins((o) => Array.from(new Set([...o, ...derived])));
+                }}
+                onRemove={(v) => setRedirectUris((u) => u.filter((r) => r !== v))}
+              />
             </div>
-            <TagInput
-              tags={allowedOrigins}
-              placeholder="https://app.example.com"
-              validate={validateUri}
-              onAdd={(v) => setAllowedOrigins((o) => [...o, v])}
-              onRemove={(v) => setAllowedOrigins((o) => o.filter((r) => r !== v))}
+
+            <div className="space-y-1.5">
+              <label htmlFor="edit-cors-origin" className="font-sans text-xs font-medium text-foreground">Allowed CORS Origins</label>
+              <ClientTagInput
+                id="edit-cors-origin"
+                tags={allowedOrigins}
+                placeholder="https://app.example.com"
+                validate={(val) => validateUri(val) ? null : 'Enter a valid HTTP or HTTPS origin without wildcards or credentials'}
+                onAdd={(v) => setAllowedOrigins((o) => [...o, v])}
+                onRemove={(v) => setAllowedOrigins((o) => o.filter((r) => r !== v))}
+              />
+            </div>
+
+            <ClientPolicyControls
+              clientType={clientType}
+              accessPolicy={accessPolicy}
+              isDev={isDev}
+              readOnly={!canEditPolicy}
+              onClientTypeChange={(val) => { setClientType(val); setConfirmSecretRevoke(false); }}
+              onAccessPolicyChange={(val) => { setAccessPolicy(val); setConfirmWideningOpen(false); }}
+              onIsDevChange={setIsDev}
             />
-            {allowedOrigins.length === 0 && (
-              <p className="font-sans text-[11px] text-muted-foreground mt-1">
-                Existing allowed origins are preserved if left empty.
+
+            {!canEditPolicy && (
+              <p className="text-xs text-muted-foreground">
+                Policy dimensions are read only for scoped administrators. Contact a platform super administrator to change policy.
               </p>
             )}
-          </div>
 
-          <div className="rounded-lg border border-border bg-secondary/30 p-4 space-y-3">
-            <label className="flex items-start justify-between gap-4 cursor-pointer">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-sans text-xs font-medium text-foreground block">
-                    Development Mode
-                  </span>
-                  <span className="rounded bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 px-1.5 py-0.2 font-sans text-[10px] font-medium">
-                    Dev
-                  </span>
-                </div>
-                <span className="font-sans text-xs text-muted-foreground">
-                  Allows loopback URLs (http://localhost, http://127.0.0.1) for local testing.
-                </span>
-              </div>
-              <Checkbox
-                checked={isDev}
-                onCheckedChange={(checked) => setIsDev(checked === true)}
-              />
-            </label>
+            <ClientTransitionWarnings
+              needsSecretRevokeConfirm={needsSecretRevokeConfirm}
+              confirmSecretRevoke={confirmSecretRevoke}
+              onConfirmSecretRevokeChange={setConfirmSecretRevoke}
+              needsPublicToConfidential={needsPublicToConfidential}
+              needsWideningOpenConfirm={needsWideningOpenConfirm}
+              confirmWideningOpen={confirmWideningOpen}
+              onConfirmWideningOpenChange={setConfirmWideningOpen}
+            />
 
-            <label className="flex items-start justify-between gap-4 cursor-pointer">
-              <div>
-                <span className="font-sans text-xs font-medium text-foreground block">
-                  Public Application Mode
-                </span>
-                <span className="font-sans text-xs text-muted-foreground">
-                  When enabled, any platform user can log in. When disabled (Private Mode), only explicitly assigned users can access it.
-                </span>
-              </div>
-              <Checkbox
-                checked={isPublic}
-                onCheckedChange={(checked) => setIsPublic(checked === true)}
-              />
-            </label>
+            <div className="rounded-lg border border-border bg-secondary/20 p-3.5 space-y-2.5">
+              <label className="flex items-center justify-between gap-4 cursor-pointer text-xs">
+                <span className="font-medium text-foreground">Application Active</span>
+                <Checkbox checked={isActive} onCheckedChange={(c) => setIsActive(c === true)} />
+              </label>
+              <label className="flex items-center justify-between gap-4 cursor-pointer text-xs">
+                <span className="font-medium text-foreground">Skip User Consent</span>
+                <Checkbox checked={skipConsent} onCheckedChange={(c) => setSkipConsent(c === true)} />
+              </label>
+              <label className="flex items-center justify-between gap-4 cursor-pointer text-xs">
+                <span className="font-medium text-foreground">Allow RP-Initiated Sign-Out</span>
+                <Checkbox checked={enableEndSession} onCheckedChange={(c) => setEnableEndSession(c === true)} />
+              </label>
+            </div>
 
-            <label className="flex items-start justify-between gap-4 cursor-pointer">
-              <div>
-                <span className="font-sans text-xs font-medium text-foreground block">
-                  Application Active
-                </span>
-                <span className="font-sans text-xs text-muted-foreground">
-                  Disable to reject token requests immediately.
-                </span>
-              </div>
-              <Checkbox
-                checked={isActive}
-                onCheckedChange={(checked) => setIsActive(checked === true)}
-              />
-            </label>
-
-            <label className="flex items-start justify-between gap-4 cursor-pointer">
-              <div>
-                <span className="font-sans text-xs font-medium text-foreground block">
-                  Skip User Consent
-                </span>
-                <span className="font-sans text-xs text-muted-foreground">
-                  Skip scope approval for first-party clients.
-                </span>
-              </div>
-              <Checkbox
-                checked={skipConsent}
-                onCheckedChange={(checked) => setSkipConsent(checked === true)}
-              />
-            </label>
-
-            <label className="flex items-start justify-between gap-4 cursor-pointer">
-              <div>
-                <span className="font-sans text-xs font-medium text-foreground block">
-                  Allow Remote Sign-Out
-                </span>
-                <span className="font-sans text-xs text-muted-foreground">
-                  Allow RP-initiated logout triggers.
-                </span>
-              </div>
-              <Checkbox
-                checked={enableEndSession}
-                onCheckedChange={(checked) => setEnableEndSession(checked === true)}
-              />
-            </label>
-          </div>
-
-          <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" onClick={onClose} disabled={loading} className="h-9">
-              Cancel
-            </Button>
-            <Button type="submit" disabled={loading} className="h-9">
-              {loading ? 'Saving...' : 'Save changes'}
-            </Button>
-          </DialogFooter>
-        </form>
+            <DialogFooter className="mt-4">
+              <Button type="button" variant="outline" onClick={onClose} disabled={loading} className="h-9">Cancel</Button>
+              <Button type="submit" disabled={!canSave} className="h-9">
+                {loading ? 'Saving...' : 'Save changes'}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );
