@@ -17,6 +17,7 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
         // Verify calling client is not ambiguous
         const authHeader = c.req.header("authorization") || c.req.header("Authorization");
         let basicClientId: string | null = null;
+        let basicClientSecret: string | null = null;
         let hasBasicAuth = false;
         if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
             try {
@@ -24,11 +25,25 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
                 const colonIndex = decoded.indexOf(":");
                 if (colonIndex !== -1) {
                     basicClientId = decoded.slice(0, colonIndex);
+                    basicClientSecret = decoded.slice(colonIndex + 1);
                     hasBasicAuth = true;
                 }
             } catch {}
         }
-        const callerClientId = basicClientId || params.get("client_id");
+        const bodyClientId = params.get("client_id");
+        const bodyClientSecret = params.get("client_secret");
+
+        // Reject multiple or conflicting credentials
+        if (hasBasicAuth && bodyClientSecret) {
+            return c.json({ error: "invalid_client", error_description: "Multiple client credentials submitted" }, 400);
+        }
+        if (hasBasicAuth && bodyClientId && bodyClientId !== basicClientId) {
+            return c.json({ error: "invalid_client", error_description: "Conflicting client identifiers" }, 400);
+        }
+
+        const callerClientId = basicClientId || bodyClientId;
+        const callerSecret = hasBasicAuth ? basicClientSecret : bodyClientSecret;
+
         if (callerClientId) {
             const database = await getDb();
             const callerDoc = await resolveOAuthClient(database, callerClientId);
@@ -36,14 +51,38 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
                 const headers = hasBasicAuth ? { "WWW-Authenticate": 'Basic realm="OAuth"' } : undefined;
                 return c.json({ error: "invalid_client", error_description: "Calling client configuration is ambiguous" }, 401, headers);
             }
+            if (callerDoc?.disabled) {
+                return c.json({ error: "invalid_client", error_description: "Calling client is disabled" }, 401);
+            }
         }
 
-        // First forward to Better Auth for client authentication and default handling
-        const res = await authProvider.handler(c.req.raw);
+        // Determine if token is a custom RS256 JWT issued by SWYRA Auth
+        const isCustomJwt = typeof token === "string" && token.includes(".");
 
-        // If Better Auth rejected client credentials (e.g. 401), preserve the security gate
-        if (res.status === 401) {
+        let res: Response;
+        if (isCustomJwt) {
+            // Establish caller authentication through supported engine mechanism using sentinel token probe
+            const probeParams = new URLSearchParams(params);
+            probeParams.set("token", "swyra_credential_probe_sentinel");
+            const probeReq = new Request(c.req.raw.url, {
+                method: "POST",
+                headers: c.req.raw.headers,
+                body: probeParams.toString(),
+            });
+            res = await authProvider.handler(probeReq);
+        } else {
+            // Forward raw request to engine for opaque / engine-managed tokens
+            res = await authProvider.handler(c.req.raw);
+        }
+
+        // Preserve engine authentication failures (including body secret HTTP 400 and Basic 401)
+        if (res.status === 401 || res.status === 400) {
             return res;
+        }
+
+        // Engine errors and outages must never become active:true responses
+        if (res.status >= 500) {
+            return c.json({ error: "server_error", error_description: "Authentication engine failure" }, res.status);
         }
 
         const data = await res.clone().json().catch(() => null);
@@ -84,116 +123,113 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
             return res;
         }
 
-        // Better Auth returned active: false (e.g. JWT audience did not match a registered resource server).
-        // Check if the token is an RS256 JWT access token issued by SWYRA Auth.
-        if (token && typeof token === "string" && token.includes(".")) {
+        // JWT fallback for SWYRA Auth RS256 access tokens
+        // Caller authentication was already proven by the engine returning HTTP 200 on the probe
+        if (isCustomJwt) {
+            if (!callerClientId) {
+                return c.json({ error: "invalid_client", error_description: "Missing required client credentials" }, 401);
+            }
+            const database = await getDb();
+            const callerDoc = await resolveOAuthClient(database, callerClientId);
+            if (!callerDoc || callerDoc.disabled || callerDoc.isAmbiguous) {
+                return c.json({ error: "invalid_client", error_description: "Calling client not found, disabled, or ambiguous" }, 401);
+            }
+
+            let kid: string | undefined;
             try {
-                // Extract authenticated client ID from Basic Auth or request body
-                let authClientId: string | undefined;
-                const authHeader = c.req.header("authorization") || c.req.header("Authorization");
-                if (authHeader && authHeader.toLowerCase().startsWith("basic ")) {
-                    try {
-                        const decoded = Buffer.from(authHeader.slice(6).trim(), "base64").toString("utf-8");
-                        const idx = decoded.indexOf(":");
-                        if (idx !== -1) authClientId = decoded.slice(0, idx);
-                    } catch {}
+                const header = decodeProtectedHeader(token);
+                kid = header.kid;
+            } catch {}
+            const publicKey = await getIdpPublicKey(kid);
+            if (!publicKey) {
+                return c.json({ active: false }, 200);
+            }
+
+            try {
+                const { payload } = await jwtVerify(token, publicKey, {
+                    algorithms: ["RS256"],
+                    issuer: config.auth.baseURL,
+                });
+
+                const nowSec = Math.floor(Date.now() / 1000);
+                if (payload.exp && payload.exp <= nowSec) {
+                    return c.json({ active: false }, 200);
                 }
-                if (!authClientId) {
-                    authClientId = params.get("client_id") || undefined;
+
+                // RFC 7662 Section 4: Anti-scanning & Cross-client token isolation
+                const authClientId = callerDoc.clientId;
+                const tokenClientId = (payload.client_id as string) || (payload.azp as string) || (payload.aud as string);
+                if (authClientId && tokenClientId && tokenClientId !== authClientId) {
+                    return c.json({ active: false }, 200);
                 }
 
-                let kid: string | undefined;
-                try {
-                    const header = decodeProtectedHeader(token);
-                    kid = header.kid;
-                } catch {}
-                const publicKey = await getIdpPublicKey(kid);
-                if (publicKey) {
-                    const { payload } = await jwtVerify(token, publicKey, {
-                        algorithms: ["RS256"],
-                        issuer: config.auth.baseURL,
-                    });
-
-                    const nowSec = Math.floor(Date.now() / 1000);
-                    if (payload.exp && payload.exp <= nowSec) {
-                        return c.json({ active: false }, 200);
-                    }
-
-                    // RFC 7662 Section 4: Anti-scanning & Cross-client token isolation
-                    const tokenClientId = (payload.client_id as string) || (payload.azp as string) || (payload.aud as string);
-                    if (authClientId && tokenClientId && tokenClientId !== authClientId) {
-                        return c.json({ active: false }, 200);
-                    }
-
-                    const database = await getDb();
-                    // Check client validity
-                    const clientDoc = tokenClientId ? await resolveOAuthClient(database, tokenClientId) : null;
-                    if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
-                        return c.json({ active: false }, 200);
-                    }
-                    const hasAccess = await checkPrivateAppTokenAccess(database, payload.sub, clientDoc);
-                    if (!hasAccess) {
-                        return c.json({ active: false }, 200);
-                    }
-
-                    // Check active state in database (revocation check)
-                    const tokenDoc = await database.collection("oauthAccessToken").findOne({
-                        token,
-                        clientId: tokenClientId,
-                    });
-                    if (!tokenDoc) {
-                        return c.json({ active: false }, 200);
-                    }
-
-                    const activeFamilyId = (tokenDoc as any)?.familyId || (payload as any)?.family_id;
-                    if (activeFamilyId) {
-                        const fam = await database.collection("oauth_token_families").findOne({
-                            familyId: String(activeFamilyId),
-                            ...(tokenClientId ? { clientId: tokenClientId } : {}),
-                        });
-                        if (!fam || fam.status === "revoked") {
-                            return c.json({ active: false }, 200);
-                        }
-                    }
-
-                    // Immutable subject ownership: query ONLY by immutable subject ID
-                    const userId = String(payload.sub || tokenDoc.userId || "");
-                    const orConditions: any[] = [{ id: userId }];
-                    if (ObjectId.isValid(userId) && userId.length === 24) {
-                        orConditions.push({ _id: new ObjectId(userId) });
-                    }
-                    const userDoc = await database.collection("user").findOne({
-                        $or: orConditions,
-                    });
-
-                    const tokenIssuedAtMs = typeof payload.iat_ms === "number"
-                        ? payload.iat_ms
-                        : (typeof payload.iat === "number" ? payload.iat * 1000 : undefined);
-                    const tokenVersion = typeof payload.token_version === "number" ? payload.token_version : undefined;
-                    const eligibility = checkAccountEligibility(userDoc, {
-                        tokenIssuedAtMs,
-                        tokenIssuedAtSec: payload.iat,
-                        tokenVersion,
-                    });
-                    if (!eligibility.eligible) {
-                        return c.json({ active: false }, 200);
-                    }
-
-                    const resolved = await resolveUserRoleForClient(database, userDoc, tokenClientId);
-
-                    return c.json({
-                        active: true,
-                        sub: payload.sub,
-                        client_id: tokenClientId,
-                        scope: payload.scope || (Array.isArray(tokenDoc.scopes) ? tokenDoc.scopes.join(" ") : "openid profile email"),
-                        exp: payload.exp,
-                        iat: payload.iat,
-                        iss: payload.iss,
-                        token_type: "Bearer",
-                        role: resolved.role,
-                        scoped_client_id: resolved.scopedClientId,
-                    }, 200);
+                // Check client validity
+                const clientDoc = tokenClientId ? await resolveOAuthClient(database, tokenClientId) : null;
+                if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+                    return c.json({ active: false }, 200);
                 }
+                const hasAccess = await checkPrivateAppTokenAccess(database, payload.sub, clientDoc);
+                if (!hasAccess) {
+                    return c.json({ active: false }, 200);
+                }
+
+                // Check active state in database (revocation check)
+                const tokenDoc = await database.collection("oauthAccessToken").findOne({
+                    token,
+                    clientId: tokenClientId,
+                });
+                if (!tokenDoc) {
+                    return c.json({ active: false }, 200);
+                }
+
+                const activeFamilyId = (tokenDoc as any)?.familyId || (payload as any)?.family_id;
+                if (activeFamilyId) {
+                    const fam = await database.collection("oauth_token_families").findOne({
+                        familyId: String(activeFamilyId),
+                        ...(tokenClientId ? { clientId: tokenClientId } : {}),
+                    });
+                    if (!fam || fam.status === "revoked") {
+                        return c.json({ active: false }, 200);
+                    }
+                }
+
+                // Immutable subject ownership: query ONLY by immutable subject ID
+                const userId = String(payload.sub || tokenDoc.userId || "");
+                const orConditions: any[] = [{ id: userId }];
+                if (ObjectId.isValid(userId) && userId.length === 24) {
+                    orConditions.push({ _id: new ObjectId(userId) });
+                }
+                const userDoc = await database.collection("user").findOne({
+                    $or: orConditions,
+                });
+
+                const tokenIssuedAtMs = typeof payload.iat_ms === "number"
+                    ? payload.iat_ms
+                    : (typeof payload.iat === "number" ? payload.iat * 1000 : undefined);
+                const tokenVersion = typeof payload.token_version === "number" ? payload.token_version : undefined;
+                const eligibility = checkAccountEligibility(userDoc, {
+                    tokenIssuedAtMs,
+                    tokenIssuedAtSec: payload.iat,
+                    tokenVersion,
+                });
+                if (!eligibility.eligible) {
+                    return c.json({ active: false }, 200);
+                }
+
+                const resolved = await resolveUserRoleForClient(database, userDoc, tokenClientId);
+
+                return c.json({
+                    active: true,
+                    sub: payload.sub,
+                    client_id: tokenClientId,
+                    scope: payload.scope || (Array.isArray(tokenDoc.scopes) ? tokenDoc.scopes.join(" ") : "openid profile email"),
+                    exp: payload.exp,
+                    iat: payload.iat,
+                    iss: payload.iss,
+                    token_type: "Bearer",
+                    role: resolved.role,
+                    scoped_client_id: resolved.scopedClientId,
+                }, 200);
             } catch {
                 return c.json({ active: false }, 200);
             }

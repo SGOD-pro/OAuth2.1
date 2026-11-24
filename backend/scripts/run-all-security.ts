@@ -102,6 +102,7 @@ const securityTestFiles = [
   "tests/security/session-expiry-and-isolation.test.ts",
   "tests/security/private-token-access.test.ts",
   "tests/security/open-app-bypass-flows.test.ts",
+  "tests/security/userinfo-introspect-auth.test.ts",
 ];
 
 console.log("================================================================");

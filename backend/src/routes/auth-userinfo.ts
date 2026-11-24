@@ -141,38 +141,49 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
         }
         if (res.status === 200) {
             try {
-                const text = await res.text();
                 let data: any = null;
                 try {
+                    const text = await res.text();
                     data = JSON.parse(text);
                 } catch {
-                    return new Response(text, { status: res.status, headers: res.headers });
+                    return c.json(
+                        { error: "invalid_token", error_description: "Invalid response from authorization server" },
+                        401,
+                        { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid response from authorization server"' }
+                    );
                 }
 
-                if (data && (data.sub || data.id)) {
-                    const database = await getDb();
-                    const userId = String(data.sub || data.id);
-                    const orConditions: any[] = [{ id: userId }];
-                    if (ObjectId.isValid(userId) && userId.length === 24) {
-                        orConditions.push({ _id: new ObjectId(userId) });
-                    }
-                    const userDoc = await database.collection("user").findOne({
-                        $or: orConditions
-                    });
+                if (!data || (!data.sub && !data.id)) {
+                    return c.json(
+                        { error: "invalid_token", error_description: "Invalid or unsupported access token" },
+                        401,
+                        { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid or unsupported access token"' }
+                    );
+                }
 
-                    let tokenIssuedAtSec: number | undefined;
-                    let tokenIssuedAtMs: number | undefined;
-                    let tokenVersion: number | undefined;
+                const database = await getDb();
+                const userId = String(data.sub || data.id);
+                const orConditions: any[] = [{ id: userId }];
+                if (ObjectId.isValid(userId) && userId.length === 24) {
+                    orConditions.push({ _id: new ObjectId(userId) });
+                }
+                const userDoc = await database.collection("user").findOne({
+                    $or: orConditions
+                });
+
+                let accDoc: any = null;
+                let tokenIssuedAtSec: number | undefined;
+                let tokenIssuedAtMs: number | undefined;
+                let tokenVersion: number | undefined;
+                if (bearerToken) {
                     try {
-                        const accDoc = bearerToken
-                            ? await database.collection("oauthAccessToken").findOne({
-                                $or: [
-                                    { token: bearerToken },
-                                    { token: hashToken(bearerToken, "base64url") },
-                                    { token: hashToken(bearerToken, "hex") },
-                                ],
-                            })
-                            : null;
+                        accDoc = await database.collection("oauthAccessToken").findOne({
+                            $or: [
+                                { token: bearerToken },
+                                { token: hashToken(bearerToken, "base64url") },
+                                { token: hashToken(bearerToken, "hex") },
+                            ],
+                        });
                         if (accDoc?.createdAt) {
                             tokenIssuedAtMs = new Date(accDoc.createdAt).getTime();
                             tokenIssuedAtSec = Math.floor(tokenIssuedAtMs / 1000);
@@ -181,62 +192,87 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                             tokenVersion = accDoc.tokenVersion;
                         }
                     } catch {}
-
-                    // Authoritative Account Eligibility Check
-                    const eligibility = checkAccountEligibility(userDoc, {
-                        tokenIssuedAtMs,
-                        tokenIssuedAtSec: tokenIssuedAtSec ?? Math.floor(Date.now() / 1000),
-                        tokenVersion,
-                    });
-                    if (!eligibility.eligible) {
-                        return c.json(
-                            { error: "invalid_token", error_description: `User account is ineligible or revoked: ${eligibility.reason}` },
-                            401,
-                            { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="User account is ineligible or revoked"' }
-                        );
-                    }
-
-                    let targetClientId = (accDoc?.clientId || data.client_id || data.clientId || "") as string;
-                    if (!targetClientId && bearerToken) {
-                        try {
-                            const decoded: any = decodeJwt(bearerToken);
-                            targetClientId = (decoded?.client_id || decoded?.azp || (typeof decoded?.aud === "string" ? decoded.aud : decoded?.aud?.[0]) || "") as string;
-                        } catch {}
-                    }
-
-                    const queryClientId = c.req.query("client_id");
-                    if (queryClientId && targetClientId && queryClientId !== targetClientId) {
-                        return c.json(
-                            { error: "invalid_request", error_description: "Query client_id does not match authenticated token client" },
-                            400
-                        );
-                    }
-
-                    if (targetClientId) {
-                        const clientDoc = await resolveOAuthClient(database, targetClientId);
-                        if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
-                            return c.json(
-                                { error: "invalid_client", error_description: "Target client is disabled, ambiguous, or not found" },
-                                401
-                            );
-                        }
-                        const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
-                        if (!hasAccess) {
-                            return c.json(
-                                { error: "forbidden", error_description: "User is not an authorized member of this private application" },
-                                403
-                            );
-                        }
-                    }
-                    const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
-                    data.role = resolved.role;
-                    data.scoped_client_id = resolved.scopedClientId;
-                    return c.json(data, 200);
                 }
+
+                // Authoritative Account Eligibility Check
+                const eligibility = checkAccountEligibility(userDoc, {
+                    tokenIssuedAtMs,
+                    tokenIssuedAtSec: tokenIssuedAtSec ?? Math.floor(Date.now() / 1000),
+                    tokenVersion,
+                });
+                if (!eligibility.eligible) {
+                    return c.json(
+                        { error: "invalid_token", error_description: `User account is ineligible or revoked: ${eligibility.reason}` },
+                        401,
+                        { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="User account is ineligible or revoked"' }
+                    );
+                }
+
+                let targetClientId = (accDoc?.clientId || data.client_id || data.clientId || "") as string;
+                if (!targetClientId && bearerToken) {
+                    try {
+                        const decoded: any = decodeJwt(bearerToken);
+                        targetClientId = (decoded?.client_id || decoded?.azp || (typeof decoded?.aud === "string" ? decoded.aud : decoded?.aud?.[0]) || "") as string;
+                    } catch {}
+                }
+
+                if (!targetClientId) {
+                    return c.json(
+                        { error: "invalid_token", error_description: "Token is missing required client audience" },
+                        401,
+                        { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Token is missing required client audience"' }
+                    );
+                }
+
+                const queryClientId = c.req.query("client_id");
+                if (queryClientId && queryClientId !== targetClientId) {
+                    return c.json(
+                        { error: "invalid_request", error_description: "Query client_id does not match authenticated token client" },
+                        400
+                    );
+                }
+
+                const clientDoc = await resolveOAuthClient(database, targetClientId);
+                if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
+                    return c.json(
+                        { error: "invalid_client", error_description: "Target client is disabled, ambiguous, or not found" },
+                        401
+                    );
+                }
+
+                const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
+                if (!hasAccess) {
+                    return c.json(
+                        { error: "forbidden", error_description: "User is not an authorized member of this private application" },
+                        403
+                    );
+                }
+
+                if (accDoc?.familyId) {
+                    const familyDoc = await database.collection("oauth_token_families").findOne({
+                        familyId: String(accDoc.familyId),
+                        ...(targetClientId ? { clientId: targetClientId } : {}),
+                    });
+                    if (!familyDoc || familyDoc.status === "revoked") {
+                        return c.json(
+                            { error: "invalid_token", error_description: "Token family has been revoked" },
+                            401,
+                            { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Token family has been revoked"' }
+                        );
+                    }
+                }
+
+                const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
+                data.role = resolved.role;
+                data.scoped_client_id = resolved.scopedClientId;
                 return c.json(data, 200);
             } catch (err) {
                 console.error("[USERINFO_ERR]", err);
-                return res;
+                return c.json(
+                    { error: "invalid_token", error_description: "Failed to process userinfo request" },
+                    401,
+                    { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="Failed to process userinfo request"' }
+                );
             }
         }
         return res;

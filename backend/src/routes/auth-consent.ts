@@ -102,6 +102,8 @@ export async function handleOAuthConsent(c: Context) {
  */
 export async function handleOAuthContinue(c: Context) {
     let sessionUser: any = null;
+    let clientId: string | null = null;
+    let tx: any = null;
     try {
         const sessionResult = await authProvider.api.getSession({
             headers: getHeaders(c),
@@ -123,7 +125,6 @@ export async function handleOAuthContinue(c: Context) {
 
     if (sessionUser) {
         const body = await c.req.raw.clone().json().catch(() => null);
-        let clientId: string | null = null;
         let state: string | null = null;
         if (body?.oauth_query && typeof body.oauth_query === "string") {
             try {
@@ -135,7 +136,7 @@ export async function handleOAuthContinue(c: Context) {
         if (!state) state = c.req.query("state") || null;
 
         const txIdCookie = getCookie(c, "oauth_transaction_id");
-        const tx = await getOAuthTransaction({ state: state || undefined, transactionId: txIdCookie || undefined });
+        tx = await getOAuthTransaction({ state: state || undefined, transactionId: txIdCookie || undefined });
         if (tx) {
             if (clientId && clientId !== tx.clientId) {
                 return c.json({ error: "invalid_request", error_description: "Client ID does not match OAuth transaction" }, 400);

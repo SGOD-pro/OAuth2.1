@@ -72,7 +72,7 @@ admin.use("*", async (c, next) => {
 admin.get("/me", requireAdmin, async (c) => {
   const user = c.get("user") as any;
   const session = c.get("session") as any;
-  const reqId = c.get("requestId") || c.req.header("x-request-id");
+  const reqId = (c.get as any)("requestId") || c.req.header("x-request-id");
 
   return c.json({
     id: user.id || user._id,

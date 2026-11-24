@@ -381,3 +381,51 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 7. Command: `npm run test:all-security`
    * Result: All 39 security test files passed (100 percent)
 8. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose
+
+
+## UserInfo engine success handling and introspection caller authentication repair
+
+**Date:** 2026-11-24. **Result:** Verified UserInfo engine success handling repair, clean accDoc scoping, client context audience requirement, and safe error response returns without stream reuse. Verified introspection proven caller authentication gating via installed engine probe, preserving engine rejections for wrong Basic credentials (HTTP 401) and wrong body secrets (HTTP 400 invalid_client). Verified that engine errors and outages never return active true, and verified RFC 7662 cross client isolation. Resolved backend TypeScript diagnostics across admin.ts, auth-consent.ts, and auth-userinfo.ts. Slice P1c administrative controls and UI remain pending.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `2339779de44ce1168d5b4b12ed2cfc8c079d0814`
+* Worktree status: Working tree with UserInfo engine success and introspection auth repair
+* Source scope:
+  * [routes/auth-userinfo.ts](../../../backend/src/routes/auth-userinfo.ts): Scopes accDoc correctly in outer scope, requires validated target client audience before returning claims, returns fresh error responses preventing consumed stream errors
+  * [routes/auth-introspect.ts](../../../backend/src/routes/auth-introspect.ts): Preserves engine authentication failures (Basic 401, body secret 400), fails closed on engine errors without active true responses, establishes caller authentication via engine probe before inspecting RS256 token claims
+  * [routes/auth-consent.ts](../../../backend/src/routes/auth-consent.ts): Scopes tx and clientId in outer function scope of handleOAuthContinue
+  * [routes/admin.ts](../../../backend/src/routes/admin.ts): Fixes Context get requestId type overload
+  * [scripts/run-all-security.ts](../../../backend/scripts/run-all-security.ts): Registers userinfo-introspect-auth regression suite in security test runner
+  * [tests/security/userinfo-introspect-auth.test.ts](../../../backend/tests/security/userinfo-introspect-auth.test.ts): Regression suite for UserInfo engine success and introspection caller authentication gating (11 tests)
+* File length: All modified and new production and test source files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `cd backend && node --import tsx --test tests/security/userinfo-introspect-auth.test.ts`
+   * Result: 11 passed, 0 failed (1025ms)
+   * UserInfo engine success allows valid access for authorized member on private client (passed)
+   * UserInfo engine success denies access with HTTP 403 when private client assignment is deleted (passed)
+   * UserInfo engine success rejects query client substitution with HTTP 400 (passed)
+   * UserInfo engine success fails closed with HTTP 401 when client context is missing (passed)
+   * Introspection rejects unauthenticated caller with missing credentials with HTTP 401 (passed)
+   * Introspection rejects confidential caller supplying client_id without client_secret with HTTP 401 (passed)
+   * Introspection preserves engine rejection for wrong Basic credentials with HTTP 401 (passed)
+   * Introspection preserves engine rejection for wrong body credentials with HTTP 400 (passed)
+   * Introspection denies cross client token introspection with HTTP 200 active false (passed)
+   * Introspection allows valid authenticated caller to introspect their own RS256 token with HTTP 200 active true (passed)
+   * Introspection fails closed and never returns active true on engine error (passed)
+2. Command: `./frontend/node_modules/.bin/tsc --project backend/tsconfig.json --noEmit`
+   * Result: 0 diagnostics across entire backend source tree
+3. Command: `npm run test:unit`
+   * Result: All 16 unit test suites passed with 0 failures
+4. Command: `npm run test:local-consumer-e2e`
+   * Result: All 11 local consumer flows passed with 0 failures
+5. Command: `npm run security:integration-check`
+   * Result: 0 violations
+6. Command: `npm run security:docs-check`
+   * Result: 0 errors
+7. Command: `npm run test:all-security`
+   * Result: All 40 security test files passed (100 percent)
+8. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose
