@@ -1,3 +1,4 @@
+import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { resolveOAuthClient } from "../utils/security";
 
@@ -166,4 +167,55 @@ export async function authenticateTokenClient(c: any): Promise<ClientAuthResult>
             params,
         },
     };
+}
+
+/**
+ * Authenticate confidential clients through the installed engine before state mutation.
+ */
+export async function verifyConfidentialClientCredentials(
+    c: any,
+    clientContext: AuthenticatedClientContext
+): Promise<{ success: true } | { success: false; response: Response }> {
+    const { canonicalClientId, clientDoc, reqToForward, params } = clientContext;
+    const probeUrl = new URL("/api/auth/oauth2/introspect", c.req.raw.url).toString();
+    const isPostAuth = clientDoc?.tokenEndpointAuthMethod === "client_secret_post";
+    const bodyClientSecret = params.get("client_secret");
+
+    const probeBody = isPostAuth
+        ? new URLSearchParams({
+            token: "swyra_credential_probe_sentinel",
+            client_id: canonicalClientId,
+            client_secret: bodyClientSecret || "",
+        }).toString()
+        : "token=swyra_credential_probe_sentinel";
+
+    const probeHeaders = new Headers(reqToForward.headers);
+    probeHeaders.set("Content-Type", "application/x-www-form-urlencoded");
+
+    const probeRequest = new Request(probeUrl, {
+        method: "POST",
+        headers: probeHeaders,
+        body: probeBody,
+    });
+
+    const probeRes = await authProvider.handler(probeRequest);
+    if (probeRes.status !== 200) {
+        const errorBody = await probeRes.clone().json().catch(() => ({
+            error: "invalid_client",
+            error_description: "Client authentication failed",
+        }));
+        const headers: Record<string, string> = {};
+        const wwwAuth = probeRes.headers.get("www-authenticate");
+        if (wwwAuth) {
+            headers["WWW-Authenticate"] = wwwAuth;
+        } else if (reqToForward.headers.get("authorization")?.toLowerCase().startsWith("basic ")) {
+            headers["WWW-Authenticate"] = 'Basic realm="OAuth"';
+        }
+        return {
+            success: false,
+            response: c.json(errorBody, probeRes.status, headers),
+        };
+    }
+
+    return { success: true };
 }

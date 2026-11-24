@@ -8,7 +8,7 @@ import { registerTokenFamily } from "../db/state";
 import { verifyAndConsumeAuthorizationCode } from "../utils/pkce";
 import { mintJwtAccessToken, resignIdTokenWithNewAtHash } from "./auth-jwt";
 import { getTokenBarrierHookForTesting } from "./auth-keys";
-import { AuthenticatedClientContext } from "./auth-token-auth";
+import { AuthenticatedClientContext, verifyConfidentialClientCredentials } from "./auth-token-auth";
 import {
     resolveTokenSubjectUserId,
     commitTokenIssuanceLinearization,
@@ -30,6 +30,18 @@ export async function handleAuthorizationCodeGrant(
     const incomingCode = params.get("code");
     if (!incomingCode) {
         return c.json({ error: "invalid_request", error_description: "code is required" }, 400);
+    }
+
+    // Authenticate confidential clients through the installed engine before code mutation
+    const clientDoc = clientContext.clientDoc;
+    const isPublicClient = clientDoc?.clientType === "public" ||
+        (clientDoc?.isPublic === true && !clientDoc?.clientSecret && !clientDoc?.client_secret);
+
+    if (!isPublicClient) {
+        const authProbe = await verifyConfidentialClientCredentials(c, clientContext);
+        if (!authProbe.success) {
+            return authProbe.response;
+        }
     }
 
     const codeVerifier = params.get("code_verifier");

@@ -11,9 +11,9 @@ import { isolateTestEnvironment, REDIS_ALIAS_ENV_VARS } from "../tests/fixtures/
 isolateTestEnvironment();
 
 import { startSharedMongo, stopSharedMongo, getSuiteUri, isHarnessRunning } from "../tests/fixtures/test-docker-mongo";
-import { MongoClient } from "mongodb";
 import crypto from "node:crypto";
 import { spawn, ChildProcess } from "node:child_process";
+import { coordinateSuiteCleanup } from "./security-runner-lifecycle";
 
 let harnessInitiallyRunning = false;
 let currentChild: ChildProcess | null = null;
@@ -21,73 +21,22 @@ let currentSuiteDbName: string | null = null;
 let currentSuiteUri: string | null = null;
 let isShuttingDown = false;
 
-async function terminateProcessTree(child: ChildProcess, gracePeriodMs = 3000): Promise<void> {
-  const pid = child.pid;
-  if (!pid || child.exitCode !== null) return;
-
-  const killGroup = (signal: NodeJS.Signals) => {
-    try {
-      if (process.platform !== "win32") {
-        process.kill(-pid, signal);
-      } else {
-        child.kill(signal);
-      }
-    } catch {}
-  };
-
-  killGroup("SIGTERM");
-
-  const exited = await new Promise<boolean>((resolve) => {
-    if (child.exitCode !== null) return resolve(true);
-    const timer = setTimeout(() => resolve(false), gracePeriodMs);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-
-  if (!exited && child.exitCode === null) {
-    killGroup("SIGKILL");
-    await new Promise<void>((resolve) => {
-      if (child.exitCode !== null) return resolve();
-      const killTimer = setTimeout(resolve, 2000);
-      child.once("exit", () => {
-        clearTimeout(killTimer);
-        resolve();
-      });
-    });
-  }
-}
-
-async function dropDatabaseSafely(uri: string, dbName: string): Promise<void> {
-  const cleanupClient = new MongoClient(uri, {
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 5000,
-  });
-  try {
-    await cleanupClient.connect();
-    await cleanupClient.db(dbName).dropDatabase();
-  } catch (err: any) {
-    console.warn(`Database cleanup failed for ${dbName}: ${err?.message || err}`);
-  } finally {
-    await cleanupClient.close().catch(() => {});
-  }
-}
-
 async function handleSignal(signal: NodeJS.Signals) {
   if (isShuttingDown) return;
   isShuttingDown = true;
   console.log(`\nReceived ${signal}. Cleaning up owned test resources...`);
 
-  if (currentChild) {
-    await terminateProcessTree(currentChild, 2000);
-    currentChild = null;
-  }
-  if (currentSuiteUri && currentSuiteDbName) {
-    await dropDatabaseSafely(currentSuiteUri, currentSuiteDbName);
-    currentSuiteUri = null;
-    currentSuiteDbName = null;
-  }
+  await coordinateSuiteCleanup({
+    child: currentChild,
+    uri: currentSuiteUri,
+    dbName: currentSuiteDbName,
+    gracePeriodMs: 2000,
+    deadlineMs: 5000,
+  });
+  currentChild = null;
+  currentSuiteUri = null;
+  currentSuiteDbName = null;
+
   if (!harnessInitiallyRunning) {
     stopSharedMongo();
   }
@@ -144,6 +93,8 @@ const securityTestFiles = [
   "tests/security/auth-deduplication-and-attribution.test.ts",
   "tests/security/client-policy-compatibility.test.ts",
   "tests/security/pkce-enforcement.test.ts",
+  "tests/security/auth-before-mutation-repro.test.ts",
+  "tests/security/runner-lifecycle-cleanup.test.ts",
   "tests/security/session-expiry-and-isolation.test.ts",
 ];
 
@@ -180,6 +131,14 @@ for (const testFile of securityTestFiles) {
       delete childEnv[k];
     }
   }
+  childEnv.NODE_ENV = "test";
+  childEnv.BETTER_AUTH_URL = "http://localhost:3000";
+  childEnv.FRONTEND_URL = "http://localhost:5174";
+  childEnv.BETTER_AUTH_SECRET = "ci_better_auth_secret_minimum_32_characters_long_key";
+  childEnv.INTERNAL_GATEWAY_SECRET = "ci_internal_gateway_secret_minimum_32_characters_key";
+  childEnv.TRUSTED_PROXY_CIDRS = "10.0.0.0/8,172.16.0.0/12,127.0.0.1/32";
+  childEnv.GOOGLE_CLIENT_ID = "test-google-id";
+  childEnv.GOOGLE_CLIENT_SECRET = "test-google-secret";
 
   let timeoutFired = false;
 
@@ -205,13 +164,23 @@ for (const testFile of securityTestFiles) {
     const timer = setTimeout(async () => {
       timeoutFired = true;
       console.error(`\n[TIMEOUT] ${testFile} exceeded ${timeoutMs}ms timeout. Terminating process tree.`);
-      await terminateProcessTree(child, 3000);
+      await coordinateSuiteCleanup({
+        child,
+        uri: suiteUri,
+        dbName: suiteDbName,
+        gracePeriodMs: 3000,
+        deadlineMs: 5000,
+      });
+      currentChild = null;
+      currentSuiteDbName = null;
+      currentSuiteUri = null;
       resolve(1);
     }, timeoutMs);
 
-    child.on("exit", (code) => {
+    child.on("exit", (code, signal) => {
       clearTimeout(timer);
-      resolve(code ?? 1);
+      const effectiveCode = code !== null ? code : (signal ? 1 : 0);
+      resolve(effectiveCode);
     });
     child.on("error", (err) => {
       clearTimeout(timer);
@@ -220,14 +189,18 @@ for (const testFile of securityTestFiles) {
     });
   });
 
-  if (currentChild) {
-    await terminateProcessTree(currentChild, 1000);
+  if (currentChild || currentSuiteDbName) {
+    await coordinateSuiteCleanup({
+      child: currentChild,
+      uri: currentSuiteUri,
+      dbName: currentSuiteDbName,
+      gracePeriodMs: 1000,
+      deadlineMs: 5000,
+    });
     currentChild = null;
+    currentSuiteDbName = null;
+    currentSuiteUri = null;
   }
-
-  await dropDatabaseSafely(suiteUri, suiteDbName);
-  currentSuiteDbName = null;
-  currentSuiteUri = null;
 
   const durationMs = Date.now() - startTime;
   if (exitCode === 0 && !timeoutFired) {

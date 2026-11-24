@@ -222,3 +222,48 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 0 errors
 8. Command: `ps aux | grep -E "cors|worker" | grep -v grep`
    * Result: Zero orphaned node test worker processes surviving
+
+
+## Authenticate before mutation and runner lifecycle cleanup verification
+
+**Date:** 2026-11-24. **Result:** Verified that confidential client credentials are fully authenticated through the installed engine before authorization code consumption, burning, or token family replay revocation. Verified robust process group cleanup covering suite leader exit with stubborn descendants ignoring SIGTERM, coordinated cleanup across timeout, interruption, and natural exit paths, signal code exit detection, and bounded database deletion with operation deadlines. Open app membership bypass and slice P1c administrative controls remain pending.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `4de35b1aabcd7bc4d8f53c59eb911464e9409e21`
+* Worktree status: Working tree with authentication ordering and runner lifecycle cleanup
+* Source scope:
+  * [auth-token-auth.ts](../../../backend/src/routes/auth-token-auth.ts): Authenticates confidential clients through the installed engine's probe endpoint before granting execution
+  * [security-runner-lifecycle.ts](../../../backend/scripts/security-runner-lifecycle.ts): Module managing process group termination with SIGKILL escalation, signalCode exit detection, bounded database drop operations, and coordinated suite cleanup
+  * [run-all-security.ts](../../../backend/scripts/run-all-security.ts): Updated aggregate runner consuming coordinated lifecycle cleanup across timeout, interruption, and child exit paths
+  * [auth-before-mutation-repro.test.ts](../../../backend/tests/security/auth-before-mutation-repro.test.ts): Regression suite proving wrong credentials cause zero code mutations or family revocations, and legitimate exchanges succeed
+  * [runner-lifecycle-cleanup.test.ts](../../../backend/tests/security/runner-lifecycle-cleanup.test.ts): Lifecycle suite proving stubborn descendant termination, signalCode detection, and bounded database cleanup deadlines
+* File length: All modified and new production and test source files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `cd backend && node --import tsx tests/security/auth-before-mutation-repro.test.ts`
+   * Result: 3 passed, 0 failed (1156ms)
+   * REPRO 1: Wrong Basic secret returns HTTP 401 invalid_client; authorization code remains pending in database with consumedAt unset; legitimate confidential client subsequently exchanges the same code with HTTP 200
+   * REPRO 2: Wrong body client_secret returns HTTP 401 invalid_client; authorization code remains pending in database; legitimate client subsequently exchanges with HTTP 200
+   * REPRO 3: Replay of consumed code with wrong secret returns HTTP 401 invalid_client; existing token family remains active; subsequent replay by legitimate client with correct secret returns HTTP 400 invalid_grant and revokes the token family with reason code_replayed
+2. Command: `cd backend && node --import tsx tests/security/runner-lifecycle-cleanup.test.ts`
+   * Result: 4 passed, 0 failed (470ms)
+   * Process group cleanup: Leader process exits first while descendant ignores SIGTERM; runner targets negative process group ID and terminates stubborn descendant via SIGKILL escalation within bounded time
+   * Signal detection: Child terminated by SIGKILL with null exitCode is recognized immediately via signalCode
+   * Bounded drop: Unreachable connection and stalled drop fail fast within configured deadline (~327ms for 300ms deadline) and close MongoDB client in finally block
+   * Coordinated cleanup: Process termination completes strictly before database removal begins
+3. Command: `npm run test:pkce-enforcement`
+   * Result: 19 passed, 0 failed
+4. Command: `npm run test:unit`
+   * Result: All 16 unit test suites passed with 0 failures
+5. Command: `npm run test:local-consumer-e2e`
+   * Result: All 11 local consumer flows passed with 0 failures
+6. Command: `npm run security:integration-check`
+   * Result: 0 violations
+7. Command: `npm run security:docs-check`
+   * Result: 0 errors
+8. Command: `npm run test:all-security`
+   * Result: All 34 security test files passed (100 percent)
+9. Prose check: Verified zero punctuation hyphens or dashes in added documentation prose
