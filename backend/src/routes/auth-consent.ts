@@ -5,7 +5,7 @@ import { getDb } from "../db/mongo";
 import { getOAuthTransaction } from "../db/state";
 import { getHeaders, resolveOAuthClient, checkUserHasAppAccess } from "../utils/security";
 import { config } from "../config";
-import { bindAuthorizationCode } from "../utils/pkce";
+import { finalizeAuthorizeCodeWithFence } from "./auth-token-linearize";
 
 /**
  * Handle OAuth 2.1 user consent endpoint (/oauth2/consent).
@@ -63,9 +63,11 @@ export async function handleOAuthConsent(c: Context) {
         clientId = c.req.query("client_id") || getCookie(c, "current_client_id") || null;
     }
 
+    let resolvedClientDoc: any = null;
     if (clientId) {
         const database = await getDb();
         const clientDoc = await resolveOAuthClient(database, clientId);
+        resolvedClientDoc = clientDoc;
         if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
             return c.json({ error: "invalid_client", error_description: "Client application not found, disabled, or ambiguous" }, 400);
         }
@@ -92,7 +94,8 @@ export async function handleOAuthConsent(c: Context) {
     }
 
     const res = await authProvider.handler(c.req.raw);
-    await captureAndBindCode(res, tx, sessionUser, clientId);
+    const committed = await captureAndBindCode(res, tx, sessionUser, clientId, resolvedClientDoc);
+    if (!committed) return c.json({ error: "invalid_client", error_description: "Client credentials transitioned during consent" }, 401);
     return res;
 }
 
@@ -104,6 +107,7 @@ export async function handleOAuthContinue(c: Context) {
     let sessionUser: any = null;
     let clientId: string | null = null;
     let tx: any = null;
+    let resolvedClientDoc: any = null;
     try {
         const sessionResult = await authProvider.api.getSession({
             headers: getHeaders(c),
@@ -153,6 +157,7 @@ export async function handleOAuthContinue(c: Context) {
         if (clientId) {
             const database = await getDb();
             const clientDoc = await resolveOAuthClient(database, clientId);
+            resolvedClientDoc = clientDoc;
             if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
                 return c.json({ error: "invalid_client", error_description: "Client application not found, disabled, or ambiguous" }, 400);
             }
@@ -179,7 +184,8 @@ export async function handleOAuthContinue(c: Context) {
     }
 
     const res = await authProvider.handler(c.req.raw);
-    await captureAndBindCode(res, tx, sessionUser, clientId);
+    const committed = await captureAndBindCode(res, tx, sessionUser, clientId, resolvedClientDoc);
+    if (!committed) return c.json({ error: "invalid_client", error_description: "Client credentials transitioned during continuation" }, 401);
     return res;
 }
 
@@ -187,8 +193,9 @@ async function captureAndBindCode(
     res: Response,
     tx: any,
     sessionUser: any,
-    clientId: string | null
-): Promise<void> {
+    clientId: string | null,
+    clientDoc: any
+): Promise<boolean> {
     try {
         let redirectTarget: string | null = res.headers.get("location");
         if (!redirectTarget && res.status === 200) {
@@ -207,17 +214,25 @@ async function captureAndBindCode(
                 const sessionUserId = String(sessionUser.id || sessionUser._id);
                 const currentVersion = typeof sessionUser.tokenVersion === "number" ? sessionUser.tokenVersion : 1;
                 const database = await getDb();
-                await bindAuthorizationCode(database, {
-                    code,
-                    clientId: tx?.clientId || clientId || "",
-                    redirectUri: tx?.redirectUri || (parsed.origin + parsed.pathname),
-                    codeChallenge: tx?.codeChallenge,
-                    codeChallengeMethod: tx?.codeChallengeMethod || "S256",
-                    userId: sessionUserId,
-                    tokenVersion: currentVersion,
-                    transactionId: tx?.transactionId,
-                });
+                const targetCid = clientDoc?.clientId || tx?.clientId || clientId || "";
+                if (targetCid) {
+                    return finalizeAuthorizeCodeWithFence(database, {
+                        clientId: targetCid,
+                        expectedClientType: clientDoc?.clientType,
+                        expectedCredentialVersion: typeof clientDoc?.credentialVersion === "number" ? clientDoc.credentialVersion : 1,
+                    }, {
+                        code,
+                        clientId: targetCid,
+                        redirectUri: tx?.redirectUri || (parsed.origin + parsed.pathname),
+                        codeChallenge: tx?.codeChallenge,
+                        codeChallengeMethod: tx?.codeChallengeMethod || "S256",
+                        userId: sessionUserId,
+                        tokenVersion: currentVersion,
+                        transactionId: tx?.transactionId,
+                    });
+                }
             }
         }
     } catch {}
+    return true;
 }

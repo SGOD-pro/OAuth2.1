@@ -1,5 +1,17 @@
 import { ObjectId } from "mongodb";
 import { hashToken } from "../utils/security";
+import {
+    commitClientIssuanceLinearization,
+    type ClientIssuanceFence,
+} from "./auth-client-fence";
+export {
+    buildClientIssuanceFence,
+    commitClientIssuanceLinearization,
+    purgeAuthorizationCodeOnCommitFailure,
+    finalizeAuthorizeCodeWithFence,
+    isArtifactInvalidatedByClientTransition,
+    type ClientIssuanceFence,
+} from "./auth-client-fence";
 
 /**
  * Resolves authenticated subject userId from ID token, access token JWT payload, or database tokens.
@@ -54,14 +66,19 @@ export async function resolveTokenSubjectUserId(
 
 /**
  * Exact Issuance/Revocation Linearization Point:
- * Durable Conditional State Transition coordinated with revocation.
+ * Durable Conditional State Transition coordinated with user and optional client revocation fences.
  */
 export async function commitTokenIssuanceLinearization(
     database: any,
     resolvedUserId: string,
     expectedTokenVersion: number,
-    issuedAtMs?: number
+    issuedAtMs?: number,
+    clientFence?: ClientIssuanceFence
 ): Promise<boolean> {
+    if (clientFence) {
+        const clientOk = await commitClientIssuanceLinearization(database, clientFence);
+        if (!clientOk) return false;
+    }
     const commitCondition: Record<string, any> = {
         $or: [
             { id: resolvedUserId },
@@ -162,18 +179,25 @@ export async function purgeTokensOnCommitFailure(
     revokeFamilyInsteadOfDelete?: boolean
 ): Promise<void> {
     const familyQuery = familyId ? { familyId } : { clientId: canonicalClientId, userId: resolvedUserId };
+    const atHashes = tokenData?.access_token
+        ? [tokenData.access_token, hashToken(tokenData.access_token, "base64url"), hashToken(tokenData.access_token, "hex")]
+        : [];
+    const rtHashes = tokenData?.refresh_token
+        ? [tokenData.refresh_token, hashToken(tokenData.refresh_token, "base64url"), hashToken(tokenData.refresh_token, "hex")]
+        : [];
+
     await Promise.all([
         database.collection("oauthAccessToken").deleteMany({
             $or: [
                 { clientId: canonicalClientId, userId: resolvedUserId },
                 { token: jwtAt },
-                ...(tokenData?.access_token ? [{ token: tokenData.access_token }] : []),
+                ...atHashes.map((t) => ({ token: t })),
             ],
         }),
         database.collection("oauthRefreshToken").deleteMany({
             $or: [
                 { clientId: canonicalClientId, userId: resolvedUserId },
-                ...(tokenData?.refresh_token ? [{ token: tokenData.refresh_token }] : []),
+                ...rtHashes.map((t) => ({ token: t })),
             ],
         }),
         revokeFamilyInsteadOfDelete

@@ -5,7 +5,6 @@ import {
   getHeaders,
   getTrustedClientIp,
   deriveAllowedOriginsFromRedirectUris,
-  normalizeOAuthClientFields,
   validateOAuthClientConfiguration,
   resolveOAuthClient,
 } from "../utils/security";
@@ -13,11 +12,10 @@ import { isSuperAdmin } from "../middleware/admin-auth";
 import { recordAdminAudit } from "../db/state";
 import { invalidateClientOrigins } from "../cache/origin-cache";
 import { resolveClientPolicy } from "../identity/client-policy";
+import { executeClientPatchTransition, formatAdminClientResponse } from "./admin-client-transition";
 import {
   hasV2PolicyMutationFields,
   resolvePatchClientPolicy,
-  stripSensitiveClientFields,
-  extractClientTimestamps,
 } from "./admin-client-policy-helper";
 
 const authApi = authProvider.api as any;
@@ -33,17 +31,8 @@ export async function handleGetClientById(c: any): Promise<Response> {
 
     if (!clientDoc) return c.json({ error: "Client not found" }, 404);
 
-    const { createdDate: createdAtIso, updatedDate: updatedAtIso } = extractClientTimestamps(clientDoc);
     const canonicalId = clientDoc.clientId || clientDoc.client_id || clientDoc.id || String(clientDoc._id);
-    const normalized = normalizeOAuthClientFields({ ...clientDoc, id: canonicalId, clientId: canonicalId });
-    return c.json(stripSensitiveClientFields({
-      ...normalized,
-      client_id: normalized.clientId,
-      createdAt: createdAtIso,
-      created_at: createdAtIso,
-      updatedAt: updatedAtIso,
-      updated_at: updatedAtIso,
-    }));
+    return c.json(formatAdminClientResponse(clientDoc, canonicalId));
   } catch (err: any) {
     return c.json({ error: "Client not found" }, 404);
   }
@@ -186,11 +175,17 @@ export async function handlePatchClientById(c: any): Promise<Response> {
       dbUpdates.policyMigratedBy = sessionUser?.id || null;
     }
     if (policyPlan.deleteSecret) {
+      dbUpdates.credentialVersion = (typeof oldClient.credentialVersion === "number" ? oldClient.credentialVersion : 1) + 1;
+      dbUpdates.clientSecretRevokedAt = now;
       dbUnsets.clientSecret = "";
       dbUnsets.client_secret = "";
     } else if (policyPlan.freshSecretHash) {
+      dbUpdates.credentialVersion = (typeof oldClient.credentialVersion === "number" ? oldClient.credentialVersion : 1) + 1;
       dbUpdates.clientSecret = policyPlan.freshSecretHash;
       dbUnsets.client_secret = "";
+    }
+    if (oldClient.pendingCredentialCleanup) {
+      dbUnsets.pendingCredentialCleanup = "";
     }
   }
 
@@ -221,45 +216,56 @@ export async function handlePatchClientById(c: any): Promise<Response> {
   if (typeof body.disabled === "boolean") updatePayload.disabled = body.disabled;
   if (typeof body.is_active === "boolean") updatePayload.disabled = !body.is_active;
 
-  let result: any = null;
-  try {
-    result = await authApi.adminUpdateOAuthClient({
-      headers: getHeaders(c),
-      body: { client_id: id, update: updatePayload },
-    });
-  } catch (err: any) {
-    console.warn("[ADMIN_PATCH_CLIENT] Better-Auth update error, proceeding with direct DB update:", err?.body || err?.message);
-  }
-
   if (typeof updatePayload.skip_consent === "boolean") dbUpdates.skipConsent = updatePayload.skip_consent;
   if (typeof updatePayload.enable_end_session === "boolean") dbUpdates.enableEndSession = updatePayload.enable_end_session;
   if (typeof updatePayload.disabled === "boolean") dbUpdates.disabled = updatePayload.disabled;
 
-  const mongoUpdate: Record<string, any> = { $set: dbUpdates };
-  if (Object.keys(dbUnsets).length > 0) mongoUpdate.$unset = dbUnsets;
-  await database.collection("oauthClient").updateOne(
-    { $or: [{ clientId: id }, { client_id: id }, { id }] },
-    mongoUpdate
-  );
-  const updatedDoc = await database.collection("oauthClient").findOne({
-    $or: [{ clientId: id }, { client_id: id }, { id }],
-  });
+  const canonicalId = oldClient.clientId || oldClient.client_id || id;
+  const revokeCredentials =
+    body.disabled === true ||
+    body.is_active === false ||
+    policyPlan.deleteSecret ||
+    Boolean(oldClient.pendingCredentialCleanup);
+
+  let updatedDoc: any = null;
+  try {
+    updatedDoc = await executeClientPatchTransition({
+      database,
+      id,
+      canonicalId,
+      oldClient,
+      dbUpdates,
+      dbUnsets,
+      revokeCredentials,
+    });
+  } catch (err: any) {
+    console.error("[ADMIN_PATCH_CLIENT] Credential transition failed; changes rolled back:", err?.message || err);
+    return c.json(
+      {
+        error: "server_error",
+        code: "ERR_TRANSITION_CLEANUP_FAILED",
+        message: "Client credential transition rolled back because revocation cleanup failed",
+      },
+      500
+    );
+  }
+
+  let result: any = null;
+  if (Object.keys(updatePayload).length > 0) {
+    try {
+      result = await authApi.adminUpdateOAuthClient({
+        headers: getHeaders(c),
+        body: { client_id: id, update: updatePayload },
+      });
+    } catch (err: any) {
+      console.warn("[ADMIN_PATCH_CLIENT] Better-Auth update error, proceeding with direct DB update:", err?.body || err?.message);
+    }
+  }
 
   if (!result && !updatedDoc) return c.json({ error: "Client not found" }, 404);
 
   // Invalidate CORS origin cache across Redis and MongoDB after database update (prevents races)
   await invalidateClientOrigins(oldClient, updatedDoc || { ...oldClient, ...dbUpdates, ...body });
-
-  // Token revocation on client disable or Confidential -> Public secret revocation
-  const canonicalId = updatedDoc?.clientId || oldClient.clientId || id;
-  if (body.disabled === true || body.is_active === false || policyPlan.deleteSecret) {
-    await Promise.all([
-      database.collection("oauthAccessToken").deleteMany({ clientId: canonicalId }),
-      database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalId }),
-      database.collection("oauthAuthorizationCode").deleteMany({ clientId: canonicalId }),
-      database.collection("oauth_token_families").deleteMany({ clientId: canonicalId }),
-    ]);
-  }
 
   await recordAdminAudit({
     actorUserId: sessionUser?.id,
@@ -272,23 +278,11 @@ export async function handlePatchClientById(c: any): Promise<Response> {
     timestamp: now,
   });
 
-  const { createdDate, updatedDate } = extractClientTimestamps(updatedDoc);
-
-  const normalized = normalizeOAuthClientFields({
-    ...(updatedDoc || result || {}),
-    id: canonicalId,
-    clientId: canonicalId,
-    redirectUris: updatedDoc?.redirectUris || targetRedirectUris || [],
-    allowedOrigins: updatedDoc?.allowedOrigins || targetAllowedOrigins || [],
-  });
-
-  const safeResult = stripSensitiveClientFields({
-    ...normalized,
-    client_id: normalized.clientId,
-    createdAt: createdDate,
-    created_at: createdDate,
-    updatedAt: updatedDate,
-    updated_at: updatedDate,
-  });
+  const safeResult = formatAdminClientResponse(
+    updatedDoc || result || {},
+    canonicalId,
+    targetRedirectUris || [],
+    targetAllowedOrigins || []
+  );
   return c.json(policyPlan.freshSecret ? { ...safeResult, client_secret: policyPlan.freshSecret } : safeResult);
 }

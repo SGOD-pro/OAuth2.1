@@ -105,6 +105,7 @@ const securityTestFiles = [
   "tests/security/userinfo-introspect-auth.test.ts",
   "tests/security/introspect-controlled-failures.test.ts",
   "tests/security/p1c-admin-policy-api.test.ts",
+  "tests/security/p1c-credential-transition.test.ts",
 ];
 
 console.log("================================================================");

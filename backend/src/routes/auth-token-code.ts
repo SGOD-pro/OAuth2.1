@@ -14,6 +14,8 @@ import {
     commitTokenIssuanceLinearization,
     purgeTokensOnMintFailure,
     purgeTokensOnCommitFailure,
+    isArtifactInvalidatedByClientTransition,
+    buildClientIssuanceFence,
 } from "./auth-token-linearize";
 
 /**
@@ -34,6 +36,7 @@ export async function handleAuthorizationCodeGrant(
 
     // Authenticate confidential clients through the installed engine before code mutation
     const clientDoc = clientContext.clientDoc;
+    const clientFence = buildClientIssuanceFence(canonicalClientId, clientDoc);
     const isPublicClient = clientDoc?.clientType === "public" ||
         (clientDoc?.isPublic === true && !clientDoc?.clientSecret && !clientDoc?.client_secret);
 
@@ -66,6 +69,9 @@ export async function handleAuthorizationCodeGrant(
 
     const codeDoc = consumption.codeDoc;
     if (codeDoc) {
+        if (isArtifactInvalidatedByClientTransition(clientDoc, codeDoc)) {
+            return c.json({ error: "invalid_grant", error_description: "Client credentials transitioned since authorization code was issued" }, 400);
+        }
         if (codeDoc.userId) {
             preCodeUserId = String(codeDoc.userId);
         }
@@ -241,7 +247,8 @@ export async function handleAuthorizationCodeGrant(
                     database,
                     resolvedUserId,
                     expectedTokenVersion,
-                    codeIssuedAtMs
+                    codeIssuedAtMs,
+                    clientFence
                 );
 
                 if (!commitSuccess) {

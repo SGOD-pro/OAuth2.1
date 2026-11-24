@@ -118,6 +118,7 @@ export interface BindAuthorizationCodeParams {
   codeChallenge?: string | null; codeChallengeMethod?: string | null;
   userId?: string | null; tokenVersion?: number | null;
   transactionId?: string | null; ttlSeconds?: number;
+  clientType?: string; clientCredentialVersion?: number;
 }
 
 /**
@@ -138,6 +139,8 @@ export async function bindAuthorizationCode(
     userId: params.userId || undefined,
     tokenVersion: typeof params.tokenVersion === "number" ? params.tokenVersion : 1,
     transactionId: params.transactionId || undefined,
+    clientType: params.clientType || undefined,
+    clientCredentialVersion: typeof params.clientCredentialVersion === "number" ? params.clientCredentialVersion : undefined,
     status: "pending",
     updatedAt: new Date(),
   };

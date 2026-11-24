@@ -99,6 +99,7 @@ export function setSigningKeyOverrideForTesting(override: (() => Promise<{ priva
 }
 
 export type TokenBarrierStage =
+    | "before_authorize_commit"
     | "before_issuance_commit"
     | "after_issuance_commit"
     | "before_fence_code"

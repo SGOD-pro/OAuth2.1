@@ -56,7 +56,7 @@ This spec owns requirement IDs and acceptance, not duplicate API/schema text. [R
 - [x] Incorporate main with reviewed security baseline, reconcile docs without runtime downgrade.
 - [x] P0: transaction-aware engine creation and request-local session compatibility proof, [local evidence and limitations](p0-evidence.md). Production wiring belongs to P2/P3.
 - [x] P1: additive client policy migration and open access without membership, see [0008-p1-client-policy-migration.md](0008-p1-client-policy-migration.md).
-- [ ] P2a: mail budgets/outbox, intent/OTP/proof and verification pages.
+- [ ] P2a: mail budgets/outbox, intent/OTP/proof and verification pages (Planned, implementation pending), see [0008-p2a-mail-and-intents.md](0008-p2a-mail-and-intents.md).
 - [ ] P2b: username/password finalization transaction and all provisioning bypass closure.
 - [ ] P3: session registry, transaction/dashboard contexts, chooser and independent logout.
 - [ ] P4: verified invitation, MFA lifecycle, step-up and recovery custody.

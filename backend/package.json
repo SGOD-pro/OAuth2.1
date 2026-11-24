@@ -91,7 +91,8 @@
     "test:client-policy-compatibility": "node --import tsx tests/security/client-policy-compatibility.test.ts",
     "test:pkce-enforcement": "node --import tsx tests/security/pkce-enforcement.test.ts",
     "test:p1c-admin-api": "node --import tsx tests/security/p1c-admin-policy-api.test.ts",
-    "test:p1c-admin-browser": "node --import tsx tests/e2e/p1c-admin-browser.test.ts"
+    "test:p1c-admin-browser": "node --import tsx tests/e2e/p1c-admin-browser.test.ts",
+    "test:p1c-credential-transition": "node --import tsx tests/security/p1c-credential-transition.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

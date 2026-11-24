@@ -7,10 +7,8 @@ import { getTokenBarrierHookForTesting } from "./auth-keys";
 import { claimRotationRights } from "./auth-token-claim";
 import { AuthenticatedClientContext } from "./auth-token-auth";
 import {
-    resolveTokenSubjectUserId,
-    commitTokenIssuanceLinearization,
-    purgeTokensOnMintFailure,
-    purgeTokensOnCommitFailure,
+    resolveTokenSubjectUserId, commitTokenIssuanceLinearization,
+    purgeTokensOnMintFailure, purgeTokensOnCommitFailure, buildClientIssuanceFence,
 } from "./auth-token-linearize";
 import {
     validatePreRefreshEligibility,
@@ -42,6 +40,7 @@ export async function handleRefreshTokenGrant(
     refreshToken: string
 ): Promise<Response> {
     const { canonicalClientId, clientDoc, reqToForward } = clientContext;
+    const clientFence = buildClientIssuanceFence(canonicalClientId, clientDoc);
     const database = await getDb();
     const incomingHash = hashToken(refreshToken, "hex");
 
@@ -256,7 +255,8 @@ export async function handleRefreshTokenGrant(
                         database,
                         resolvedUserId,
                         expectedRefreshTokenVersion,
-                        preRefreshIssuedAtMs
+                        preRefreshIssuedAtMs,
+                        clientFence
                     );
 
                     if (!commitSuccess) {

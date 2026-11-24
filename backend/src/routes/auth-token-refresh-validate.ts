@@ -20,6 +20,28 @@ export async function validatePreRefreshEligibility(
     preRefreshIssuedAtSec?: number,
     preRefreshTokenVersion?: number
 ): Promise<RefreshValidationResult> {
+    if (
+        clientDoc?.clientSecretRevokedAt &&
+        preRefreshIssuedAtMs &&
+        preRefreshIssuedAtMs <= new Date(clientDoc.clientSecretRevokedAt).getTime()
+    ) {
+        await Promise.all([
+            database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: preRefreshUserId }),
+            database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: preRefreshUserId }),
+            database.collection("oauth_token_families").updateMany(
+                { clientId: canonicalClientId, userId: preRefreshUserId },
+                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+            ),
+        ]);
+        return {
+            valid: false,
+            errorResponse: {
+                error: "invalid_grant",
+                error_description: "Refresh token predates client credential transition",
+                status: 401,
+            },
+        };
+    }
     const userDoc = await database.collection("user").findOne({
         $or: [
             { id: preRefreshUserId },
@@ -90,6 +112,28 @@ export async function validatePostRefreshEligibility(
     preRefreshIssuedAtSec?: number,
     preRefreshTokenVersion?: number
 ): Promise<RefreshValidationResult> {
+    if (
+        clientDoc?.clientSecretRevokedAt &&
+        preRefreshIssuedAtMs &&
+        preRefreshIssuedAtMs <= new Date(clientDoc.clientSecretRevokedAt).getTime()
+    ) {
+        await Promise.all([
+            database.collection("oauthAccessToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+            database.collection("oauthRefreshToken").deleteMany({ clientId: canonicalClientId, userId: resolvedUserId }),
+            database.collection("oauth_token_families").updateMany(
+                { clientId: canonicalClientId, userId: resolvedUserId },
+                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+            ),
+        ]);
+        return {
+            valid: false,
+            errorResponse: {
+                error: "invalid_grant",
+                error_description: "Refresh token predates client credential transition",
+                status: 401,
+            },
+        };
+    }
     const userDoc = await database.collection("user").findOne({
         $or: [
             { id: resolvedUserId },

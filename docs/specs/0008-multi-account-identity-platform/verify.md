@@ -531,3 +531,46 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 0 violations and 0 errors
 10. Prose check: Verified zero punctuation hyphens or dashes in added documentation and review prose
 
+
+## Slice P1c credential transition atomicity, commit guards, and P2a slice plan
+
+**Date:** 2026-11-25. **Result:** Verified transactional Confidential to Public credential cleanup rollback on failure, safe retry behavior, and in flight commit linearization guards across `/oauth2/authorize`, `/oauth2/consent`, `/oauth2/continue`, authorization code exchange, and refresh token rotation. Drafted the P2a pre account email verification and durable mail outbox implementation slice ([0008-p2a-mail-and-intents.md](0008-p2a-mail-and-intents.md)); P2a implementation and runtime verification remain pending with account creation deferred to P2b.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `a60afa06267bbb936a9e0224ba2a10cbc64abb72`
+* Worktree status: Working tree with transactional client transition cleanup, Better Auth `verification` code revocation, monotonic client `credentialVersion` issuance fences, regression tests, P2a planning slice spec, review record, and synced ledger docs
+* Source scope:
+  * [routes/admin-client-transition.ts](../../../backend/src/routes/admin-client-transition.ts): Wraps `oauthClient` updates and credential/token/code/family/`verification` cleanup inside MongoDB `session.withTransaction` with fallback snapshot restore and shared response serialization
+  * [routes/admin-client-detail.ts](../../../backend/src/routes/admin-client-detail.ts): Increments `credentialVersion`, records `clientSecretRevokedAt`, executes atomic transition cleanup before post commit Better Auth sync, and returns HTTP 500 cleanly if cleanup fails
+  * [routes/auth-client-fence.ts](../../../backend/src/routes/auth-client-fence.ts): Enforces monotonic `credentialVersion` and client type checks on in flight authorize, code, and refresh commits across both V2 explicit and legacy client records, plus code purge on abort
+  * [routes/auth-token-linearize.ts](../../../backend/src/routes/auth-token-linearize.ts): Integrates optional client issuance fence into `commitTokenIssuanceLinearization` and extends token commit failure purging to hashed token variants
+  * [routes/auth-authorize.ts](../../../backend/src/routes/auth-authorize.ts), [routes/auth-consent.ts](../../../backend/src/routes/auth-consent.ts), [routes/auth-token-code.ts](../../../backend/src/routes/auth-token-code.ts), [routes/auth-token-refresh.ts](../../../backend/src/routes/auth-token-refresh.ts), [routes/auth-token-refresh-validate.ts](../../../backend/src/routes/auth-token-refresh-validate.ts), [utils/pkce.ts](../../../backend/src/utils/pkce.ts), [routes/auth-keys.ts](../../../backend/src/routes/auth-keys.ts): Propagates `clientType`, `credentialVersion`, and `clientSecretRevokedAt` transition guards and `before_authorize_commit` test barrier
+  * [tests/security/p1c-credential-transition.test.ts](../../../backend/tests/security/p1c-credential-transition.test.ts): Regression suite verifying cleanup failure rollback + safe retry + idempotent retry, plus concurrent Confidential to Public abort on code exchange, refresh rotation, and authorize issuance (4 tests)
+  * [scripts/run-all-security.ts](../../../backend/scripts/run-all-security.ts): Registers transition regression suite (43 total suites)
+  * [0008-p2a-mail-and-intents.md](0008-p2a-mail-and-intents.md): Drafted P2a implementation slice specification (Planned; implementation remains pending)
+* File length: All modified and new production and test source files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck` (`tsc --project tsconfig.json --noEmit`)
+   * Result: 0 diagnostics across backend source tree
+2. Command: `npm run test:p1c-credential-transition`
+   * Result: 4 passed, 0 failed
+   * Cleanup failure rolls back Confidential to Public preserving policy/credentials and completes safely on retry plus idempotent repeat (passed)
+   * In flight authorization code exchange fails closed cleanly when Confidential to Public commits before issuance fence (passed)
+   * In flight refresh token rotation fails closed cleanly when Confidential to Public commits before issuance fence (passed)
+   * In flight authorize request fails closed without returning authorization code when Confidential to Public commits mid flow (passed)
+3. Command: `npm run test:p1c-admin-api`
+   * Result: 5 passed, 0 failed
+4. Command: `npm run test:p1c-admin-browser`
+   * Result: Passed all six Playwright browser acceptance checks (`BAC-P1C-01` through `BAC-P1C-06`)
+5. Command: `npm run test:unit`
+   * Result: All 16 unit test suites passed, 0 failed (including `runtime-resilience` and `refresh-lease-fencing`)
+6. Command: `npm run test:all-security`
+   * Result: All 43 security test files passed, 0 failed
+7. Command: `npm run security:integration-check && npm run security:docs-check`
+   * Result: 0 violations and 0 errors
+
+

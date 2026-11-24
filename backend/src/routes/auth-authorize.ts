@@ -14,7 +14,8 @@ import {
 } from "../utils/security";
 import { checkAccountEligibility } from "../utils/account-eligibility";
 import { createOAuthTransaction, recordAuthEvent } from "../db/state";
-import { validatePkceAuthorizationParams, bindAuthorizationCode } from "../utils/pkce";
+import { validatePkceAuthorizationParams } from "../utils/pkce";
+import { finalizeAuthorizeCodeWithFence } from "./auth-token-linearize";
 
 export async function handleOAuthAuthorize(c: any): Promise<Response> {
     const state = c.req.query("state");
@@ -63,6 +64,7 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
     }
 
     const canonicalClientId = client.clientId;
+    const clientFence = { clientId: canonicalClientId, expectedClientType: client.clientType, expectedCredentialVersion: typeof client.credentialVersion === "number" ? client.credentialVersion : 1 };
 
     // Validate PKCE S256 parameters for authorization code flows
     const pkceValidation = validatePkceAuthorizationParams({
@@ -199,22 +201,18 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
         }
 
         if (location) {
+            let blockedByTransition = false;
             try {
                 const locUrl = new URL(location, config.auth.baseURL);
                 const code = locUrl.searchParams.get("code");
                 if (code) {
                     const sessionUserId = sessionUser ? String(sessionUser.id || sessionUser._id) : undefined;
                     const currentVersion = sessionUser && typeof sessionUser.tokenVersion === "number" ? sessionUser.tokenVersion : 1;
-                    await bindAuthorizationCode(database, {
-                        code,
-                        clientId: canonicalClientId,
-                        redirectUri,
-                        codeChallenge: pkceValidation.challenge,
-                        codeChallengeMethod: pkceValidation.method,
-                        userId: sessionUserId,
-                        tokenVersion: currentVersion,
-                        transactionId,
-                    }).catch(() => {});
+                    const ok = await finalizeAuthorizeCodeWithFence(database, clientFence, {
+                        code, clientId: canonicalClientId, redirectUri, codeChallenge: pkceValidation.challenge,
+                        codeChallengeMethod: pkceValidation.method, userId: sessionUserId, tokenVersion: currentVersion, transactionId,
+                    });
+                    if (!ok) blockedByTransition = true;
                 }
                 if (locUrl.pathname.includes("/auth")) {
                     locUrl.searchParams.set("client_id", canonicalClientId);
@@ -227,6 +225,9 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
                     headers.set("location", location);
                 }
             } catch {}
+            if (blockedByTransition) {
+                return c.json({ error: "invalid_client", error_description: "Client credentials transitioned during authorization" }, 401);
+            }
             return new Response(null, {
                 status: 302,
                 statusText: "Found",
