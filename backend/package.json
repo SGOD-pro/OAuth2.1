@@ -105,6 +105,8 @@
     "test:p3-binding": "node --import tsx tests/security/p3-chooser-session-binding.test.ts",
     "test:p3-continuation": "node --import tsx tests/security/p3-continuation-session-binding.test.ts",
     "test:p3-contexts": "node --import tsx tests/security/p3-owner-dashboard-contexts.test.ts",
+    "test:p3-dashboard-browser": "node --import tsx tests/e2e/p3-account-dashboard-browser.test.ts",
+    "test:p4-admin-mfa": "node --import tsx tests/security/p4-admin-mfa-enrollment.test.ts",
     "test:p3-two-tab": "node --import tsx tests/e2e/p3-two-tab-chooser-browser.test.ts"
   },
   "devDependencies": {

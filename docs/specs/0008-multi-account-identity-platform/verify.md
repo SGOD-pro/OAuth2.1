@@ -772,6 +772,26 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 3/3 continuation tests passed, Playwright two tab browser E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
+## Slice P3 dashboard browser evidence and Slice P4 admin MFA start
+
+**Date:** 2026-11-25. **Result:** Verified `/account` in a real two tab Playwright browser test (tabs pinned to A and B, zero persistent storage, reload clears in memory handle, sign out A leaves B usable) and verified P4 admin TOTP enrollment, setup only authority, app admin assignment boundaries, and 15 minute step up freshness for both platform and app admins. P3 is complete; P4 remains open for invitation lifecycle, recovery changes, and optional user TOTP.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `45d693ac793c00bd4393988161e6e7b3a7191597`
+* Worktree status: Working tree with `p3-account-dashboard-browser.test.ts`, `p4-admin-mfa-enrollment.test.ts`, package scripts, review record, and updated ledger documentation
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p3-dashboard-browser`
+   * Result: 0 TypeScript diagnostics; Playwright `/account` two tab E2E passed
+2. Command: `npm run test:p4-admin-mfa`
+   * Result: 2 test groups passed, 0 failed (platform admin setup only authority, TOTP enrollment, and step up freshness; app admin setup only authority, TOTP enrollment, and assignment isolation)
+3. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 
 
 
