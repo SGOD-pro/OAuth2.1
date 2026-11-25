@@ -1013,3 +1013,38 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 
 
+
+## Slice P4 optional user TOTP (AC-11, partial) and review remediation
+
+**Date:** 2026-11-25. **Result:** Implemented optional ordinary user TOTP (`POST /api/identity/totp/enable`, `/verify`, `/disable`) via `X-Identity-Context`, `AccountTotpPanel.tsx`, and `totp_used_steps` atomic replay protection, and resolved all security review blockers and majors (session rotation preservation on `disable` with `browser_session_sets` CAS update, `ObjectId` `oauthRefreshToken`/`oauthAccessToken`/`oauth_token_families` revocation, exact step `claimMatchedTotpStep` keyed by `{ userId, step, secretDigest }` across enroll/login/disable/admin without pre locking invalid guesses, login 2FA ambient session stripping and `browser_session_sets` enrollment, per `userId` rate limits, pre enrollment `mfaVerifiedAt == null` session revocation/denial, and promoted admin exclusion). `AC-11` remains **partial**.
+
+### Engine findings (installed `better-auth@^1.6.25`)
+
+* `twoFactor` `verifyTOTP` (`totp/index.mjs:188-223`) decrypts `twoFactor.secret` with `ctx.context.secretConfig` (UTF-8 secret passed to `createOTP`, `window = 1` = 90s), skips `assertTwoFactorNotLocked` and `beginAttempt(5)` when `session.session` exists, and rotates the session on initial verification while deleting the incoming session.
+* `disableTwoFactor` (`two-factor/index.mjs:206-231`) also creates a new session and deletes the incoming session; `handleOwnerTotpDisable` extracts the rotated session from `Set-Cookie`, CAS updates `browser_session_sets`, and excludes the new session ID from `deleteMany`.
+* `enableTwoFactor` (`two-factor/index.mjs:146-158`) overwrites `secret` and `backupCodes` immediately even when `verified === true`, requiring an explicit `409 ERR_TOTP_ALREADY_ENABLED` guard.
+* `verifyTwoFactor` resolves `getSessionFromCtx(ctx)` before `better-auth.two_factor`, requiring ambient `better-auth.session_token` cookie stripping during challenge verification.
+* `oauthRefreshToken.userId` is coerced to MongoDB `ObjectId` by `@better-auth/mongo-adapter`, requiring both string and `ObjectId` filters on token/family revocation.
+
+### Session policy & tested commit boundary
+
+* Pre enrollment password only sessions (`mfaVerifiedAt == null`) are revoked on TOTP enrollment (`handleOwnerTotpVerify`) and denied by `session-adapter.ts` once `twoFactorEnabled === true` (documented in `docs/SESSION_MODEL.md`).
+* Branch: `v2`
+* Verified implementation SHA: `314847d10dd951296f193289017d97ee6cf18880` (following `39209af` and `562751a`)
+* Review record: `docs/reviews/2026-11-25-p4-optional-user-totp.md` (initial review Verdict: Blocked; all blockers and majors resolved and re-verified at `314847d10dd951296f193289017d97ee6cf18880`)
+
+### Verification commands and execution evidence
+
+1. Command: `npm --prefix frontend run lint && npm --prefix frontend run build:ui && npm run typecheck:backend`
+   * Result: 0 ESLint errors, Vite SPA build succeeded, 0 backend TypeScript diagnostics
+2. Command: `npm run test:p4-user-totp && npm run test:p4-recovery && npm run test:p4-admin-mfa && npm run test:p3-dashboard-browser`
+   * Result: `test:p4-user-totp` 2/2 passed (context isolation, pending/enrolled guards, 10 way concurrent `409` replay, cross step/cross endpoint replay, login 2FA ambient session isolation + registry attachment, disable rotated session preservation + `ObjectId` OAuth token/family revocation, promoted admin `403`); `test:p4-recovery` 5/5 passed; `test:p4-admin-mfa` 2/2 passed; `test:p3-dashboard-browser` Playwright passed
+3. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration contract violations, 0 documentation consistency errors
+
+### Remaining open gaps (`AC-11` partial & P4 release decisions)
+
+* **Password reset (`AC-11` unverified)**: Forgot/reset password flows preserving `twoFactorEnabled` and revoking stale sessions, contexts, and OAuth refresh families remain unverified.
+* **Contact/email change (`AC-11` unverified)**: Email/contact change flows preserving factor policy and revoking stale authority remain unverified.
+* **Operator lost factor recovery custody (open release decision)**: Operator assisted lost factor recovery custody and runbook remain open; admin lost factor recovery must never be email only.
+* **UI browser E2E**: `AccountTotpPanel.tsx` and `TwoFactor.tsx` ordinary user redirect passed ESLint + Vite/TypeScript build, with Playwright UI automation for TOTP enrollment/disable pending.
