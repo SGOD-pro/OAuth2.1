@@ -16,6 +16,7 @@ import {
   executeCompletionTransaction,
   getRegistrationTxEngine,
 } from "./registration-tx-engine";
+import { resolveAndEnrollSession } from "./browser-session-registry";
 
 export interface RegistrationCompleteTestHooks {
   onBeforePasswordHash?: () => void | Promise<void>;
@@ -32,6 +33,7 @@ export function setRegistrationCompleteTestHooks(hooks: RegistrationCompleteTest
 export interface CompleteRegistrationInput {
   rawBrowser: string | undefined;
   rawProof: string | undefined;
+  rawBrowserSessionProof?: string;
   username: unknown;
   password: unknown;
   acceptedTermsVersion: unknown;
@@ -47,6 +49,7 @@ export interface CompleteRegistrationResult {
   body: Record<string, unknown>;
   clearProofCookie?: boolean;
   sessionSetCookies?: string[];
+  nextBrowserSessionProof?: string;
 }
 
 function classifyDuplicateKey(err: any): "username" | "email" | "idempotency" | null {
@@ -218,6 +221,7 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
   // Post-commit ordinary session establishment; committed user survives session failure
   let sessionSetCookies: string[] = [];
   let sessionEstablished = false;
+  let nextBrowserSessionProof: string | undefined;
   try {
     await completeHooks?.onSessionCreate?.();
     const signInHeaders = new Headers();
@@ -234,7 +238,26 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
       sessionSetCookies = typeof signInRes.headers?.getSetCookie === "function"
         ? signInRes.headers.getSetCookie()
         : (signInRes.headers?.get("set-cookie") ? [signInRes.headers.get("set-cookie")] : []);
-      sessionEstablished = sessionSetCookies.some((c) => c.includes("better-auth.session_token="));
+      const sessionCookieHdr = sessionSetCookies.find((c) => /(?:__Secure-)?better-auth\.session_token=([^;]+)/.test(c));
+      const match = sessionCookieHdr?.match(/(?:__Secure-)?better-auth\.session_token=([^;]+)/);
+      if (match) {
+        const rawTok = decodeURIComponent(match[1]);
+        const enrolled = await resolveAndEnrollSession({
+          database,
+          rawBrowserProof: input.rawBrowserSessionProof,
+          sessionToken: rawTok,
+          userDoc: { id: createdUserId, email: verifiedEmail, username: parsedUser.display, role: "user", tokenVersion: 1 },
+        });
+        if (enrolled && enrolled.ok) {
+          nextBrowserSessionProof = enrolled.nextRawProof;
+          sessionEstablished = true;
+        } else if (enrolled && !enrolled.ok) {
+          await database.collection("session").deleteOne({ token: rawTok.split(".")[0] }).catch(() => {});
+          sessionSetCookies = [];
+        } else {
+          sessionEstablished = true;
+        }
+      }
     }
   } catch (sessionErr: any) {
     console.warn("[REG_COMPLETE] Post-commit session establishment failed:", sessionErr?.message || sessionErr);
@@ -244,6 +267,7 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
     status: 201,
     clearProofCookie: true,
     sessionSetCookies,
+    nextBrowserSessionProof,
     body: {
       completed: true,
       sessionEstablished,

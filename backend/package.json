@@ -98,7 +98,9 @@
     "test:p2a-browser": "node --import tsx tests/e2e/p2a-registration-browser.test.ts",
     "test:p2b-complete": "node --import tsx tests/security/p2b-account-completion.test.ts",
     "test:p2b-bypasses": "node --import tsx tests/security/p2b-provisioning-bypasses.test.ts",
-    "test:p2b-browser": "node --import tsx tests/e2e/p2b-complete-browser.test.ts"
+    "test:p2b-browser": "node --import tsx tests/e2e/p2b-complete-browser.test.ts",
+    "test:p3-registry": "node --import tsx tests/security/p3-browser-session-registry.test.ts",
+    "test:p3-adapter": "node --import tsx tests/security/p3-session-adapter-isolation.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

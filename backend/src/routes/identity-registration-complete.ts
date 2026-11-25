@@ -4,6 +4,7 @@ import { config } from "../config";
 import { getDb } from "../db/mongo";
 import { getTrustedClientIp, hasDangerousMongoKeys } from "../utils/security";
 import { completeVerifiedRegistration } from "../identity/registration-complete";
+import { buildBrowserProofCookieOptions, getBrowserSessionCookieName } from "../identity/browser-session-registry";
 import { computeBrowserBindingHash, computeUsernameLookup, digestToken, normalizeUsername } from "../identity/registration-crypto";
 import { BROWSER_COOKIE, PROOF_COOKIE, cookieSecurityOpts, getRequestId } from "./identity-registration-shared";
 
@@ -23,6 +24,7 @@ export async function handleRegistrationComplete(c: Context): Promise<Response> 
     const result = await completeVerifiedRegistration({
       rawBrowser: getCookie(c, BROWSER_COOKIE),
       rawProof: getCookie(c, PROOF_COOKIE),
+      rawBrowserSessionProof: getCookie(c, getBrowserSessionCookieName()),
       username: body.username,
       password: body.password,
       acceptedTermsVersion: body.acceptedTermsVersion,
@@ -35,6 +37,9 @@ export async function handleRegistrationComplete(c: Context): Promise<Response> 
 
     if (result.clearProofCookie) {
       setCookie(c, PROOF_COOKIE, "", cookieSecurityOpts(0, "/api/identity"));
+    }
+    if (result.nextBrowserSessionProof) {
+      setCookie(c, getBrowserSessionCookieName(), result.nextBrowserSessionProof, buildBrowserProofCookieOptions() as any);
     }
     for (const cookieHeader of result.sessionSetCookies || []) {
       c.header("Set-Cookie", cookieHeader, { append: true });

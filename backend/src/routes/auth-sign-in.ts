@@ -15,6 +15,8 @@ import {
 import { config } from "../config";
 import { extractClientContext, executeDummyHash } from "./auth-client-context";
 import { enforceTargetRateLimit } from "./auth-rate-limit";
+import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
+import { attachOrdinaryBrowserSessionToResponse } from "../identity/session-adapter";
 
 /**
  * Handle password sign-in (/sign-in/email).
@@ -161,18 +163,17 @@ export async function handleSignInEmail(c: any): Promise<Response> {
     }
 
     // Forward authentication request to Better Auth
-    const res = await authProvider.handler(c.req.raw);
+    let res = await authProvider.handler(c.req.raw);
 
     // CRITICAL SECURITY INVARIANT: Application membership MUST NEVER mutate before successful authentication
     if (res.status >= 200 && res.status < 300) {
         let authUserId: string | null = null;
+        let authUserDoc: any = null;
         if (body?.email) {
             try {
                 const normalizedEmail = body.email.toLowerCase().trim();
-                const authUser = await database.collection("user").findOne({ email: normalizedEmail });
-                if (authUser) {
-                    authUserId = String(authUser.id || authUser._id);
-                }
+                authUserDoc = await database.collection("user").findOne({ email: normalizedEmail });
+                if (authUserDoc) authUserId = String(authUserDoc.id || authUserDoc._id);
             } catch (err) {
                 console.error("[SIGNIN] Failed to find user for audit:", err);
             }
@@ -216,25 +217,22 @@ export async function handleSignInEmail(c: any): Promise<Response> {
             return res;
         }
 
-        // Single-factor completed login: extract established session ID
-        let sessionId: string | null = null;
-        try {
-            const setCookieList: string[] = (res.headers as any).getSetCookie
-                ? (res.headers as any).getSetCookie()
-                : [res.headers.get("set-cookie") || ""];
-            for (const header of setCookieList) {
-                const match = header.match(/(?:__Secure-)?better-auth\.session_token=([^;]+)/);
-                if (match) {
-                    const rawToken = decodeURIComponent(match[1]);
-                    const token = rawToken.split(".")[0];
-                    const sessionDoc = await database.collection("session").findOne({ token });
-                    if (sessionDoc) {
-                        sessionId = String(sessionDoc._id || sessionDoc.id);
-                        break;
-                    }
-                }
-            }
-        } catch {}
+        const attached = await attachOrdinaryBrowserSessionToResponse({
+            database,
+            res,
+            rawBrowserProof: getCookie(c, getBrowserSessionCookieName()),
+            userDoc: authUserDoc,
+        });
+        const sessionId = attached.sessionId;
+        res = attached.response;
+        if (attached.capacityExceeded) {
+            await recordAuthEvent({
+                eventType: "sign_in", outcome: "denied", userId: authUserId, targetIdentifier,
+                clientId: boundClientId, clientName: boundClientName, ipAddress: safeIp,
+                userAgent: safeUserAgent, reason: "session_set_full",
+            });
+            return res;
+        }
 
         const isOpen = clientDoc?.accessPolicy === "open" || clientDoc?.isPublic === true;
         if (authUserId && clientDoc && isOpen && canonicalClientId && !config.openAppMembershipBypassEnabled) {

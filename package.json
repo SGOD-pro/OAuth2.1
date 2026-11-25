@@ -40,6 +40,8 @@
     "test:p2b-complete": "npm --prefix backend run test:p2b-complete",
     "test:p2b-bypasses": "npm --prefix backend run test:p2b-bypasses",
     "test:p2b-browser": "npm --prefix backend run test:p2b-browser",
+    "test:p3-registry": "npm --prefix backend run test:p3-registry",
+    "test:p3-adapter": "npm --prefix backend run test:p3-adapter",
     "test:client-policy-enforcement": "npm --prefix backend run test:client-policy-enforcement",
     "test:client-policy-compatibility": "npm --prefix backend run test:client-policy-compatibility",
     "test:pkce-enforcement": "npm --prefix backend run test:pkce-enforcement",

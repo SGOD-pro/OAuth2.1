@@ -110,6 +110,8 @@ const securityTestFiles = [
   "tests/security/p2a-outbox-worker-and-callbacks.test.ts",
   "tests/security/p2b-account-completion.test.ts",
   "tests/security/p2b-provisioning-bypasses.test.ts",
+  "tests/security/p3-browser-session-registry.test.ts",
+  "tests/security/p3-session-adapter-isolation.test.ts",
 ];
 
 console.log("================================================================");

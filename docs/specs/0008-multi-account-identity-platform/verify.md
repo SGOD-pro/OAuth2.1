@@ -16,7 +16,7 @@ Record actual commands and results in the documentation PR: relative links, anch
 | OTP start, verify, resend, finalize and wrong code zero writes | 02-04,15 | Real API + disposable DB and mail sink; concurrency workers | P2a intents, OTP limits, atomic budgets, encrypted outbox, leased worker with local test sink, authenticated callbacks, and browser UI verified locally (zero accounts or sessions created); real cloud mail provider delivery and P2b finalization remain pending |
 | New user, profile, key, session and lost response recovery | 03,16 | Real engine finalization + idempotency | P2b verified email account creation, normalized unique username transaction, idempotent retry, post commit session fallback, `/register/profile`, and provisioning bypass closure verified locally (account `keyRef` remains `null` until P6 and live cloud mail provider delivery remains pending) |
 | Client policy backfill and open, private matrix | 05-06,14 | Old and new schema and real consumer fixtures | P1a classification and audit (32 cases), refresh lease fencing (2 cases), P1b canonical resolution, open app bypass, token enforcement, introspection gating, and P1c admin registration, editing, and BAC P1C 01 through 06 browser acceptance checks locally verified; P2 through P9 remain pending |
-| Browser A and B login, tab interleave, expiry, logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | Pending |
+| Browser A and B login, tab interleave, expiry, logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | First P3 slice (`browser_session_sets` registry, `GET /api/identity/accounts`, `/accounts/sign-out`, `/accounts/remove`, request local session adapter, and ordinary login / verified registration wiring) locally verified; chooser UI, OAuth transaction selection, dashboard contexts, and multi tab interleaving remain pending |
 | Account list CORS, CSRF, fixation, context misuse | 08 | Browser and direct HTTP negatives | Pending |
 | Genuine user, admin MFA, recovery, promotion, step up, plugin paths | 10-11 | Real password, TOTP, backup protocol | Pending |
 | Dashboard A and B ownership, claims, privacy and admin serializers | 12-14 | Direct API + browser, cache, consumer tests | Pending |
@@ -650,6 +650,38 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: All 16 unit suites passed, all 11 local consumer E2E flows passed, all 47 security suites passed with 0 failures, and Lambda/Node production bundles built cleanly
 7. Command: `npm run security:integration-check && npm run security:docs-check`
    * Result: 0 violations and 0 errors
+
+
+## Slice P3 browser session registry and request local session adapter
+
+**Date:** 2026-11-25. **Result:** Verified the first P3 slice (`browser_session_sets` server registry, opaque entry handles, request local session adapter, single account browser sign out/removal, 10 account non evicting capacity cap, and ordinary sign in / verified registration session wiring) against shared Docker MongoDB (`rs0`), real Better Auth engine sessions, Playwright browser E2E, local consumer OAuth E2E, and security/documentation contract checks. Chooser UI, OAuth transaction account selection, dashboard contexts, and multi tab browser interleaving remain pending for the next P3 slice.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `5947aad15922e1c291976d3ca425cac5ba6c5a90`
+* Worktree status: Working tree with `browser_session_sets` registry and indexes, request local [session-adapter.ts](../../../backend/src/identity/session-adapter.ts), `/api/identity/accounts*` endpoints, ordinary login / verified registration browser session enrollment, review record, and updated ledger docs
+* Source scope:
+  * [identity/browser-session-registry.ts](../../../backend/src/identity/browser-session-registry.ts): `browser_session_sets` storage (digested proof handles, monotonic CAS version rotation, 10 account capacity enforcement without silent eviction, live status projection, single entry sign out and signed out removal) and `__Host-swyra-browser` / `swyra-browser` cookie attributes
+  * [identity/session-adapter.ts](../../../backend/src/identity/session-adapter.ts): Multi layer revalidation (browser proof, active entry status, `tokenVersion`, engine `session` expiry/revocation, real `engine.api.getSession` with cache disabled), request local authorize/consent dispatch via `selected-engine-session.ts`, and `attachOrdinaryBrowserSessionToResponse`
+  * [routes/identity-accounts.ts](../../../backend/src/routes/identity-accounts.ts) & [routes/identity.ts](../../../backend/src/routes/identity.ts): `GET /api/identity/accounts`, `POST /api/identity/accounts/sign-out`, `POST /api/identity/accounts/remove` under CSRF and `no-store` headers
+  * [routes/auth-sign-in.ts](../../../backend/src/routes/auth-sign-in.ts), [identity/registration-complete.ts](../../../backend/src/identity/registration-complete.ts), [routes/identity-registration-complete.ts](../../../backend/src/routes/identity-registration-complete.ts), [db/indexes.ts](../../../backend/src/db/indexes.ts)
+  * [tests/security/p3-browser-session-registry.test.ts](../../../backend/tests/security/p3-browser-session-registry.test.ts), [tests/security/p3-session-adapter-isolation.test.ts](../../../backend/tests/security/p3-session-adapter-isolation.test.ts), [scripts/run-all-security.ts](../../../backend/scripts/run-all-security.ts), [package.json](../../../package.json), [backend/package.json](../../../backend/package.json)
+* File length: All modified and added source and test files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm --prefix frontend run lint && npm --prefix frontend run build:ui`
+   * Result: 0 TypeScript diagnostics, 0 ESLint errors, clean Vite build
+2. Command: `npm run test:p3-registry`
+   * Result: 3 test groups passed, 0 failed (account A verified registration + account B login coexistence, proof rotation, digest only storage, zero leaked session tokens or emails, signing out or expiring A preserves B, invalid proofs fail closed, 10 account capacity blocks 11th without silent eviction until remove)
+3. Command: `npm run test:p3-adapter`
+   * Result: 2 test groups passed, 0 failed (request local OAuth authorize/consent dispatch ignores conflicting ambient cookies, revalidates `tokenVersion` and engine session while preserving B, enforces `__Host-swyra-browser` production cookie attributes and preserves admin/MFA gates)
+4. Command: `npm --prefix backend run test:p0-sessions && npm --prefix backend run test:p0-transactions && npm run test:p2b-complete && npm run test:p2b-bypasses && npm run test:p2b-browser && npm run test:browser-e2e && npm run test:local-consumer-e2e && npm run test:unit`
+   * Result: All P0, P2b (completion, bypasses, and Playwright browser), general Playwright OAuth E2E, local consumer OAuth E2E, and 16 unit suites passed with 0 failures
+5. Command: `npm run test:all-security && npm run security:integration-check && npm run security:docs-check`
+   * Result: All 49 security suites passed (49 passed, 0 failed), 0 integration lint violations, and 0 documentation consistency errors
+
 
 
 
