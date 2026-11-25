@@ -15,6 +15,8 @@ import {
 } from "./auth-roles";
 import { resolveTrustedOrigins } from "./auth-trusted-origins";
 import { sendVerificationEmailHandler } from "./auth-verification-email";
+import { recordPasswordResetMailForTesting } from "../identity/mail-service";
+import { ObjectId } from "mongodb";
 
 export { isSuperAdminUser };
 
@@ -37,6 +39,41 @@ export const authProvider = betterAuth({
             config.auth.emailVerificationEnabled,
         autoSignIn: config.env !== "production",
         revokeSessionsOnPasswordReset: true,
+        sendResetPassword: async ({ user, url, token }: { user: any; url: string; token: string }) => {
+            recordPasswordResetMailForTesting(user.email, url, token);
+        },
+        onPasswordReset: async ({ user }: { user: any }) => {
+            if (!user?.id) return;
+            const now = new Date();
+            const uFilters: any[] = [{ userId: user.id }];
+            if (ObjectId.isValid(user.id) && user.id.length === 24) {
+                uFilters.push({ userId: new ObjectId(user.id) });
+            }
+            await Promise.all([
+                database.collection("browser_session_sets").updateMany(
+                    { entries: { $elemMatch: { userId: user.id, status: "active" } } },
+                    {
+                        $set: {
+                            "entries.$[elem].status": "signed_out",
+                            "entries.$[elem].sessionId": null,
+                            "entries.$[elem].signedOutAt": now,
+                        },
+                        $inc: { version: 1 },
+                    },
+                    { arrayFilters: [{ "elem.userId": user.id, "elem.status": "active" }] }
+                ),
+                database.collection("identity_contexts").updateMany(
+                    { userId: user.id, revokedAt: null },
+                    { $set: { revokedAt: now } }
+                ),
+                database.collection("oauthRefreshToken").deleteMany({ $or: uFilters }),
+                database.collection("oauthAccessToken").deleteMany({ $or: uFilters }),
+                database.collection("oauth_token_families").updateMany(
+                    { $or: uFilters, status: { $ne: "revoked" } },
+                    { $set: { status: "revoked", revokedAt: now } }
+                ),
+            ]);
+        },
     },
 
     emailVerification: {

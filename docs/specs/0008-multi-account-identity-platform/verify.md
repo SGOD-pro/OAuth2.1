@@ -1044,7 +1044,13 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 ### Remaining open gaps (`AC-11` partial & P4 release decisions)
 
-* **Password reset (`AC-11` unverified)**: Forgot/reset password flows preserving `twoFactorEnabled` and revoking stale sessions, contexts, and OAuth refresh families remain unverified.
 * **Contact/email change (`AC-11` unverified)**: Email/contact change flows preserving factor policy and revoking stale authority remain unverified.
 * **Operator lost factor recovery custody (open release decision)**: Operator assisted lost factor recovery custody and runbook remain open; admin lost factor recovery must never be email only.
-* **UI browser E2E**: `AccountTotpPanel.tsx` and `TwoFactor.tsx` ordinary user redirect passed ESLint + Vite/TypeScript build, with Playwright UI automation for TOTP enrollment/disable pending.
+
+## Slice P4 password reset, browser TOTP E2E, and replay exception reconciliation
+
+**Date:** 2026-11-26. **Result:** Verified password reset with TOTP enabled (`p4-password-reset-totp.test.ts`), added ordinary user TOTP browser E2E (`test:p4-user-totp-browser` registered in CI), and reconciled the enrollment replay exception. `AC-11` remains **partial** (email/contact change and operator lost factor recovery custody remain open).
+
+* **Password reset with TOTP (`backend/src/utils/auth.ts`, `backend/src/identity/mail-service.ts`, `backend/tests/security/p4-password-reset-totp.test.ts`):** Wired `sendResetPassword` (local mail sink in non production) and `onPasswordReset` in Better Auth `emailAndPassword` (`revokeSessionsOnPasswordReset: true`). Verified that resetting a password preserves `twoFactorEnabled: true`, revokes the affected account's prior Better Auth sessions, `browser_session_sets` entries, `identity_contexts`, and `oauthRefreshToken`/`oauthAccessToken`/`oauth_token_families`, keeps a second account in the same browser active, and still requires TOTP on next sign in.
+* **Ordinary user TOTP browser E2E (`backend/tests/e2e/p4-user-totp-browser.test.ts`, `.github/workflows/ci.yml`):** Verified `/account` TOTP enrollment via `AccountTotpPanel.tsx`, sign out, TOTP sign in via `/two-factor`, consumer OAuth PKCE flow, and authorized TOTP disable.
+* **Enrollment replay exception (`backend/src/routes/auth-two-factor.ts`):** `handleVerifyTotp` skips `claimMatchedTotpStep` when `twoFactor.verified === false` (enrollment verification) so enrollment does not block same window sign in. Enrollment still completes once (`handleOwnerTotpEnable` rejects `verified === true` with `409 ERR_TOTP_ALREADY_ENABLED`), sign in follows the documented same window policy, and accepted login codes cannot be reused (`409 ERR_TOTP_REPLAY`).

@@ -43,6 +43,22 @@ export function isMailWorkerAutoDispatchEnabled(): boolean {
   return autoDispatchEnabled;
 }
 
+export function recordPasswordResetMailForTesting(email: string, url: string, token: string): void {
+  if (config.env === "production") return;
+  testSinkMessages.push({
+    to: email,
+    from: "noreply@swyra.local",
+    subject: "Reset your SWYRA Auth password",
+    text: `Reset URL: ${url} (token: ${token})`,
+    html: `<a href="${url}">Reset password</a>`,
+    purpose: "password_reset",
+    templateVersion: "v1",
+    idempotencyKey: crypto.randomUUID(),
+    providerMessageId: `local_sink_${crypto.randomUUID()}`,
+    receivedAt: new Date().toISOString(),
+  });
+}
+
 function escapeHtml(raw: string): string {
   return raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }

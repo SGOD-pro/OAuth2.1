@@ -150,6 +150,8 @@ jobs:
 
       - name: Run P3 Account Dashboard Browser E2E Suite (Playwright)
         run: npm run test:p3-dashboard-browser
+      - name: Run P4 Ordinary-User TOTP Browser E2E Suite (Playwright)
+        run: npm run test:p4-user-totp-browser
 
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine
