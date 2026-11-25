@@ -22,7 +22,7 @@ import {
   handleRenewIdentityContext,
 } from "./identity-contexts";
 import { handleClaimInvitation } from "./identity-invitations";
-import { handleBackupCodeRecovery } from "./identity-recovery";
+import { handleBackupCodeRecovery, recoveryAccountRateLimit, recoveryIpRateLimit } from "./identity-recovery";
 import { handleMailCallback } from "../identity/mail-webhooks";
 
 const identity = new Hono();
@@ -58,7 +58,7 @@ identity.get("/contexts/me", handleGetOwnerContextMe);
 identity.post("/contexts/renew", handleRenewIdentityContext);
 
 identity.post("/invitations/claim", handleClaimInvitation);
-identity.post("/recovery/backup-code", handleBackupCodeRecovery);
+identity.post("/recovery/backup-code", recoveryIpRateLimit, recoveryAccountRateLimit, handleBackupCodeRecovery);
 
 identity.post("/mail/callbacks", handleMailCallback);
 

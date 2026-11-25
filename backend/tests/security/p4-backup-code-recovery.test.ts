@@ -153,4 +153,47 @@ describe("P4 Backup-Code Recovery & Role Restoration", () => {
     }
     assert.equal(lastStatus, 429);
   });
+
+  it("preserves backup code on failed commit and restores platform admin after fresh TOTP", async () => {
+    const { setRecoveryCommitHookForTesting } = await import("../../src/routes/identity-recovery");
+    const email = `rec_sup_${crypto.randomBytes(4).toString("hex")}@example.com`;
+    const { backupCodes } = await seedEnrolledAdmin(email, "admin");
+
+    // Simulate commit failure inside transaction -> backup code must be preserved
+    setRecoveryCommitHookForTesting(() => { throw new Error("Simulated commit failure"); });
+    try {
+      const failRes = await app.request("/api/identity/recovery/backup-code", {
+        method: "POST", headers: hdrs({ "Content-Type": "application/json", "x-forwarded-for": "198.51.100.77, 10.0.0.1" }),
+        body: JSON.stringify({ email, password, backupCode: backupCodes[0] }),
+      });
+      assert.equal(failRes.status, 500);
+    } finally {
+      setRecoveryCommitHookForTesting(null);
+    }
+
+    // Retry with the same backup code succeeds
+    const okRes = await app.request("/api/identity/recovery/backup-code", {
+      method: "POST", headers: hdrs({ "Content-Type": "application/json", "x-forwarded-for": "198.51.100.77, 10.0.0.1" }),
+      body: JSON.stringify({ email, password, backupCode: backupCodes[0] }),
+    });
+    assert.equal(okRes.status, 200);
+    const recoveryCookie = extractCookie(okRes, "better-auth.session_token");
+
+    // Setup-only until fresh TOTP
+    const statsBefore = await app.request("/api/admin/stats", { headers: hdrs({ Cookie: recoveryCookie }) });
+    assert.equal(statsBefore.status, 403);
+
+    const enr = await app.request("/api/auth/two-factor/enable", {
+      method: "POST", headers: hdrs({ "Content-Type": "application/json", Cookie: recoveryCookie }), body: JSON.stringify({ password }),
+    });
+    const { totpURI } = await enr.json();
+    const ver = await app.request("/api/auth/two-factor/verify-totp", {
+      method: "POST", headers: hdrs({ "Content-Type": "application/json", Cookie: recoveryCookie }),
+      body: JSON.stringify({ code: generateTotpCode(new URL(totpURI).searchParams.get("secret")!) }),
+    });
+    assert.equal(ver.status, 200);
+    const restoredCookie = extractCookie(ver, "better-auth.session_token") || recoveryCookie;
+    const statsAfter = await app.request("/api/admin/stats", { headers: hdrs({ Cookie: restoredCookie }) });
+    assert.equal(statsAfter.status, 200);
+  });
 });

@@ -846,6 +846,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
+## Slice P4 backup code recovery atomicity and shared rate limiting
+
+**Date:** 2026-11-25. **Result:** Closed P4 backup code recovery failure and rate limit gaps by moving backup code consumption, old session invalidation, `tokenVersion` bump, `twoFactorEnabled: false` reset, and restricted recovery session issuance into a single MongoDB replica set transaction, replacing the local counter with shared `createRateLimiter` IP and account limits (`sensitivity: "auth"`), and using configured session cookie attributes (`Secure` in production). Optional user TOTP and operator lost factor recovery custody remain open.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `4f5cc32b33219c4518efd0b3ce194d0ad0f84fa0`
+* Worktree status: Working tree with transactional `identity-recovery.ts`, shared `recoveryIpRateLimit` and `recoveryAccountRateLimit`, failed commit and platform admin recovery tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-invitations && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 3/3 recovery tests passed (concurrent single use, rate limiting, failed commit preservation and platform admin restoration); 3/3 invitation tests passed; 2/2 admin MFA tests passed
+2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 ## Slice P4 verified private app invitations
 
 **Date:** 2026-11-25. **Result:** Implemented and verified private app invitation issuance (`POST /api/admin/clients/:clientId/invitations`), revocation (`DELETE /api/admin/clients/:clientId/invitations/:inviteId`), and atomic single use claim (`POST /api/identity/invitations/claim`) with local mail sink delivery, mailbox proof and authenticated account checks, inviter role ceilings, 5 minute MFA gating, and tightened fresh MFA assertions (`404` exact status). P3 is complete; P4 remains open for recovery and optional user TOTP.
@@ -896,6 +914,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-invitations && npm run test:p4-admin-mfa`
    * Result: 0 TypeScript diagnostics; 2/2 recovery tests passed (concurrent single use backup code consumption, old session invalidation, setup only authority, fresh TOTP restoration preserving `app-admin` scope, and rate limiting); 3/3 invitation tests passed; 2/2 admin MFA tests passed
+2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
+## Slice P4 backup code recovery atomicity and shared rate limiting
+
+**Date:** 2026-11-25. **Result:** Closed P4 backup code recovery failure and rate limit gaps by moving backup code consumption, old session invalidation, `tokenVersion` bump, `twoFactorEnabled: false` reset, and restricted recovery session issuance into a single MongoDB replica set transaction, replacing the local counter with shared `createRateLimiter` IP and account limits (`sensitivity: "auth"`), and using configured session cookie attributes (`Secure` in production). Optional user TOTP and operator lost factor recovery custody remain open.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `4f5cc32b33219c4518efd0b3ce194d0ad0f84fa0`
+* Worktree status: Working tree with transactional `identity-recovery.ts`, shared `recoveryIpRateLimit` and `recoveryAccountRateLimit`, failed commit and platform admin recovery tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-invitations && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 3/3 recovery tests passed (concurrent single use, rate limiting, failed commit preservation and platform admin restoration); 3/3 invitation tests passed; 2/2 admin MFA tests passed
 2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
    * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
