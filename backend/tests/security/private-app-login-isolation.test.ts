@@ -28,6 +28,8 @@ let failed = 0;
 
 async function runTest(name: string, fn: () => Promise<void>) {
   try {
+    const db = await (await import("../../src/db/mongo")).getDb().catch(() => null);
+    if (db) await db.collection("totp_used_steps").deleteMany({}).catch(() => {});
     await fn();
     console.log(`[PASS] ${name}`);
     passed++;

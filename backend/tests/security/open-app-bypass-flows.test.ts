@@ -179,7 +179,7 @@ describe("Open-App Membership Bypass Complex Flows Suite", () => {
         body: JSON.stringify({ email: mfaUserEmail, password: mfaUserPass }),
       });
       const mfaCookie2 = (sign2.headers.get("set-cookie") || "").split(",").map((s) => s.trim().split(";")[0]).filter((c) => c.includes("two_factor")).join("; ");
-      const totp2 = await createOTP(mfaRawSecret, { digits: 6, period: 30 }).totp();
+      const totp2 = await createOTP(mfaRawSecret, { digits: 6, period: 30 }).hotp(Math.floor(Date.now() / 30000) + 1);
       await app.request("/api/auth/two-factor/verify-totp", {
         method: "POST", headers: { ...getHeaders({ Cookie: `${mfaCookie2}; ${txCookie2}` }), "Content-Type": "application/json" },
         body: JSON.stringify({ code: totp2 }),

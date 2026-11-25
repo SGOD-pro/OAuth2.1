@@ -207,7 +207,9 @@ export async function loginEnrolledAdminMfa(
   }
   const challengeCookie = getCookieFromHeaders(challengeLoginRes.headers, "two_factor=");
 
-  const challengeOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
+  // Use the next time step (+1) so a re-login immediately after enrollment+login
+  // does not collide with the current step in totp_used_steps.
+  const challengeOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).hotp(Math.floor(Date.now() / 30000) + 1);
   const verifyChallengeRes = await app.request("/api/auth/two-factor/verify-totp", {
     method: "POST",
     headers: buildHeaders({ Cookie: challengeCookie }),
