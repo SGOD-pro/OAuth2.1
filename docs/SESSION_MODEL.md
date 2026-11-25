@@ -66,6 +66,8 @@ sequenceDiagram
 
 For own-account pages, `POST /api/identity/contexts` creates a 15-minute renewable context tied to browser set, session, user and purpose. Return an opaque context handle to same-origin JS; keep it in memory or the tab URL fragment only, never persistent web storage. It is insufficient without the browser proof cookie. Send it in `X-Identity-Context`; validate CSRF/Origin and subject every time. Reload may require choosing the account again. Clear fragments before navigation to consumers and set Referrer-Policy=no-referrer on identity pages.
 
+Pre-enrollment password-only sessions (`mfaVerifiedAt == null`) are never treated as having completed MFA after TOTP is enabled; disabling TOTP revokes other active sessions and refresh families for that account while preserving the other accounts in the browser set.
+
 Admin contexts use separate purpose `platform-admin` or `app-admin:<clientId>` and require matching role/assignment and MFA. They cannot be created by merely selecting an ordinary chooser entry. A browser preference may choose the initial UI label but must not determine any API subject. Remove mixed-cookie/bearer ambiguity; reject conflicting principals.
 
 ## 5. Session expiry and assurance defaults

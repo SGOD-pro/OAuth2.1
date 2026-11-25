@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AccountChooser, type BrowserAccountEntry } from "../components/AccountChooser";
+import { AccountTotpPanel } from "../components/AccountTotpPanel";
 import { csrfHeaders } from "../lib/csrf";
 import { clearOwnerContextHandle, fetchOwnerContextMe, issueOwnerContext } from "../lib/identityContext";
 
@@ -87,6 +88,13 @@ export default function AccountDashboard() {
         <p className="text-xs text-muted-foreground" data-testid="dashboard-user-id">
           Subject: {account.userId}
         </p>
+        <AccountTotpPanel
+          onCompleted={() => {
+            clearOwnerContextHandle();
+            setAccount(null);
+            void loadAccounts();
+          }}
+        />
         <button
           type="button"
           className="text-sm underline text-muted-foreground hover:text-foreground"

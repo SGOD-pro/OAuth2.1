@@ -50,6 +50,7 @@
     "test:p4-admin-mfa": "npm --prefix backend run test:p4-admin-mfa",
     "test:p4-invitations": "npm --prefix backend run test:p4-invitations",
     "test:p4-recovery": "npm --prefix backend run test:p4-recovery",
+    "test:p4-user-totp": "npm --prefix backend run test:p4-user-totp",
     "test:p3-two-tab": "npm --prefix backend run test:p3-two-tab",
     "test:client-policy-enforcement": "npm --prefix backend run test:client-policy-enforcement",
     "test:client-policy-compatibility": "npm --prefix backend run test:client-policy-compatibility",

@@ -23,6 +23,13 @@ import {
 } from "./identity-contexts";
 import { handleClaimInvitation } from "./identity-invitations";
 import { handleBackupCodeRecovery, recoveryAccountRateLimit, recoveryIpRateLimit } from "./identity-recovery";
+import {
+  handleOwnerTotpDisable,
+  handleOwnerTotpEnable,
+  handleOwnerTotpVerify,
+  totpIpRateLimit,
+  totpSubjectRateLimit,
+} from "./identity-totp";
 import { handleMailCallback } from "../identity/mail-webhooks";
 
 const identity = new Hono();
@@ -39,6 +46,7 @@ identity.use("/contexts", csrfProtection);
 identity.use("/contexts/*", csrfProtection);
 identity.use("/invitations/*", csrfProtection);
 identity.use("/recovery/*", csrfProtection);
+identity.use("/totp/*", csrfProtection);
 
 identity.get("/registration/config", handleGetRegistrationConfig);
 identity.get("/registration/intent/:intentId", handleGetRegistrationIntentStatus);
@@ -59,6 +67,10 @@ identity.post("/contexts/renew", handleRenewIdentityContext);
 
 identity.post("/invitations/claim", handleClaimInvitation);
 identity.post("/recovery/backup-code", recoveryIpRateLimit, recoveryAccountRateLimit, handleBackupCodeRecovery);
+
+identity.post("/totp/enable", totpIpRateLimit, handleOwnerTotpEnable);
+identity.post("/totp/verify", totpIpRateLimit, totpSubjectRateLimit, handleOwnerTotpVerify);
+identity.post("/totp/disable", totpIpRateLimit, totpSubjectRateLimit, handleOwnerTotpDisable);
 
 identity.post("/mail/callbacks", handleMailCallback);
 

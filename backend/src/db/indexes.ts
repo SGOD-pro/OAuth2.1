@@ -14,6 +14,7 @@ export async function ensureIdentityCollectionIndexes(db: Awaited<ReturnType<typ
     "browser_session_sets",
     "identity_contexts",
     "app_invitations",
+    "totp_used_steps",
   ];
   await Promise.all(cols.map((col) => db.createCollection(col).catch(() => {})));
   const safeCreate = async (col: string, spec: any, options?: any) => {
@@ -48,6 +49,8 @@ export async function ensureIdentityCollectionIndexes(db: Awaited<ReturnType<typ
     safeCreate("app_invitations", { tokenDigest: 1 }, { unique: true }),
     safeCreate("app_invitations", { clientId: 1, status: 1 }),
     safeCreate("app_invitations", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    safeCreate("totp_used_steps", { userId: 1, step: 1, purpose: 1 }, { unique: true }),
+    safeCreate("totp_used_steps", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
   ]);
 }
 
