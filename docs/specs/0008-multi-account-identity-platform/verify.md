@@ -733,6 +733,25 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: All 51 security suites passed (51 passed, 0 failed), 0 integration contract violations, and 0 documentation consistency errors
 
 
+## Slice P3 OAuth continuation session binding
+
+**Date:** 2026-11-25. **Result:** Verified that `/api/auth/oauth2/continue` reuses the request local session adapter whenever the OAuth transaction has a selected account, using the same validated subject and session for policy checks, engine dispatch, and code finalization with the original selection revision, while failing closed on stale or revoked selections and preserving legacy continuation for transactions without a selection. Dashboard contexts remain pending for the next slice to complete P3.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `a7d3830a1d83a0c63e89e6d141a3562bc0040a12`
+* Worktree status: Working tree with shared `resolveConsentOrContinueSession` in `auth-consent.ts`, `/api/auth/oauth2/continue` allowlist in `selected-engine-session.ts`, route level suite `p3-continuation-session-binding.test.ts`, review record, and updated ledger documentation
+* File length: All modified and new backend source and test files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `npm run test:p3-continuation`
+   * Result: 3 test groups passed, 0 failed (selected subject used for private app policy check despite conflicting ambient cookie, stale/revoked selection fails closed with 401 `ERR_SESSION_REVOKED`, legacy continuation without selection preserved)
+2. Command: `npm run typecheck:backend && npm run test:p3-binding && npm run test:p3-two-tab && npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 0 TypeScript diagnostics, 3/3 P3 binding tests passed, Playwright two tab browser E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 
 
 

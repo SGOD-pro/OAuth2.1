@@ -14,6 +14,36 @@ import { verifySelectedTransactionStillActive } from "../identity/oauth-selectio
  * Handle OAuth 2.1 user consent endpoint (/oauth2/consent).
  * Enforces session authentication and private application membership boundary.
  */
+async function resolveConsentOrContinueSession(
+    c: Context,
+    database: any,
+    tx: any,
+    rawBrowserProof: string | undefined
+): Promise<{ sessionUser: any; useSelectedAdapter: boolean; errorRes?: Response }> {
+    if (tx?.selectedEntryId && tx.browserSetId) {
+        try {
+            const verified = await resolveVerifiedBrowserEntry(authProvider as any, database, rawBrowserProof, tx.selectedEntryId);
+            if (verified.userId !== tx.selectedUserId || verified.sessionId !== tx.selectedSessionId) {
+                return { sessionUser: null, useSelectedAdapter: true, errorRes: c.json({ error: "unauthorized", code: "ERR_SELECTION_MISMATCH" }, 401) };
+            }
+            const userDoc = await database.collection("user").findOne({ $or: [{ id: verified.userId }, { username: verified.label }] });
+            return { sessionUser: { id: verified.userId, role: verified.role, ...userDoc }, useSelectedAdapter: true };
+        } catch {
+            return { sessionUser: null, useSelectedAdapter: true, errorRes: c.json({ error: "unauthorized", code: "ERR_SESSION_REVOKED", message: "Selected session is no longer active" }, 401) };
+        }
+    }
+    try {
+        const sessionResult = await authProvider.api.getSession({ headers: getHeaders(c) });
+        if (sessionResult?.user) {
+            const userDoc = await database.collection("user").findOne({
+                $or: [{ id: sessionResult.user.id }, { _id: (sessionResult.user as any)._id }, { email: sessionResult.user.email }],
+            });
+            return { sessionUser: { ...sessionResult.user, ...userDoc }, useSelectedAdapter: false };
+        }
+    } catch {}
+    return { sessionUser: null, useSelectedAdapter: false };
+}
+
 export async function handleOAuthConsent(c: Context) {
     const body = await c.req.raw.clone().json().catch(() => null);
     let clientId: string | null = null;
@@ -32,34 +62,8 @@ export async function handleOAuthConsent(c: Context) {
 
     const rawBrowserProof = getCookie(c, getBrowserSessionCookieName());
     const database = await getDb();
-    let sessionUser: any = null;
-    let useSelectedAdapter = false;
-
-    if (tx?.selectedEntryId && tx.browserSetId) {
-        try {
-            const verified = await resolveVerifiedBrowserEntry(authProvider as any, database, rawBrowserProof, tx.selectedEntryId);
-            if (verified.userId !== tx.selectedUserId || verified.sessionId !== tx.selectedSessionId) {
-                return c.json({ error: "unauthorized", code: "ERR_SELECTION_MISMATCH" }, 401);
-            }
-            const userDoc = await database.collection("user").findOne({ $or: [{ id: verified.userId }, { username: verified.label }] });
-            sessionUser = { id: verified.userId, role: verified.role, ...userDoc };
-            useSelectedAdapter = true;
-        } catch {
-            return c.json({ error: "unauthorized", code: "ERR_SESSION_REVOKED", message: "Selected session is no longer active" }, 401);
-        }
-    } else {
-        try {
-            const sessionResult = await authProvider.api.getSession({ headers: getHeaders(c) });
-            if (sessionResult?.user) {
-                const userDoc = await database.collection("user").findOne({
-                    $or: [{ id: sessionResult.user.id }, { _id: (sessionResult.user as any)._id }, { email: sessionResult.user.email }],
-                });
-                sessionUser = { ...sessionResult.user, ...userDoc };
-            }
-        } catch {
-            sessionUser = null;
-        }
-    }
+    const { sessionUser, useSelectedAdapter, errorRes } = await resolveConsentOrContinueSession(c, database, tx, rawBrowserProof);
+    if (errorRes) return errorRes;
 
     if (!sessionUser) {
         return c.json({ error: "unauthorized", message: "Authentication required" }, 401);
@@ -140,43 +144,28 @@ export async function handleOAuthConsent(c: Context) {
  * Enforces private application membership verification on continuation flows.
  */
 export async function handleOAuthContinue(c: Context) {
-    let sessionUser: any = null;
+    const body = await c.req.raw.clone().json().catch(() => null);
     let clientId: string | null = null;
-    let tx: any = null;
-    let resolvedClientDoc: any = null;
-    try {
-        const sessionResult = await authProvider.api.getSession({
-            headers: getHeaders(c),
-        });
-        if (sessionResult?.user) {
-            const database = await getDb();
-            const userDoc = await database.collection("user").findOne({
-                $or: [
-                    { id: sessionResult.user.id },
-                    { _id: (sessionResult.user as any)._id },
-                    { email: sessionResult.user.email },
-                ],
-            });
-            sessionUser = { ...sessionResult.user, ...userDoc };
-        }
-    } catch {
-        sessionUser = null;
+    let state: string | null = null;
+    if (body?.oauth_query && typeof body.oauth_query === "string") {
+        try {
+            const queryParams = new URLSearchParams(body.oauth_query);
+            clientId = queryParams.get("client_id");
+            state = queryParams.get("state");
+        } catch {}
     }
+    if (!state) state = c.req.query("state") || null;
 
+    const txIdParam = (typeof body?.transaction_id === "string" && body.transaction_id.trim()) || c.req.query("transaction_id") || getCookie(c, "oauth_transaction_id");
+    const tx = await getOAuthTransaction({ transactionId: txIdParam || undefined, state: state || undefined });
+
+    const rawBrowserProof = getCookie(c, getBrowserSessionCookieName());
+    const database = await getDb();
+    const { sessionUser, useSelectedAdapter, errorRes } = await resolveConsentOrContinueSession(c, database, tx, rawBrowserProof);
+    if (errorRes) return errorRes;
+
+    let resolvedClientDoc: any = null;
     if (sessionUser) {
-        const body = await c.req.raw.clone().json().catch(() => null);
-        let state: string | null = null;
-        if (body?.oauth_query && typeof body.oauth_query === "string") {
-            try {
-                const queryParams = new URLSearchParams(body.oauth_query);
-                clientId = queryParams.get("client_id");
-                state = queryParams.get("state");
-            } catch {}
-        }
-        if (!state) state = c.req.query("state") || null;
-
-        const txIdCookie = getCookie(c, "oauth_transaction_id");
-        tx = await getOAuthTransaction({ state: state || undefined, transactionId: txIdCookie || undefined });
         if (tx) {
             if (clientId && clientId !== tx.clientId) {
                 return c.json({ error: "invalid_request", error_description: "Client ID does not match OAuth transaction" }, 400);
@@ -191,7 +180,6 @@ export async function handleOAuthContinue(c: Context) {
         }
 
         if (clientId) {
-            const database = await getDb();
             const clientDoc = await resolveOAuthClient(database, clientId);
             resolvedClientDoc = clientDoc;
             if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
@@ -219,9 +207,31 @@ export async function handleOAuthContinue(c: Context) {
         }
     }
 
-    const res = await authProvider.handler(c.req.raw);
+    const res = useSelectedAdapter && tx?.selectedEntryId
+        ? await dispatchRequestWithBrowserEntry(authProvider as any, database, rawBrowserProof, tx.selectedEntryId, c.req.raw)
+        : await authProvider.handler(c.req.raw);
+    if (useSelectedAdapter && tx) {
+        const stillValid = await verifySelectedTransactionStillActive(database, rawBrowserProof, tx);
+        if (!stillValid) {
+            let redirectTarget: string | null = res.headers.get("location");
+            if (!redirectTarget && res.status === 200) {
+                const j = await res.clone().json().catch(() => null);
+                redirectTarget = j?.redirect_uri || j?.url || null;
+            }
+            const code = redirectTarget ? new URL(redirectTarget, config.auth.baseURL).searchParams.get("code") : null;
+            if (code) await purgeAuthorizationCodeOnCommitFailure(database, code).catch(() => {});
+            return c.json({ error: "unauthorized", code: "ERR_SESSION_REVOKED" }, 401);
+        }
+    }
     const committed = await captureAndBindCode(res, tx, sessionUser, clientId, resolvedClientDoc);
-    if (!committed) return c.json({ error: "invalid_client", error_description: "Client credentials transitioned during continuation" }, 401);
+    if (!committed) {
+        return c.json(
+            useSelectedAdapter
+                ? { error: "unauthorized", code: "ERR_SESSION_REVOKED", error_description: "Selected session revoked, reselected, or client transitioned during continuation" }
+                : { error: "invalid_client", error_description: "Client credentials transitioned during continuation" },
+            401
+        );
+    }
     return res;
 }
 

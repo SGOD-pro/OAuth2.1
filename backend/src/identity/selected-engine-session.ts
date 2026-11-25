@@ -23,8 +23,9 @@ export async function dispatchSelectedEngineSession(
 ): Promise<Response> {
   const path = new URL(request.url).pathname;
   if (!((request.method === "GET" && path === "/api/auth/oauth2/authorize") ||
-        (request.method === "POST" && path === "/api/auth/oauth2/consent"))) {
-    throw new Error("Selected-session dispatch only supports authorize and consent");
+        (request.method === "POST" && path === "/api/auth/oauth2/consent") ||
+        (request.method === "POST" && path === "/api/auth/oauth2/continue"))) {
+    throw new Error("Selected-session dispatch only supports authorize, consent, and continue");
   }
   const context = await engine.$context;
   const headers = new Headers(request.headers);

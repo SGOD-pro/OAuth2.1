@@ -44,6 +44,7 @@
     "test:p3-adapter": "npm --prefix backend run test:p3-adapter",
     "test:p3-selection": "npm --prefix backend run test:p3-selection",
     "test:p3-binding": "npm --prefix backend run test:p3-binding",
+    "test:p3-continuation": "npm --prefix backend run test:p3-continuation",
     "test:p3-two-tab": "npm --prefix backend run test:p3-two-tab",
     "test:client-policy-enforcement": "npm --prefix backend run test:client-policy-enforcement",
     "test:client-policy-compatibility": "npm --prefix backend run test:client-policy-compatibility",
