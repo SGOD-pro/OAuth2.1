@@ -1042,10 +1042,17 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 3. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
    * Result: 11/11 local consumer E2E flows passed, 0 integration contract violations, 0 documentation consistency errors
 
-### Remaining open gaps (`AC-11` partial & P4 release decisions)
+### Remaining open gaps (P4 release decisions)
 
-* **Contact/email change (`AC-11` unverified)**: Email/contact change flows preserving factor policy and revoking stale authority remain unverified.
 * **Operator lost factor recovery custody (open release decision)**: Operator assisted lost factor recovery custody and runbook remain open; admin lost factor recovery must never be email only.
+* **Live mail provider delivery**: Password reset and email change verification/notification were verified with the local mail sink (`getTestMailSinkMessages`); live mail provider delivery remains separate.
+
+## Slice P4 verified email change (`AC-11` complete)
+
+**Date:** 2026-11-26. **Result:** Implemented and locally verified `/api/identity/email-change/request` and `/api/identity/email-change/confirm` (`backend/src/routes/identity-email-change.ts`, `backend/tests/security/p4-email-change.test.ts`). `AC-11` is now **locally verified** (with live mail provider delivery separate, and operator lost factor recovery custody open).
+
+* **Account binding & recent auth:** Both endpoints resolve `X-Identity-Context` via `resolveOwnerDashboardContext` (an ambient session for B never targets B when context is A). `request` verifies current password and requires admin TOTP + recent MFA (5 minute window) for admin roles.
+* **Atomic proof & uniqueness:** `confirm` runs inside a MongoDB transaction (`mongoSession.withTransaction`), atomically consumes the single use `email_change_requests` proof, checks `newEmail` uniqueness at commit (`409` on collision, preserving old address and authority), advances `sessionVersion` and `lookupVersion`, preserves `_id`/`sub`/`role`/`twoFactorEnabled`, revokes A's old sessions, `identity_contexts`, `browser_session_sets` entries, and OAuth tokens/families, keeps B signed in, and notifies `oldEmail` via the local mail sink.
 
 ## Slice P4 password reset, browser TOTP E2E, and replay exception reconciliation
 

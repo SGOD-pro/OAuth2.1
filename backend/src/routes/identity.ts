@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { handleEmailChangeRequest, handleEmailChangeConfirm } from "./identity-email-change";
 import { csrfProtection } from "../middleware/csrf";
 import {
   handleGetRegistrationConfig,
@@ -48,6 +49,7 @@ identity.use("/contexts/*", csrfProtection);
 identity.use("/invitations/*", csrfProtection);
 identity.use("/recovery/*", csrfProtection);
 identity.use("/totp/*", csrfProtection);
+identity.use("/email-change/*", csrfProtection);
 
 identity.get("/registration/config", handleGetRegistrationConfig);
 identity.get("/registration/intent/:intentId", handleGetRegistrationIntentStatus);
@@ -72,6 +74,8 @@ identity.post("/recovery/backup-code", recoveryIpRateLimit, recoveryAccountRateL
 identity.post("/totp/enable", totpIpRateLimit, handleOwnerTotpEnable);
 identity.post("/totp/verify", totpIpRateLimit, totpSubjectRateLimit, handleOwnerTotpVerify);
 identity.post("/totp/disable", totpIpRateLimit, totpSubjectRateLimit, handleOwnerTotpDisable);
+identity.post("/email-change/request", totpIpRateLimit, handleEmailChangeRequest);
+identity.post("/email-change/confirm", totpIpRateLimit, handleEmailChangeConfirm);
 
 identity.post("/mail/callbacks", handleMailCallback);
 

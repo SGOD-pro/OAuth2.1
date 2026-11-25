@@ -59,6 +59,26 @@ export function recordPasswordResetMailForTesting(email: string, url: string, to
   });
 }
 
+export function recordEmailChangeMailForTesting(
+  to: string,
+  purpose: "email_change_verify" | "email_change_notice",
+  text: string,
+): void {
+  if (config.env === "production") return;
+  testSinkMessages.push({
+    to,
+    from: "noreply@swyra.local",
+    subject: purpose === "email_change_verify" ? "Confirm your new email address" : "Your SWYRA Auth email was changed",
+    text,
+    html: `<p>${text}</p>`,
+    purpose,
+    templateVersion: "v1",
+    idempotencyKey: crypto.randomUUID(),
+    providerMessageId: `local_sink_${crypto.randomUUID()}`,
+    receivedAt: new Date().toISOString(),
+  });
+}
+
 function escapeHtml(raw: string): string {
   return raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
