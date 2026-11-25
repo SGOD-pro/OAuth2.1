@@ -235,4 +235,63 @@ describe("P4 Verified Private-App Invitations", () => {
     });
     assert.equal(claimExp.status, 409);
   });
+
+  it("rolls back failed grant so invite stays retryable, preserves privileged roles, and requires TOTP for app-admin access", async () => {
+    clearLocalInviteMailSink();
+    const { claimPrivateAppInvitation } = await import("../../src/identity/app-invitations");
+    const superEmail = `sup3_${crypto.randomBytes(4).toString("hex")}@example.com`;
+    const userEmail = `rb_${crypto.randomBytes(4).toString("hex")}@example.com`;
+    await seedUser(superEmail, "admin");
+    const userId = await seedUser(userEmail, "user", { emailVerified: true });
+    const superCookie = await signInWithMfa(superEmail);
+    const userCookie = await signIn(userEmail);
+
+    const iss = await app.request("/api/admin/clients/priv-b/invitations", {
+      method: "POST", headers: hdrs({ "Content-Type": "application/json", Cookie: superCookie }),
+      body: JSON.stringify({ email: userEmail, roleCeiling: "app-admin" }),
+    });
+    assert.equal(iss.status, 201);
+    const { inviteId } = await iss.json();
+    const rawToken = getLocalInviteMailSink()[0].rawToken;
+
+    // Simulate grant failure inside transaction -> invite must roll back to pending
+    await assert.rejects(
+      () => claimPrivateAppInvitation({
+        database: db,
+        rawToken,
+        userId,
+        userEmail,
+        emailVerified: true,
+        onBeforeGrantForTesting: () => { throw new Error("Simulated grant failure"); },
+      }),
+      /Simulated grant failure/
+    );
+    const afterFail = await db.collection("app_invitations").findOne({ inviteId });
+    assert.equal(afterFail?.status, "pending", "Failed grant must roll back invite to pending");
+
+    // Retry succeeds and grants app-admin, but admin access still requires completed TOTP
+    const retryRes = await app.request("/api/identity/invitations/claim", {
+      method: "POST", headers: hdrs({ "Content-Type": "application/json", Cookie: userCookie }),
+      body: JSON.stringify({ token: rawToken }),
+    });
+    assert.equal(retryRes.status, 200);
+    const adminCheck = await app.request("/api/admin/clients/priv-b/users", { headers: hdrs({ Cookie: userCookie }) });
+    assert.equal(adminCheck.status, 403);
+    assert.equal((await adminCheck.json()).code, "ERR_MFA_ENROLLMENT_REQUIRED");
+
+    // Existing platform super-admin claiming app-admin invite preserves role: "admin"
+    const issSuper = await app.request("/api/admin/clients/priv-b/invitations", {
+      method: "POST", headers: hdrs({ "Content-Type": "application/json", Cookie: superCookie }),
+      body: JSON.stringify({ email: superEmail, roleCeiling: "app-admin" }),
+    });
+    assert.equal(issSuper.status, 201);
+    const superTok = getLocalInviteMailSink()[1].rawToken;
+    const superClaim = await app.request("/api/identity/invitations/claim", {
+      method: "POST", headers: hdrs({ "Content-Type": "application/json", Cookie: superCookie }),
+      body: JSON.stringify({ token: superTok }),
+    });
+    assert.equal(superClaim.status, 200);
+    const superDoc = await db.collection("user").findOne({ email: superEmail });
+    assert.equal(superDoc?.role, "admin", "Existing platform admin role must be preserved");
+  });
 });

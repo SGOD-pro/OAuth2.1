@@ -129,54 +129,83 @@ export async function claimPrivateAppInvitation(params: {
   userId: string;
   userEmail: string;
   emailVerified: boolean;
+  onBeforeGrantForTesting?: () => Promise<void> | void;
 }): Promise<{ clientId: string; roleCeiling: "user" | "app-admin"; userId: string }> {
-  const { database, rawToken, userId, userEmail, emailVerified } = params;
+  const { database, rawToken, userId, userEmail, emailVerified, onBeforeGrantForTesting } = params;
   if (!emailVerified) {
     throw new InvitationError("ERR_MAILBOX_PROOF_REQUIRED", 403, "Verified mailbox proof is required before claiming an invitation");
   }
   const normalizedEmail = userEmail.trim().toLowerCase();
   const tokenDigest = digestToken(rawToken.trim());
   const now = new Date();
+  const mongoClient = (database as any).client;
 
-  const claimed = await database.collection<AppInvitationDoc>("app_invitations").findOneAndUpdate(
-    {
-      tokenDigest,
-      status: "pending",
-      expiresAt: { $gt: now },
-      targetEmail: normalizedEmail,
-    },
-    {
-      $set: {
-        status: "claimed",
-        claimedAt: now,
-        claimedByUserId: userId,
+  const runClaim = async (session?: any) => {
+    const opt = session ? { session } : {};
+    const claimed = await database.collection<AppInvitationDoc>("app_invitations").findOneAndUpdate(
+      {
+        tokenDigest,
+        status: "pending",
+        expiresAt: { $gt: now },
+        targetEmail: normalizedEmail,
       },
-    },
-    { returnDocument: "after" }
-  );
+      {
+        $set: {
+          status: "claimed",
+          claimedAt: now,
+          claimedByUserId: userId,
+        },
+      },
+      { returnDocument: "after", ...opt }
+    );
 
-  if (!claimed) {
-    const existing = await database.collection<AppInvitationDoc>("app_invitations").findOne({ tokenDigest });
-    if (existing && existing.targetEmail !== normalizedEmail) {
-      throw new InvitationError("ERR_INVITE_MAILBOX_MISMATCH", 403, "Invitation is bound to a different mailbox");
+    if (!claimed) {
+      const existing = await database.collection<AppInvitationDoc>("app_invitations").findOne({ tokenDigest }, opt);
+      if (existing && existing.targetEmail !== normalizedEmail) {
+        throw new InvitationError("ERR_INVITE_MAILBOX_MISMATCH", 403, "Invitation is bound to a different mailbox");
+      }
+      throw new InvitationError("ERR_INVITE_INVALID_OR_EXPIRED", 409, "Invitation is invalid, expired, revoked, or already claimed");
     }
-    throw new InvitationError("ERR_INVITE_INVALID_OR_EXPIRED", 409, "Invitation is invalid, expired, revoked, or already claimed");
+
+    if (onBeforeGrantForTesting) {
+      await onBeforeGrantForTesting();
+    }
+
+    if (claimed.roleCeiling === "user") {
+      await database.collection("user_app_registrations").updateOne(
+        { userId, clientId: claimed.clientId },
+        { $setOnInsert: { userId, clientId: claimed.clientId, registeredAt: now, invitedBy: claimed.inviterUserId } },
+        { upsert: true, ...opt }
+      );
+    } else if (claimed.roleCeiling === "app-admin") {
+      const userFilters: any[] = [{ id: userId }, { _id: userId }];
+      if (ObjectId.isValid(userId)) userFilters.push({ _id: new ObjectId(userId) });
+      const existingUser = await database.collection("user").findOne({ $or: userFilters }, opt);
+      // Preserve existing platform super-admin roles; only assign app-admin if not already privileged.
+      if (existingUser?.role !== "admin" && existingUser?.role !== "super-admin") {
+        await database.collection("user").updateOne(
+          { $or: userFilters },
+          { $set: { role: "app-admin", scopedClientId: claimed.clientId } },
+          opt
+        );
+      }
+    }
+
+    return { clientId: claimed.clientId, roleCeiling: claimed.roleCeiling, userId };
+  };
+
+  if (mongoClient && typeof mongoClient.startSession === "function") {
+    const session = mongoClient.startSession();
+    try {
+      let result!: { clientId: string; roleCeiling: "user" | "app-admin"; userId: string };
+      await session.withTransaction(async () => {
+        result = await runClaim(session);
+      });
+      return result;
+    } finally {
+      await session.endSession();
+    }
   }
 
-  if (claimed.roleCeiling === "user") {
-    await database.collection("user_app_registrations").updateOne(
-      { userId, clientId: claimed.clientId },
-      { $setOnInsert: { userId, clientId: claimed.clientId, registeredAt: now, invitedBy: claimed.inviterUserId } },
-      { upsert: true }
-    );
-  } else if (claimed.roleCeiling === "app-admin") {
-    const userFilters: any[] = [{ id: userId }, { _id: userId }];
-    if (ObjectId.isValid(userId)) userFilters.push({ _id: new ObjectId(userId) });
-    await database.collection("user").updateOne(
-      { $or: userFilters },
-      { $set: { role: "app-admin", scopedClientId: claimed.clientId } }
-    );
-  }
-
-  return { clientId: claimed.clientId, roleCeiling: claimed.roleCeiling, userId };
+  return runClaim();
 }

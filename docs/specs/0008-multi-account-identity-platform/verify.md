@@ -810,6 +810,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: Playwright `/account` two tab E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
+## Slice P4 invitation claim consistency and local system walkthrough
+
+**Date:** 2026-11-25. **Result:** Wrapped `claimPrivateAppInvitation` in a MongoDB replica set transaction so invitation consumption and membership or `app-admin` assignment commit together, verified failed grant rollback and retryability, verified existing `admin` role preservation and TOTP enforcement for `app-admin` access, and ran the full local system walkthrough. All flows (OTP signup, two account selection, `/account` dashboard, open/private app login, and invite claim) passed in automated Playwright and protocol suites against shared Docker MongoDB (`rs0`); no separate manual browser click through was performed, and invitation delivery used `localInviteMailSink` rather than live SMTP. P3 is complete; P4 remains open for recovery and optional user TOTP.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `0d0078e3a08acc0f932e06882ae3a7b012a576ae`
+* Worktree status: Working tree with transactional `claimPrivateAppInvitation` in `app-invitations.ts`, rollback and role preservation tests in `p4-private-app-invitations.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-invitations && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 3/3 invitation tests passed (including failed grant rollback, retryability, privileged role preservation, and TOTP gating); 2/2 admin MFA tests passed
+2. Command: `npm run test:p2b-browser && npm run test:p3-two-tab && npm run test:p3-dashboard-browser && npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: P2b registration browser E2E, P3 two tab chooser E2E, P3 `/account` dashboard E2E, 11/11 local consumer E2E flows, integration contract check, and docs consistency check all passed
+
+
 ## Slice P4 verified private app invitations
 
 **Date:** 2026-11-25. **Result:** Implemented and verified private app invitation issuance (`POST /api/admin/clients/:clientId/invitations`), revocation (`DELETE /api/admin/clients/:clientId/invitations/:inviteId`), and atomic single use claim (`POST /api/identity/invitations/claim`) with local mail sink delivery, mailbox proof and authenticated account checks, inviter role ceilings, 5 minute MFA gating, and tightened fresh MFA assertions (`404` exact status). P3 is complete; P4 remains open for recovery and optional user TOTP.
@@ -826,6 +844,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 0 TypeScript diagnostics; 2/2 invitation tests passed (role ceilings, mailbox proof, concurrent single use claim, revocation, expiry, role separation); 2/2 admin MFA tests passed
 2. Command: `npm run test:p3-dashboard-browser && npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
    * Result: Playwright `/account` two tab E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
+## Slice P4 invitation claim consistency and local system walkthrough
+
+**Date:** 2026-11-25. **Result:** Wrapped `claimPrivateAppInvitation` in a MongoDB replica set transaction so invitation consumption and membership or `app-admin` assignment commit together, verified failed grant rollback and retryability, verified existing `admin` role preservation and TOTP enforcement for `app-admin` access, and ran the full local system walkthrough. All flows (OTP signup, two account selection, `/account` dashboard, open/private app login, and invite claim) passed in automated Playwright and protocol suites against shared Docker MongoDB (`rs0`); no separate manual browser click through was performed, and invitation delivery used `localInviteMailSink` rather than live SMTP. P3 is complete; P4 remains open for recovery and optional user TOTP.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `0d0078e3a08acc0f932e06882ae3a7b012a576ae`
+* Worktree status: Working tree with transactional `claimPrivateAppInvitation` in `app-invitations.ts`, rollback and role preservation tests in `p4-private-app-invitations.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-invitations && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 3/3 invitation tests passed (including failed grant rollback, retryability, privileged role preservation, and TOTP gating); 2/2 admin MFA tests passed
+2. Command: `npm run test:p2b-browser && npm run test:p3-two-tab && npm run test:p3-dashboard-browser && npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: P2b registration browser E2E, P3 two tab chooser E2E, P3 `/account` dashboard E2E, 11/11 local consumer E2E flows, integration contract check, and docs consistency check all passed
 
 
 
