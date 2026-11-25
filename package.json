@@ -48,6 +48,7 @@
     "test:p3-contexts": "npm --prefix backend run test:p3-contexts",
     "test:p3-dashboard-browser": "npm --prefix backend run test:p3-dashboard-browser",
     "test:p4-admin-mfa": "npm --prefix backend run test:p4-admin-mfa",
+    "test:p4-invitations": "npm --prefix backend run test:p4-invitations",
     "test:p3-two-tab": "npm --prefix backend run test:p3-two-tab",
     "test:client-policy-enforcement": "npm --prefix backend run test:client-policy-enforcement",
     "test:client-policy-compatibility": "npm --prefix backend run test:client-policy-compatibility",

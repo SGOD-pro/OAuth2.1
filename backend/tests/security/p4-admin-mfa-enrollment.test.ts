@@ -127,7 +127,7 @@ describe("P4 Admin TOTP Enrollment, Setup-Only Authority & Step-Up", () => {
       method: "DELETE",
       headers: hdrs({ Cookie: mfaCookie }),
     });
-    assert.notEqual(okDelete.status, 403);
+    assert.equal(okDelete.status, 404);
 
     // Just outside 5-minute window (5m10s ago) fails step-up on sensitive admin routes
     const outside5m = new Date(Date.now() - (5 * 60 + 10) * 1000);
@@ -170,7 +170,7 @@ describe("P4 Admin TOTP Enrollment, Setup-Only Authority & Step-Up", () => {
       method: "DELETE",
       headers: hdrs({ Cookie: mfaCookie }),
     });
-    assert.notEqual(okAppDelete.status, 403);
+    assert.equal(okAppDelete.status, 404);
 
     // Just outside 5-minute window (5m10s ago) fails step-up for app-admin
     const outside5m = new Date(Date.now() - (5 * 60 + 10) * 1000);

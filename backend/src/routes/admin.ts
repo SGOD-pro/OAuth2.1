@@ -13,6 +13,7 @@ import { adminProvisionRateLimit } from "../middleware/rate-limit";
 import { handleGetStats } from "./admin-stats";
 import { handleGetLogs, handleGetV2Logs } from "./admin-logs";
 import { handlePostUsers, handleGetUsers } from "./admin-users";
+import { handleIssueClientInvitation, handleRevokeClientInvitation } from "./admin-invitations";
 import { handleGetClients, handlePostClients, handleDeleteClient } from "./admin-clients";
 import { handleGetClientById, handlePatchClientById } from "./admin-client-detail";
 import { handleGetAppConfig, handlePatchAppConfig } from "./admin-app-config";
@@ -143,6 +144,9 @@ admin.post("/clients/:clientId/users", requireScopedAdmin, handlePostAppUsers);
 
 // 16. Remove a User from a Client
 admin.delete("/clients/:clientId/users/:userId", requireScopedAdmin, requireRecentMfa, handleDeleteAppUser);
+
+admin.post("/clients/:clientId/invitations", requireScopedAdmin, requireRecentMfa, handleIssueClientInvitation);
+admin.delete("/clients/:clientId/invitations/:inviteId", requireScopedAdmin, requireRecentMfa, handleRevokeClientInvitation);
 
 // 17. Admin Catch-All 404 Handler
 admin.all("*", (c) => {

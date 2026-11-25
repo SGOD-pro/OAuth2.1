@@ -810,6 +810,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: Playwright `/account` two tab E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
+## Slice P4 verified private app invitations
+
+**Date:** 2026-11-25. **Result:** Implemented and verified private app invitation issuance (`POST /api/admin/clients/:clientId/invitations`), revocation (`DELETE /api/admin/clients/:clientId/invitations/:inviteId`), and atomic single use claim (`POST /api/identity/invitations/claim`) with local mail sink delivery, mailbox proof and authenticated account checks, inviter role ceilings, 5 minute MFA gating, and tightened fresh MFA assertions (`404` exact status). P3 is complete; P4 remains open for recovery and optional user TOTP.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `d45d5d0167b3fa46800863661ac3a74de23814e1`
+* Worktree status: Working tree with `app-invitations.ts`, `admin-invitations.ts`, `identity-invitations.ts`, `app_invitations` indexes, `p4-private-app-invitations.test.ts`, tightened `p4-admin-mfa-enrollment.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-invitations && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 2/2 invitation tests passed (role ceilings, mailbox proof, concurrent single use claim, revocation, expiry, role separation); 2/2 admin MFA tests passed
+2. Command: `npm run test:p3-dashboard-browser && npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: Playwright `/account` two tab E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 
 
 
