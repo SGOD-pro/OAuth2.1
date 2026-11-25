@@ -846,6 +846,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
+## Slice P4 independent account and IP recovery rate limits
+
+**Date:** 2026-11-25. **Result:** Enforced independent trusted IP (`limit: 10`) and normalized email digest (`limit: 5`) rate limits before password verification on `POST /api/identity/recovery/backup-code` via `createRateLimiter` (`sensitivity: "auth"`), verified shared `rate_limits` counters across accounts and IPs including unknown accounts, and verified fail closed (`429`) behavior under simulated store outage. Optional user TOTP and operator lost factor recovery custody remain open in P4.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `de1683c97620ed8f9e225c1d6072b0088d3d8c23`
+* Worktree status: Working tree with `keyFn` in `rate-limit.ts`, `digestToken` account key in `identity-recovery.ts`, cross IP unknown account, cross account IP, and store outage tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 4/4 recovery tests passed; 2/2 admin MFA tests passed
+2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 ## Slice P4 backup code recovery atomicity and shared rate limiting
 
 **Date:** 2026-11-25. **Result:** Closed P4 backup code recovery failure and rate limit gaps by moving backup code consumption, old session invalidation, `tokenVersion` bump, `twoFactorEnabled: false` reset, and restricted recovery session issuance into a single MongoDB replica set transaction, replacing the local counter with shared `createRateLimiter` IP and account limits (`sensitivity: "auth"`), and using configured session cookie attributes (`Secure` in production). Optional user TOTP and operator lost factor recovery custody remain open.
@@ -860,6 +878,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-invitations && npm run test:p4-admin-mfa`
    * Result: 0 TypeScript diagnostics; 3/3 recovery tests passed (concurrent single use, rate limiting, failed commit preservation and platform admin restoration); 3/3 invitation tests passed; 2/2 admin MFA tests passed
+2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
+## Slice P4 independent account and IP recovery rate limits
+
+**Date:** 2026-11-25. **Result:** Enforced independent trusted IP (`limit: 10`) and normalized email digest (`limit: 5`) rate limits before password verification on `POST /api/identity/recovery/backup-code` via `createRateLimiter` (`sensitivity: "auth"`), verified shared `rate_limits` counters across accounts and IPs including unknown accounts, and verified fail closed (`429`) behavior under simulated store outage. Optional user TOTP and operator lost factor recovery custody remain open in P4.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `de1683c97620ed8f9e225c1d6072b0088d3d8c23`
+* Worktree status: Working tree with `keyFn` in `rate-limit.ts`, `digestToken` account key in `identity-recovery.ts`, cross IP unknown account, cross account IP, and store outage tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 4/4 recovery tests passed; 2/2 admin MFA tests passed
 2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
    * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
@@ -918,6 +954,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
+## Slice P4 independent account and IP recovery rate limits
+
+**Date:** 2026-11-25. **Result:** Enforced independent trusted IP (`limit: 10`) and normalized email digest (`limit: 5`) rate limits before password verification on `POST /api/identity/recovery/backup-code` via `createRateLimiter` (`sensitivity: "auth"`), verified shared `rate_limits` counters across accounts and IPs including unknown accounts, and verified fail closed (`429`) behavior under simulated store outage. Optional user TOTP and operator lost factor recovery custody remain open in P4.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `de1683c97620ed8f9e225c1d6072b0088d3d8c23`
+* Worktree status: Working tree with `keyFn` in `rate-limit.ts`, `digestToken` account key in `identity-recovery.ts`, cross IP unknown account, cross account IP, and store outage tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 4/4 recovery tests passed; 2/2 admin MFA tests passed
+2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 ## Slice P4 backup code recovery atomicity and shared rate limiting
 
 **Date:** 2026-11-25. **Result:** Closed P4 backup code recovery failure and rate limit gaps by moving backup code consumption, old session invalidation, `tokenVersion` bump, `twoFactorEnabled: false` reset, and restricted recovery session issuance into a single MongoDB replica set transaction, replacing the local counter with shared `createRateLimiter` IP and account limits (`sensitivity: "auth"`), and using configured session cookie attributes (`Secure` in production). Optional user TOTP and operator lost factor recovery custody remain open.
@@ -932,6 +986,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-invitations && npm run test:p4-admin-mfa`
    * Result: 0 TypeScript diagnostics; 3/3 recovery tests passed (concurrent single use, rate limiting, failed commit preservation and platform admin restoration); 3/3 invitation tests passed; 2/2 admin MFA tests passed
+2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
+## Slice P4 independent account and IP recovery rate limits
+
+**Date:** 2026-11-25. **Result:** Enforced independent trusted IP (`limit: 10`) and normalized email digest (`limit: 5`) rate limits before password verification on `POST /api/identity/recovery/backup-code` via `createRateLimiter` (`sensitivity: "auth"`), verified shared `rate_limits` counters across accounts and IPs including unknown accounts, and verified fail closed (`429`) behavior under simulated store outage. Optional user TOTP and operator lost factor recovery custody remain open in P4.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `de1683c97620ed8f9e225c1d6072b0088d3d8c23`
+* Worktree status: Working tree with `keyFn` in `rate-limit.ts`, `digestToken` account key in `identity-recovery.ts`, cross IP unknown account, cross account IP, and store outage tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 4/4 recovery tests passed; 2/2 admin MFA tests passed
 2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
    * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 

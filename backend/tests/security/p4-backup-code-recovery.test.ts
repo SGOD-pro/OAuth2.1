@@ -140,18 +140,51 @@ describe("P4 Backup-Code Recovery & Role Restoration", () => {
     assert.equal(deniedB.status, 403);
   });
 
-  it("rate-limits excessive backup-code recovery attempts", async () => {
-    const email = `rec_rl_${crypto.randomBytes(4).toString("hex")}@example.com`;
-    await seedEnrolledAdmin(email, "admin");
+  it("rate-limits excessive backup-code recovery attempts across IPs for unknown accounts too", async () => {
+    const unknownEmail = `unknown_${crypto.randomBytes(4).toString("hex")}@example.com`;
     let lastStatus = 0;
     for (let i = 0; i < 6; i++) {
       const r = await app.request("/api/identity/recovery/backup-code", {
-        method: "POST", headers: hdrs({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ email, password, backupCode: "INVALID-CODE" }),
+        method: "POST",
+        headers: hdrs({ "Content-Type": "application/json", "x-forwarded-for": `198.51.100.${10 + i}, 10.0.0.1` }),
+        body: JSON.stringify({ email: unknownEmail, password, backupCode: "INVALID-CODE" }),
       });
       lastStatus = r.status;
     }
     assert.equal(lastStatus, 429);
+  });
+
+  it("shares one IP quota across distinct accounts and fails closed when rate-limit store fails", async () => {
+    const sharedIp = "198.51.100.200, 10.0.0.1";
+    let status = 0;
+    for (let i = 0; i < 11; i++) {
+      const r = await app.request("/api/identity/recovery/backup-code", {
+        method: "POST",
+        headers: hdrs({ "Content-Type": "application/json", "x-forwarded-for": sharedIp }),
+        body: JSON.stringify({ email: `acct_${i}_${crypto.randomBytes(3).toString("hex")}@example.com`, password, backupCode: "BAD" }),
+      });
+      status = r.status;
+    }
+    assert.equal(status, 429, "11th request from same IP across distinct accounts must hit IP limit");
+
+    // Verify MongoDB shared counter exists for both IP and account prefixes
+    const ipEntries = await db.collection("rate_limits").countDocuments({ _id: { $regex: /^RATE#rl:recovery:ip:/ } });
+    const acctEntries = await db.collection("rate_limits").countDocuments({ _id: { $regex: /^RATE#rl:recovery:acct:/ } });
+    assert.ok(ipEntries > 0 && acctEntries > 0, "Both IP and account limits must use shared rate_limits store");
+
+    // Simulate store outage -> must fail closed (503)
+    const { __simulateRateLimitStoreFailure } = await import("../../src/db/rate-limits");
+    __simulateRateLimitStoreFailure(true);
+    try {
+      const outageRes = await app.request("/api/identity/recovery/backup-code", {
+        method: "POST",
+        headers: hdrs({ "Content-Type": "application/json", "x-forwarded-for": "198.51.100.201, 10.0.0.1" }),
+        body: JSON.stringify({ email: "outage@example.com", password, backupCode: "BAD" }),
+      });
+      assert.equal(outageRes.status, 429);
+    } finally {
+      __simulateRateLimitStoreFailure(false);
+    }
   });
 
   it("preserves backup code on failed commit and restores platform admin after fresh TOTP", async () => {

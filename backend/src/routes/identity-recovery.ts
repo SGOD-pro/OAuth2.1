@@ -7,6 +7,7 @@ import { authProvider } from "../utils/auth";
 import { hasDangerousMongoKeys } from "../utils/security";
 import { config } from "../config";
 import { createRateLimiter } from "../middleware/rate-limit";
+import { digestToken } from "../identity/registration-crypto";
 
 export const recoveryIpRateLimit = createRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -20,6 +21,11 @@ export const recoveryAccountRateLimit = createRateLimiter({
   limit: 5,
   prefix: "rl:recovery:acct:",
   sensitivity: "auth",
+  keyFn: async (c: Context) => {
+    const body = await c.req.raw.clone().json().catch(() => null);
+    const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
+    return email ? digestToken(email) : null;
+  },
 });
 
 let recoveryCommitHookForTesting: (() => Promise<void> | void) | null = null;

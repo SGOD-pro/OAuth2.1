@@ -92,8 +92,9 @@ export function createRateLimiter(options: {
   prefix?: string;
   limiterName?: RateLimiterName;
   sensitivity?: LimiterSensitivity;
+  keyFn?: (c: any) => Promise<string | null> | string | null;
 }) {
-  const { windowMs, limit, prefix = "global", limiterName, sensitivity = "public" } = options;
+  const { windowMs, limit, prefix = "global", limiterName, sensitivity = "public", keyFn } = options;
 
   return createMiddleware(async (c, next) => {
     if (c.req.method === "OPTIONS") {
@@ -101,14 +102,16 @@ export function createRateLimiter(options: {
     }
 
     const ip = getTrustedClientIp(c);
-    const key = `${prefix}:${ip}`;
+    const customSubject = keyFn ? await keyFn(c) : null;
+    const subject = customSubject || ip;
+    const key = `${prefix}:${subject}`;
     const now = Date.now();
 
     // 1. Primary: Redis Upstash Ratelimit if available
     const limiter = limiterName && rateLimiters ? rateLimiters[limiterName] : null;
 
     if (limiter) {
-      const redisResult = await checkRateLimit(limiter, ip);
+      const redisResult = await checkRateLimit(limiter, subject);
 
       // remaining !== -1 indicates successful Redis execution
       if (redisResult.remaining !== -1) {
