@@ -118,6 +118,7 @@ const securityTestFiles = [
   "tests/security/p3-owner-dashboard-contexts.test.ts",
   "tests/security/p4-admin-mfa-enrollment.test.ts",
   "tests/security/p4-private-app-invitations.test.ts",
+  "tests/security/p4-backup-code-recovery.test.ts",
 ];
 
 console.log("================================================================");

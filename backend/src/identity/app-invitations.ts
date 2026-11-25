@@ -194,18 +194,17 @@ export async function claimPrivateAppInvitation(params: {
     return { clientId: claimed.clientId, roleCeiling: claimed.roleCeiling, userId };
   };
 
-  if (mongoClient && typeof mongoClient.startSession === "function") {
-    const session = mongoClient.startSession();
-    try {
-      let result!: { clientId: string; roleCeiling: "user" | "app-admin"; userId: string };
-      await session.withTransaction(async () => {
-        result = await runClaim(session);
-      });
-      return result;
-    } finally {
-      await session.endSession();
-    }
+  if (!mongoClient || typeof mongoClient.startSession !== "function") {
+    throw new InvitationError("ERR_TRANSACTION_REQUIRED", 503, "Database transaction support is required to claim invitations");
   }
-
-  return runClaim();
+  const session = mongoClient.startSession();
+  try {
+    let result!: { clientId: string; roleCeiling: "user" | "app-admin"; userId: string };
+    await session.withTransaction(async () => {
+      result = await runClaim(session);
+    });
+    return result;
+  } finally {
+    await session.endSession();
+  }
 }

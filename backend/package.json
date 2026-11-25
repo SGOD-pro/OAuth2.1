@@ -108,6 +108,7 @@
     "test:p3-dashboard-browser": "node --import tsx tests/e2e/p3-account-dashboard-browser.test.ts",
     "test:p4-admin-mfa": "node --import tsx tests/security/p4-admin-mfa-enrollment.test.ts",
     "test:p4-invitations": "node --import tsx tests/security/p4-private-app-invitations.test.ts",
+    "test:p4-recovery": "node --import tsx tests/security/p4-backup-code-recovery.test.ts",
     "test:p3-two-tab": "node --import tsx tests/e2e/p3-two-tab-chooser-browser.test.ts"
   },
   "devDependencies": {

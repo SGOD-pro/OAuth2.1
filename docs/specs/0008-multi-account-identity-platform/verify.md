@@ -828,6 +828,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: P2b registration browser E2E, P3 two tab chooser E2E, P3 `/account` dashboard E2E, 11/11 local consumer E2E flows, integration contract check, and docs consistency check all passed
 
 
+## Slice P4 backup code recovery and mandatory invite claim transaction
+
+**Date:** 2026-11-25. **Result:** Enforced mandatory MongoDB transactions in `claimPrivateAppInvitation` (`503 ERR_TRANSACTION_REQUIRED` if unavailable) and implemented `POST /api/identity/recovery/backup-code` reusing Better Auth's TOTP engine with rate limiting, single use backup code consumption, atomic invalidation of old elevated sessions and `tokenVersion` bump, setup only recovery authority, and fresh TOTP restoration preserving exact role and `scopedClientId`. P3 is complete (with CI evidence); P4 remains open for operator lost factor recovery custody and optional user TOTP.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `d46ffe3ef48feedf17eadd3425540003b7908b30`
+* Worktree status: Working tree with mandatory transaction guard in `app-invitations.ts`, `identity-recovery.ts`, `p4-backup-code-recovery.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-invitations && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 2/2 recovery tests passed (concurrent single use backup code consumption, old session invalidation, setup only authority, fresh TOTP restoration preserving `app-admin` scope, and rate limiting); 3/3 invitation tests passed; 2/2 admin MFA tests passed
+2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 ## Slice P4 verified private app invitations
 
 **Date:** 2026-11-25. **Result:** Implemented and verified private app invitation issuance (`POST /api/admin/clients/:clientId/invitations`), revocation (`DELETE /api/admin/clients/:clientId/invitations/:inviteId`), and atomic single use claim (`POST /api/identity/invitations/claim`) with local mail sink delivery, mailbox proof and authenticated account checks, inviter role ceilings, 5 minute MFA gating, and tightened fresh MFA assertions (`404` exact status). P3 is complete; P4 remains open for recovery and optional user TOTP.
@@ -862,6 +880,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 0 TypeScript diagnostics; 3/3 invitation tests passed (including failed grant rollback, retryability, privileged role preservation, and TOTP gating); 2/2 admin MFA tests passed
 2. Command: `npm run test:p2b-browser && npm run test:p3-two-tab && npm run test:p3-dashboard-browser && npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
    * Result: P2b registration browser E2E, P3 two tab chooser E2E, P3 `/account` dashboard E2E, 11/11 local consumer E2E flows, integration contract check, and docs consistency check all passed
+
+
+## Slice P4 backup code recovery and mandatory invite claim transaction
+
+**Date:** 2026-11-25. **Result:** Enforced mandatory MongoDB transactions in `claimPrivateAppInvitation` (`503 ERR_TRANSACTION_REQUIRED` if unavailable) and implemented `POST /api/identity/recovery/backup-code` reusing Better Auth's TOTP engine with rate limiting, single use backup code consumption, atomic invalidation of old elevated sessions and `tokenVersion` bump, setup only recovery authority, and fresh TOTP restoration preserving exact role and `scopedClientId`. P3 is complete (with CI evidence); P4 remains open for operator lost factor recovery custody and optional user TOTP.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `d46ffe3ef48feedf17eadd3425540003b7908b30`
+* Worktree status: Working tree with mandatory transaction guard in `app-invitations.ts`, `identity-recovery.ts`, `p4-backup-code-recovery.test.ts`, review record, and updated ledger
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-recovery && npm run test:p4-invitations && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 2/2 recovery tests passed (concurrent single use backup code consumption, old session invalidation, setup only authority, fresh TOTP restoration preserving `app-admin` scope, and rate limiting); 3/3 invitation tests passed; 2/2 admin MFA tests passed
+2. Command: `npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
 
