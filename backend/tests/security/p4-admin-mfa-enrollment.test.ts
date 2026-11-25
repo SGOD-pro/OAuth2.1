@@ -120,14 +120,26 @@ describe("P4 Admin TOTP Enrollment, Setup-Only Authority & Step-Up", () => {
     const statsAfter = await app.request("/api/admin/stats", { headers: hdrs({ Cookie: mfaCookie }) });
     assert.equal(statsAfter.status, 200);
 
-    // Stale MFA (> 15 min) fails step-up on sensitive admin routes
-    await db.collection("session").updateMany({}, { $set: { mfaVerifiedAt: new Date(Date.now() - 20 * 60 * 1000), createdAt: new Date(Date.now() - 20 * 60 * 1000) } });
+    // Just inside 5-minute window (4m30s ago) succeeds on sensitive route
+    const inside5m = new Date(Date.now() - (4 * 60 + 30) * 1000);
+    await db.collection("session").updateMany({}, { $set: { mfaVerifiedAt: inside5m, createdAt: inside5m } });
+    const okDelete = await app.request("/api/admin/clients/nonexistent-id", {
+      method: "DELETE",
+      headers: hdrs({ Cookie: mfaCookie }),
+    });
+    assert.notEqual(okDelete.status, 403);
+
+    // Just outside 5-minute window (5m10s ago) fails step-up on sensitive admin routes
+    const outside5m = new Date(Date.now() - (5 * 60 + 10) * 1000);
+    await db.collection("session").updateMany({}, { $set: { mfaVerifiedAt: outside5m, createdAt: outside5m } });
     const staleDelete = await app.request("/api/admin/clients/nonexistent-id", {
       method: "DELETE",
       headers: hdrs({ Cookie: mfaCookie }),
     });
     assert.equal(staleDelete.status, 403);
-    assert.equal((await staleDelete.json()).code, "ERR_MFA_STEP_UP_REQUIRED");
+    const staleBody = await staleDelete.json();
+    assert.equal(staleBody.code, "ERR_MFA_STEP_UP_REQUIRED");
+    assert.match(staleBody.message, /< 5 minutes/);
   });
 
   it("enforces setup-only authority, TOTP enrollment, and preserves app-admin assignment checks", async () => {
@@ -150,5 +162,26 @@ describe("P4 Admin TOTP Enrollment, Setup-Only Authority & Step-Up", () => {
     // App-admin assignment boundary preserved for unassigned app-b
     const deniedB = await app.request("/api/admin/clients/app-b/users", { headers: hdrs({ Cookie: mfaCookie }) });
     assert.equal(deniedB.status, 403);
+
+    // Just inside 5-minute window (4m30s ago) succeeds on sensitive app-admin mutation
+    const inside5m = new Date(Date.now() - (4 * 60 + 30) * 1000);
+    await db.collection("session").updateMany({}, { $set: { mfaVerifiedAt: inside5m, createdAt: inside5m } });
+    const okAppDelete = await app.request("/api/admin/clients/app-a/users/nonexistent-user", {
+      method: "DELETE",
+      headers: hdrs({ Cookie: mfaCookie }),
+    });
+    assert.notEqual(okAppDelete.status, 403);
+
+    // Just outside 5-minute window (5m10s ago) fails step-up for app-admin
+    const outside5m = new Date(Date.now() - (5 * 60 + 10) * 1000);
+    await db.collection("session").updateMany({}, { $set: { mfaVerifiedAt: outside5m, createdAt: outside5m } });
+    const staleAppDelete = await app.request("/api/admin/clients/app-a/users/nonexistent-user", {
+      method: "DELETE",
+      headers: hdrs({ Cookie: mfaCookie }),
+    });
+    assert.equal(staleAppDelete.status, 403);
+    const staleAppBody = await staleAppDelete.json();
+    assert.equal(staleAppBody.code, "ERR_MFA_STEP_UP_REQUIRED");
+    assert.match(staleAppBody.message, /< 5 minutes/);
   });
 });

@@ -792,6 +792,24 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
+## Slice P4 admin MFA five minute freshness alignment and CI coverage
+
+**Date:** 2026-11-25. **Result:** Aligned `requireRecentMfa` in `admin-mfa.ts` to 5 minutes (`5 * 60 * 1000` ms) with updated error copy, verified deterministic inside (`4m30s`) and outside (`5m10s`) 5 minute checks for both platform and app admins, and added `test:p3-dashboard-browser` to `.github/workflows/ci.yml`. P3 is complete; P4 remains open for invitations, recovery, and optional user TOTP.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `aa4315615cd46577fd4ee7a4c1efc442f567c9ef`
+* Worktree status: Working tree with 5 minute `requireRecentMfa` in `admin-mfa.ts`, deterministic 5 minute boundary tests in `p4-admin-mfa-enrollment.test.ts`, `test:p3-dashboard-browser` in `.github/workflows/ci.yml`, review record, and updated ledger/roadmap
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm run test:p4-admin-mfa`
+   * Result: 0 TypeScript diagnostics; 2 test groups passed, 0 failed (inside/outside 5 minute boundary for both platform and app admins)
+2. Command: `npm run test:p3-dashboard-browser && npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: Playwright `/account` two tab E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 
 
 

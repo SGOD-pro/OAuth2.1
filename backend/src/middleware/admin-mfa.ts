@@ -65,14 +65,14 @@ export const requireRecentMfa = createMiddleware(async (c, next) => {
   }
   const mfaVerifiedAt = session?.mfaVerifiedAt ? new Date(session.mfaVerifiedAt).getTime() : 0;
   const now = Date.now();
-  const MAX_MFA_AGE_MS = 15 * 60 * 1000; // 15 minutes
+  const MAX_MFA_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
   if (!mfaVerifiedAt || now - mfaVerifiedAt > MAX_MFA_AGE_MS) {
     return c.json(
       {
         error: "mfa_step_up_required",
         code: "ERR_MFA_STEP_UP_REQUIRED",
-        message: "Recent two-factor authentication (< 15 minutes) is required for sensitive administrative operations.",
+        message: "Recent two-factor authentication (< 5 minutes) is required for sensitive administrative operations.",
         requestId: reqId,
       },
       403

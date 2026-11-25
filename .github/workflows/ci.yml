@@ -148,6 +148,9 @@ jobs:
       - name: Run P3 Two-Tab Chooser Browser E2E Suite (Playwright)
         run: npm run test:p3-two-tab
 
+      - name: Run P3 Account Dashboard Browser E2E Suite (Playwright)
+        run: npm run test:p3-dashboard-browser
+
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine
 
