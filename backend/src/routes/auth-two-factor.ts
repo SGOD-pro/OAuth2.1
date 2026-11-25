@@ -63,7 +63,13 @@ export async function handleVerifyTotp(c: Context) {
                 uFilters.push({ userId: new ObjectId(candidateUser.id) });
             }
             const twoFactorDoc = await database.collection("twoFactor").findOne({ $or: uFilters }).catch(() => null);
-            if (twoFactorDoc?.secret) {
+            // Skip replay-guard for enrollment verification (verified === false). The guard's purpose
+            // is to prevent a stolen sign-in challenge code from being replayed. Enrollment just
+            // confirms the user can generate a valid code from their own freshly-issued secret;
+            // applying the guard here would cause the subsequent sign-in challenge to fail with 409
+            // when both calls land in the same 30-second TOTP window.
+            const isEnrollmentVerify = twoFactorDoc && twoFactorDoc.verified === false;
+            if (twoFactorDoc?.secret && !isEnrollmentVerify) {
                 try {
                     const ctx = await authProvider.$context;
                     claimedStep = await claimMatchedTotpStep({

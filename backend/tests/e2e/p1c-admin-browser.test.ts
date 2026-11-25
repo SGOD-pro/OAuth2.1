@@ -49,7 +49,7 @@ async function enrollTotpApi(idpUrl: string, email: string, password: string): P
   const { totpURI } = await enableRes.json();
   const b32Secret = new URL(totpURI).searchParams.get("secret")!;
   const rawSecret = Buffer.from(base32.decode(b32Secret)).toString();
-  const code = await createOTP(rawSecret, { digits: 6, period: 30 }).hotp(Math.floor(Date.now() / 30000) - 1);
+  const code = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
   await fetch(`${idpUrl}/api/auth/two-factor/verify-totp`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: cookie, Origin: idpUrl, "x-gateway-secret": gatewaySecret },

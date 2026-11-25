@@ -132,9 +132,7 @@ export async function enrollAndLoginAdminMfaWithSecret(
   }
   const rawSecret = Buffer.from(base32.decode(b32Secret)).toString();
 
-  // Use the previous time step for enrollment verification to avoid a replay collision
-  // when the challenge sign-in and its verify-totp happen within the same 30-second window.
-  const enrollOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).hotp(Math.floor(Date.now() / 30000) - 1);
+  const enrollOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
   const verifyEnrollRes = await app.request("/api/auth/two-factor/verify-totp", {
     method: "POST",
     headers: buildHeaders({ Cookie: preCookie }),
