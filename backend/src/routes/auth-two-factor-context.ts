@@ -62,20 +62,6 @@ export async function resolveValidatedMfaOauthContext(c: Context): Promise<Valid
 
 export async function resolveCandidateMfaUser(c: Context): Promise<{ id: string | null; email: string | null } | null> {
     try {
-        const sessionResult = await authProvider.api.getSession({
-            headers: getHeaders(c),
-        });
-        if (sessionResult?.user) {
-            return {
-                id: (sessionResult.user.id || (sessionResult.user as any)._id)?.toString() || null,
-                email: sessionResult.user.email || null,
-            };
-        }
-    } catch {
-        // no active session
-    }
-
-    try {
         const twoFactorCookie = getCookie(c, "better-auth.two_factor");
         if (twoFactorCookie) {
             const database = await getDb();
@@ -108,6 +94,20 @@ export async function resolveCandidateMfaUser(c: Context): Promise<{ id: string 
         }
     } catch {
         // ignore
+    }
+
+    try {
+        const sessionResult = await authProvider.api.getSession({
+            headers: getHeaders(c),
+        });
+        if (sessionResult?.user) {
+            return {
+                id: (sessionResult.user.id || (sessionResult.user as any)._id)?.toString() || null,
+                email: sessionResult.user.email || null,
+            };
+        }
+    } catch {
+        // no active session
     }
 
     return null;

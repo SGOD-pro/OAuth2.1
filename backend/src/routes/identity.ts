@@ -24,6 +24,7 @@ import {
 import { handleClaimInvitation } from "./identity-invitations";
 import { handleBackupCodeRecovery, recoveryAccountRateLimit, recoveryIpRateLimit } from "./identity-recovery";
 import {
+  contextIssueIpRateLimit,
   handleOwnerTotpDisable,
   handleOwnerTotpEnable,
   handleOwnerTotpVerify,
@@ -61,7 +62,7 @@ identity.post("/accounts/select", handleSelectBrowserAccount);
 identity.post("/accounts/sign-out", handleSignOutBrowserAccount);
 identity.post("/accounts/remove", handleRemoveBrowserAccount);
 
-identity.post("/contexts", handleIssueIdentityContext);
+identity.post("/contexts", contextIssueIpRateLimit, handleIssueIdentityContext);
 identity.get("/contexts/me", handleGetOwnerContextMe);
 identity.post("/contexts/renew", handleRenewIdentityContext);
 

@@ -60,12 +60,20 @@ export async function handleGetOwnerContextMe(c: Context): Promise<Response> {
       rawBrowserProof,
       rawContextHandle,
     });
+    const { ObjectId } = await import("mongodb");
+    const uFilters: any[] = [{ id: verified.userId }, { _id: verified.userId }];
+    if (ObjectId.isValid(verified.userId) && verified.userId.length === 24) uFilters.push({ _id: new ObjectId(verified.userId) });
+    const [userDoc, twoFactorDoc] = await Promise.all([
+      database.collection("user").findOne({ $or: uFilters }),
+      database.collection("twoFactor").findOne({ $or: [{ userId: verified.userId }, ...(ObjectId.isValid(verified.userId) && verified.userId.length === 24 ? [{ userId: new ObjectId(verified.userId) }] : [])] }),
+    ]);
     return c.json({
       entryId: verified.entryId,
       userId: verified.userId,
       label: verified.label,
       purpose: context.purpose,
       expiresAt: context.expiresAt,
+      totpEnabled: Boolean(userDoc?.twoFactorEnabled && twoFactorDoc?.verified),
       requestId,
     });
   } catch (err: any) {

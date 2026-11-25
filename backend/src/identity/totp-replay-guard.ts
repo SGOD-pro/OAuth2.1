@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type { Db } from "mongodb";
+import { symmetricDecrypt } from "better-auth/crypto";
 import { ensureIdentityCollectionIndexes } from "../db/indexes";
+import { digestToken } from "./registration-crypto";
 
 export class TotpReplayError extends Error {
   constructor(public readonly code: string, public readonly status: number, message: string) {
@@ -8,14 +10,8 @@ export class TotpReplayError extends Error {
   }
 }
 
-export function computeTotpForStep(base32Secret: string, step: number): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let bits = "";
-  for (const c of base32Secret.toUpperCase().replace(/=+$/, "")) {
-    const val = alphabet.indexOf(c);
-    if (val >= 0) bits += val.toString(2).padStart(5, "0");
-  }
-  const bytes = Buffer.from(bits.match(/.{8}/g)!.map((b) => parseInt(b, 2)));
+function computeTotpForStep(utf8Secret: string, step: number): string {
+  const bytes = Buffer.from(utf8Secret, "utf8");
   const counter = Buffer.alloc(8);
   counter.writeBigUInt64BE(BigInt(step));
   const hmac = crypto.createHmac("sha1", bytes).update(counter).digest();
@@ -28,21 +24,56 @@ export function computeTotpForStep(base32Secret: string, step: number): string {
   return String(code % 1_000_000).padStart(6, "0");
 }
 
-export async function claimTotpTimeStep(params: {
+function safeCodeEquals(a: string, b: string): boolean {
+  if (a.length !== b.length || a.length === 0) return false;
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+/**
+ * Finds the exact TOTP step (-1, 0, +1) matching the supplied code and atomically claims it
+ * across all endpoints (enroll, login, disable, admin) without pre-locking invalid guesses.
+ * Returns null if the code does not match any step in the current window.
+ */
+export async function claimMatchedTotpStep(params: {
   database: Db;
   userId: string;
-  purpose: "enroll" | "login" | "disable";
+  code: string;
+  encryptedSecret: string;
+  engineSecret: any;
   session?: any;
-}): Promise<number> {
-  const { database, userId, purpose, session } = params;
+}): Promise<number | null> {
+  const { database, userId, code, encryptedSecret, engineSecret, session } = params;
   await ensureIdentityCollectionIndexes(database);
 
-  const step = Math.floor(Date.now() / 1000 / 30);
+  let decryptedSecret = encryptedSecret;
+  try {
+    decryptedSecret = await symmetricDecrypt({ key: engineSecret, data: encryptedSecret });
+  } catch {
+    // Some test fixtures or legacy rows may store plaintext base32; fall through safely.
+  }
+
+  const normalizedCode = code.trim();
+  const baseStep = Math.floor(Date.now() / 1000 / 30);
+  let matchedStep: number | null = null;
+  for (const offset of [0, -1, 1]) {
+    const candidateStep = baseStep + offset;
+    const expected = computeTotpForStep(decryptedSecret, candidateStep);
+    if (safeCodeEquals(normalizedCode, expected)) {
+      matchedStep = candidateStep;
+      break;
+    }
+  }
+
+  if (matchedStep === null) {
+    return null;
+  }
+
   const now = new Date();
   const expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+  const secretDigest = digestToken(encryptedSecret);
   try {
     await database.collection("totp_used_steps").insertOne(
-      { userId, step, purpose, createdAt: now, expiresAt },
+      { userId, step: matchedStep, secretDigest, createdAt: now, expiresAt },
       session ? { session } : {}
     );
   } catch (err: any) {
@@ -52,9 +83,12 @@ export async function claimTotpTimeStep(params: {
     throw err;
   }
 
-  return step;
+  return matchedStep;
 }
 
-export async function releaseTotpTimeStep(database: Db, userId: string, step: number, purpose: "enroll" | "login" | "disable"): Promise<void> {
-  await database.collection("totp_used_steps").deleteOne({ userId, step, purpose }).catch(() => {});
+export async function releaseTotpTimeStep(database: Db, userId: string, step: number | null, encryptedSecret?: string): Promise<void> {
+  if (step === null) return;
+  const filter: any = { userId, step };
+  if (encryptedSecret) filter.secretDigest = digestToken(encryptedSecret);
+  await database.collection("totp_used_steps").deleteOne(filter).catch(() => {});
 }

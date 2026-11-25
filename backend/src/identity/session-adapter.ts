@@ -86,6 +86,9 @@ async function resolveSelectedSessionInternal(
   const rawMfa = (sessionDoc as any).mfaVerifiedAt || (verified.session as any)?.mfaVerifiedAt;
   const mfaDate = rawMfa ? new Date(rawMfa) : null;
   const mfaTime = mfaDate && !isNaN(mfaDate.getTime()) ? Math.floor(mfaDate.getTime() / 1000) : null;
+  if (isOrdinaryRole(userDoc.role) && userDoc.twoFactorEnabled === true && mfaTime === null) {
+    throw new SessionAdapterError("ERR_MFA_REQUIRED", "Session predates TOTP enrollment and lacks MFA verification");
+  }
 
   return {
     entryId: entry.entryId,

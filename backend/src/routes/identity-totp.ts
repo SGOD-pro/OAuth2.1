@@ -1,28 +1,29 @@
 import crypto from "node:crypto";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
-import { ObjectId } from "mongodb";
-import { makeSignature, symmetricDecrypt } from "better-auth/crypto";
+import { ObjectId, type Db } from "mongodb";
+import { makeSignature } from "better-auth/crypto";
 import { getDb } from "../db/mongo";
 import { authProvider } from "../utils/auth";
 import { hasDangerousMongoKeys } from "../utils/security";
 import { createRateLimiter } from "../middleware/rate-limit";
-import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
+import { getBrowserSessionCookieName, isOrdinaryRole } from "../identity/browser-session-registry";
+import { extractSessionTokenFromHeaders } from "../identity/session-adapter";
 import { IdentityContextError, resolveOwnerDashboardContext } from "../identity/owner-contexts";
-import { claimTotpTimeStep, releaseTotpTimeStep, TotpReplayError } from "../identity/totp-replay-guard";
+import { claimMatchedTotpStep, releaseTotpTimeStep, TotpReplayError } from "../identity/totp-replay-guard";
 import { digestToken } from "../identity/registration-crypto";
 
 export const totpIpRateLimit = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 20,
-  prefix: "rl:totp:ip:",
+  prefix: "rl:totp:ip",
   sensitivity: "auth",
 });
 
 export const totpSubjectRateLimit = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
-  prefix: "rl:totp:subj:",
+  limit: 20,
+  prefix: "rl:totp:subj",
   sensitivity: "auth",
   keyFn: async (c: Context) => {
     const h = c.req.header("x-identity-context");
@@ -30,20 +31,107 @@ export const totpSubjectRateLimit = createRateLimiter({
   },
 });
 
+export const contextIssueIpRateLimit = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  prefix: "rl:ctx:ip",
+  sensitivity: "auth",
+});
+
 function getReqId(c: Context): string {
   return (c.get("requestId" as never) as string) || crypto.randomUUID();
 }
 
-async function buildBoundSessionHeaders(database: any, sessionId: string): Promise<Headers> {
-  const filters: any[] = [{ id: sessionId }, { _id: sessionId }];
-  if (ObjectId.isValid(sessionId)) filters.push({ _id: new ObjectId(sessionId) });
-  const sessDoc = await database.collection("session").findOne({ $or: filters });
-  if (!sessDoc?.token) throw new Error("ERR_SESSION_MISSING");
+function idFilters(id: string): any[] {
+  const filters: any[] = [{ id }, { _id: id }];
+  if (ObjectId.isValid(id) && id.length === 24) filters.push({ _id: new ObjectId(id) });
+  return filters;
+}
+
+function userIdFilters(userId: string): any[] {
+  const filters: any[] = [{ userId }];
+  if (ObjectId.isValid(userId) && userId.length === 24) filters.push({ userId: new ObjectId(userId) });
+  return filters;
+}
+
+async function enforceTotpUserRateLimit(database: Db, userId: string): Promise<void> {
+  const key = `rl:totp:user:${digestToken(`totp-user-rl-v1:${userId}`)}`;
+  const now = new Date();
+  const res = await database.collection("rate_limits").findOneAndUpdate(
+    { _id: key as any },
+    { $inc: { count: 1 }, $setOnInsert: { createdAt: now } },
+    { upsert: true, returnDocument: "after" }
+  );
+  const count = (res as any)?.count ?? (res as any)?.value?.count ?? 1;
+  if (count > 20) {
+    throw new IdentityContextError("ERR_RATE_LIMITED", 429, "Too many TOTP attempts for this account");
+  }
+}
+
+async function buildHeadersForToken(rawSignedOrPlainToken: string, isShortSession: boolean): Promise<Headers> {
   const ctx = await authProvider.$context;
-  const sig = await makeSignature(sessDoc.token, ctx.secret);
+  const plainToken = rawSignedOrPlainToken.includes(".") ? rawSignedOrPlainToken.split(".")[0] : rawSignedOrPlainToken;
+  const sig = await makeSignature(plainToken, ctx.secret);
+  const parts = [`${ctx.authCookies.sessionToken.name}=${encodeURIComponent(`${plainToken}.${sig}`)}`];
+  if (isShortSession && ctx.authCookies?.dontRememberToken?.name) {
+    const dontSig = await makeSignature("true", ctx.secret);
+    parts.push(`${ctx.authCookies.dontRememberToken.name}=${encodeURIComponent(`true.${dontSig}`)}`);
+  }
   const headers = new Headers();
-  headers.set("cookie", `${ctx.authCookies.sessionToken.name}=${encodeURIComponent(`${sessDoc.token}.${sig}`)}`);
+  headers.set("cookie", parts.join("; "));
   return headers;
+}
+
+async function buildBoundSessionHeaders(database: Db, sessionId: string): Promise<{ headers: Headers; isShortSession: boolean }> {
+  const sessDoc = await database.collection("session").findOne({ $or: idFilters(sessionId) });
+  if (!sessDoc?.token) throw new Error("ERR_SESSION_MISSING");
+  const createdMs = sessDoc.createdAt ? new Date(sessDoc.createdAt).getTime() : 0;
+  const expiresMs = sessDoc.expiresAt ? new Date(sessDoc.expiresAt).getTime() : 0;
+  const isShortSession = createdMs > 0 && expiresMs > 0 && expiresMs - createdMs <= 2 * 24 * 3600 * 1000;
+  const headers = await buildHeadersForToken(sessDoc.token, isShortSession);
+  return { headers, isShortSession };
+}
+
+async function rotateBrowserSessionEntry(params: {
+  database: Db;
+  setId: string;
+  entryId: string;
+  oldSessionId: string;
+  newSessionToken: string | null;
+  contextId: string;
+  userId: string;
+  revokeOtherSessions: boolean;
+}): Promise<string> {
+  const { database, setId, entryId, oldSessionId, newSessionToken, contextId, userId, revokeOtherSessions } = params;
+  if (!newSessionToken) {
+    throw new IdentityContextError("ERR_ROTATED_SESSION_MISSING", 500, "Expected rotated session token");
+  }
+  const rawTok = decodeURIComponent(newSessionToken).split(".")[0];
+  const newSess = await database.collection("session").findOne({ token: rawTok });
+  if (!newSess) {
+    throw new IdentityContextError("ERR_ROTATED_SESSION_MISSING", 500, "Rotated session missing from store");
+  }
+  const newSessionId = String(newSess.id || newSess._id);
+  const now = new Date();
+  const cas = await database.collection("browser_session_sets").updateOne(
+    { setId, revokedAt: null, entries: { $elemMatch: { entryId, sessionId: oldSessionId, status: "active" } } },
+    { $set: { "entries.$.sessionId": newSessionId, "entries.$.lastUsedAt": now }, $inc: { version: 1 } }
+  );
+  if (cas.modifiedCount === 0) {
+    await database.collection("session").deleteOne({ _id: newSess._id }).catch(() => {});
+    throw new IdentityContextError("ERR_ENTRY_CONCURRENTLY_CHANGED", 401, "Account entry changed concurrently");
+  }
+  await database.collection("identity_contexts").updateOne({ contextId }, { $set: { revokedAt: now } });
+  if (revokeOtherSessions) {
+    const neFilter: any = { $or: userIdFilters(userId), id: { $ne: newSessionId } };
+    if (ObjectId.isValid(newSessionId) && newSessionId.length === 24) {
+      neFilter._id = { $ne: new ObjectId(newSessionId) };
+    } else {
+      neFilter._id = { $ne: newSess._id };
+    }
+    await database.collection("session").deleteMany(neFilter);
+  }
+  return newSessionId;
 }
 
 export async function handleOwnerTotpEnable(c: Context): Promise<Response> {
@@ -57,18 +145,20 @@ export async function handleOwnerTotpEnable(c: Context): Promise<Response> {
   const rawContextHandle = c.req.header("x-identity-context") || undefined;
 
   try {
-    const { verified } = await resolveOwnerDashboardContext({
-      database,
-      engine: authProvider,
-      rawBrowserProof,
-      rawContextHandle,
-    });
-    const headers = await buildBoundSessionHeaders(database, verified.sessionId);
-    const res = await (authProvider.api as any).enableTwoFactor({
-      body: { password: body.password },
-      headers,
-      asResponse: true,
-    });
+    const { verified } = await resolveOwnerDashboardContext({ database, engine: authProvider, rawBrowserProof, rawContextHandle });
+    if (!isOrdinaryRole(verified.role)) {
+      return c.json({ error: "forbidden", code: "ERR_ADMIN_TOTP_ROUTE_FORBIDDEN", requestId }, 403);
+    }
+    await enforceTotpUserRateLimit(database, verified.userId);
+    const [userDoc, twoFactorDoc] = await Promise.all([
+      database.collection("user").findOne({ $or: idFilters(verified.userId) }),
+      database.collection("twoFactor").findOne({ $or: userIdFilters(verified.userId) }),
+    ]);
+    if (userDoc?.twoFactorEnabled === true || twoFactorDoc?.verified === true) {
+      return c.json({ error: "conflict", code: "ERR_TOTP_ALREADY_ENABLED", requestId }, 409);
+    }
+    const { headers } = await buildBoundSessionHeaders(database, verified.sessionId);
+    const res = await (authProvider.api as any).enableTwoFactor({ body: { password: body.password }, headers, asResponse: true });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       return c.json({ error: "request_rejected", code: data.code || "ERR_TOTP_ENABLE_FAILED", message: data.message, requestId }, res.status as any);
@@ -92,59 +182,61 @@ export async function handleOwnerTotpVerify(c: Context): Promise<Response> {
   const rawBrowserProof = getCookie(c, getBrowserSessionCookieName());
   const rawContextHandle = c.req.header("x-identity-context") || undefined;
 
+  let claimedStep: number | null = null;
+  let claimedUserId: string | null = null;
   try {
-    const { context, verified } = await resolveOwnerDashboardContext({
-      database,
-      engine: authProvider,
-      rawBrowserProof,
-      rawContextHandle,
-    });
-    const ctx = await authProvider.$context;
-    const sessFilters: any[] = [{ userId: verified.userId }, ...(ObjectId.isValid(verified.userId) ? [{ userId: new ObjectId(verified.userId) }] : [])];
-    const twoFactorDoc = await database.collection("twoFactor").findOne({ $or: sessFilters });
+    const { context, verified } = await resolveOwnerDashboardContext({ database, engine: authProvider, rawBrowserProof, rawContextHandle });
+    if (!isOrdinaryRole(verified.role)) {
+      return c.json({ error: "forbidden", code: "ERR_ADMIN_TOTP_ROUTE_FORBIDDEN", requestId }, 403);
+    }
+    await enforceTotpUserRateLimit(database, verified.userId);
+    const twoFactorDoc = await database.collection("twoFactor").findOne({ $or: userIdFilters(verified.userId) });
     if (!twoFactorDoc?.secret) {
       return c.json({ error: "invalid_request", code: "ERR_TOTP_NOT_PENDING", requestId }, 400);
     }
-    const claimedStep = await claimTotpTimeStep({
+    if (twoFactorDoc.verified === true) {
+      return c.json({ error: "conflict", code: "ERR_TOTP_ALREADY_ENABLED", requestId }, 409);
+    }
+
+    const ctx = await authProvider.$context;
+    claimedUserId = verified.userId;
+    claimedStep = await claimMatchedTotpStep({
       database,
       userId: verified.userId,
-      purpose: "enroll",
+      code: body.code.trim(),
+      encryptedSecret: twoFactorDoc.secret,
+      engineSecret: (ctx as any).secretConfig || ctx.secret,
     });
+    if (claimedStep === null) {
+      return c.json({ error: "unauthorized", code: "INVALID_TWO_FACTOR_CODE", requestId }, 401);
+    }
 
-    const headers = await buildBoundSessionHeaders(database, verified.sessionId);
-    const res = await (authProvider.api as any).verifyTOTP({
-      body: { code: body.code.trim() },
-      headers,
-      asResponse: true,
-    });
+    const { headers } = await buildBoundSessionHeaders(database, verified.sessionId);
+    const res = await (authProvider.api as any).verifyTOTP({ body: { code: body.code.trim() }, headers, asResponse: true });
     if (!res.ok) {
-      await releaseTotpTimeStep(database, verified.userId, claimedStep, "enroll");
+      await releaseTotpTimeStep(database, verified.userId, claimedStep);
       const errData = await res.json().catch(() => ({}));
       return c.json({ error: "unauthorized", code: errData.code || "ERR_TOTP_VERIFY_FAILED", requestId }, res.status as any);
     }
 
     const now = new Date();
-    const rawSetCookie = res.headers.get("set-cookie") || "";
-    const tokMatch = rawSetCookie.match(/(?:__Secure-)?better-auth\.session_token=([^;]+)/);
-    let activeSessionId = verified.sessionId;
-    if (tokMatch) {
-      const rawTok = decodeURIComponent(tokMatch[1]).split(".")[0];
-      const newSess = await database.collection("session").findOne({ token: rawTok }).catch(() => null);
-      if (newSess) {
-        activeSessionId = String(newSess.id || newSess._id);
-        await database.collection("browser_session_sets").updateOne(
-          { setId: context.setId, "entries.entryId": verified.entryId },
-          { $set: { "entries.$.sessionId": activeSessionId, "entries.$.lastUsedAt": now } }
-        );
-      }
-    }
-    const sFilters: any[] = [{ id: activeSessionId }, { _id: activeSessionId }];
-    if (ObjectId.isValid(activeSessionId)) sFilters.push({ _id: new ObjectId(activeSessionId) });
-    await database.collection("session").updateOne({ $or: sFilters }, { $set: { mfaVerifiedAt: now, twoFactorVerified: true } });
-    await database.collection("identity_contexts").updateOne({ contextId: context.contextId }, { $set: { revokedAt: now } });
+    const newSessionId = await rotateBrowserSessionEntry({
+      database,
+      setId: context.setId,
+      entryId: verified.entryId,
+      oldSessionId: verified.sessionId,
+      newSessionToken: extractSessionTokenFromHeaders(res.headers),
+      contextId: context.contextId,
+      userId: verified.userId,
+      revokeOtherSessions: true,
+    });
+    await database.collection("session").updateOne({ $or: idFilters(newSessionId) }, { $set: { mfaVerifiedAt: now, twoFactorVerified: true } });
 
     return c.json({ enabled: true, mfaVerifiedAt: now.toISOString(), requestId });
   } catch (err: any) {
+    if (claimedUserId && claimedStep !== null && !(err instanceof TotpReplayError)) {
+      await releaseTotpTimeStep(database, claimedUserId, claimedStep);
+    }
     if (err instanceof IdentityContextError) {
       return c.json({ error: "unauthorized", code: err.code, message: err.message, requestId }, err.status as any);
     }
@@ -173,55 +265,81 @@ export async function handleOwnerTotpDisable(c: Context): Promise<Response> {
   const rawBrowserProof = getCookie(c, getBrowserSessionCookieName());
   const rawContextHandle = c.req.header("x-identity-context") || undefined;
 
+  let claimedStep: number | null = null;
+  let claimedUserId: string | null = null;
   try {
-    const { verified } = await resolveOwnerDashboardContext({
-      database,
-      engine: authProvider,
-      rawBrowserProof,
-      rawContextHandle,
-    });
-    const ctx = await authProvider.$context;
-    const sessFilters: any[] = [{ userId: verified.userId }, ...(ObjectId.isValid(verified.userId) ? [{ userId: new ObjectId(verified.userId) }] : [])];
-    const twoFactorDoc = await database.collection("twoFactor").findOne({ $or: sessFilters });
-    if (!twoFactorDoc?.secret) {
+    const { context, verified } = await resolveOwnerDashboardContext({ database, engine: authProvider, rawBrowserProof, rawContextHandle });
+    if (!isOrdinaryRole(verified.role)) {
+      return c.json({ error: "forbidden", code: "ERR_ADMIN_TOTP_ROUTE_FORBIDDEN", requestId }, 403);
+    }
+    await enforceTotpUserRateLimit(database, verified.userId);
+    const [userDoc, twoFactorDoc, credDoc] = await Promise.all([
+      database.collection("user").findOne({ $or: idFilters(verified.userId) }),
+      database.collection("twoFactor").findOne({ $or: userIdFilters(verified.userId) }),
+      database.collection("account").findOne({ $or: userIdFilters(verified.userId), providerId: "credential" }),
+    ]);
+    if (userDoc?.twoFactorEnabled !== true || twoFactorDoc?.verified !== true || !twoFactorDoc?.secret) {
       return c.json({ error: "invalid_request", code: "ERR_TOTP_NOT_ENABLED", requestId }, 400);
     }
-    const claimedStep = await claimTotpTimeStep({
+
+    const ctx = await authProvider.$context;
+    const validPass = credDoc?.password
+      ? await ctx.password.verify({ hash: credDoc.password, password: body.password }).catch(() => false)
+      : false;
+    if (!validPass) {
+      return c.json({ error: "unauthorized", code: "INVALID_PASSWORD", requestId }, 401);
+    }
+
+    claimedUserId = verified.userId;
+    claimedStep = await claimMatchedTotpStep({
       database,
       userId: verified.userId,
-      purpose: "disable",
+      code: body.code.trim(),
+      encryptedSecret: twoFactorDoc.secret,
+      engineSecret: (ctx as any).secretConfig || ctx.secret,
     });
-
-    const headers = await buildBoundSessionHeaders(database, verified.sessionId);
-    const verRes = await (authProvider.api as any).verifyTOTP({
-      body: { code: body.code.trim() },
-      headers,
-      asResponse: true,
-    });
-    if (!verRes.ok) {
-      await releaseTotpTimeStep(database, verified.userId, claimedStep, "disable");
+    if (claimedStep === null) {
       return c.json({ error: "unauthorized", code: "ERR_INVALID_TOTP", requestId }, 401);
     }
-    const res = await (authProvider.api as any).disableTwoFactor({
-      body: { password: body.password },
-      headers,
-      asResponse: true,
-    });
+
+    const { headers, isShortSession } = await buildBoundSessionHeaders(database, verified.sessionId);
+    const verRes = await (authProvider.api as any).verifyTOTP({ body: { code: body.code.trim() }, headers, asResponse: true });
+    if (!verRes.ok) {
+      await releaseTotpTimeStep(database, verified.userId, claimedStep);
+      return c.json({ error: "unauthorized", code: "ERR_INVALID_TOTP", requestId }, 401);
+    }
+
+    const rotatedAfterVerify = extractSessionTokenFromHeaders(verRes.headers);
+    const disableHeaders = rotatedAfterVerify ? await buildHeadersForToken(rotatedAfterVerify, isShortSession) : headers;
+    const res = await (authProvider.api as any).disableTwoFactor({ body: { password: body.password }, headers: disableHeaders, asResponse: true });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
       return c.json({ error: "unauthorized", code: errData.code || "ERR_TOTP_DISABLE_FAILED", requestId }, res.status as any);
     }
 
-    // Revoke other sessions and refresh families for this user while preserving role
-    const otherSessionFilter: any = { $or: sessFilters, id: { $ne: verified.sessionId } };
-    if (ObjectId.isValid(verified.sessionId)) {
-      otherSessionFilter._id = { $ne: new ObjectId(verified.sessionId) };
-    }
-    await database.collection("session").deleteMany(otherSessionFilter);
-    await database.collection("oauthRefreshToken").deleteMany({ userId: verified.userId });
+    await rotateBrowserSessionEntry({
+      database,
+      setId: context.setId,
+      entryId: verified.entryId,
+      oldSessionId: verified.sessionId,
+      newSessionToken: extractSessionTokenFromHeaders(res.headers),
+      contextId: context.contextId,
+      userId: verified.userId,
+      revokeOtherSessions: true,
+    });
+    const uFilters = userIdFilters(verified.userId);
+    const now = new Date();
+    await Promise.all([
+      database.collection("oauthRefreshToken").deleteMany({ $or: uFilters }),
+      database.collection("oauthAccessToken").deleteMany({ $or: uFilters }),
+      database.collection("oauth_token_families").updateMany({ $or: uFilters, status: { $ne: "revoked" } }, { $set: { status: "revoked", revokedAt: now } }),
+    ]);
 
     return c.json({ disabled: true, requestId });
   } catch (err: any) {
+    if (claimedUserId && claimedStep !== null && !(err instanceof TotpReplayError)) {
+      await releaseTotpTimeStep(database, claimedUserId, claimedStep);
+    }
     if (err instanceof IdentityContextError) {
       return c.json({ error: "unauthorized", code: err.code, message: err.message, requestId }, err.status as any);
     }

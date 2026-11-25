@@ -5,7 +5,7 @@ import { csrfHeaders } from "../lib/csrf";
 import { clearOwnerContextHandle, fetchOwnerContextMe, issueOwnerContext } from "../lib/identityContext";
 
 export default function AccountDashboard() {
-  const [account, setAccount] = useState<{ entryId: string; userId: string; label: string; expiresAt: string } | null>(null);
+  const [account, setAccount] = useState<{ entryId: string; userId: string; label: string; expiresAt: string; totpEnabled?: boolean } | null>(null);
   const [accounts, setAccounts] = useState<BrowserAccountEntry[]>([]);
   const [selectingEntryId, setSelectingEntryId] = useState<string | null>(null);
   const [signingOutEntryId, setSigningOutEntryId] = useState<string | null>(null);
@@ -89,6 +89,7 @@ export default function AccountDashboard() {
           Subject: {account.userId}
         </p>
         <AccountTotpPanel
+          totpEnabled={Boolean(account.totpEnabled)}
           onCompleted={() => {
             clearOwnerContextHandle();
             setAccount(null);

@@ -157,7 +157,13 @@ export const TwoFactor: React.FC = () => {
         }
       }
 
-      window.location.assign('/admin');
+      const sessRes = await authClient.getSession().catch(() => null);
+      const role = (sessRes?.data?.user as { role?: string } | undefined)?.role;
+      if (role === 'admin' || role === 'super_admin') {
+        window.location.assign('/admin');
+      } else {
+        window.location.assign('/account');
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Verification failed.';
       setError(msg);

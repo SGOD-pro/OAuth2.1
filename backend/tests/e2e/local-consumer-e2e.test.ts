@@ -251,7 +251,7 @@ async function enrollAndLoginAdminMfa(email: string, pass: string): Promise<stri
   const challengePart = setCookie.split(",").find((p: string) => p.trim().startsWith("better-auth.two_factor="));
   const challengeCookie = (challengePart || "").trim().split(";")[0];
 
-  const challengeOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
+  const challengeOtp = await createOTP(rawSecret, { digits: 6, period: 30 }).hotp(Math.floor(Date.now() / 30000) + 1);
   const verifyChallengeRes = await app.request("/api/auth/two-factor/verify-totp", {
     method: "POST",
     headers: getTestHeaders({ Cookie: challengeCookie, "content-type": "application/json" }),

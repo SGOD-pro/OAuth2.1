@@ -1,7 +1,20 @@
 import { getDb } from "./mongo";
 import { selfHealAppAdmins } from "../utils/admin-sync";
 
+const identityIndexCache = new WeakMap<object, Promise<void>>();
+
 export async function ensureIdentityCollectionIndexes(db: Awaited<ReturnType<typeof getDb>>): Promise<void> {
+  const existing = identityIndexCache.get(db as unknown as object);
+  if (existing) return existing;
+  const promise = ensureIdentityCollectionIndexesImpl(db).catch((err) => {
+    identityIndexCache.delete(db as unknown as object);
+    throw err;
+  });
+  identityIndexCache.set(db as unknown as object, promise);
+  return promise;
+}
+
+async function ensureIdentityCollectionIndexesImpl(db: Awaited<ReturnType<typeof getDb>>): Promise<void> {
   const cols = [
     "user",
     "account",
@@ -49,9 +62,11 @@ export async function ensureIdentityCollectionIndexes(db: Awaited<ReturnType<typ
     safeCreate("app_invitations", { tokenDigest: 1 }, { unique: true }),
     safeCreate("app_invitations", { clientId: 1, status: 1 }),
     safeCreate("app_invitations", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
-    safeCreate("totp_used_steps", { userId: 1, step: 1, purpose: 1 }, { unique: true }),
+    safeCreate("totp_used_steps", { userId: 1, step: 1, secretDigest: 1 }, { unique: true }),
     safeCreate("totp_used_steps", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
   ]);
+  await db.collection("totp_used_steps").dropIndex("userId_1_step_1_purpose_1").catch(() => {});
+  await db.collection("totp_used_steps").dropIndex("userId_1_step_1").catch(() => {});
 }
 
 let indexPromise: Promise<void> | null = null;
