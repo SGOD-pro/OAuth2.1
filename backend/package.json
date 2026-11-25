@@ -100,7 +100,9 @@
     "test:p2b-bypasses": "node --import tsx tests/security/p2b-provisioning-bypasses.test.ts",
     "test:p2b-browser": "node --import tsx tests/e2e/p2b-complete-browser.test.ts",
     "test:p3-registry": "node --import tsx tests/security/p3-browser-session-registry.test.ts",
-    "test:p3-adapter": "node --import tsx tests/security/p3-session-adapter-isolation.test.ts"
+    "test:p3-adapter": "node --import tsx tests/security/p3-session-adapter-isolation.test.ts",
+    "test:p3-selection": "node --import tsx tests/security/p3-chooser-transaction-selection.test.ts",
+    "test:p3-two-tab": "node --import tsx tests/e2e/p3-two-tab-chooser-browser.test.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

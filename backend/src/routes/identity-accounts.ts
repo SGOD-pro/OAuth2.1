@@ -10,6 +10,7 @@ import {
   removeBrowserEntry,
   signOutBrowserEntry,
 } from "../identity/browser-session-registry";
+import { selectAccountForOAuthTransaction } from "../identity/oauth-selection";
 
 function getReqId(c: Context): string {
   return (c.get("requestId" as never) as string) || crypto.randomUUID();
@@ -60,4 +61,27 @@ export async function handleRemoveBrowserAccount(c: Context): Promise<Response> 
   }
   setCookie(c, getBrowserSessionCookieName(), outcome.nextRawProof, buildBrowserProofCookieOptions() as any);
   return c.json({ removed: true, entryId: outcome.entryId, requestId });
+}
+
+export async function handleSelectBrowserAccount(c: Context): Promise<Response> {
+  const requestId = getReqId(c);
+  const body = await c.req.raw.clone().json().catch(() => null);
+  if (
+    !body || typeof body !== "object" || hasDangerousMongoKeys(body) ||
+    typeof body.transactionId !== "string" || !body.transactionId.trim() ||
+    typeof body.entryId !== "string" || !body.entryId.trim()
+  ) {
+    return c.json({ error: "invalid_request", code: "ERR_INVALID_INPUT", requestId }, 400);
+  }
+  const expectedRevision = typeof body.expectedRevision === "number" ? body.expectedRevision : 0;
+  const database = await getDb();
+  const outcome = await selectAccountForOAuthTransaction({
+    database,
+    rawBrowserProof: getCookie(c, getBrowserSessionCookieName()),
+    transactionId: body.transactionId.trim(),
+    entryId: body.entryId.trim(),
+    expectedRevision,
+    requestId,
+  });
+  return c.json(outcome.body, outcome.status as any);
 }

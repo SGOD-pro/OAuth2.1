@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { setCookie } from "hono/cookie";
+import { getCookie, setCookie } from "hono/cookie";
 import { ObjectId } from "mongodb";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
@@ -16,6 +16,8 @@ import { checkAccountEligibility } from "../utils/account-eligibility";
 import { createOAuthTransaction, recordAuthEvent } from "../db/state";
 import { validatePkceAuthorizationParams } from "../utils/pkce";
 import { finalizeAuthorizeCodeWithFence } from "./auth-token-linearize";
+import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
+import { evaluateAuthorizeChooserRedirect } from "../identity/oauth-selection";
 
 export async function handleOAuthAuthorize(c: any): Promise<Response> {
     const state = c.req.query("state");
@@ -83,6 +85,10 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
 
     // Create server-side OAuth transaction record for multi-tab isolation & tampering prevention
     const transactionId = crypto.randomUUID();
+    const promptRaw = c.req.query("prompt") || null;
+    const promptTokens = (promptRaw || "").trim().split(/\s+/).filter(Boolean);
+    const maxAgeRaw = c.req.query("max_age");
+    const parsedMaxAge = maxAgeRaw !== undefined && /^\d+$/.test(maxAgeRaw) ? Number(maxAgeRaw) : null;
 
     await createOAuthTransaction({
         transactionId,
@@ -91,15 +97,13 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
         state,
         codeChallenge: pkceValidation.challenge,
         codeChallengeMethod: pkceValidation.method,
+        prompt: promptRaw,
+        maxAge: parsedMaxAge,
+        nonce: c.req.query("nonce") || null,
+        scope: c.req.query("scope") || null,
     });
 
-    const cookieOpts = {
-        path: "/",
-        httpOnly: true,
-        secure: config.env === "production",
-        sameSite: "Lax" as const,
-        maxAge: 60 * 10,
-    };
+    const cookieOpts = { path: "/", httpOnly: true, secure: config.env === "production", sameSite: "Lax" as const, maxAge: 600 };
     setCookie(c, "oauth_transaction_id", transactionId, cookieOpts);
     setCookie(c, "current_client_id", canonicalClientId, cookieOpts);
 
@@ -217,6 +221,7 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
                 if (locUrl.pathname.includes("/auth")) {
                     locUrl.searchParams.set("client_id", canonicalClientId);
                     locUrl.searchParams.set("transaction_id", transactionId);
+                    locUrl.searchParams.set("selection_revision", "0");
                     locUrl.searchParams.set("state", state);
                     if (!client.isPublic) {
                         locUrl.searchParams.set("is_public", "false");
@@ -242,57 +247,49 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
         });
     };
 
+    const chooserRedirect = await evaluateAuthorizeChooserRedirect({
+        database,
+        rawBrowserProof: getCookie(c, getBrowserSessionCookieName()),
+        transactionId,
+        client,
+        redirectUri,
+        state,
+        promptTokens,
+        query: {
+            client_id: canonicalClientId, redirect_uri: redirectUri, response_type: c.req.query("response_type") || "code",
+            scope: c.req.query("scope"), state, code_challenge: c.req.query("code_challenge"),
+            code_challenge_method: c.req.query("code_challenge_method"), nonce: c.req.query("nonce"), prompt: c.req.query("prompt"),
+        },
+        hasAmbientSession: Boolean(sessionUser),
+    });
+    if (chooserRedirect) {
+        return c.redirect(chooserRedirect, 302);
+    }
+
     // F. Enforce Private Application Mode at OAuth Boundary
     const isPrivate = client.accessPolicy === "private" || (client.accessPolicy !== "open" && client.isPublic === false);
     if (isPrivate) {
-        if (sessionUser) {
-            // User is already authenticated with a valid global session
-            const hasAccess = await checkUserHasAppAccess(database, sessionUser, canonicalClientId);
-
-            if (!hasAccess) {
-                const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
-                const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
-                await recordAuthEvent({
-                    eventType: "oauth_authorize",
-                    outcome: "denied",
-                    userId: String(sessionUser.id || (sessionUser as any)._id),
-                    targetIdentifier: sessionUser.email || null,
-                    clientId: canonicalClientId,
-                    clientName: client.client_name || client.name || null,
-                    ipAddress: safeIp,
-                    reason: "private_app_unauthorized",
-                });
-                // Deny authorization immediately! Do NOT issue code or continue to token issuance.
-                const errorUrl = new URL(redirectUri);
-                errorUrl.searchParams.set("error", "access_denied");
-                errorUrl.searchParams.set("error_description", "Access restricted: Your account is not authorized for this private application");
-                errorUrl.searchParams.set("state", state);
-                return c.redirect(errorUrl.toString(), 302);
-            }
-        } else {
-            // Unauthenticated user attempting OAuth on a private application:
-            // Forward to centralized IdP login with registration disabled.
-            // DO NOT block unauthenticated users from reaching the IdP login page.
-            return forwardToBetterAuth();
+        if (sessionUser && !(await checkUserHasAppAccess(database, sessionUser, canonicalClientId))) {
+            const rawIp = getTrustedClientIp(c.req.raw.headers, config.trustedProxyCidrs);
+            const safeIp = rawIp && rawIp !== "unknown" ? rawIp : null;
+            await recordAuthEvent({
+                eventType: "oauth_authorize", outcome: "denied", userId: String(sessionUser.id || (sessionUser as any)._id),
+                targetIdentifier: sessionUser.email || null, clientId: canonicalClientId,
+                clientName: client.client_name || client.name || null, ipAddress: safeIp, reason: "private_app_unauthorized",
+            });
+            const errorUrl = new URL(redirectUri);
+            errorUrl.searchParams.set("error", "access_denied");
+            errorUrl.searchParams.set("error_description", "Access restricted: Your account is not authorized for this private application");
+            errorUrl.searchParams.set("state", state);
+            return c.redirect(errorUrl.toString(), 302);
         }
-    } else {
-        // Public Application Mode:
-        if (sessionUser && !config.openAppMembershipBypassEnabled) {
-            const userId = String(sessionUser.id || (sessionUser as any)._id);
-            const isRegistered = await checkUserAppRegistration(database, userId, canonicalClientId);
-            if (!isRegistered) {
-                await database.collection("user_app_registrations").insertOne({
-                    userId,
-                    clientId: canonicalClientId,
-                    registeredAt: new Date(),
-                }).catch((err: any) => {
-                    if (err?.code === 11000) return;
-                    throw err;
-                });
-            }
+    } else if (sessionUser && !config.openAppMembershipBypassEnabled) {
+        const userId = String(sessionUser.id || (sessionUser as any)._id);
+        if (!(await checkUserAppRegistration(database, userId, canonicalClientId))) {
+            await database.collection("user_app_registrations").insertOne({ userId, clientId: canonicalClientId, registeredAt: new Date() }).catch((err: any) => {
+                if (err?.code !== 11000) throw err;
+            });
         }
     }
-
-    // Continue normal Better Auth OAuth flow
     return forwardToBetterAuth();
 }

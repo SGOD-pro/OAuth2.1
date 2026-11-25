@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { authClient } from '@/lib/auth-client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { BrandMark } from '@/components/BrandMark';
 import { usePageTitle } from '@/hooks/usePageTitle';
+import { apiFetch } from '@/lib/api';
+import { csrfHeaders } from '@/lib/csrf';
 import { Check, ShieldCheck } from 'lucide-react';
 
 export const Consent: React.FC = () => {
@@ -40,19 +41,26 @@ export const Consent: React.FC = () => {
     setLoading(true);
 
     try {
-      const oauth_query = searchParams.get('oauth_query') || undefined;
-      const res = await authClient.oauth2.consent({
-        accept,
-        scope: accept ? rawScope : undefined,
-        oauth_query,
+      const oauth_query = searchParams.get('oauth_query') || window.location.search.slice(1) || undefined;
+      const transaction_id = searchParams.get('transaction_id') || undefined;
+      const res = await apiFetch('/api/auth/oauth2/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
+        body: JSON.stringify({
+          accept,
+          scope: accept ? rawScope : undefined,
+          oauth_query,
+          transaction_id,
+        }),
       });
+      const data = await res.json().catch(() => ({}));
 
-      if (res?.error) {
-        toast.error(res.error.message || 'Consent failed.');
+      if (!res.ok) {
+        toast.error(data?.message || data?.error_description || 'Consent failed.');
         setLoading(false);
-      } else if (res?.data?.url) {
-        window.location.assign(res.data.url);
-      } else if (res?.data?.redirect) {
+      } else if (data?.url) {
+        window.location.assign(data.url);
+      } else {
         setLoading(false);
       }
     } catch {

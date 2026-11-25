@@ -145,6 +145,9 @@ jobs:
       - name: Run P2b Registration Completion Browser E2E Suite (Playwright)
         run: npm run test:p2b-browser
 
+      - name: Run P3 Two-Tab Chooser Browser E2E Suite (Playwright)
+        run: npm run test:p3-two-tab
+
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine
 

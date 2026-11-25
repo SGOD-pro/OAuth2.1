@@ -13,6 +13,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { toast } from 'sonner';
 import { BrandMark } from '@/components/BrandMark';
+import { AccountChooser, type BrowserAccountEntry } from '@/components/AccountChooser';
+import { apiFetch } from '@/lib/api';
+import { csrfHeaders } from '@/lib/csrf';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Eye, EyeOff } from 'lucide-react';
@@ -38,6 +41,13 @@ export const SignIn: React.FC = () => {
   const [showSignUpPassword, setShowSignUpPassword] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
   const [searchParams] = useSearchParams();
+  const transactionId = searchParams.get('transaction_id') || '';
+  const [selectionRevision, setSelectionRevision] = useState(() => Number(searchParams.get('selection_revision') ?? '0'));
+  const [accounts, setAccounts] = useState<BrowserAccountEntry[]>([]);
+  const [showCredentialForm, setShowCredentialForm] = useState(false);
+  const [selectingEntryId, setSelectingEntryId] = useState<string | null>(null);
+  const [signingOutEntryId, setSigningOutEntryId] = useState<string | null>(null);
+  const [chooserError, setChooserError] = useState<string | null>(null);
   const initialError = searchParams.get('error_description') || searchParams.get('error');
   const [error, setError] = useState<string | null>(
     initialError && initialError !== 'login_required' && initialError !== 'consent_required'
@@ -95,9 +105,19 @@ export const SignIn: React.FC = () => {
 
   useEffect(() => {
     if (searchParams.get('prompt') === 'login') return;
-    if (!callbackURL) return;
-
     let active = true;
+    if (transactionId || callbackURL) {
+      apiFetch('/api/identity/accounts')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!active || !Array.isArray(d?.accounts)) return;
+          setAccounts(d.accounts);
+        })
+        .catch(() => {});
+    }
+    if (searchParams.get('prompt') === 'select_account' || transactionId) return () => { active = false; };
+    if (!callbackURL) return () => { active = false; };
+
     authClient.getSession().then(({ data }) => {
       if (!active || !data?.user) return;
       setRedirecting(true);
@@ -105,7 +125,58 @@ export const SignIn: React.FC = () => {
     }).catch(() => {});
 
     return () => { active = false; };
-  }, [callbackURL, searchParams]);
+  }, [callbackURL, searchParams, transactionId]);
+
+  const selectEntryAndContinue = async (entryId: string, rev = selectionRevision) => {
+    if (!transactionId) return;
+    setSelectingEntryId(entryId);
+    setChooserError(null);
+    try {
+      const res = await apiFetch('/api/identity/accounts/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
+        body: JSON.stringify({ transactionId, entryId, expectedRevision: rev }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (typeof data?.currentRevision === 'number') setSelectionRevision(data.currentRevision);
+      if (res.ok && data?.redirectTo) {
+        setRedirecting(true);
+        window.location.assign(data.redirectTo);
+        return;
+      }
+      if (data?.requiresReauth) {
+        setChooserError('Fresh authentication is required for this account.');
+        setShowCredentialForm(true);
+        return;
+      }
+      setChooserError(data?.code === 'ERR_PRIVATE_APP_ACCESS_DENIED'
+        ? 'Your selected account does not have access to this private application.'
+        : 'Unable to continue with that account. Please choose another or sign in again.');
+    } catch {
+      setChooserError('Network error while selecting account.');
+    } finally {
+      setSelectingEntryId(null);
+    }
+  };
+
+  const handleSignOutEntry = async (entryId: string) => {
+    setSigningOutEntryId(entryId);
+    setChooserError(null);
+    try {
+      const res = await apiFetch('/api/identity/accounts/sign-out', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...csrfHeaders() },
+        body: JSON.stringify({ entryId }),
+      });
+      if (res.ok) {
+        const listRes = await apiFetch('/api/identity/accounts');
+        const listJson = listRes.ok ? await listRes.json() : null;
+        if (Array.isArray(listJson?.accounts)) setAccounts(listJson.accounts);
+      }
+    } finally {
+      setSigningOutEntryId(null);
+    }
+  };
 
   const handleSignIn = async (values: z.infer<typeof signInSchema>) => {
     setLoading(true);
@@ -124,10 +195,29 @@ export const SignIn: React.FC = () => {
         return;
       }
 
-      if ((res.data as Record<string, unknown>)?.twoFactorRedirect) {
+      const resData = res.data as Record<string, unknown> | undefined;
+      if (resData?.twoFactorRedirect) {
         const twoFactorUrl = `/two-factor?${searchParams.toString()}`;
         window.location.assign(twoFactorUrl);
         return;
+      }
+
+      if (searchParams.has('sig')) {
+        setRedirecting(true);
+        return;
+      }
+
+      if (transactionId && !resData?.url) {
+        const listRes = await apiFetch('/api/identity/accounts');
+        const listJson = listRes.ok ? await listRes.json() : null;
+        const activeList: BrowserAccountEntry[] = Array.isArray(listJson?.accounts)
+          ? listJson.accounts.filter((a: BrowserAccountEntry) => a.status === 'active')
+          : [];
+        activeList.sort((a, b) => new Date(b.lastUsedAt || 0).getTime() - new Date(a.lastUsedAt || 0).getTime());
+        if (activeList[0]) {
+          await selectEntryAndContinue(activeList[0].entryId, selectionRevision);
+          return;
+        }
       }
 
       setRedirecting(true);
@@ -275,6 +365,19 @@ export const SignIn: React.FC = () => {
             )}
 
             <CardContent className="p-6 sm:p-8 w-full">
+              {accounts.length > 0 && !showCredentialForm && (transactionId || callbackURL) ? (
+                <AccountChooser
+                  accounts={accounts}
+                  selectingEntryId={selectingEntryId}
+                  signingOutEntryId={signingOutEntryId}
+                  error={chooserError}
+                  onSelectAccount={(entryId) => void selectEntryAndContinue(entryId, selectionRevision)}
+                  onSignOutAccount={(entryId) => void handleSignOutEntry(entryId)}
+                  onSignInAgain={() => setShowCredentialForm(true)}
+                  onUseAnotherAccount={() => setShowCredentialForm(true)}
+                />
+              ) : (
+                <>
               <div className="mb-6">
                 <h2 className="font-heading text-2xl font-semibold text-foreground tracking-tight">
                   {tab === 'sign-in' ? 'Sign in' : 'Create an account'}
@@ -542,6 +645,8 @@ export const SignIn: React.FC = () => {
                   </TabsContent>
                 )}
               </Tabs>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>

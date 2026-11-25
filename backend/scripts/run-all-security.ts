@@ -112,6 +112,7 @@ const securityTestFiles = [
   "tests/security/p2b-provisioning-bypasses.test.ts",
   "tests/security/p3-browser-session-registry.test.ts",
   "tests/security/p3-session-adapter-isolation.test.ts",
+  "tests/security/p3-chooser-transaction-selection.test.ts",
 ];
 
 console.log("================================================================");

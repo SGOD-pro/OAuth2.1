@@ -169,6 +169,7 @@ export async function attachOrdinaryBrowserSessionToResponse(params: {
   }
   const headers = new Headers(res.headers);
   headers.append("set-cookie", serializeBrowserProofSetCookie(enrolled.nextRawProof));
+  headers.set("x-browser-entry-id", enrolled.entryId);
   return {
     response: new Response(res.body, { status: res.status, headers }),
     sessionId,

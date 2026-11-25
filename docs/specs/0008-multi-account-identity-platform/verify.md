@@ -16,7 +16,7 @@ Record actual commands and results in the documentation PR: relative links, anch
 | OTP start, verify, resend, finalize and wrong code zero writes | 02-04,15 | Real API + disposable DB and mail sink; concurrency workers | P2a intents, OTP limits, atomic budgets, encrypted outbox, leased worker with local test sink, authenticated callbacks, and browser UI verified locally (zero accounts or sessions created); real cloud mail provider delivery and P2b finalization remain pending |
 | New user, profile, key, session and lost response recovery | 03,16 | Real engine finalization + idempotency | P2b verified email account creation, normalized unique username transaction, idempotent retry, post commit session fallback, `/register/profile`, and provisioning bypass closure verified locally (account `keyRef` remains `null` until P6 and live cloud mail provider delivery remains pending) |
 | Client policy backfill and open, private matrix | 05-06,14 | Old and new schema and real consumer fixtures | P1a classification and audit (32 cases), refresh lease fencing (2 cases), P1b canonical resolution, open app bypass, token enforcement, introspection gating, and P1c admin registration, editing, and BAC P1C 01 through 06 browser acceptance checks locally verified; P2 through P9 remain pending |
-| Browser A and B login, tab interleave, expiry, logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | First P3 slice (`browser_session_sets` registry, `GET /api/identity/accounts`, `/accounts/sign-out`, `/accounts/remove`, request local session adapter, and ordinary login / verified registration wiring) locally verified; chooser UI, OAuth transaction selection, dashboard contexts, and multi tab interleaving remain pending |
+| Browser A and B login, tab interleave, expiry, logout, admin purpose | 07-09,21 | Real browser plus separate backend workers | First two P3 slices (`browser_session_sets` registry, atomic sign out, request local session adapter, chooser UI, per tab OAuth selection with CAS revision, `prompt`/`max_age`/`nonce`/private issuance fences, and real two tab Playwright E2E) locally verified; dashboard contexts (`POST /api/identity/contexts`) and separate worker multi process P3 tests remain pending |
 | Account list CORS, CSRF, fixation, context misuse | 08 | Browser and direct HTTP negatives | Pending |
 | Genuine user, admin MFA, recovery, promotion, step up, plugin paths | 10-11 | Real password, TOTP, backup protocol | Pending |
 | Dashboard A and B ownership, claims, privacy and admin serializers | 12-14 | Direct API + browser, cache, consumer tests | Pending |
@@ -681,6 +681,32 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: All P0, P2b (completion, bypasses, and Playwright browser), general Playwright OAuth E2E, local consumer OAuth E2E, and 16 unit suites passed with 0 failures
 5. Command: `npm run test:all-security && npm run security:integration-check && npm run security:docs-check`
    * Result: All 49 security suites passed (49 passed, 0 failed), 0 integration lint violations, and 0 documentation consistency errors
+
+
+## Slice P3 account chooser UI and per tab OAuth selection
+
+**Date:** 2026-11-25. **Result:** Verified Slice P3 account chooser UI, atomic single account browser sign out, per tab `oauth_transactions` selection binding (`POST /api/identity/accounts/select`) with CAS revisions, request local authorize/consent dispatch, issuance commit session revalidation, and real two tab Playwright browser interleaving against shared Docker MongoDB (`rs0`), real Better Auth engine sessions, local consumer OAuth E2E, and security/documentation checks. P3 remains open for dashboard contexts (`POST /api/identity/contexts`) and separate worker P3 coverage.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `3211afa20129ac66a8c527fa94cc30d017abbe6d`
+* Worktree status: Working tree with transactional `signOutBrowserEntry`, extended `oauth_transactions` selection binding, `POST /api/identity/accounts/select`, OIDC `prompt`/`max_age`/`nonce` chooser/consent enforcement, `AccountChooser.tsx`, updated `SignIn.tsx` and `Consent.tsx`, P3 selection and two tab browser suites, CI trigger, review record, and ledger updates
+* File length: All modified and new backend source and test files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm --prefix frontend run lint && npm --prefix frontend run build:ui`
+   * Result: 0 TypeScript diagnostics, 0 ESLint errors, clean Vite TypeScript build
+2. Command: `npm run test:p3-selection`
+   * Result: 2 test groups passed, 0 failed (atomic transaction consistency on concurrent sign out + idempotent retry, CAS revision conflicts, interleaved two tab authorize/consent/token exchange, `prompt=none` / `select_account` / `private` access checks, revoked selection blocked at consent)
+3. Command: `npm run test:p3-two-tab`
+   * Result: Real Playwright two tab browser E2E passed (sign in A, add B via chooser preserving A, interleaved two tab chooser -> consent -> PKCE code exchange yielding exact `sub` and `nonce`, sign out A from chooser preserving B)
+4. Command: `npm run test:p3-registry && npm run test:p3-adapter && npm run test:browser-e2e && npm run test:local-consumer-e2e`
+   * Result: All P3 registry/adapter suites, general Playwright browser OAuth E2E, and 11 local consumer OAuth E2E flows passed with 0 failures
+5. Command: `npm run test:all-security && npm run security:integration-check && npm run security:docs-check`
+   * Result: All 50 security suites passed (50 passed, 0 failed), 0 integration contract violations, and 0 documentation consistency errors
+
 
 
 

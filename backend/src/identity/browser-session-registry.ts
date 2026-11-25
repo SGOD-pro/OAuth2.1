@@ -192,29 +192,66 @@ export async function listBrowserSetEntriesWithLiveStatus(database: Db, rawBrows
 }
 
 export async function signOutBrowserEntry(database: Db, rawBrowserProof: string | undefined, entryId: string) {
-  const setDoc = await findActiveBrowserSet(database, rawBrowserProof);
-  if (!setDoc) return { ok: false as const, status: 401, code: "ERR_BROWSER_PROOF_INVALID" };
-  const idx = setDoc.entries.findIndex((e) => e.entryId === entryId);
-  if (idx < 0) return { ok: false as const, status: 404, code: "ERR_ACCOUNT_ENTRY_NOT_FOUND" };
+  const initialSet = await findActiveBrowserSet(database, rawBrowserProof);
+  if (!initialSet) return { ok: false as const, status: 401, code: "ERR_BROWSER_PROOF_INVALID" };
 
-  const target = setDoc.entries[idx];
-  const sessIdFilters = toIdFilters([target.sessionId]);
-  await database.collection("session").deleteMany({
-    $or: [{ _id: { $in: sessIdFilters } }, { id: target.sessionId }],
-    userId: { $in: toIdFilters([target.userId]) },
-  });
+  const mongoClient = (database as any).client;
+  const runAtomic = async (session?: any) => {
+    const opt = session ? { session } : {};
+    const setDoc = await database.collection<BrowserSessionSetDoc>("browser_session_sets").findOne(
+      { setId: initialSet.setId, handleDigest: initialSet.handleDigest, revokedAt: null, expiresAt: { $gt: new Date() } },
+      opt
+    );
+    if (!setDoc) return { kind: "conflict" as const };
+    const idx = setDoc.entries.findIndex((e) => e.entryId === entryId);
+    if (idx < 0) return { kind: "not_found" as const };
 
-  const now = new Date();
-  const nextEntries = [...setDoc.entries];
-  nextEntries[idx] = { ...target, status: "signed_out", signedOutAt: now };
-  const { rawProof, digest } = generateProofPair();
-  const updated = await database.collection<BrowserSessionSetDoc>("browser_session_sets").findOneAndUpdate(
-    { setId: setDoc.setId, handleDigest: setDoc.handleDigest, version: setDoc.version, revokedAt: null },
-    { $set: { entries: nextEntries, handleDigest: digest, updatedAt: now }, $inc: { version: 1 } },
-    { returnDocument: "after" }
-  );
-  if (!updated) return { ok: false as const, status: 409, code: "ERR_CONCURRENT_MODIFICATION" };
-  return { ok: true as const, entryId, nextRawProof: rawProof };
+    const target = setDoc.entries[idx];
+    const sessIdFilters = toIdFilters([target.sessionId]);
+    await database.collection("session").deleteMany(
+      { $or: [{ _id: { $in: sessIdFilters } }, { id: target.sessionId }], userId: { $in: toIdFilters([target.userId]) } },
+      opt
+    );
+    if (target.status === "signed_out") {
+      return { kind: "ok" as const, entryId, nextRawProof: rawBrowserProof! };
+    }
+
+    const now = new Date();
+    const nextEntries = [...setDoc.entries];
+    nextEntries[idx] = { ...target, status: "signed_out", signedOutAt: now };
+    const { rawProof, digest } = generateProofPair();
+    const updated = await database.collection<BrowserSessionSetDoc>("browser_session_sets").findOneAndUpdate(
+      { setId: setDoc.setId, handleDigest: setDoc.handleDigest, version: setDoc.version, revokedAt: null },
+      { $set: { entries: nextEntries, handleDigest: digest, updatedAt: now }, $inc: { version: 1 } },
+      { ...opt, returnDocument: "after" }
+    );
+    if (!updated) throw Object.assign(new Error("Sign-out CAS version conflict"), { casConflict: true });
+    return { kind: "ok" as const, entryId, nextRawProof: rawProof };
+  };
+
+  try {
+    const outcome = mongoClient && typeof mongoClient.startSession === "function"
+      ? await (async () => {
+          const session = mongoClient.startSession();
+          try {
+            let out!: Awaited<ReturnType<typeof runAtomic>>;
+            await session.withTransaction(async () => { out = await runAtomic(session); });
+            return out;
+          } finally {
+            await session.endSession().catch(() => {});
+          }
+        })()
+      : await runAtomic(undefined);
+
+    if (outcome.kind === "not_found") return { ok: false as const, status: 404, code: "ERR_ACCOUNT_ENTRY_NOT_FOUND" };
+    if (outcome.kind === "conflict") return { ok: false as const, status: 409, code: "ERR_CONCURRENT_MODIFICATION" };
+    return { ok: true as const, entryId: outcome.entryId, nextRawProof: outcome.nextRawProof };
+  } catch (err: any) {
+    if (err?.casConflict || err?.code === 112 || err?.codeName === "WriteConflict") {
+      return { ok: false as const, status: 409, code: "ERR_CONCURRENT_MODIFICATION" };
+    }
+    throw err;
+  }
 }
 
 export async function removeBrowserEntry(database: Db, rawBrowserProof: string | undefined, entryId: string) {
@@ -222,10 +259,7 @@ export async function removeBrowserEntry(database: Db, rawBrowserProof: string |
   if (!live) return { ok: false as const, status: 401, code: "ERR_BROWSER_PROOF_INVALID" };
   const target = live.accounts.find((a) => a.entryId === entryId);
   if (!target) return { ok: false as const, status: 404, code: "ERR_ACCOUNT_ENTRY_NOT_FOUND" };
-  if (target.status === "active") {
-    return { ok: false as const, status: 409, code: "ERR_SIGNOUT_REQUIRED" };
-  }
-
+  if (target.status === "active") return { ok: false as const, status: 409, code: "ERR_SIGNOUT_REQUIRED" };
   const setDoc = await findActiveBrowserSet(database, rawBrowserProof);
   if (!setDoc) return { ok: false as const, status: 401, code: "ERR_BROWSER_PROOF_INVALID" };
   const nextEntries = setDoc.entries.filter((e) => e.entryId !== entryId);

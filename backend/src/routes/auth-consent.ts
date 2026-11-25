@@ -5,37 +5,16 @@ import { getDb } from "../db/mongo";
 import { getOAuthTransaction } from "../db/state";
 import { getHeaders, resolveOAuthClient, checkUserHasAppAccess } from "../utils/security";
 import { config } from "../config";
-import { finalizeAuthorizeCodeWithFence } from "./auth-token-linearize";
+import { finalizeAuthorizeCodeWithFence, purgeAuthorizationCodeOnCommitFailure } from "./auth-token-linearize";
+import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
+import { dispatchRequestWithBrowserEntry, resolveVerifiedBrowserEntry } from "../identity/session-adapter";
+import { verifySelectedTransactionStillActive } from "../identity/oauth-selection";
 
 /**
  * Handle OAuth 2.1 user consent endpoint (/oauth2/consent).
  * Enforces session authentication and private application membership boundary.
  */
 export async function handleOAuthConsent(c: Context) {
-    let sessionUser: any = null;
-    try {
-        const sessionResult = await authProvider.api.getSession({
-            headers: getHeaders(c),
-        });
-        if (sessionResult?.user) {
-            const database = await getDb();
-            const userDoc = await database.collection("user").findOne({
-                $or: [
-                    { id: sessionResult.user.id },
-                    { _id: (sessionResult.user as any)._id },
-                    { email: sessionResult.user.email },
-                ],
-            });
-            sessionUser = { ...sessionResult.user, ...userDoc };
-        }
-    } catch {
-        sessionUser = null;
-    }
-
-    if (!sessionUser) {
-        return c.json({ error: "unauthorized", message: "Authentication required" }, 401);
-    }
-
     const body = await c.req.raw.clone().json().catch(() => null);
     let clientId: string | null = null;
     let state: string | null = null;
@@ -48,8 +27,44 @@ export async function handleOAuthConsent(c: Context) {
     }
     if (!state) state = c.req.query("state") || null;
 
-    const txIdCookie = getCookie(c, "oauth_transaction_id");
-    const tx = await getOAuthTransaction({ state: state || undefined, transactionId: txIdCookie || undefined });
+    const txIdParam = (typeof body?.transaction_id === "string" && body.transaction_id.trim()) || c.req.query("transaction_id") || getCookie(c, "oauth_transaction_id");
+    const tx = await getOAuthTransaction({ transactionId: txIdParam || undefined, state: state || undefined });
+
+    const rawBrowserProof = getCookie(c, getBrowserSessionCookieName());
+    const database = await getDb();
+    let sessionUser: any = null;
+    let useSelectedAdapter = false;
+
+    if (tx?.selectedEntryId && tx.browserSetId) {
+        try {
+            const verified = await resolveVerifiedBrowserEntry(authProvider as any, database, rawBrowserProof, tx.selectedEntryId);
+            if (verified.userId !== tx.selectedUserId || verified.sessionId !== tx.selectedSessionId) {
+                return c.json({ error: "unauthorized", code: "ERR_SELECTION_MISMATCH" }, 401);
+            }
+            const userDoc = await database.collection("user").findOne({ $or: [{ id: verified.userId }, { username: verified.label }] });
+            sessionUser = { id: verified.userId, role: verified.role, ...userDoc };
+            useSelectedAdapter = true;
+        } catch {
+            return c.json({ error: "unauthorized", code: "ERR_SESSION_REVOKED", message: "Selected session is no longer active" }, 401);
+        }
+    } else {
+        try {
+            const sessionResult = await authProvider.api.getSession({ headers: getHeaders(c) });
+            if (sessionResult?.user) {
+                const userDoc = await database.collection("user").findOne({
+                    $or: [{ id: sessionResult.user.id }, { _id: (sessionResult.user as any)._id }, { email: sessionResult.user.email }],
+                });
+                sessionUser = { ...sessionResult.user, ...userDoc };
+            }
+        } catch {
+            sessionUser = null;
+        }
+    }
+
+    if (!sessionUser) {
+        return c.json({ error: "unauthorized", message: "Authentication required" }, 401);
+    }
+
     if (tx) {
         if (clientId && clientId !== tx.clientId) {
             return c.json({ error: "invalid_request", error_description: "Client ID does not match OAuth transaction" }, 400);
@@ -93,7 +108,22 @@ export async function handleOAuthConsent(c: Context) {
         }
     }
 
-    const res = await authProvider.handler(c.req.raw);
+    const res = useSelectedAdapter && tx?.selectedEntryId
+        ? await dispatchRequestWithBrowserEntry(authProvider as any, database, rawBrowserProof, tx.selectedEntryId, c.req.raw)
+        : await authProvider.handler(c.req.raw);
+    if (useSelectedAdapter && tx) {
+        const stillValid = await verifySelectedTransactionStillActive(database, rawBrowserProof, tx);
+        if (!stillValid) {
+            let redirectTarget: string | null = res.headers.get("location");
+            if (!redirectTarget && res.status === 200) {
+                const j = await res.clone().json().catch(() => null);
+                redirectTarget = j?.redirect_uri || j?.url || null;
+            }
+            const code = redirectTarget ? new URL(redirectTarget, config.auth.baseURL).searchParams.get("code") : null;
+            if (code) await purgeAuthorizationCodeOnCommitFailure(database, code).catch(() => {});
+            return c.json({ error: "unauthorized", code: "ERR_SESSION_REVOKED" }, 401);
+        }
+    }
     const committed = await captureAndBindCode(res, tx, sessionUser, clientId, resolvedClientDoc);
     if (!committed) return c.json({ error: "invalid_client", error_description: "Client credentials transitioned during consent" }, 401);
     return res;
