@@ -159,7 +159,8 @@ export const TwoFactor: React.FC = () => {
 
       const sessRes = await authClient.getSession().catch(() => null);
       const role = (sessRes?.data?.user as { role?: string } | undefined)?.role;
-      if (role === 'admin' || role === 'super_admin') {
+      const isAdminRole = role === 'admin' || role === 'super-admin' || role === 'super_admin' || role === 'app-admin' || role === 'app_admin';
+      if (isAdminRole) {
         window.location.assign('/admin');
       } else {
         window.location.assign('/account');
