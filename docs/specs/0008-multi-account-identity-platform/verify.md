@@ -752,6 +752,26 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: 0 TypeScript diagnostics, 3/3 P3 binding tests passed, Playwright two tab browser E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
 
 
+## Slice P3 owner dashboard contexts
+
+**Date:** 2026-11-25. **Result:** Verified `POST /api/identity/contexts`, `GET /api/identity/contexts/me`, and `POST /api/identity/contexts/renew` for ordinary owner dashboards, plus tab memory frontend wiring (`/account`) and tightened continuation assertions. Two dashboard tabs stay pinned to their respective accounts, signing out A invalidates A's context while B remains usable, expiry and parent session bounded renewal are enforced, wrong purpose and conflicting browser proofs are rejected, and admin routes reject owner contexts. P3 acceptance criteria are met; P4 MFA work and P5 full dashboard features remain separate.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `646189e00249df4ddf958e29f6c5f92ff055a066`
+* Worktree status: Working tree with `owner-contexts.ts`, `identity-contexts.ts`, `identity_contexts` TTL/unique indexes, `identityContext.ts`, `AccountDashboard.tsx`, `p3-owner-dashboard-contexts.test.ts`, tightened `p3-continuation-session-binding.test.ts`, review record, and updated ledger documentation
+
+### Verification commands and execution evidence
+
+1. Command: `npm --prefix frontend run lint && npm --prefix frontend run build:ui && npm run typecheck:backend`
+   * Result: 0 ESLint errors, clean Vite build, 0 TypeScript diagnostics
+2. Command: `npm run test:p3-contexts`
+   * Result: 2 test groups passed, 0 failed (two tabs pinned to A and B, admin route rejection, sign out A invalidates A while B stays usable, expiry, parent session bounded renewal, wrong purpose, and browser mismatch)
+3. Command: `npm run test:p3-continuation && npm run test:p3-two-tab && npm run test:local-consumer-e2e && npm run security:integration-check && npm run security:docs-check`
+   * Result: 3/3 continuation tests passed, Playwright two tab browser E2E passed, 11/11 local consumer E2E flows passed, 0 integration violations, and 0 documentation consistency errors
+
+
 
 
 

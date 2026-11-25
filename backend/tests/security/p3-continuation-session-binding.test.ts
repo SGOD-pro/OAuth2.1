@@ -135,6 +135,18 @@ describe("P3 OAuth Continuation Session Binding", () => {
     assert.notEqual(res.status, 403, "Continuation must evaluate private app access for selected userA, not ambient userB");
     assert.notEqual(res.status, 401, "Continuation must accept valid selected session despite ambient cookie");
     assert.notEqual(res.status, 500, "Continuation dispatch must not throw");
+    // Engine outcome must be a valid OAuth response (redirect/consent/bad-request on synthetic query), never an auth/policy failure
+    assert.ok([200, 302, 400].includes(res.status), `Unexpected continuation status ${res.status}`);
+    if (res.status === 302 || res.status === 200) {
+      const loc = res.headers.get("location") || (await res.clone().json().catch(() => null))?.url;
+      if (loc) {
+        const code = new URL(loc, "http://localhost").searchParams.get("code");
+        if (code) {
+          const codeDoc = await db.collection("oauthAuthorizationCode").findOne({ code });
+          assert.equal(codeDoc?.userId, userA, "Issued code must be bound to selected userA");
+        }
+      }
+    }
   });
 
   it("fails closed on /oauth2/continue when selected session is stale or revoked", async () => {

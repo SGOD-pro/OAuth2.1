@@ -115,6 +115,7 @@ const securityTestFiles = [
   "tests/security/p3-chooser-transaction-selection.test.ts",
   "tests/security/p3-chooser-session-binding.test.ts",
   "tests/security/p3-continuation-session-binding.test.ts",
+  "tests/security/p3-owner-dashboard-contexts.test.ts",
 ];
 
 console.log("================================================================");

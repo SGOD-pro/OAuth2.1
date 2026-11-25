@@ -16,6 +16,11 @@ import {
   handleSelectBrowserAccount,
   handleSignOutBrowserAccount,
 } from "./identity-accounts";
+import {
+  handleGetOwnerContextMe,
+  handleIssueIdentityContext,
+  handleRenewIdentityContext,
+} from "./identity-contexts";
 import { handleMailCallback } from "../identity/mail-webhooks";
 
 const identity = new Hono();
@@ -28,6 +33,8 @@ identity.use("*", async (c, next) => {
 identity.use("/registration/*", csrfProtection);
 identity.use("/username/*", csrfProtection);
 identity.use("/accounts/*", csrfProtection);
+identity.use("/contexts", csrfProtection);
+identity.use("/contexts/*", csrfProtection);
 
 identity.get("/registration/config", handleGetRegistrationConfig);
 identity.get("/registration/intent/:intentId", handleGetRegistrationIntentStatus);
@@ -41,6 +48,10 @@ identity.get("/accounts", handleListBrowserAccounts);
 identity.post("/accounts/select", handleSelectBrowserAccount);
 identity.post("/accounts/sign-out", handleSignOutBrowserAccount);
 identity.post("/accounts/remove", handleRemoveBrowserAccount);
+
+identity.post("/contexts", handleIssueIdentityContext);
+identity.get("/contexts/me", handleGetOwnerContextMe);
+identity.post("/contexts/renew", handleRenewIdentityContext);
 
 identity.post("/mail/callbacks", handleMailCallback);
 

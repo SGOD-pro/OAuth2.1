@@ -15,12 +15,13 @@ V2 user-facing flows remain planned. P0 isolated adapters/tests are
 open app bypass, private token access, introspection gating, admin client policy UI and API,
 and transactional credential transition and commit fences) are locally verified. Slices P2a and P2b (registration intents, OTP budgets, encrypted mail outbox, leased worker with local test sink, authenticated callbacks, transactional verified account completion, `/register/profile`, and verified mode provisioning bypass closure behind default disabled mode) are
 [locally verified](docs/specs/0008-multi-account-identity-platform/verify.md)
-with live mail provider delivery and P3 through P9 remaining pending. The first three P3 slices
+with live mail provider delivery and P4 through P9 remaining pending. Slice P3
 (browser session registry, atomic single account sign out and removal, request local session
-adapter, account chooser UI, per tab OAuth selection with CAS revision binding, and exact engine
-session freshness binding with durable issuance commit guards) are
+adapter, account chooser UI, per tab OAuth selection with CAS revision binding, exact engine
+session freshness binding with durable issuance commit guards, `/oauth2/continue` session
+binding, and owner dashboard contexts) is
 [locally verified](docs/specs/0008-multi-account-identity-platform/verify.md),
-with dashboard contexts remaining pending to complete P3.
+with P4 MFA work and P5 full dashboard features remaining separate.
 Security PR #2 is integrated into main at `828acc5`;
 preserve its eligibility/MFA hardening rather than rebuilding it as the next feature.
 After P0 acceptance, follow bounded P1-P9 slices, preserving private/admin isolation, stable subjects

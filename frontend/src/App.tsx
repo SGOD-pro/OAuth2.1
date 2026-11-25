@@ -20,6 +20,7 @@ const ResetPassword = lazy(() =>
   import('@/pages/ResetPassword').then((module) => ({ default: module.ResetPassword }))
 );
 const Consent = lazy(() => import('@/pages/Consent').then((module) => ({ default: module.Consent })));
+const AccountDashboard = lazy(() => import('@/pages/AccountDashboard'));
 const AuthCallback = lazy(() =>
   import('@/pages/AuthCallback').then((module) => ({ default: module.AuthCallback }))
 );
@@ -67,6 +68,7 @@ const router = createBrowserRouter([
   { path: '/forgot-password', element: withLayout(<ForgotPassword />) },
   { path: '/reset-password', element: withLayout(<ResetPassword />) },
   { path: '/consent', element: withLayout(<Consent />) },
+  { path: '/account', element: withLayout(<AccountDashboard />) },
   { path: '/callback', element: withLayout(<AuthCallback />) },
   { path: '/signout', element: <SignOut /> },
 

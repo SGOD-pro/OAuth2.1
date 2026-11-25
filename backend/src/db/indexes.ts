@@ -12,6 +12,7 @@ export async function ensureIdentityCollectionIndexes(db: Awaited<ReturnType<typ
     "identity_outbox",
     "auth_events",
     "browser_session_sets",
+    "identity_contexts",
   ];
   await Promise.all(cols.map((col) => db.createCollection(col).catch(() => {})));
   const safeCreate = async (col: string, spec: any, options?: any) => {
@@ -39,6 +40,9 @@ export async function ensureIdentityCollectionIndexes(db: Awaited<ReturnType<typ
     safeCreate("browser_session_sets", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
     safeCreate("browser_session_sets", { "entries.entryId": 1 }),
     safeCreate("browser_session_sets", { "entries.userId": 1 }),
+    safeCreate("identity_contexts", { contextDigest: 1 }, { unique: true }),
+    safeCreate("identity_contexts", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    safeCreate("identity_contexts", { setId: 1, entryId: 1 }),
   ]);
 }
 
