@@ -708,6 +708,32 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
    * Result: All 50 security suites passed (50 passed, 0 failed), 0 integration contract violations, and 0 documentation consistency errors
 
 
+## Slice P3 chooser session binding and issuance commit guard
+
+**Date:** 2026-11-25. **Result:** Verified that OAuth authorization and consent flows resolve authTime and MFA metadata directly from the exact engine session validated by the session adapter without fallback to user level session scans or current time. Denied stale and unproven freshness requests for both max_age and prompt=login. Implemented durable shared commit guards serializing code issuance with selected session revocation and transaction reselection across all code issuing paths. Verified against separate backend worker processes on shared Docker MongoDB (`rs0`), real two tab Playwright browser coverage, local consumer OAuth E2E, and repository security and documentation checks. Dashboard contexts remain pending for the next slice to complete P3.
+
+### Tested commit and boundary
+
+* Branch: `v2`
+* Base inspection commit SHA: `23ca91c4dfa7792237f5f80594cce91e37a112f7`
+* Worktree status: Working tree with exact engine session metadata extraction in `session-adapter.ts`, freshness enforcement in `oauth-selection.ts`, durable commit guard `session-issuance-fence.ts`, issuance integration in `auth-client-fence.ts` and `auth-consent.ts`, separate process concurrency test harness `p3-external-worker.ts`, security test suite `p3-chooser-session-binding.test.ts`, review record, and updated ledger documentation
+* File length: All modified and new backend source and test files are strictly under 300 lines
+
+### Verification commands and execution evidence
+
+1. Command: `npm run typecheck:backend && npm --prefix frontend run lint && npm --prefix frontend run build:ui`
+   * Result: 0 TypeScript diagnostics, 0 ESLint errors, clean Vite production build
+2. Command: `npm run test:p3-binding`
+   * Result: 3 test groups passed, 0 failed (enforces freshness against two sessions of the same user and rejects unproven freshness without fallback, invalidates pending issuance when separate process commits sign out on shared MongoDB, invalidates pending issuance when separate process commits transaction reselection with code purge)
+3. Command: `npm run test:p3-two-tab`
+   * Result: Real Playwright two tab browser E2E passed (interleaved chooser selection, consent, PKCE code exchange verifying bound subject and nonce, sign out A preserving B)
+4. Command: `npm run test:p3-selection && npm run test:p3-registry && npm run test:p3-adapter && npm run test:browser-e2e && npm run test:local-consumer-e2e`
+   * Result: All P3 selection/registry/adapter suites, general Playwright browser OAuth E2E, and 11 local consumer OAuth E2E flows passed with 0 failures
+5. Command: `npm run test:all-security && npm run security:integration-check && npm run security:docs-check`
+   * Result: All 51 security suites passed (51 passed, 0 failed), 0 integration contract violations, and 0 documentation consistency errors
+
+
+
 
 
 

@@ -1,6 +1,18 @@
+import { ObjectId } from "mongodb";
 import { hashToken } from "../utils/security";
 import { bindAuthorizationCode, type BindAuthorizationCodeParams } from "../utils/pkce";
 import { getTokenBarrierHookForTesting } from "./auth-keys";
+import {
+    type SelectedSessionIssuanceFence,
+    commitSelectedSessionLinearization,
+    resolveSessionFenceFromTransaction,
+} from "../identity/session-issuance-fence";
+
+export {
+    type SelectedSessionIssuanceFence,
+    commitSelectedSessionLinearization,
+    resolveSessionFenceFromTransaction,
+};
 
 export interface ClientIssuanceFence {
     clientId: string;
@@ -105,19 +117,104 @@ export async function purgeAuthorizationCodeOnCommitFailure(database: any, code:
 /**
  * Verifies in-flight client policy state before committing and binding an issued authorization code.
  */
+export async function commitUserIssuanceLinearization(
+    database: any,
+    resolvedUserId: string,
+    expectedTokenVersion: number,
+    issuedAtMs?: number
+): Promise<boolean> {
+    const commitCondition: Record<string, any> = {
+        $or: [
+            { id: resolvedUserId },
+            ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
+        ],
+        $and: [
+            {
+                $or: [
+                    { tokenVersion: expectedTokenVersion },
+                    ...(expectedTokenVersion === 1 ? [{ tokenVersion: { $exists: false } }, { tokenVersion: null }] : []),
+                ],
+            },
+            { banned: { $ne: true } },
+            { disabled: { $ne: true } },
+            { isActive: { $ne: false } },
+            { status: { $nin: ["inactive", "deleting", "deleted"] } },
+            { deletedAt: { $exists: false } },
+            ...(issuedAtMs ? [{
+                $or: [
+                    { tokensRevokedBefore: { $exists: false } },
+                    { tokensRevokedBefore: null },
+                    { tokensRevokedBefore: { $lte: new Date(issuedAtMs) } },
+                ],
+            }] : [{
+                $or: [
+                    { tokensRevokedBefore: { $exists: false } },
+                    { tokensRevokedBefore: null },
+                    { tokensRevokedBefore: { $lte: new Date() } },
+                ],
+            }]),
+            ...(issuedAtMs ? [{
+                $or: [
+                    { passwordChangedAt: { $exists: false } },
+                    { passwordChangedAt: null },
+                    { passwordChangedAt: { $lte: new Date(issuedAtMs) } },
+                ],
+            }] : []),
+        ],
+    };
+
+    const commitResult: any = await database.collection("user").findOneAndUpdate(
+        commitCondition,
+        {
+            $set: {
+                tokenVersion: expectedTokenVersion,
+                lastTokenIssuedAt: new Date(),
+            },
+        },
+        { returnDocument: "after" }
+    );
+
+    const updatedDoc = commitResult && (commitResult.value !== undefined ? commitResult.value : commitResult);
+    return Boolean(updatedDoc);
+}
+
 export async function finalizeAuthorizeCodeWithFence(
     database: any,
     fence: ClientIssuanceFence,
-    bindParams: Omit<BindAuthorizationCodeParams, "clientType" | "clientCredentialVersion">
+    bindParams: Omit<BindAuthorizationCodeParams, "clientType" | "clientCredentialVersion">,
+    sessionFence?: SelectedSessionIssuanceFence
 ): Promise<boolean> {
     const barrierHook = getTokenBarrierHookForTesting();
     if (barrierHook) {
         await barrierHook("before_authorize_commit", fence.clientId);
+        const targetId = sessionFence?.transactionId || bindParams.transactionId || undefined;
+        if (targetId) {
+            await barrierHook("before_selected_session_commit", targetId);
+        }
     }
     const clientCommitted = await commitClientIssuanceLinearization(database, fence);
     if (!clientCommitted) {
         await purgeAuthorizationCodeOnCommitFailure(database, bindParams.code);
         return false;
+    }
+    if (bindParams.userId) {
+        const userCommitted = await commitUserIssuanceLinearization(
+            database,
+            bindParams.userId,
+            typeof bindParams.tokenVersion === "number" ? bindParams.tokenVersion : 1
+        );
+        if (!userCommitted) {
+            await purgeAuthorizationCodeOnCommitFailure(database, bindParams.code);
+            return false;
+        }
+    }
+    const effectiveSessionFence = sessionFence || (bindParams.transactionId ? await resolveSessionFenceFromTransaction(database, bindParams.transactionId) : undefined);
+    if (effectiveSessionFence) {
+        const sessionCommitted = await commitSelectedSessionLinearization(database, effectiveSessionFence, bindParams.code);
+        if (!sessionCommitted) {
+            await purgeAuthorizationCodeOnCommitFailure(database, bindParams.code);
+            return false;
+        }
     }
     await bindAuthorizationCode(database, {
         ...bindParams,

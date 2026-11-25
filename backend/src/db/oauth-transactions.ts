@@ -90,7 +90,7 @@ export async function bindOAuthTransactionSelection(params: {
   sessionId: string;
   sessionVersion: number;
   tokenVersion: number;
-  authTime: number;
+  authTime?: number | null;
   mfaTime?: number | null;
 }): Promise<OAuthTransactionDoc | null> {
   const db = await getDb();

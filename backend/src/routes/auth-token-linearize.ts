@@ -2,15 +2,20 @@ import { ObjectId } from "mongodb";
 import { hashToken } from "../utils/security";
 import {
     commitClientIssuanceLinearization,
+    commitUserIssuanceLinearization,
     type ClientIssuanceFence,
 } from "./auth-client-fence";
 export {
     buildClientIssuanceFence,
     commitClientIssuanceLinearization,
+    commitUserIssuanceLinearization,
+    commitSelectedSessionLinearization,
+    resolveSessionFenceFromTransaction,
     purgeAuthorizationCodeOnCommitFailure,
     finalizeAuthorizeCodeWithFence,
     isArtifactInvalidatedByClientTransition,
     type ClientIssuanceFence,
+    type SelectedSessionIssuanceFence,
 } from "./auth-client-fence";
 
 /**
@@ -79,59 +84,7 @@ export async function commitTokenIssuanceLinearization(
         const clientOk = await commitClientIssuanceLinearization(database, clientFence);
         if (!clientOk) return false;
     }
-    const commitCondition: Record<string, any> = {
-        $or: [
-            { id: resolvedUserId },
-            ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
-        ],
-        $and: [
-            {
-                $or: [
-                    { tokenVersion: expectedTokenVersion },
-                    ...(expectedTokenVersion === 1 ? [{ tokenVersion: { $exists: false } }, { tokenVersion: null }] : []),
-                ],
-            },
-            { banned: { $ne: true } },
-            { disabled: { $ne: true } },
-            { isActive: { $ne: false } },
-            { status: { $nin: ["inactive", "deleting", "deleted"] } },
-            { deletedAt: { $exists: false } },
-            ...(issuedAtMs ? [{
-                $or: [
-                    { tokensRevokedBefore: { $exists: false } },
-                    { tokensRevokedBefore: null },
-                    { tokensRevokedBefore: { $lte: new Date(issuedAtMs) } },
-                ],
-            }] : [{
-                $or: [
-                    { tokensRevokedBefore: { $exists: false } },
-                    { tokensRevokedBefore: null },
-                    { tokensRevokedBefore: { $lte: new Date() } },
-                ],
-            }]),
-            ...(issuedAtMs ? [{
-                $or: [
-                    { passwordChangedAt: { $exists: false } },
-                    { passwordChangedAt: null },
-                    { passwordChangedAt: { $lte: new Date(issuedAtMs) } },
-                ],
-            }] : []),
-        ],
-    };
-
-    const commitResult: any = await database.collection("user").findOneAndUpdate(
-        commitCondition,
-        {
-            $set: {
-                tokenVersion: expectedTokenVersion,
-                lastTokenIssuedAt: new Date(),
-            },
-        },
-        { returnDocument: "after" }
-    );
-
-    const updatedDoc = commitResult && (commitResult.value !== undefined ? commitResult.value : commitResult);
-    return Boolean(updatedDoc);
+    return commitUserIssuanceLinearization(database, resolvedUserId, expectedTokenVersion, issuedAtMs);
 }
 
 /**

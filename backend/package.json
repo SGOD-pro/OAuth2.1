@@ -102,6 +102,7 @@
     "test:p3-registry": "node --import tsx tests/security/p3-browser-session-registry.test.ts",
     "test:p3-adapter": "node --import tsx tests/security/p3-session-adapter-isolation.test.ts",
     "test:p3-selection": "node --import tsx tests/security/p3-chooser-transaction-selection.test.ts",
+    "test:p3-binding": "node --import tsx tests/security/p3-chooser-session-binding.test.ts",
     "test:p3-two-tab": "node --import tsx tests/e2e/p3-two-tab-chooser-browser.test.ts"
   },
   "devDependencies": {

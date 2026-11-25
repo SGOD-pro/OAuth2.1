@@ -125,7 +125,13 @@ export async function handleOAuthConsent(c: Context) {
         }
     }
     const committed = await captureAndBindCode(res, tx, sessionUser, clientId, resolvedClientDoc);
-    if (!committed) return c.json({ error: "invalid_client", error_description: "Client credentials transitioned during consent" }, 401);
+    if (!committed) {
+        return c.json({
+            error: "unauthorized",
+            code: "ERR_SESSION_REVOKED",
+            error_description: "Selected session revoked, reselected, or client transitioned during consent",
+        }, 401);
+    }
     return res;
 }
 
@@ -246,6 +252,14 @@ async function captureAndBindCode(
                 const database = await getDb();
                 const targetCid = clientDoc?.clientId || tx?.clientId || clientId || "";
                 if (targetCid) {
+                    const sessionFence = (tx?.selectedSessionId && tx?.selectedEntryId) ? {
+                        transactionId: tx.transactionId,
+                        expectedSelectionRevision: typeof tx.selectionRevision === "number" ? tx.selectionRevision : 1,
+                        expectedSessionId: tx.selectedSessionId,
+                        expectedEntryId: tx.selectedEntryId,
+                        expectedBrowserSetId: tx.browserSetId || undefined,
+                        expectedUserId: tx.selectedUserId || sessionUserId,
+                    } : undefined;
                     return finalizeAuthorizeCodeWithFence(database, {
                         clientId: targetCid,
                         expectedClientType: clientDoc?.clientType,
@@ -259,7 +273,7 @@ async function captureAndBindCode(
                         userId: sessionUserId,
                         tokenVersion: currentVersion,
                         transactionId: tx?.transactionId,
-                    });
+                    }, sessionFence);
                 }
             }
         }

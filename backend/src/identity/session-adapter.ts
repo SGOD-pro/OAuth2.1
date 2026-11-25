@@ -12,6 +12,10 @@ export interface VerifiedBrowserEntry {
   sessionId: string;
   label: string;
   role: string;
+  authTime: number | null;
+  mfaTime: number | null;
+  createdAt: Date | null;
+  tokenVersion: number;
 }
 
 export class SessionAdapterError extends Error {
@@ -76,6 +80,13 @@ async function resolveSelectedSessionInternal(
     throw new SessionAdapterError("ERR_ENGINE_SESSION_INVALID", "Engine session verification failed");
   }
 
+  const rawCreatedAt = sessionDoc.createdAt || verified.session?.createdAt;
+  const createdAtDate = rawCreatedAt ? new Date(rawCreatedAt) : null;
+  const authTime = createdAtDate && !isNaN(createdAtDate.getTime()) ? Math.floor(createdAtDate.getTime() / 1000) : null;
+  const rawMfa = (sessionDoc as any).mfaVerifiedAt || (verified.session as any)?.mfaVerifiedAt;
+  const mfaDate = rawMfa ? new Date(rawMfa) : null;
+  const mfaTime = mfaDate && !isNaN(mfaDate.getTime()) ? Math.floor(mfaDate.getTime() / 1000) : null;
+
   return {
     entryId: entry.entryId,
     userId: entry.userId,
@@ -83,6 +94,10 @@ async function resolveSelectedSessionInternal(
     label: entry.label,
     role: typeof userDoc.role === "string" ? userDoc.role : "user",
     token: sessionDoc.token,
+    authTime,
+    mfaTime,
+    createdAt: createdAtDate,
+    tokenVersion: currentVersion,
   };
 }
 
@@ -100,6 +115,10 @@ export async function resolveVerifiedBrowserEntry(
     sessionId: resolved.sessionId,
     label: resolved.label,
     role: resolved.role,
+    authTime: resolved.authTime,
+    mfaTime: resolved.mfaTime,
+    createdAt: resolved.createdAt,
+    tokenVersion: resolved.tokenVersion,
   };
 }
 

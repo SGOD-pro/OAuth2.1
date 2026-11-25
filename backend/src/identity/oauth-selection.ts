@@ -106,17 +106,29 @@ export async function selectAccountForOAuthTransaction(params: {
     return { status: 400, body: { error: "invalid_client", code: "ERR_INVALID_CLIENT", requestId } };
   }
 
+  const authTimeSec = verified.authTime;
+  const mfaTimeSec = verified.mfaTime;
+
+  const promptTokens = (tx.prompt || "").split(/\s+/).filter(Boolean);
+  if (tx.maxAge != null) {
+    if (authTimeSec == null || Math.floor(Date.now() / 1000) - authTimeSec > tx.maxAge) {
+      return { status: 403, body: { error: "login_required", code: "ERR_MAX_AGE_EXCEEDED", requiresReauth: true, requestId } };
+    }
+  }
+  if (promptTokens.includes("login")) {
+    if (authTimeSec == null || authTimeSec * 1000 < new Date(tx.createdAt).getTime()) {
+      return { status: 403, body: { error: "login_required", code: "ERR_PROMPT_LOGIN_REQUIRED", requiresReauth: true, requestId } };
+    }
+  }
+
   const userDoc = await database.collection("user").findOne({ id: verified.userId }).catch(() => null)
     ?? await database.collection("user").findOne({ username: verified.label }).catch(() => null);
-  const sessDoc = await database.collection("session").findOne({ token: { $exists: true }, userId: userDoc?._id ?? verified.userId })
-    ?? await database.collection("session").find({}).toArray().then((all) => all.find((s) => String(s._id || s.id) === verified.sessionId));
-  const authTimeSec = sessDoc?.createdAt ? Math.floor(new Date(sessDoc.createdAt).getTime() / 1000) : Math.floor(Date.now() / 1000);
 
   if (userDoc) {
     const elig = checkAccountEligibility(userDoc, {
-      tokenIssuedAtMs: authTimeSec * 1000,
-      tokenIssuedAtSec: authTimeSec,
-      tokenVersion: userDoc.tokenVersion,
+      tokenIssuedAtMs: authTimeSec != null ? authTimeSec * 1000 : undefined,
+      tokenIssuedAtSec: authTimeSec != null ? authTimeSec : undefined,
+      tokenVersion: typeof userDoc.tokenVersion === "number" ? userDoc.tokenVersion : verified.tokenVersion,
     });
     if (!elig.eligible) {
       return { status: 403, body: { error: "access_denied", code: "ERR_ACCOUNT_INELIGIBLE", requestId } };
@@ -131,14 +143,6 @@ export async function selectAccountForOAuthTransaction(params: {
     }
   }
 
-  const promptTokens = (tx.prompt || "").split(/\s+/).filter(Boolean);
-  if (tx.maxAge != null && Math.floor(Date.now() / 1000) - authTimeSec > tx.maxAge) {
-    return { status: 403, body: { error: "login_required", code: "ERR_MAX_AGE_EXCEEDED", requiresReauth: true, requestId } };
-  }
-  if (promptTokens.includes("login") && sessDoc?.createdAt && new Date(sessDoc.createdAt).getTime() < new Date(tx.createdAt).getTime()) {
-    return { status: 403, body: { error: "login_required", code: "ERR_PROMPT_LOGIN_REQUIRED", requiresReauth: true, requestId } };
-  }
-
   const bound = await bindOAuthTransactionSelection({
     transactionId: tx.transactionId,
     expectedRevision,
@@ -146,10 +150,10 @@ export async function selectAccountForOAuthTransaction(params: {
     entryId: verified.entryId,
     userId: verified.userId,
     sessionId: verified.sessionId,
-    sessionVersion: typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : 1,
-    tokenVersion: typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : 1,
+    sessionVersion: verified.tokenVersion,
+    tokenVersion: typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : verified.tokenVersion,
     authTime: authTimeSec,
-    mfaTime: sessDoc?.mfaVerifiedAt ? Math.floor(new Date(sessDoc.mfaVerifiedAt).getTime() / 1000) : null,
+    mfaTime: mfaTimeSec,
   });
   if (!bound) {
     return { status: 409, body: { error: "conflict", code: "ERR_REVISION_CONFLICT", requestId } };
@@ -200,16 +204,22 @@ export async function selectAccountForOAuthTransaction(params: {
 
   const code = locUrl.searchParams.get("code");
   if (code) {
-    const stillActive = await verifySelectedTransactionStillActive(database, rawBrowserProof, bound);
-    const fenced = stillActive && await finalizeAuthorizeCodeWithFence(database, {
+    const fenced = await finalizeAuthorizeCodeWithFence(database, {
       clientId: clientDoc.clientId,
       expectedClientType: clientDoc.clientType,
       expectedCredentialVersion: typeof clientDoc.credentialVersion === "number" ? clientDoc.credentialVersion : 1,
     }, {
       code, clientId: clientDoc.clientId, redirectUri: tx.redirectUri, codeChallenge: tx.codeChallenge,
       codeChallengeMethod: tx.codeChallengeMethod || "S256", userId: verified.userId,
-      tokenVersion: typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : 1,
+      tokenVersion: typeof userDoc?.tokenVersion === "number" ? userDoc.tokenVersion : verified.tokenVersion,
       transactionId: bound.transactionId,
+    }, {
+      transactionId: bound.transactionId,
+      expectedSelectionRevision: bound.selectionRevision,
+      expectedSessionId: verified.sessionId,
+      expectedEntryId: verified.entryId,
+      expectedBrowserSetId: setDoc.setId,
+      expectedUserId: verified.userId,
     });
     if (!fenced) {
       await purgeAuthorizationCodeOnCommitFailure(database, code).catch(() => {});
