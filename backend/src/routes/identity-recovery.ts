@@ -24,7 +24,8 @@ export const recoveryAccountRateLimit = createRateLimiter({
   keyFn: async (c: Context) => {
     const body = await c.req.raw.clone().json().catch(() => null);
     const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
-    return email ? digestToken(email) : null;
+    if (!email || !email.includes("@")) return null;
+    return digestToken(`recovery-rl-v1:${email}`);
   },
 });
 

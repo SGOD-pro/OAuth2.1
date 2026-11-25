@@ -853,7 +853,7 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 ### Tested commit and boundary
 
 * Branch: `v2`
-* Base inspection commit SHA: `de1683c97620ed8f9e225c1d6072b0088d3d8c23`
+* Base inspection commit SHA: `926b5c547e08121acfda5f245f11e55e8741cfe7` (CI run: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45625840490`)
 * Worktree status: Working tree with `keyFn` in `rate-limit.ts`, `digestToken` account key in `identity-recovery.ts`, cross IP unknown account, cross account IP, and store outage tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
 
 ### Verification commands and execution evidence
@@ -889,7 +889,7 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 ### Tested commit and boundary
 
 * Branch: `v2`
-* Base inspection commit SHA: `de1683c97620ed8f9e225c1d6072b0088d3d8c23`
+* Base inspection commit SHA: `926b5c547e08121acfda5f245f11e55e8741cfe7` (CI run: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45625840490`)
 * Worktree status: Working tree with `keyFn` in `rate-limit.ts`, `digestToken` account key in `identity-recovery.ts`, cross IP unknown account, cross account IP, and store outage tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
 
 ### Verification commands and execution evidence
@@ -961,7 +961,7 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 ### Tested commit and boundary
 
 * Branch: `v2`
-* Base inspection commit SHA: `de1683c97620ed8f9e225c1d6072b0088d3d8c23`
+* Base inspection commit SHA: `926b5c547e08121acfda5f245f11e55e8741cfe7` (CI run: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45625840490`)
 * Worktree status: Working tree with `keyFn` in `rate-limit.ts`, `digestToken` account key in `identity-recovery.ts`, cross IP unknown account, cross account IP, and store outage tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
 
 ### Verification commands and execution evidence
@@ -997,7 +997,7 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 ### Tested commit and boundary
 
 * Branch: `v2`
-* Base inspection commit SHA: `de1683c97620ed8f9e225c1d6072b0088d3d8c23`
+* Base inspection commit SHA: `926b5c547e08121acfda5f245f11e55e8741cfe7` (CI run: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45625840490`)
 * Worktree status: Working tree with `keyFn` in `rate-limit.ts`, `digestToken` account key in `identity-recovery.ts`, cross IP unknown account, cross account IP, and store outage tests in `p4-backup-code-recovery.test.ts`, review record, and updated ledger
 
 ### Verification commands and execution evidence

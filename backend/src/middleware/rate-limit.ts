@@ -102,7 +102,10 @@ export function createRateLimiter(options: {
     }
 
     const ip = getTrustedClientIp(c);
-    const customSubject = keyFn ? await keyFn(c) : null;
+    const customSubject = keyFn ? await keyFn(c) : undefined;
+    if (keyFn && customSubject === null) {
+      return next();
+    }
     const subject = customSubject || ip;
     const key = `${prefix}:${subject}`;
     const now = Date.now();
