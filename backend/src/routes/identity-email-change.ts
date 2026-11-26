@@ -170,7 +170,7 @@ export async function handleEmailChangeConfirm(c: Context) {
         { _id: userObjectId, email: oldEmail },
         {
           $set: { email: newEmail, emailVerified: true, updatedAt: now },
-          $inc: { sessionVersion: 1, lookupVersion: 1 },
+          $inc: { tokenVersion: 1, sessionVersion: 1, lookupVersion: 1 },
         },
         { session }
       );
