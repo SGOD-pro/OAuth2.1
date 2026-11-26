@@ -156,6 +156,8 @@ jobs:
         run: npm run test:p5-owner-portal
       - name: Run P5.2 Owner Profile Browser E2E Suite (Playwright)
         run: npm run test:p5-owner-profile
+      - name: Run P5.4 Owner Privacy Browser E2E Suite (Playwright)
+        run: npm run test:p5-privacy
 
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine

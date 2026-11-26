@@ -285,7 +285,11 @@ export async function handleRefreshTokenGrant(
                         tokenData.id_token = await resignIdTokenWithNewAtHash(
                             tokenData.id_token,
                             jwtAt,
-                            (payload) => filterConsumerClaims(payload, tokenData.scope || "openid profile email", userDoc)
+                            (payload) => filterConsumerClaims(
+                                payload,
+                                tokenData.scope || (Array.isArray(claimResult.existingFamily?.scopes) && claimResult.existingFamily.scopes.length > 0 ? claimResult.existingFamily.scopes : "openid"),
+                                userDoc
+                            )
                         );
                     }
                     return c.json(tokenData, 200);

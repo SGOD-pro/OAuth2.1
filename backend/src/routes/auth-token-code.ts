@@ -283,7 +283,11 @@ export async function handleAuthorizationCodeGrant(
                     tokenData.id_token = await resignIdTokenWithNewAtHash(
                         tokenData.id_token,
                         jwtAt,
-                        (payload) => filterConsumerClaims(payload, tokenData.scope || "openid profile email", userDoc)
+                        (payload) => filterConsumerClaims(
+                            payload,
+                            tokenData.scope || "openid",
+                            userDoc
+                        )
                     );
                 }
                 return c.json(tokenData, 200);

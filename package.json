@@ -50,6 +50,7 @@
     "test:p4-user-totp-browser": "npm --prefix backend run test:p4-user-totp-browser",
     "test:p5-owner-portal": "npm --prefix backend run test:p5-owner-portal",
     "test:p5-owner-profile": "npm --prefix backend run test:p5-owner-profile",
+    "test:p5-privacy": "npm --prefix backend run test:p5-privacy",
     "test:p4-admin-mfa": "npm --prefix backend run test:p4-admin-mfa",
     "test:p4-invitations": "npm --prefix backend run test:p4-invitations",
     "test:p4-recovery": "npm --prefix backend run test:p4-recovery",
