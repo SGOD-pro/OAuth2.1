@@ -1076,8 +1076,16 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 ## P6a account-key backend proof (disposable local adapter)
 
-* Tested SHA: `48200903b99ec5aa7a7c63e39fb1c03255994883` (CI: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45906714186`)
+* Original P6a proof: `48200903b99ec5aa7a7c63e39fb1c03255994883` (CI: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45906714186`).
+* Expanded P6a proof: `60627b31748d228587abb97eadd5b5c716474dd4` (CI: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45907310837`), extended with explicit `A2` denial, `B` decrypt continuity, and unchanged `monotonicSeq` on destruction retry of an already-destroyed reference.
 * Scope: `AccountKeyProvider` interface and `InMemoryAccountKeyProvider` in `backend/src/identity/account-key-provider.ts`; local proof in `backend/tests/security/p6a-account-key-provider.test.ts` (registered in `backend/scripts/run-all-security.ts`).
 * Verified locally (same-process disposable proof): cross-account unwrap denial, provider-outage fail-closed, per-reference denial scope (denying A1 leaves A2 and B active until A2 is explicitly denied), monotonic `monotonicSeq` transitions, idempotent destruction retries with stable state/seq, and distinct `denied`, `scheduled_destruction`, and `destroyed` states.
-* Key lifecycle boundary before P6b: Account-level denial in P6b must iterate every historical wrapping reference in the account key inventory, track key rotation, and coordinate with replicas/backups. Restart and independent restore-ledger proof remain open.
-* Real-provider verification plan (held for explicit approval): Provision isolated synthetic accounts and a non-production KMS/Vault key (~$1/month + API calls, 7-day minimum pending-deletion window), capture separate evidence for immediate denial, pending destruction, and final provider-confirmed destruction, then clean up. P6a final-destruction acceptance remains open until a real provider proves it; P6b and P7 remain pending.
+* Key lifecycle & durable fence boundary before P6b:
+  * A durable account-wide fence blocks `wrapDataKey` and `unwrapDataKey` before historical key cleanup begins.
+  * Concurrent key rotation enters the account key inventory before/during cleanup so no newly minted wrapping reference escapes denial.
+  * On backup/snapshot restore, the restore path replays newer denials from the independent denial ledger before reopening account access. Restart and independent restore-ledger proof remain open.
+* AWS KMS real-provider preflight (held for explicit approval; HashiCorp Vault remains a separate provider plan):
+  * Isolated non-production AWS account and region (e.g. `us-east-1`), dedicated test IAM role scoped to `kms:CreateKey`, `kms:CreateAlias`, `kms:Encrypt`, `kms:Decrypt`, `kms:DisableKey`, `kms:ScheduleKeyDeletion`, `kms:DescribeKey`, and `kms:DeleteAlias` on tagged `swyra-p6a-proof` keys only.
+  * Separate synthetic CMKs for account A (`alias/swyra-p6a-proof-a`) and account B (`alias/swyra-p6a-proof-b`), ~$1/month per CMK + API call charges, within standard AWS KMS request quotas; cleanup owned by the test operator.
+  * Required evidence stages: (1) immediate denial (`DisableKey` on A -> A decrypt fails, B decrypt succeeds), (2) pending deletion (`ScheduleKeyDeletion` 7-day minimum window -> interim result only, A decrypt fails, B decrypt succeeds), (3) final provider-confirmed destruction (CloudTrail audit event + `DescribeKey` returning `NotFoundException` after window expires).
+  * P6a final-destruction acceptance remains open until a real provider proves it; cloud provisioning, key destruction, P6b, P7, main merge, and deployment require explicit approval.

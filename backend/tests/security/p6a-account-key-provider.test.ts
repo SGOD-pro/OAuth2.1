@@ -60,6 +60,13 @@ describe("P6a Account-Key Backend Proof (Disposable Local Adapter)", () => {
       await provider.unwrapDataKey("acct_A", wrappedA2.keyRef, wrappedA2.wrappedKey),
       dekA2
     );
+    // Explicitly deny A2 as well and confirm B can still decrypt
+    const denyA2Res = await provider.denyAccess("acct_A", wrappedA2.keyRef, "owner_revoked");
+    assert.equal(denyA2Res.state, "denied");
+    await assert.rejects(
+      () => provider.unwrapDataKey("acct_A", wrappedA2.keyRef, wrappedA2.wrappedKey),
+      (err: any) => err instanceof AccountKeyAccessError && err.code === "key_denied"
+    );
     assert.deepEqual(
       await provider.unwrapDataKey("acct_B", wrappedB.keyRef, wrappedB.wrappedKey),
       dekB
@@ -92,6 +99,8 @@ describe("P6a Account-Key Backend Proof (Disposable Local Adapter)", () => {
     const sched3 = await provider.scheduleDestruction("acct_A", wrappedA1.keyRef);
     assert.equal(sched3.state, "destroyed");
     assert.equal(sched3.idempotent, true);
+    const stateAfterSched3 = await provider.getKeyState("acct_A", wrappedA1.keyRef);
+    assert.equal(stateAfterSched3.monotonicSeq, stateAfterDestroy.monotonicSeq);
     await assert.rejects(
       () => provider.unwrapDataKey("acct_A", wrappedA1.keyRef, wrappedA1.wrappedKey),
       (err: any) => err instanceof AccountKeyAccessError && err.code === "key_destroyed"
