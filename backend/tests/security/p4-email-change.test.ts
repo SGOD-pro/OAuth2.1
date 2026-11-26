@@ -237,13 +237,33 @@ describe("P4 Verified Email Change (AC-11)", { timeout: 60_000 }, () => {
     const noticeMsgs = getTestMailSinkMessages().filter((m: any) => m.to === emailA1 && m.purpose === "email_change_notice");
     assert.equal(noticeMsgs.length, 1, "Old mailbox must receive change notification");
 
-    // Prior session for A must be revoked
+    // Prior session for A must be revoked and cannot authorize a new OAuth code
     const oldSessARes = await app.request("/api/auth/get-session", {
       method: "GET",
       headers: headers({ Cookie: rotatedCookieA }),
     });
     const oldSessAData = await oldSessARes.json().catch(() => null);
     assert.equal(oldSessAData?.user ?? null, null, "Prior session for A must be revoked");
+
+    const staleAuthzRes = await app.request(
+      `/api/auth/oauth2/authorize?client_id=nonexistent&redirect_uri=${encodeURIComponent(origin + "/cb")}&response_type=code&scope=openid&state=s1&code_challenge=abc&code_challenge_method=S256`,
+      { method: "GET", headers: headers({ Cookie: rotatedCookieA }) }
+    );
+    assert.ok(staleAuthzRes.status === 302 || staleAuthzRes.status === 400 || staleAuthzRes.status === 401, "Prior session must not issue OAuth code");
+    const staleLoc = staleAuthzRes.headers.get("location") || "";
+    assert.ok(!staleLoc.includes("code="), "Prior session must never yield an authorization code");
+
+    // Pre-change refresh token for A must fail closed
+    const staleRefreshRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: origin },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: "stale_pre_change_refresh_token",
+        client_id: "client-ec-test",
+      }).toString(),
+    });
+    assert.ok(staleRefreshRes.status === 400 || staleRefreshRes.status === 401, "Pre-change refresh token must be rejected");
 
     // Stale token from first request must not overwrite newer contact
     const staleConfirm = await app.request("/api/identity/email-change/confirm", {
