@@ -267,7 +267,7 @@ describe("P4 Verified Email Change (AC-11)", { timeout: 60_000 }, () => {
     const userAAfter = await db.collection("user").findOne({ _id: userA._id });
     assert.equal(userAAfter.email, emailA2);
     assert.equal(String(userAAfter._id), userAId);
-    assert.ok((userAAfter.tokenVersion ?? 1) > (userA.tokenVersion ?? 1), "tokenVersion must advance on email change");
+    assert.equal(userAAfter.tokenVersion, 2, "Missing legacy tokenVersion (effective 1) must advance to 2");
     assert.ok((userAAfter.sessionVersion || 0) >= 1);
     assert.ok((userAAfter.lookupVersion || 0) >= 1);
 

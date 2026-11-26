@@ -166,11 +166,20 @@ export async function handleEmailChangeConfirm(c: Context) {
         throw Object.assign(new Error("Email address is already in use"), { status: 409 });
       }
 
+      const userDoc = await database.collection("user").findOne(
+        { _id: userObjectId, email: oldEmail },
+        { session }
+      );
+      if (!userDoc) {
+        throw Object.assign(new Error("User not found or email already changed"), { status: 409 });
+      }
+      const nextTokenVersion = (typeof userDoc.tokenVersion === "number" ? userDoc.tokenVersion : 1) + 1;
+
       const upd = await database.collection("user").updateOne(
         { _id: userObjectId, email: oldEmail },
         {
-          $set: { email: newEmail, emailVerified: true, updatedAt: now },
-          $inc: { tokenVersion: 1, sessionVersion: 1, lookupVersion: 1 },
+          $set: { email: newEmail, emailVerified: true, updatedAt: now, tokenVersion: nextTokenVersion },
+          $inc: { sessionVersion: 1, lookupVersion: 1 },
         },
         { session }
       );
