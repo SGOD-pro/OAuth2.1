@@ -247,12 +247,51 @@ describe("P5.4 Owner Privacy & Consumer Claim Filtering", { timeout: 60_000 }, (
     assert.equal(uiNarrowedJsonA.email, undefined);
     assert.equal(uiNarrowedJsonA.name, undefined);
 
-    // User B still shares email and profile
-    const fullTokensB = await issueTokens(cookieB, clientId, clientSecret, redirectUri, "openid profile email", "198.51.100.95, 10.0.0.1");
+    // User B still shares email and profile (separate narrowing-with-sharing-ON case)
+    const fullTokensB = await issueTokens(cookieB, clientId, clientSecret, redirectUri, "openid profile email offline_access", "198.51.100.95, 10.0.0.1");
     const uiFullB = await app.request("/api/auth/oauth2/userinfo", { method: "GET", headers: headers({ Authorization: `Bearer ${fullTokensB.access_token}`, "x-forwarded-for": "198.51.100.95, 10.0.0.1" }) });
     assert.equal(uiFullB.status, 200);
     const uiFullJsonB = await uiFullB.json();
     assert.equal(uiFullJsonB.email, emailB);
     assert.equal(uiFullJsonB.name, "User Beta");
+
+    // Refresh B with scope=openid while sharing remains ON
+    const narrowResB = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: headers({ "Content-Type": "application/x-www-form-urlencoded", "x-forwarded-for": "198.51.100.95, 10.0.0.1" }),
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: fullTokensB.refresh_token,
+        client_id: clientId,
+        scope: "openid",
+      }).toString(),
+    });
+    assert.equal(narrowResB.status, 200);
+    const narrowedB = await narrowResB.json();
+    const narrowedClaimsB = decodeJwt(narrowedB.id_token);
+    assert.equal(narrowedClaimsB.email, undefined);
+    assert.equal(narrowedClaimsB.name, undefined);
+
+    // Refresh B's rotated token again WITHOUT a scope parameter -> stays narrow
+    const secondRefreshResB = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: headers({ "Content-Type": "application/x-www-form-urlencoded", "x-forwarded-for": "198.51.100.95, 10.0.0.1" }),
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: narrowedB.refresh_token,
+        client_id: clientId,
+      }).toString(),
+    });
+    assert.equal(secondRefreshResB.status, 200);
+    const secondB = await secondRefreshResB.json();
+    const secondClaimsB = decodeJwt(secondB.id_token);
+    assert.equal(secondClaimsB.email, undefined);
+    assert.equal(secondClaimsB.name, undefined);
+
+    const uiSecondB = await app.request("/api/auth/oauth2/userinfo", { method: "GET", headers: headers({ Authorization: `Bearer ${secondB.access_token}`, "x-forwarded-for": "198.51.100.95, 10.0.0.1" }) });
+    assert.equal(uiSecondB.status, 200);
+    const uiSecondJsonB = await uiSecondB.json();
+    assert.equal(uiSecondJsonB.email, undefined);
+    assert.equal(uiSecondJsonB.name, undefined);
   });
 });
