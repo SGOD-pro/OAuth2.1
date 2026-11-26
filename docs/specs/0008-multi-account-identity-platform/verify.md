@@ -1077,15 +1077,30 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 ## P6a account-key backend proof (disposable local adapter)
 
 * Original P6a proof: `48200903b99ec5aa7a7c63e39fb1c03255994883` (CI: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45906714186`).
-* Expanded P6a proof: `60627b31748d228587abb97eadd5b5c716474dd4` (CI: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45907310837`), extended with explicit `A2` denial, `B` decrypt continuity, and unchanged `monotonicSeq` on destruction retry of an already-destroyed reference.
+* Expanded P6a proof: `60627b31748d228587abb97eadd5b5c716474dd4` (CI: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45907310837`).
+* Final local proof (`A2` denial + stable `monotonicSeq` on destruction retry of an already-destroyed reference): `1abe5436a703283542b776e8fd218caae27db0a5` (CI: `https://github.com/SGOD-pro/OAuth2.1/actions/runs/45908915207`, passed on attempt 2 after the TOTP browser suite failed on attempt 1).
 * Scope: `AccountKeyProvider` interface and `InMemoryAccountKeyProvider` in `backend/src/identity/account-key-provider.ts`; local proof in `backend/tests/security/p6a-account-key-provider.test.ts` (registered in `backend/scripts/run-all-security.ts`).
-* Verified locally (same-process disposable proof): cross-account unwrap denial, provider-outage fail-closed, per-reference denial scope (denying A1 leaves A2 and B active until A2 is explicitly denied), monotonic `monotonicSeq` transitions, idempotent destruction retries with stable state/seq, and distinct `denied`, `scheduled_destruction`, and `destroyed` states.
-* Key lifecycle & durable fence boundary before P6b:
+* Verified locally (same-process disposable proof): cross-account unwrap denial, provider-outage fail-closed, per-reference denial scope (denying A1 leaves A2 active until A2 is explicitly denied, while B continues to decrypt), monotonic `monotonicSeq` transitions, idempotent destruction retries with stable state/seq (including on already-destroyed references), and distinct `denied`, `scheduled_destruction`, and `destroyed` states.
+* Key lifecycle & durable fence boundary before P6b (provider denial remains distinct from the application's durable account fence):
   * A durable account-wide fence blocks `wrapDataKey` and `unwrapDataKey` before historical key cleanup begins.
   * Concurrent key rotation enters the account key inventory before/during cleanup so no newly minted wrapping reference escapes denial.
   * On backup/snapshot restore, the restore path replays newer denials from the independent denial ledger before reopening account access. Restart and independent restore-ledger proof remain open.
-* AWS KMS real-provider preflight (held for explicit approval; HashiCorp Vault remains a separate provider plan):
-  * Isolated non-production AWS account and region (e.g. `us-east-1`), dedicated test IAM role scoped to `kms:CreateKey`, `kms:CreateAlias`, `kms:Encrypt`, `kms:Decrypt`, `kms:DisableKey`, `kms:ScheduleKeyDeletion`, `kms:DescribeKey`, and `kms:DeleteAlias` on tagged `swyra-p6a-proof` keys only.
-  * Separate synthetic CMKs for account A (`alias/swyra-p6a-proof-a`) and account B (`alias/swyra-p6a-proof-b`), ~$1/month per CMK + API call charges, within standard AWS KMS request quotas; cleanup owned by the test operator.
-  * Required evidence stages: (1) immediate denial (`DisableKey` on A -> A decrypt fails, B decrypt succeeds), (2) pending deletion (`ScheduleKeyDeletion` 7-day minimum window -> interim result only, A decrypt fails, B decrypt succeeds), (3) final provider-confirmed destruction (CloudTrail audit event + `DescribeKey` returning `NotFoundException` after window expires).
+* AWS KMS real-provider approval packet (held for explicit approval; HashiCorp Vault remains a separate provider plan):
+  * **Approval scope & blockers**:
+    * Sandbox AWS Account ID: `<MISSING - BLOCKING APPROVAL>`
+    * Region: `us-east-1` (single-region)
+    * Test Role ARN: `<MISSING - BLOCKING APPROVAL>`
+    * Two single-region test CMKs: `alias/swyra-p6a-proof-a` (account A) and `alias/swyra-p6a-proof-b` (account B)
+    * Cost estimate: ~$1.00/month per CMK + API call charges (~$0.03 per 10,000 requests), within standard AWS KMS quotas
+    * Cleanup owner: `<MISSING - BLOCKING APPROVAL>`
+  * **IAM permissions (least privilege, split provisioning vs key-use)**:
+    * Provisioning: `kms:CreateKey` (conditioned on `aws:RequestTag/swyra-purpose = p6a-proof` and `kms:MultiRegion = false`), `kms:TagResource`, `kms:CreateAlias`
+    * Key use & destruction (bound to the exact created key ARNs): `kms:Encrypt`, `kms:Decrypt`, `kms:DisableKey`, `kms:ScheduleKeyDeletion`, `kms:DescribeKey`, `kms:DeleteAlias`
+    * Evidence logs (read-only): `cloudtrail:LookupEvents`
+  * **Required evidence & cleanup order**:
+    * Positive decrypt control: both A and B encrypt and decrypt successfully before denial.
+    * Immediate denial: `DisableKey` on A -> A decrypt fails (`DisabledException`), B decrypt succeeds.
+    * Pending deletion (interim result only): `ScheduleKeyDeletion` on A (7-day minimum window) -> A decrypt fails (`KMSInvalidStateException`), B decrypt succeeds.
+    * Final provider-confirmed destruction: CloudTrail `DeleteKey` event for A's exact ARN AND `DescribeKey` returning `NotFoundException`.
+    * B remains usable until A's final destruction evidence is captured, then B is cleaned up under separate authorization (`ScheduleKeyDeletion` + `DeleteAlias`).
   * P6a final-destruction acceptance remains open until a real provider proves it; cloud provisioning, key destruction, P6b, P7, main merge, and deployment require explicit approval.
