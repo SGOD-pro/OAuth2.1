@@ -293,5 +293,54 @@ describe("P5.4 Owner Privacy & Consumer Claim Filtering", { timeout: 60_000 }, (
     const uiSecondJsonB = await uiSecondB.json();
     assert.equal(uiSecondJsonB.email, undefined);
     assert.equal(uiSecondJsonB.name, undefined);
+
+    // Assert persisted access-token scopes and family scopes separately
+    const userB = await db.collection("user").findOne({ email: emailB });
+    const familyB = await db.collection("oauth_token_families").findOne({ userId: String(userB._id) });
+    assert.ok(familyB, "Token family for B must exist");
+    assert.ok(familyB.scopes === undefined || Array.isArray(familyB.scopes), "Family scopes must be undefined or an array");
+    const accessDocB = await db.collection("oauthAccessToken").findOne({ token: secondB.access_token });
+    if (accessDocB) {
+      assert.deepEqual(accessDocB.scopes, ["openid"]);
+    }
+  });
+
+  it("controlled-response: omits optional claims when engine response omits scope and retains proven narrow grant", async () => {
+    const { filterConsumerClaims } = await import("../../src/identity/claim-policy");
+    const { resignIdTokenWithNewAtHash } = await import("../../src/routes/auth-jwt");
+    const { SignJWT } = await import("jose");
+
+    const secret = new TextEncoder().encode("c".repeat(32));
+    const rawIdToken = await new SignJWT({
+      sub: "user_ctrl_1",
+      email: "ctrl@example.com",
+      email_verified: true,
+      name: "Controlled User",
+      at_hash: "placeholder",
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(secret);
+
+    const prefsEnabled = { shareEmail: true, shareProfile: true };
+
+    // 1. Proven narrow grant ["openid"] with omitted engine scope
+    const narrowedJwt = await resignIdTokenWithNewAtHash(rawIdToken, "new_at_1", (payload) =>
+      filterConsumerClaims(payload, ["openid"], prefsEnabled)
+    );
+    const narrowedClaims = decodeJwt(narrowedJwt);
+    assert.equal(narrowedClaims.sub, "user_ctrl_1");
+    assert.equal(narrowedClaims.email, undefined);
+    assert.equal(narrowedClaims.name, undefined);
+
+    // 2. Unknown grant scope (undefined) with omitted engine scope -> defaults to openid-only
+    const unknownJwt = await resignIdTokenWithNewAtHash(rawIdToken, "new_at_2", (payload) =>
+      filterConsumerClaims(payload, undefined, prefsEnabled)
+    );
+    const unknownClaims = decodeJwt(unknownJwt);
+    assert.equal(unknownClaims.sub, "user_ctrl_1");
+    assert.equal(unknownClaims.email, undefined);
+    assert.equal(unknownClaims.name, undefined);
   });
 });
