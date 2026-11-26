@@ -134,8 +134,10 @@ try {
   await page.fill('input[type="password"]', password);
   const disableCode = await createOTP(rawSecret, { digits: 6, period: 30 }).hotp(Math.floor(Date.now() / 30000) - 1);
   await page.fill('[data-testid="totp-code-input"], input[placeholder*="6-digit"]', disableCode);
-  await page.click('button:has-text("Confirm Disable")');
-  await page.waitForTimeout(500);
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes("/api/identity/totp/disable") && r.status() === 200),
+    page.click('button:has-text("Confirm Disable")'),
+  ]);
   await page.reload({ waitUntil: "networkidle" });
   await page.getByText("P4 TOTP User").click();
   await page.locator('[data-testid="totp-enable-btn"], button:has-text("Enable TOTP")').waitFor({ state: "visible", timeout: 10_000 });
