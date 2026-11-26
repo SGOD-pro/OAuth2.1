@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { handleEmailChangeRequest, handleEmailChangeConfirm } from "./identity-email-change";
+import { handleListOwnerSessions, handleRevokeOwnerSession, handleListOwnerApps, handleDisconnectOwnerApp } from "./identity-owner-portal";
 import { csrfProtection } from "../middleware/csrf";
 import {
   handleGetRegistrationConfig,
@@ -50,6 +51,10 @@ identity.use("/invitations/*", csrfProtection);
 identity.use("/recovery/*", csrfProtection);
 identity.use("/totp/*", csrfProtection);
 identity.use("/email-change/*", csrfProtection);
+identity.use("/sessions", csrfProtection);
+identity.use("/sessions/*", csrfProtection);
+identity.use("/apps", csrfProtection);
+identity.use("/apps/*", csrfProtection);
 
 identity.get("/registration/config", handleGetRegistrationConfig);
 identity.get("/registration/intent/:intentId", handleGetRegistrationIntentStatus);
@@ -76,6 +81,10 @@ identity.post("/totp/verify", totpIpRateLimit, totpSubjectRateLimit, handleOwner
 identity.post("/totp/disable", totpIpRateLimit, totpSubjectRateLimit, handleOwnerTotpDisable);
 identity.post("/email-change/request", totpIpRateLimit, handleEmailChangeRequest);
 identity.post("/email-change/confirm", totpIpRateLimit, handleEmailChangeConfirm);
+identity.get("/sessions", handleListOwnerSessions);
+identity.post("/sessions/:sessionId/revoke", totpIpRateLimit, handleRevokeOwnerSession);
+identity.get("/apps", handleListOwnerApps);
+identity.post("/apps/:clientId/disconnect", totpIpRateLimit, handleDisconnectOwnerApp);
 
 identity.post("/mail/callbacks", handleMailCallback);
 

@@ -121,6 +121,7 @@ const securityTestFiles = [
   "tests/security/p4-backup-code-recovery.test.ts",
   "tests/security/p4-optional-user-totp.test.ts",
   "tests/security/p4-email-change.test.ts",
+  "tests/security/p5-owner-sessions-apps.test.ts",
 ];
 
 console.log("================================================================");
