@@ -123,6 +123,7 @@ const securityTestFiles = [
   "tests/security/p4-email-change.test.ts",
   "tests/security/p5-owner-sessions-apps.test.ts",
   "tests/security/p5-owner-profile.test.ts",
+  "tests/security/p5-admin-masking.test.ts",
 ];
 
 console.log("================================================================");

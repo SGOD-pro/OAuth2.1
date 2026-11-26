@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { authProvider } from "../utils/auth";
+import { ObjectId } from "mongodb";
 import { getDb } from "../db/mongo";
 import {
   isStrongPassword,
@@ -191,16 +192,31 @@ export async function handleGetUsers(c: any): Promise<Response> {
     const page = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
     const skip = (page - 1) * limit;
 
+    const rawQ = (c.req.query("q") || "").trim();
+    const filter: Record<string, any> = {};
+    if (rawQ) {
+      const orClauses: any[] = [
+        { usernameNormalized: rawQ.toLowerCase() },
+        { username: rawQ },
+        { id: rawQ },
+      ];
+      if (ObjectId.isValid(rawQ) && rawQ.length === 24) {
+        orClauses.push({ _id: new ObjectId(rawQ) });
+      }
+      filter.$or = orClauses;
+    }
+
     const database = await getDb();
     const users = await database
       .collection("user")
-      .find({})
+      .find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .toArray();
     const safeUsers = users.map((u: any) => ({
       _id: u._id?.toString() || u.id,
+      username: u.username ?? null,
       displayLabel: toApprovedDisplayLabel(u.email, u.name),
       name: isEmailShaped(u.name) ? toApprovedDisplayLabel(u.name) : (u.name || "User"),
       role: u.role || "user",

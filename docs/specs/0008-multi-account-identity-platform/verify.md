@@ -1060,7 +1060,11 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 ## Slice P5.2 owner profile editing
 
-**Date:** 2026-11-26. **Result:** Implemented `GET`/`PATCH /api/identity/me` (`backend/src/routes/identity-owner-portal.ts`, `backend/src/routes/identity.ts`) and `/account/profile` (`frontend/pages/AccountProfile.tsx`, `frontend/src/App.tsx`). Bound to `X-Identity-Context`, allowlists `name` and `username` only (rejecting `email`, `role`, `sub`, etc. with `400`), reuses `normalizeUsername` and `computeUsernameLookup`, and enforces username uniqueness inside a MongoDB transaction (`409` on collision, preserving existing profile). Verified in `p5-owner-profile.test.ts` (registered in `run-all-security.ts`) and `test:p5-owner-profile` (registered in CI). Admin masking, export, and deletion remain separate.
+**Date:** 2026-11-26. **Result:** Implemented `GET`/`PATCH /api/identity/me` (`backend/src/routes/identity-owner-portal.ts`, `backend/src/routes/identity.ts`) and `/account/profile` (`frontend/pages/AccountProfile.tsx`, `frontend/src/App.tsx`). Bound to `X-Identity-Context`, allowlists `name` and `username` only (rejecting `email`, `role`, `sub`, etc. with `400`), reuses `normalizeUsername` and `computeUsernameLookup`, maps concurrent username duplicate key errors (`11000`) to `409`, and enforces username uniqueness inside a MongoDB transaction. Verified in `p5-owner-profile.test.ts` (registered in `run-all-security.ts`) and `test:p5-owner-profile` (registered in CI).
+
+## Slice P5.3 admin data masking and search
+
+**Date:** 2026-11-26. **Result:** Audited and verified admin data masking across `GET /api/admin/users`, `GET /api/admin/logs`, and `GET /api/admin/clients/:clientId/users`, and added `q` search by `username`/`usernameNormalized` or opaque `_id`/`id` (never by full email) in `backend/src/routes/admin-users.ts`. Verified in `p5-admin-masking.test.ts` (registered in `run-all-security.ts`). Export, consumer claim filtering, and deletion remain for separate slices.
 
 ## Slice P4 password reset, browser TOTP E2E, and replay exception reconciliation
 

@@ -1,0 +1,85 @@
+import assert from "node:assert/strict";
+import { describe, it, before, after } from "node:test";
+import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
+import { isolateTestEnvironment } from "../fixtures/test-env-isolation";
+import { enrollAndLoginAdminMfa } from "../fixtures/admin-mfa-fixture";
+
+describe("P5.3 Admin Data Masking & Search", { timeout: 60_000 }, () => {
+  let app: any;
+  let db: any;
+  let origin: string;
+  let gatewaySecret: string;
+
+  before(async () => {
+    process.env.FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5174";
+    process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-id";
+    process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "test-google-secret";
+    process.env.BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET || "s".repeat(32);
+    process.env.BETTER_AUTH_URL = process.env.BETTER_AUTH_URL || "http://localhost:3000";
+    isolateTestEnvironment();
+    process.env.NODE_ENV = "test";
+    process.env.ALLOW_PUBLIC_SIGNUP = "true";
+    process.env.REQUIRE_EMAIL_VERIFICATION = "false";
+    process.env.TOTP_ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || "c".repeat(32);
+    process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
+    gatewaySecret = process.env.INTERNAL_GATEWAY_SECRET;
+    origin = process.env.FRONTEND_URL;
+
+    await setupSuiteDatabase("p5_admin_masking");
+    const { getDb } = await import("../../src/db/mongo");
+    db = await getDb();
+    const { default: appInstance } = await import("../../src/app");
+    app = appInstance;
+  });
+
+  after(async () => {
+    process.exit(0);
+  });
+
+  function headers(extra: Record<string, string> = {}) {
+    return {
+      "Content-Type": "application/json",
+      Origin: origin,
+      "x-gateway-secret": gatewaySecret,
+      "x-csrf-token": "any",
+      "x-forwarded-for": "198.51.100.93, 10.0.0.1",
+      ...extra,
+    };
+  }
+
+  it("masks full email in admin users, search, and logs while allowing search by username or ID", async () => {
+    const adminEmail = `p53_admin_${Date.now()}@example.com`;
+    const userEmail = `p53_secret_user_${Date.now()}@example.com`;
+    const pass = "P53!Admin#Pass123";
+
+    await app.request("/api/auth/sign-up/email", { method: "POST", headers: headers(), body: JSON.stringify({ email: adminEmail, password: pass, name: "Super Admin" }) });
+    await db.collection("user").updateOne({ email: adminEmail }, { $set: { emailVerified: true, role: "super-admin" } });
+    const adminCookie = await enrollAndLoginAdminMfa(app, adminEmail, pass, headers);
+
+    await app.request("/api/auth/sign-up/email", { method: "POST", headers: headers(), body: JSON.stringify({ email: userEmail, password: pass, name: "Ordinary User" }) });
+    await db.collection("user").updateOne({ email: userEmail }, { $set: { emailVerified: true, username: "masked_target", usernameNormalized: "masked_target" } });
+    const targetUser = await db.collection("user").findOne({ email: userEmail });
+    const targetId = String(targetUser._id);
+
+    // 1. GET /api/admin/users omits full email
+    const listRes = await app.request("/api/admin/users", { method: "GET", headers: headers({ Cookie: adminCookie }) });
+    assert.equal(listRes.status, 200);
+    const listText = await listRes.text();
+    assert.equal(listText.includes(userEmail), false, "Full user email must be absent from /api/admin/users");
+    assert.equal(listText.includes(adminEmail), false, "Full admin email must be absent from /api/admin/users");
+
+    // 2. Search by username or ID works, search by full email returns empty
+    const byUname = await app.request("/api/admin/users?q=masked_target", { method: "GET", headers: headers({ Cookie: adminCookie }) });
+    assert.equal((await byUname.json()).length, 1);
+    const byId = await app.request(`/api/admin/users?q=${targetId}`, { method: "GET", headers: headers({ Cookie: adminCookie }) });
+    assert.equal((await byId.json()).length, 1);
+    const byEmail = await app.request(`/api/admin/users?q=${encodeURIComponent(userEmail)}`, { method: "GET", headers: headers({ Cookie: adminCookie }) });
+    assert.equal((await byEmail.json()).length, 0, "Admin search must not match by full email");
+
+    // 3. GET /api/admin/logs omits full email
+    const logsRes = await app.request("/api/admin/logs", { method: "GET", headers: headers({ Cookie: adminCookie }) });
+    assert.equal(logsRes.status, 200);
+    const logsText = await logsRes.text();
+    assert.equal(logsText.includes(userEmail), false, "Full user email must be absent from /api/admin/logs");
+  });
+});
