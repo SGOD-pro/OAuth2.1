@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { Buffer } from "node:buffer";
 import { describe, it, before, after } from "node:test";
 import { createOTP } from "@better-auth/utils/otp";
@@ -192,13 +193,58 @@ describe("P4 Verified Email Change (AC-11)", { timeout: 60_000 }, () => {
     assert.equal(reqRes2.status, 200);
     const token2 = getTestMailSinkMessages().find((m: any) => m.to === emailA2 && m.purpose === "email_change_verify").text.match(/token:\s*([^\s)]+)/)?.[1];
 
-    // Seed OAuth token family for A to verify revocation
-    await db.collection("oauth_token_families").insertOne({
-      familyId: `fam_ec_${Date.now()}`,
-      userId: userAId,
-      clientId: "client-ec-test",
-      status: "active",
+    // Register a real public PKCE client and issue real pre-change OAuth credentials for A and B (success control)
+    const realClientId = `ec_real_client_${Date.now()}`;
+    const realRedirectUri = `${origin}/cb`;
+    await db.collection("oauthClient").insertOne({
+      clientId: realClientId,
+      name: "P4 Email Change Real Client",
+      redirectUris: [realRedirectUri],
+      type: "public",
+      tokenEndpointAuthMethod: "none",
+      grantTypes: ["authorization_code", "refresh_token"],
+      responseTypes: ["code"],
+      isPublic: true,
+      isDev: true,
+      clientType: "public",
+      accessPolicy: "open",
+      disabled: false,
+      skipConsent: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     });
+
+    async function issueRealOAuthTokens(cookieHeader: string) {
+      const verifier = crypto.randomBytes(32).toString("base64url");
+      const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+      const state = crypto.randomBytes(12).toString("hex");
+      const authzRes = await app.request(
+        `/api/auth/oauth2/authorize?client_id=${encodeURIComponent(realClientId)}&redirect_uri=${encodeURIComponent(realRedirectUri)}&response_type=code&scope=openid%20offline_access&state=${state}&code_challenge=${challenge}&code_challenge_method=S256`,
+        { method: "GET", headers: headers({ Cookie: cookieHeader }) }
+      );
+      assert.equal(authzRes.status, 302, "Pre-change authorize control must redirect");
+      const loc = authzRes.headers.get("location") || "";
+      const code = new URL(loc).searchParams.get("code");
+      assert.ok(code, `Pre-change authorize control must issue code, got ${loc}`);
+      const tokRes = await app.request("/api/auth/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: origin },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: realRedirectUri,
+          client_id: realClientId,
+          code_verifier: verifier,
+        }).toString(),
+      });
+      assert.equal(tokRes.status, 200, "Pre-change token exchange control must succeed");
+      return tokRes.json();
+    }
+
+    const preTokensA = await issueRealOAuthTokens(rotatedCookieA);
+    assert.ok(preTokensA.refresh_token, "A must receive pre-change refresh_token");
+    const preTokensB = await issueRealOAuthTokens(cookieB);
+    assert.ok(preTokensB.refresh_token, "B must receive pre-change refresh_token");
 
     // 4. Concurrent confirm: exactly 1 succeeds (200), loser gets 409
     clearTestMailSink();
@@ -245,25 +291,39 @@ describe("P4 Verified Email Change (AC-11)", { timeout: 60_000 }, () => {
     const oldSessAData = await oldSessARes.json().catch(() => null);
     assert.equal(oldSessAData?.user ?? null, null, "Prior session for A must be revoked");
 
+    const staleVerifier = crypto.randomBytes(32).toString("base64url");
+    const staleChallenge = crypto.createHash("sha256").update(staleVerifier).digest("base64url");
     const staleAuthzRes = await app.request(
-      `/api/auth/oauth2/authorize?client_id=nonexistent&redirect_uri=${encodeURIComponent(origin + "/cb")}&response_type=code&scope=openid&state=s1&code_challenge=abc&code_challenge_method=S256`,
+      `/api/auth/oauth2/authorize?client_id=${encodeURIComponent(realClientId)}&redirect_uri=${encodeURIComponent(realRedirectUri)}&response_type=code&scope=openid%20offline_access&state=s_after&code_challenge=${staleChallenge}&code_challenge_method=S256`,
       { method: "GET", headers: headers({ Cookie: rotatedCookieA }) }
     );
     assert.ok(staleAuthzRes.status === 302 || staleAuthzRes.status === 400 || staleAuthzRes.status === 401, "Prior session must not issue OAuth code");
     const staleLoc = staleAuthzRes.headers.get("location") || "";
     assert.ok(!staleLoc.includes("code="), "Prior session must never yield an authorization code");
 
-    // Pre-change refresh token for A must fail closed
+    // Pre-change real refresh_token for A must fail closed
     const staleRefreshRes = await app.request("/api/auth/oauth2/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: origin },
       body: new URLSearchParams({
         grant_type: "refresh_token",
-        refresh_token: "stale_pre_change_refresh_token",
-        client_id: "client-ec-test",
+        refresh_token: preTokensA.refresh_token,
+        client_id: realClientId,
       }).toString(),
     });
-    assert.ok(staleRefreshRes.status === 400 || staleRefreshRes.status === 401, "Pre-change refresh token must be rejected");
+    assert.ok(staleRefreshRes.status === 400 || staleRefreshRes.status === 401, "Pre-change refresh token for A must be rejected");
+
+    // B's pre-change real refresh_token must still succeed
+    const bRefreshRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: origin },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: preTokensB.refresh_token,
+        client_id: realClientId,
+      }).toString(),
+    });
+    assert.equal(bRefreshRes.status, 200, "B's pre-change refresh token must remain usable");
 
     // Stale token from first request must not overwrite newer contact
     const staleConfirm = await app.request("/api/identity/email-change/confirm", {
