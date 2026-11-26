@@ -103,6 +103,12 @@ describe("P5 Owner Sessions & Connected Apps API", { timeout: 60_000 }, () => {
       { userId: userAId, clientId: "p5_app2", scopes: ["openid"], createdAt: new Date() },
       { userId: userBId, clientId: "p5_appB", scopes: ["openid"], createdAt: new Date() },
     ]);
+    await db.collection("user_app_registrations").insertOne({
+      userId: userAId,
+      clientId: "p5_app1",
+      status: "active",
+      createdAt: new Date(),
+    });
 
     // List sessions & apps for A
     const listS = await app.request("/api/identity/sessions", { method: "GET", headers: headers({ Cookie: proofAB, "X-Identity-Context": ctxA }) });
@@ -142,7 +148,31 @@ describe("P5 Owner Sessions & Connected Apps API", { timeout: 60_000 }, () => {
     assert.equal(listSAfter.sessions.length, sBody.sessions.length - 1);
     assert.ok(await db.collection("session").findOne({ _id: sessB._id }), "B's session must remain");
 
-    // Disconnect p5_app1 -> preserves p5_app2 and B's app
+    // Stale createdAt (>5 min) with recent updatedAt must still be denied (403)
+    const currentA = sBody.sessions.find((s: any) => s.current);
+    const { ObjectId } = await import("mongodb");
+    await db.collection("session").updateOne(
+      { _id: new ObjectId(currentA.sessionId) },
+      { $set: { createdAt: new Date(Date.now() - 10 * 60 * 1000), updatedAt: new Date() }, $unset: { mfaVerifiedAt: "" } }
+    );
+    const staleRev = await app.request(`/api/identity/sessions/${nonCurrentA.sessionId}/revoke`, {
+      method: "POST",
+      headers: headers({ Cookie: proofAB, "X-Identity-Context": ctxA }),
+    });
+    assert.equal(staleRev.status, 403, "Stale auth with recent updatedAt must be denied on revoke");
+    const staleDisc = await app.request("/api/identity/apps/p5_app1/disconnect", {
+      method: "POST",
+      headers: headers({ Cookie: proofAB, "X-Identity-Context": ctxA }),
+    });
+    assert.equal(staleDisc.status, 403, "Stale auth with recent updatedAt must be denied on disconnect");
+
+    // Restore fresh reauthentication -> actions succeed
+    await db.collection("session").updateOne(
+      { _id: new ObjectId(currentA.sessionId) },
+      { $set: { mfaVerifiedAt: new Date() } }
+    );
+
+    // Disconnect p5_app1 -> preserves p5_app2, B's app, and administrator-managed user_app_registrations
     const discOk = await app.request("/api/identity/apps/p5_app1/disconnect", {
       method: "POST",
       headers: headers({ Cookie: proofAB, "X-Identity-Context": ctxA }),
@@ -151,5 +181,9 @@ describe("P5 Owner Sessions & Connected Apps API", { timeout: 60_000 }, () => {
     const listAAfter = await (await app.request("/api/identity/apps", { method: "GET", headers: headers({ Cookie: proofAB, "X-Identity-Context": ctxA }) })).json();
     assert.deepEqual(listAAfter.apps.map((a: any) => a.clientId), ["p5_app2"]);
     assert.ok(await db.collection("oauthConsent").findOne({ userId: userBId, clientId: "p5_appB" }));
+    assert.ok(
+      await db.collection("user_app_registrations").findOne({ userId: userAId, clientId: "p5_app1" }),
+      "Administrator-managed user_app_registrations must be preserved on owner disconnect"
+    );
   });
 });

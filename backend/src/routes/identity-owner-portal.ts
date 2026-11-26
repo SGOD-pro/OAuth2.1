@@ -38,10 +38,10 @@ async function requireRecentAuth(database: any, sessionId: string): Promise<bool
   if (!ObjectId.isValid(sessionId)) return false;
   const sess = await database.collection("session").findOne({ _id: new ObjectId(sessionId) });
   if (!sess) return false;
+  // Routine session updatedAt must not count as reauthentication.
   const refTime = Math.max(
     sess.mfaVerifiedAt ? new Date(sess.mfaVerifiedAt).getTime() : 0,
-    sess.createdAt ? new Date(sess.createdAt).getTime() : 0,
-    sess.updatedAt ? new Date(sess.updatedAt).getTime() : 0
+    sess.createdAt ? new Date(sess.createdAt).getTime() : 0
   );
   return refTime > 0 && Date.now() - refTime <= RECENT_AUTH_WINDOW_MS;
 }
@@ -124,16 +124,12 @@ export async function handleListOwnerApps(c: Context) {
   if (!owner.ok) return owner.response;
 
   const uFilters = buildUserIdFilters(owner.userId);
-  const [consents, families, regs] = await Promise.all([
+  const [consents, families] = await Promise.all([
     database.collection("oauthConsent").find({ $or: uFilters }).toArray(),
     database.collection("oauth_token_families").find({ $or: uFilters, status: { $ne: "revoked" } }).toArray(),
-    database.collection("user_app_registrations").find({ $or: uFilters }).toArray(),
   ]);
 
   const byClient = new Map<string, { clientId: string; scopes: string[]; status: string }>();
-  for (const r of regs) {
-    if (r.clientId) byClient.set(r.clientId, { clientId: r.clientId, scopes: [], status: "connected" });
-  }
   for (const f of families) {
     if (f.clientId && !byClient.has(f.clientId)) {
       byClient.set(f.clientId, { clientId: f.clientId, scopes: [], status: "connected" });
@@ -175,9 +171,9 @@ export async function handleDisconnectOwnerApp(c: Context) {
 
   const uFilters = buildUserIdFilters(owner.userId);
   const now = new Date();
+  // Revoke owner's consent and OAuth credentials; preserve administrator-managed user_app_registrations.
   await Promise.all([
     database.collection("oauthConsent").deleteMany({ $and: [{ clientId }, { $or: uFilters }] }),
-    database.collection("user_app_registrations").deleteMany({ $and: [{ clientId }, { $or: uFilters }] }),
     database.collection("oauthRefreshToken").deleteMany({ $and: [{ clientId }, { $or: uFilters }] }),
     database.collection("oauthAccessToken").deleteMany({ $and: [{ clientId }, { $or: uFilters }] }),
     database.collection("oauth_token_families").updateMany(

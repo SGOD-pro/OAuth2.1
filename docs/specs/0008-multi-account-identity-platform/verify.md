@@ -1056,7 +1056,7 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 ## Slice P5.1 owner Sessions and Connected Apps
 
-**Date:** 2026-11-26. **Result:** Implemented `/api/identity/sessions`, `/api/identity/sessions/:sessionId/revoke`, `/api/identity/apps`, and `/api/identity/apps/:clientId/disconnect` (`backend/src/routes/identity-owner-portal.ts`, `backend/src/routes/identity.ts`) and extended `/account` with `AccountSessionsAppsPanel.tsx` (`frontend/components/AccountSessionsAppsPanel.tsx`, `frontend/pages/AccountDashboard.tsx`). Verified in `p5-owner-sessions-apps.test.ts` (registered in `run-all-security.ts`) and `test:p5-owner-portal` (registered in CI). Profile editing, admin masking, export, and deletion remain for separate P5 slices.
+**Date:** 2026-11-26. **Result:** Implemented `/api/identity/sessions`, `/api/identity/sessions/:sessionId/revoke`, `/api/identity/apps`, and `/api/identity/apps/:clientId/disconnect` (`backend/src/routes/identity-owner-portal.ts`, `backend/src/routes/identity.ts`) and extended `/account` with `AccountSessionsAppsPanel.tsx` (`frontend/components/AccountSessionsAppsPanel.tsx`, `frontend/pages/AccountDashboard.tsx`). Enforces `mfaVerifiedAt`/`createdAt` recent auth (routine `updatedAt` does not satisfy reauthentication) and preserves administrator managed `user_app_registrations` on owner disconnect. Verified in `p5-owner-sessions-apps.test.ts` (registered in `run-all-security.ts`) and `test:p5-owner-portal` (registered in CI). Profile editing via `GET`/`PATCH /api/identity/me` comes next; admin masking, export, and deletion remain separate.
 
 ## Slice P4 password reset, browser TOTP E2E, and replay exception reconciliation
 
