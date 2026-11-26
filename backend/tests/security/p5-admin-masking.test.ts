@@ -7,6 +7,7 @@ import { enrollAndLoginAdminMfa } from "../fixtures/admin-mfa-fixture";
 describe("P5.3 Admin Data Masking & Search", { timeout: 60_000 }, () => {
   let app: any;
   let db: any;
+  let suiteCtx: Awaited<ReturnType<typeof setupSuiteDatabase>> | undefined;
   let origin: string;
   let gatewaySecret: string;
 
@@ -25,7 +26,7 @@ describe("P5.3 Admin Data Masking & Search", { timeout: 60_000 }, () => {
     gatewaySecret = process.env.INTERNAL_GATEWAY_SECRET;
     origin = process.env.FRONTEND_URL;
 
-    await setupSuiteDatabase("p5_admin_masking");
+    suiteCtx = await setupSuiteDatabase("p5_admin_masking");
     const { getDb } = await import("../../src/db/mongo");
     db = await getDb();
     const { default: appInstance } = await import("../../src/app");
@@ -35,7 +36,7 @@ describe("P5.3 Admin Data Masking & Search", { timeout: 60_000 }, () => {
   after(async () => {
     const { closeDb } = await import("../../src/db/mongo");
     await closeDb();
-    process.exit(process.exitCode ?? 0);
+    await suiteCtx?.cleanup();
   });
 
   function headers(extra: Record<string, string> = {}) {
@@ -124,11 +125,37 @@ describe("P5.3 Admin Data Masking & Search", { timeout: 60_000 }, () => {
     assert.ok(createAdminJson.admin?.id, "Opaque admin id must be returned");
     assert.ok(createAdminJson.admin?.displayLabel, "Approved displayLabel must be returned");
 
-    // 4. GET /api/admin/logs omits full email including nested audit details
+    // 4. GET /api/admin/logs omits full email including nested audit details, arrays, and objects
+    const arrayEmail = `p53_array_${Date.now()}@example.com`;
+    const nestedEmail = `p53_nested_${Date.now()}@example.com`;
+    await db.collection("admin_audit").insertOne({
+      actorUserId: String(targetUser._id),
+      actorScope: "super_admin",
+      action: "bulk_test_event",
+      targetClientId: clientId,
+      details: {
+        updatedFields: ["name", "redirectUrl"],
+        count: 2,
+        recipients: [arrayEmail],
+        targets: [{ email: nestedEmail, role: "member" }],
+        nestedMatrix: [[nestedEmail, "safe_label"]],
+      },
+      timestamp: new Date(),
+    });
+
     const logsRes = await app.request("/api/admin/logs", { method: "GET", headers: headers({ Cookie: adminCookie }) });
     assert.equal(logsRes.status, 200);
     const logsText = await logsRes.text();
     assert.equal(logsText.includes(userEmail), false, "Full user email must be absent from /api/admin/logs");
     assert.equal(logsText.includes(appAdminEmail), false, "Full app-admin email must be absent from /api/admin/logs");
+    assert.equal(logsText.includes(arrayEmail), false, "Full email in array must be absent from /api/admin/logs");
+    assert.equal(logsText.includes(nestedEmail), false, "Full email in nested object/array must be absent from /api/admin/logs");
+
+    const logsJson = JSON.parse(logsText);
+    const logList = Array.isArray(logsJson) ? logsJson : (logsJson.logs || logsJson.entries || []);
+    const bulkEntry = logList.find((e: any) => e.action === "bulk_test_event");
+    assert.ok(bulkEntry, "Bulk audit entry must be present");
+    assert.deepEqual(bulkEntry.details?.updatedFields, ["name", "redirectUrl"]);
+    assert.equal(bulkEntry.details?.count, 2);
   });
 });

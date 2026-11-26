@@ -3,21 +3,30 @@ import { toApprovedDisplayLabel } from "../utils/security";
 import { AggregatedLogsParams, AggregatedLogsResult, NormalizedLogEntry } from "./admin-logs-types";
 import { buildLogsFilters, buildLogsPipeline } from "./admin-logs-pipeline";
 
+function sanitizeAuditValue(value: unknown, keyHint = ""): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeAuditValue(item, keyHint));
+  }
+  if (typeof value === "string") {
+    return keyHint.toLowerCase().includes("email") || value.includes("@")
+      ? toApprovedDisplayLabel(value)
+      : value;
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = sanitizeAuditValue(v, k);
+    }
+    return out;
+  }
+  return value;
+}
+
 function sanitizeAuditDetails(details: unknown): Record<string, unknown> | null {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return null;
   }
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(details as Record<string, unknown>)) {
-    if (typeof value === "string" && (key.toLowerCase().includes("email") || value.includes("@"))) {
-      out[key] = toApprovedDisplayLabel(value);
-    } else if (value && typeof value === "object" && !Array.isArray(value)) {
-      out[key] = sanitizeAuditDetails(value);
-    } else {
-      out[key] = value;
-    }
-  }
-  return out;
+  return sanitizeAuditValue(details) as Record<string, unknown>;
 }
 
 export async function getAggregatedLogs(
