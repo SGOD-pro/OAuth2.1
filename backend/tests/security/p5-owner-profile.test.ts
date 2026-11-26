@@ -126,5 +126,31 @@ describe("P5.2 Owner Profile API (GET/PATCH /api/identity/me)", { timeout: 60_00
     const userBAfter = await db.collection("user").findOne({ _id: userB._id });
     assert.equal(userBAfter.name, "Beta User");
     assert.equal(userBAfter.username, "beta_user");
+
+    // Concurrent profile saves claiming the same username: 1 wins (200), 1 loses (409)
+    const contested = `contested_${Date.now()}`;
+    const regSetB = await db.collection("browser_session_sets").findOne({ "entries.userId": String(userB._id) });
+    const entryB = regSetB.entries.find((e: any) => e.userId === String(userB._id));
+    const ctxBRes = await app.request("/api/identity/contexts", {
+      method: "POST",
+      headers: headers({ Cookie: proofAB }),
+      body: JSON.stringify({ entryId: entryB.entryId, purpose: "owner_dashboard" }),
+    });
+    const ctxB = (await ctxBRes.json()).contextHandle;
+
+    const [rA, rB] = await Promise.all([
+      app.request("/api/identity/me", {
+        method: "PATCH",
+        headers: headers({ Cookie: proofAB, "X-Identity-Context": ctxA }),
+        body: JSON.stringify({ username: contested }),
+      }),
+      app.request("/api/identity/me", {
+        method: "PATCH",
+        headers: headers({ Cookie: proofAB, "X-Identity-Context": ctxB }),
+        body: JSON.stringify({ username: contested }),
+      }),
+    ]);
+    const statuses = [rA.status, rB.status].sort((a, b) => a - b);
+    assert.deepEqual(statuses, [200, 409], `Concurrent username claim must yield [200, 409], got ${statuses}`);
   });
 });

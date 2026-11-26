@@ -268,8 +268,8 @@ export async function handlePatchOwnerMe(c: Context) {
       await database.collection("user").updateOne({ _id: userObjectId }, { $set: updates }, { session: mongoSession });
     });
   } catch (err: any) {
-    if (err?.status === 409) {
-      return c.json({ error: err.code || "username_taken", message: err.message }, 409);
+    if (err?.status === 409 || err?.code === 11000) {
+      return c.json({ error: err?.code === 11000 ? "username_taken" : err.code || "username_taken", message: "Username is already taken" }, 409);
     }
     throw err;
   } finally {
