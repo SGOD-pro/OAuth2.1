@@ -35,6 +35,7 @@ describe("P5.3 Admin Data Masking & Search", { timeout: 60_000 }, () => {
   after(async () => {
     const { closeDb } = await import("../../src/db/mongo");
     await closeDb();
+    process.exit(process.exitCode ?? 0);
   });
 
   function headers(extra: Record<string, string> = {}) {
