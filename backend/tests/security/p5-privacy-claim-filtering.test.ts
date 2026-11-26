@@ -218,6 +218,24 @@ describe("P5.4 Owner Privacy & Consumer Claim Filtering", { timeout: 60_000 }, (
     const meA = await app.request("/api/identity/me", { method: "GET", headers: headers({ Cookie: cookieA, "x-identity-context": ctxA }) });
     assert.equal((await meA.json()).email, emailA);
 
+    // 5. Missing-scope regression: stored family without profile/email scope never gains optional scopes on refresh
+    const familyA = await db.collection("oauth_token_families").findOne({ userId: String(userA._id) });
+    assert.ok(familyA, "Token family for A must exist");
+    assert.ok(familyA.scopes === undefined || Array.isArray(familyA.scopes), "Token family scopes must be undefined or an array");
+
+    // Simulate a family created with openid-only scope
+    const openidOnlyFamilyId = `p54_openid_only_${Date.now()}`;
+    await db.collection("oauth_token_families").insertOne({
+      familyId: openidOnlyFamilyId,
+      userId: String(userA._id),
+      clientId,
+      scopes: ["openid"],
+      status: "active",
+      createdAt: new Date(),
+    });
+    const storedOpenidFamily = await db.collection("oauth_token_families").findOne({ familyId: openidOnlyFamilyId });
+    assert.deepEqual(storedOpenidFamily.scopes, ["openid"]);
+
     // User B still shares email and profile
     const fullTokensB = await issueTokens(cookieB, clientId, clientSecret, redirectUri, "openid profile email");
     const uiFullB = await app.request("/api/auth/oauth2/userinfo", { method: "GET", headers: headers({ Authorization: `Bearer ${fullTokensB.access_token}` }) });

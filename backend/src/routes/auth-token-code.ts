@@ -227,7 +227,7 @@ export async function handleAuthorizationCodeGrant(
                     familyId: familyId || undefined,
                     expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
                     createdAt: new Date(),
-                    scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                    scopes: tokenData.scope ? tokenData.scope.split(/\s+/).filter(Boolean) : ["openid"],
                     tokenVersion: expectedTokenVersion,
                 }).catch(() => {});
 

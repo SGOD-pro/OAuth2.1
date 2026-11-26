@@ -235,7 +235,11 @@ export async function handleRefreshTokenGrant(
                         familyId: currentFamilyId || undefined,
                         expiresAt: new Date(Date.now() + (tokenData.expires_in || 900) * 1000),
                         createdAt: new Date(),
-                        scopes: tokenData.scope ? tokenData.scope.split(" ") : ["openid", "profile", "email"],
+                        scopes: tokenData.scope
+                            ? tokenData.scope.split(/\s+/).filter(Boolean)
+                            : (Array.isArray(claimResult.existingFamily?.scopes) && claimResult.existingFamily.scopes.length > 0
+                                ? claimResult.existingFamily.scopes
+                                : ["openid"]),
                         tokenVersion: expectedRefreshTokenVersion,
                     }).catch(() => {});
 
