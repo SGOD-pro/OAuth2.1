@@ -120,6 +120,7 @@ const securityTestFiles = [
   "tests/security/p4-private-app-invitations.test.ts",
   "tests/security/p4-backup-code-recovery.test.ts",
   "tests/security/p4-optional-user-totp.test.ts",
+  "tests/security/p4-email-change.test.ts",
 ];
 
 console.log("================================================================");

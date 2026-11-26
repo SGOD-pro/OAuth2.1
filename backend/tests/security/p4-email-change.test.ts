@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { describe, it, before, after } from "node:test";
+import { createOTP } from "@better-auth/utils/otp";
+import { base32 } from "@better-auth/utils/base32";
 import { setupSuiteDatabase } from "../fixtures/test-docker-mongo";
 import { isolateTestEnvironment } from "../fixtures/test-env-isolation";
 
@@ -106,21 +109,41 @@ describe("P4 Verified Email Change (AC-11)", { timeout: 60_000 }, () => {
     const userA = await db.collection("user").findOne({ email: emailA1 });
     const userAId = String(userA._id);
 
+    // Enroll A in real TOTP before changing email
+    const enRes = await app.request("/api/auth/two-factor/enable", {
+      method: "POST",
+      headers: headers({ Cookie: cookieA }),
+      body: JSON.stringify({ password: pass }),
+    });
+    assert.equal(enRes.status, 200);
+    const { totpURI } = await enRes.json();
+    const b32Secret = new URL(totpURI).searchParams.get("secret")!;
+    const rawSecret = Buffer.from(base32.decode(b32Secret)).toString();
+    const enrollCode = await createOTP(rawSecret, { digits: 6, period: 30 }).totp();
+    const verEnRes = await app.request("/api/auth/two-factor/verify-totp", {
+      method: "POST",
+      headers: headers({ Cookie: [cookieA, proof].filter(Boolean).join("; ") }),
+      body: JSON.stringify({ code: enrollCode }),
+    });
+    assert.equal(verEnRes.status, 200);
+    const rotatedCookieA = extractCookie(verEnRes, "better-auth.session_token") || cookieA;
+    const proofAfterTotp = extractCookie(verEnRes, cookieName) || proof;
+
     const upB = await app.request("/api/auth/sign-up/email", {
       method: "POST",
-      headers: headers({ Cookie: proof }),
+      headers: headers({ Cookie: proofAfterTotp }),
       body: JSON.stringify({ email: emailB, password: pass, name: "User B" }),
     });
     assert.equal(upB.status, 200);
     await db.collection("user").updateOne({ email: emailB }, { $set: { emailVerified: true } });
     const inB = await app.request("/api/auth/sign-in/email", {
       method: "POST",
-      headers: headers({ Cookie: proof }),
+      headers: headers({ Cookie: proofAfterTotp }),
       body: JSON.stringify({ email: emailB, password: pass }),
     });
     assert.equal(inB.status, 200);
     const cookieB = extractCookie(inB, "better-auth.session_token");
-    const proofAB = extractCookie(inB, cookieName) || proof;
+    const proofAB = extractCookie(inB, cookieName) || proofAfterTotp;
     const userB = await db.collection("user").findOne({ email: emailB });
     const userBId = String(userB._id);
 
@@ -213,5 +236,69 @@ describe("P4 Verified Email Change (AC-11)", { timeout: 60_000 }, () => {
 
     const noticeMsgs = getTestMailSinkMessages().filter((m: any) => m.to === emailA1 && m.purpose === "email_change_notice");
     assert.equal(noticeMsgs.length, 1, "Old mailbox must receive change notification");
+
+    // Prior session for A must be revoked
+    const oldSessARes = await app.request("/api/auth/get-session", {
+      method: "GET",
+      headers: headers({ Cookie: rotatedCookieA }),
+    });
+    const oldSessAData = await oldSessARes.json().catch(() => null);
+    assert.equal(oldSessAData?.user ?? null, null, "Prior session for A must be revoked");
+
+    // Stale token from first request must not overwrite newer contact
+    const staleConfirm = await app.request("/api/identity/email-change/confirm", {
+      method: "POST",
+      headers: headers({ Cookie: proofAB, "X-Identity-Context": ctxA }),
+      body: JSON.stringify({ token }),
+    });
+    assert.ok(staleConfirm.status === 401 || staleConfirm.status === 409, "Stale token/context must be rejected");
+
+    // Signing in with new email must still require TOTP and preserve role/sub
+    const signInNew = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ email: emailA2, password: pass }),
+    });
+    assert.equal(signInNew.status, 200);
+    const signInNewBody = await signInNew.json();
+    assert.equal(signInNewBody.twoFactorRedirect, true, "New email sign-in must still require TOTP");
+    const twoFactorCookie = extractCookie(signInNew, "better-auth.two_factor");
+    const nextCode = await createOTP(rawSecret, { digits: 6, period: 30 }).hotp(Math.floor(Date.now() / 30000) + 1);
+    const verNext = await app.request("/api/auth/two-factor/verify-totp", {
+      method: "POST",
+      headers: headers({ Cookie: twoFactorCookie }),
+      body: JSON.stringify({ code: nextCode }),
+    });
+    assert.equal(verNext.status, 200, "TOTP verification must succeed for new email");
+    assert.equal(userAAfter.role, userA.role, "User role must be preserved");
+  });
+
+  it("rejects admin email-change via ordinary-user owner context (unsupported admin path)", async () => {
+    const adminEmail = `ec_admin_${Date.now()}@example.com`;
+    const pass = "AdminEmail!Pass123";
+    const up = await app.request("/api/auth/sign-up/email", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ email: adminEmail, password: pass, name: "Admin EC" }),
+    });
+    assert.equal(up.status, 200);
+    await db.collection("user").updateOne({ email: adminEmail }, { $set: { emailVerified: true, role: "admin" } });
+
+    const inRes = await app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ email: adminEmail, password: pass }),
+    });
+    assert.equal(inRes.status, 200);
+    const adminDoc = await db.collection("user").findOne({ email: adminEmail });
+    const regSet = await db.collection("browser_session_sets").findOne({ "entries.userId": String(adminDoc._id) });
+    assert.equal(regSet, null, "Admin accounts must not be enrolled in ordinary-user browser_session_sets");
+
+    const reqRes = await app.request("/api/identity/email-change/request", {
+      method: "POST",
+      headers: headers({ Cookie: extractCookie(inRes, "better-auth.session_token") }),
+      body: JSON.stringify({ newEmail: `ec_admin_new_${Date.now()}@example.com`, password: pass }),
+    });
+    assert.equal(reqRes.status, 401, "Admin email-change via ordinary-user owner-context route must fail closed");
   });
 });

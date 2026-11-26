@@ -106,6 +106,11 @@ export async function handleEmailChangeRequest(c: Context) {
   const rawToken = crypto.randomBytes(24).toString("base64url");
   const tokenDigest = digestToken(rawToken);
   const now = new Date();
+  // Supersede any prior unconsumed requests for this user so stale requests cannot overwrite newer ones.
+  await database.collection("email_change_requests").updateMany(
+    { userId: owner.userId, consumedAt: null },
+    { $set: { consumedAt: now, supersededAt: now } }
+  );
   await database.collection("email_change_requests").insertOne({
     requestId: crypto.randomUUID(),
     userId: owner.userId,
@@ -162,7 +167,7 @@ export async function handleEmailChangeConfirm(c: Context) {
       }
 
       const upd = await database.collection("user").updateOne(
-        { _id: userObjectId },
+        { _id: userObjectId, email: oldEmail },
         {
           $set: { email: newEmail, emailVerified: true, updatedAt: now },
           $inc: { sessionVersion: 1, lookupVersion: 1 },
@@ -170,7 +175,7 @@ export async function handleEmailChangeConfirm(c: Context) {
         { session }
       );
       if (upd.matchedCount === 0) {
-        throw Object.assign(new Error("User not found"), { status: 404 });
+        throw Object.assign(new Error("User not found or email already changed"), { status: 409 });
       }
 
       const uFilters = buildUserIdFilters(owner.userId);
