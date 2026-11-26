@@ -125,6 +125,7 @@ const securityTestFiles = [
   "tests/security/p5-owner-profile.test.ts",
   "tests/security/p5-admin-masking.test.ts",
   "tests/security/p5-privacy-claim-filtering.test.ts",
+  "tests/security/p5-owner-export-prep.test.ts",
 ];
 
 console.log("================================================================");
