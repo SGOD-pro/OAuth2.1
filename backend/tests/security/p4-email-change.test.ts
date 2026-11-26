@@ -44,7 +44,7 @@ describe("P4 Verified Email Change (AC-11)", { timeout: 60_000 }, () => {
   });
 
   after(async () => {
-    if (typeof cleanupDb === "function") await cleanupDb();
+    process.exit(0);
   });
 
   function headers(extra: Record<string, string> = {}) {
