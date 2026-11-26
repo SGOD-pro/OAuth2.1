@@ -154,6 +154,8 @@ jobs:
         run: npm run test:p4-user-totp-browser
       - name: Run P5 Owner Sessions & Connected Apps Browser E2E Suite (Playwright)
         run: npm run test:p5-owner-portal
+      - name: Run P5.2 Owner Profile Browser E2E Suite (Playwright)
+        run: npm run test:p5-owner-profile
 
       - name: Pre-pull Redis Docker Image for Security Suites
         run: docker pull redis:8.8.3-alpine

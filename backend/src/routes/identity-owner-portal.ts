@@ -1,10 +1,11 @@
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { ObjectId } from "mongodb";
-import { getDb } from "../db/mongo";
+import { client, getDb } from "../db/mongo";
 import { authProvider } from "../utils/auth";
 import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
 import { IdentityContextError, resolveOwnerDashboardContext } from "../identity/owner-contexts";
+import { computeUsernameLookup, normalizeUsername } from "../identity/registration-crypto";
 
 const RECENT_AUTH_WINDOW_MS = 5 * 60 * 1000;
 
@@ -183,4 +184,104 @@ export async function handleDisconnectOwnerApp(c: Context) {
   ]);
 
   return c.json({ ok: true, disconnected: true, clientId }, 200);
+}
+
+const ALLOWED_PROFILE_FIELDS = new Set(["name", "username"]);
+
+export async function handleGetOwnerMe(c: Context) {
+  const database = await getDb();
+  const owner = await resolveOwner(c, database);
+  if (!owner.ok) return owner.response;
+
+  const user = await database.collection("user").findOne({ _id: new ObjectId(owner.userId) });
+  if (!user) return c.json({ error: "not_found" }, 404);
+
+  return c.json({
+    userId: owner.userId,
+    username: user.username ?? null,
+    name: user.name ?? "",
+    email: user.email ?? "",
+    emailVerified: Boolean(user.emailVerified),
+  }, 200);
+}
+
+export async function handlePatchOwnerMe(c: Context) {
+  const database = await getDb();
+  const owner = await resolveOwner(c, database);
+  if (!owner.ok) return owner.response;
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return c.json({ error: "invalid_body", message: "JSON object required" }, 400);
+  }
+  for (const key of Object.keys(body)) {
+    if (!ALLOWED_PROFILE_FIELDS.has(key)) {
+      return c.json({ error: "forbidden_field", message: `Field '${key}' cannot be modified here` }, 400);
+    }
+  }
+
+  const updates: Record<string, any> = { updatedAt: new Date() };
+  let nextUsernameLookup: string | null = null;
+
+  if ("name" in body) {
+    if (typeof body.name !== "string" || body.name.trim().length < 1 || body.name.trim().length > 80) {
+      return c.json({ error: "invalid_name", message: "Display name must be 1 to 80 characters" }, 400);
+    }
+    updates.name = body.name.trim();
+  }
+
+  if ("username" in body) {
+    const parsed = normalizeUsername(body.username);
+    if (!parsed) {
+      return c.json({ error: "invalid_username", message: "Invalid username" }, 400);
+    }
+    updates.username = parsed.display;
+    updates.usernameNormalized = parsed.normalized;
+    nextUsernameLookup = computeUsernameLookup(parsed.normalized);
+  }
+
+  const userObjectId = new ObjectId(owner.userId);
+  const mongoSession = client.startSession();
+  try {
+    await mongoSession.withTransaction(async () => {
+      if (nextUsernameLookup) {
+        const dupUser = await database.collection("user").findOne(
+          {
+            _id: { $ne: userObjectId },
+            $or: [{ usernameNormalized: updates.usernameNormalized }, { username: updates.username }],
+          },
+          { session: mongoSession }
+        );
+        const dupLookup = await database.collection("identity_lookup").findOne(
+          { kind: "username", keyVersion: 1, keyedLookup: nextUsernameLookup, userId: { $ne: owner.userId } },
+          { session: mongoSession }
+        );
+        if (dupUser || dupLookup) {
+          throw Object.assign(new Error("Username is already taken"), { status: 409, code: "username_taken" });
+        }
+        await database.collection("identity_lookup").updateOne(
+          { kind: "username", userId: owner.userId },
+          { $set: { kind: "username", userId: owner.userId, keyVersion: 1, keyedLookup: nextUsernameLookup, updatedAt: updates.updatedAt } },
+          { upsert: true, session: mongoSession }
+        );
+      }
+      await database.collection("user").updateOne({ _id: userObjectId }, { $set: updates }, { session: mongoSession });
+    });
+  } catch (err: any) {
+    if (err?.status === 409) {
+      return c.json({ error: err.code || "username_taken", message: err.message }, 409);
+    }
+    throw err;
+  } finally {
+    await mongoSession.endSession();
+  }
+
+  const updated = await database.collection("user").findOne({ _id: userObjectId });
+  return c.json({
+    userId: owner.userId,
+    username: updated?.username ?? null,
+    name: updated?.name ?? "",
+    email: updated?.email ?? "",
+    emailVerified: Boolean(updated?.emailVerified),
+  }, 200);
 }

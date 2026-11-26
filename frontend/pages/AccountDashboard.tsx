@@ -82,7 +82,10 @@ export default function AccountDashboard() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
       <div className="w-full max-w-md rounded-lg border bg-card p-6 space-y-4">
-        <h1 className="text-lg font-semibold">Account Dashboard</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-lg font-semibold">Account Dashboard</h1>
+          <a href="/account/profile" className="text-xs underline text-muted-foreground hover:text-foreground" data-testid="edit-profile-link">Edit Profile</a>
+        </div>
         <p className="text-sm text-muted-foreground" data-testid="dashboard-account-label">
           Signed in as <span className="font-medium text-foreground">{account.label}</span>
         </p>

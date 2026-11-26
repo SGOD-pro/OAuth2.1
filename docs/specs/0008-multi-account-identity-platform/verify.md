@@ -1056,7 +1056,11 @@ A failed security invariant blocks affected rollout; do not skip or relax it for
 
 ## Slice P5.1 owner Sessions and Connected Apps
 
-**Date:** 2026-11-26. **Result:** Implemented `/api/identity/sessions`, `/api/identity/sessions/:sessionId/revoke`, `/api/identity/apps`, and `/api/identity/apps/:clientId/disconnect` (`backend/src/routes/identity-owner-portal.ts`, `backend/src/routes/identity.ts`) and extended `/account` with `AccountSessionsAppsPanel.tsx` (`frontend/components/AccountSessionsAppsPanel.tsx`, `frontend/pages/AccountDashboard.tsx`). Enforces `mfaVerifiedAt`/`createdAt` recent auth (routine `updatedAt` does not satisfy reauthentication) and preserves administrator managed `user_app_registrations` on owner disconnect. Verified in `p5-owner-sessions-apps.test.ts` (registered in `run-all-security.ts`) and `test:p5-owner-portal` (registered in CI). Profile editing via `GET`/`PATCH /api/identity/me` comes next; admin masking, export, and deletion remain separate.
+**Date:** 2026-11-26. **Result:** Implemented `/api/identity/sessions`, `/api/identity/sessions/:sessionId/revoke`, `/api/identity/apps`, and `/api/identity/apps/:clientId/disconnect` (`backend/src/routes/identity-owner-portal.ts`, `backend/src/routes/identity.ts`) and extended `/account` with `AccountSessionsAppsPanel.tsx` (`frontend/components/AccountSessionsAppsPanel.tsx`, `frontend/pages/AccountDashboard.tsx`). Enforces `mfaVerifiedAt`/`createdAt` recent auth (routine `updatedAt` does not satisfy reauthentication) and preserves administrator managed `user_app_registrations` on owner disconnect. Verified in `p5-owner-sessions-apps.test.ts` (registered in `run-all-security.ts`) and `test:p5-owner-portal` (registered in CI).
+
+## Slice P5.2 owner profile editing
+
+**Date:** 2026-11-26. **Result:** Implemented `GET`/`PATCH /api/identity/me` (`backend/src/routes/identity-owner-portal.ts`, `backend/src/routes/identity.ts`) and `/account/profile` (`frontend/pages/AccountProfile.tsx`, `frontend/src/App.tsx`). Bound to `X-Identity-Context`, allowlists `name` and `username` only (rejecting `email`, `role`, `sub`, etc. with `400`), reuses `normalizeUsername` and `computeUsernameLookup`, and enforces username uniqueness inside a MongoDB transaction (`409` on collision, preserving existing profile). Verified in `p5-owner-profile.test.ts` (registered in `run-all-security.ts`) and `test:p5-owner-profile` (registered in CI). Admin masking, export, and deletion remain separate.
 
 ## Slice P4 password reset, browser TOTP E2E, and replay exception reconciliation
 

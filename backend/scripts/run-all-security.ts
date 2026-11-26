@@ -122,6 +122,7 @@ const securityTestFiles = [
   "tests/security/p4-optional-user-totp.test.ts",
   "tests/security/p4-email-change.test.ts",
   "tests/security/p5-owner-sessions-apps.test.ts",
+  "tests/security/p5-owner-profile.test.ts",
 ];
 
 console.log("================================================================");
