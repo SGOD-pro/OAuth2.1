@@ -97,20 +97,28 @@ export async function mintJwtAccessToken(params: {
     }
 }
 
-export async function resignIdTokenWithNewAtHash(idToken: string, newAccessToken: string): Promise<string> {
+export async function resignIdTokenWithNewAtHash(
+    idToken: string,
+    newAccessToken: string,
+    claimFilter?: (payload: Record<string, any>) => Record<string, any>
+): Promise<string> {
     if (!idToken || typeof idToken !== "string") return idToken;
     const parts = idToken.split(".");
     if (parts.length !== 3) return idToken;
     try {
-        const idPayload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
-        if (!idPayload.at_hash) return idToken;
-        const newAtHash = crypto
-            .createHash("sha256")
-            .update(newAccessToken)
-            .digest()
-            .subarray(0, 16)
-            .toString("base64url");
-        idPayload.at_hash = newAtHash;
+        let idPayload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+        if (claimFilter) {
+            idPayload = claimFilter(idPayload);
+        }
+        if (idPayload.at_hash) {
+            const newAtHash = crypto
+                .createHash("sha256")
+                .update(newAccessToken)
+                .digest()
+                .subarray(0, 16)
+                .toString("base64url");
+            idPayload.at_hash = newAtHash;
+        }
         const signingKey = await getIdpSigningKey();
         if (!signingKey) return idToken;
         return await new SignJWT(idPayload)

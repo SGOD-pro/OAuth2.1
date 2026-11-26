@@ -7,6 +7,7 @@ import { checkAccountEligibility } from "../utils/account-eligibility";
 import { registerTokenFamily } from "../db/state";
 import { verifyAndConsumeAuthorizationCode } from "../utils/pkce";
 import { mintJwtAccessToken, resignIdTokenWithNewAtHash } from "./auth-jwt";
+import { filterConsumerClaims } from "../identity/claim-policy";
 import { getTokenBarrierHookForTesting } from "./auth-keys";
 import { AuthenticatedClientContext, verifyConfidentialClientCredentials } from "./auth-token-auth";
 import {
@@ -279,7 +280,11 @@ export async function handleAuthorizationCodeGrant(
 
                 tokenData.access_token = jwtAt;
                 if (tokenData.id_token) {
-                    tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
+                    tokenData.id_token = await resignIdTokenWithNewAtHash(
+                        tokenData.id_token,
+                        jwtAt,
+                        (payload) => filterConsumerClaims(payload, tokenData.scope || "openid profile email", userDoc)
+                    );
                 }
                 return c.json(tokenData, 200);
             }

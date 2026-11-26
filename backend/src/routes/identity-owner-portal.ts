@@ -285,3 +285,62 @@ export async function handlePatchOwnerMe(c: Context) {
     emailVerified: Boolean(updated?.emailVerified),
   }, 200);
 }
+
+export async function handleGetOwnerPrivacy(c: any): Promise<Response> {
+  const database = await getDb();
+  const owner = await resolveOwner(c, database);
+  if (!owner.ok) return owner.response;
+
+  const userDoc = await database.collection("user").findOne({ _id: new ObjectId(owner.userId) });
+  if (!userDoc) {
+    return c.json({ error: "not_found", message: "Account not found" }, 404);
+  }
+
+  return c.json({
+    userId: owner.userId,
+    privacyVersion: typeof userDoc.privacyVersion === "number" ? userDoc.privacyVersion : 1,
+    shareEmail: userDoc.shareEmail !== false,
+    shareProfile: userDoc.shareProfile !== false,
+  }, 200);
+}
+
+export async function handlePatchOwnerPrivacy(c: any): Promise<Response> {
+  const database = await getDb();
+  const owner = await resolveOwner(c, database);
+  if (!owner.ok) return owner.response;
+
+  let body: any = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_request", message: "Invalid JSON body" }, 400);
+  }
+
+  const updates: Record<string, any> = {
+    privacyVersion: 1,
+    updatedAt: new Date(),
+  };
+  if (body.shareEmail !== undefined) {
+    if (typeof body.shareEmail !== "boolean") {
+      return c.json({ error: "invalid_request", message: "shareEmail must be a boolean" }, 400);
+    }
+    updates.shareEmail = body.shareEmail;
+  }
+  if (body.shareProfile !== undefined) {
+    if (typeof body.shareProfile !== "boolean") {
+      return c.json({ error: "invalid_request", message: "shareProfile must be a boolean" }, 400);
+    }
+    updates.shareProfile = body.shareProfile;
+  }
+
+  const userObjectId = new ObjectId(owner.userId);
+  await database.collection("user").updateOne({ _id: userObjectId }, { $set: updates });
+  const updated = await database.collection("user").findOne({ _id: userObjectId });
+
+  return c.json({
+    userId: owner.userId,
+    privacyVersion: typeof updated?.privacyVersion === "number" ? updated.privacyVersion : 1,
+    shareEmail: updated?.shareEmail !== false,
+    shareProfile: updated?.shareProfile !== false,
+  }, 200);
+}

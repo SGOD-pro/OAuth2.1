@@ -7,6 +7,7 @@ import { getIdpPublicKey } from "../middleware/admin-auth";
 import { checkAccountEligibility } from "../utils/account-eligibility";
 import { hashToken, resolveOAuthClient, checkPrivateAppTokenAccess } from "../utils/security";
 import { resolveUserRoleForClient } from "./auth-keys";
+import { filterConsumerClaims } from "../identity/claim-policy";
 
 export async function handleOAuthUserInfo(c: any): Promise<Response> {
     try {
@@ -125,7 +126,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                             responsePayload.name = userDoc?.name || payload.name || (userDoc?.email ? userDoc.email.split("@")[0] : userId);
                         }
 
-                        return c.json(responsePayload, 200);
+                        return c.json(filterConsumerClaims(responsePayload, scopes, userDoc), 200);
                     }
                 }
             } catch {
@@ -265,7 +266,8 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                 const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
                 data.role = resolved.role;
                 data.scoped_client_id = resolved.scopedClientId;
-                return c.json(data, 200);
+                const opaqueScopes = accDoc?.scopes || accDoc?.scope || "openid";
+                return c.json(filterConsumerClaims(data, opaqueScopes, userDoc), 200);
             } catch (err) {
                 console.error("[USERINFO_ERR]", err);
                 return c.json(

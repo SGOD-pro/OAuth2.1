@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { handleEmailChangeRequest, handleEmailChangeConfirm } from "./identity-email-change";
-import { handleListOwnerSessions, handleRevokeOwnerSession, handleListOwnerApps, handleDisconnectOwnerApp, handleGetOwnerMe, handlePatchOwnerMe } from "./identity-owner-portal";
+import { handleListOwnerSessions, handleRevokeOwnerSession, handleListOwnerApps, handleDisconnectOwnerApp, handleGetOwnerMe, handlePatchOwnerMe, handleGetOwnerPrivacy, handlePatchOwnerPrivacy } from "./identity-owner-portal";
 import { csrfProtection } from "../middleware/csrf";
 import {
   handleGetRegistrationConfig,
@@ -88,6 +88,8 @@ identity.get("/apps", handleListOwnerApps);
 identity.post("/apps/:clientId/disconnect", totpIpRateLimit, handleDisconnectOwnerApp);
 identity.get("/me", handleGetOwnerMe);
 identity.patch("/me", totpIpRateLimit, handlePatchOwnerMe);
+identity.get("/privacy", handleGetOwnerPrivacy);
+identity.patch("/privacy", totpIpRateLimit, handlePatchOwnerPrivacy);
 
 identity.post("/mail/callbacks", handleMailCallback);
 

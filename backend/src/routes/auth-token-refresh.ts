@@ -3,6 +3,7 @@ import { getDb } from "../db/mongo";
 import { hashToken } from "../utils/security";
 import { verifyAndRotateTokenFamily } from "../db/state";
 import { mintJwtAccessToken, resignIdTokenWithNewAtHash } from "./auth-jwt";
+import { filterConsumerClaims } from "../identity/claim-policy";
 import { getTokenBarrierHookForTesting } from "./auth-keys";
 import { claimRotationRights } from "./auth-token-claim";
 import { AuthenticatedClientContext } from "./auth-token-auth";
@@ -281,7 +282,11 @@ export async function handleRefreshTokenGrant(
 
                     tokenData.access_token = jwtAt;
                     if (tokenData.id_token) {
-                        tokenData.id_token = await resignIdTokenWithNewAtHash(tokenData.id_token, jwtAt);
+                        tokenData.id_token = await resignIdTokenWithNewAtHash(
+                            tokenData.id_token,
+                            jwtAt,
+                            (payload) => filterConsumerClaims(payload, tokenData.scope || "openid profile email", userDoc)
+                        );
                     }
                     return c.json(tokenData, 200);
                 }
