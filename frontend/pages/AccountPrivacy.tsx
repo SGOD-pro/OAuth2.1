@@ -29,15 +29,17 @@ export default function AccountPrivacy() {
       try {
         const res = await fetch("/api/identity/privacy", {
           credentials: "include",
-          headers: buildHeaders(),
+          headers: ownerContext ? { "x-identity-context": ownerContext } : {},
         });
         if (!res.ok) {
           throw new Error("Failed to load privacy settings");
         }
         const data = (await res.json()) as PrivacyState;
         if (active) setPrivacy(data);
-      } catch (err: any) {
-        if (active) setError(err?.message || "Failed to load privacy settings");
+      } catch (err: unknown) {
+        if (active) {
+          setError(err instanceof Error ? err.message : "Failed to load privacy settings");
+        }
       } finally {
         if (active) setLoading(false);
       }
@@ -45,7 +47,7 @@ export default function AccountPrivacy() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [ownerContext]);
 
   const handleSave = async () => {
     if (!privacy) return;
@@ -69,8 +71,8 @@ export default function AccountPrivacy() {
       const updated = (await res.json()) as PrivacyState;
       setPrivacy(updated);
       setSavedMsg("Privacy preferences saved.");
-    } catch (err: any) {
-      setError(err?.message || "Failed to save privacy settings");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save privacy settings");
     } finally {
       setSaving(false);
     }
