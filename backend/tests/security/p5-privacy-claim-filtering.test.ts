@@ -25,6 +25,7 @@ describe("P5.4 Owner Privacy & Consumer Claim Filtering", { timeout: 60_000 }, (
     process.env.REQUIRE_EMAIL_VERIFICATION = "false";
     process.env.TOTP_ENCRYPTION_KEY = process.env.TOTP_ENCRYPTION_KEY || "c".repeat(32);
     process.env.INTERNAL_GATEWAY_SECRET = process.env.INTERNAL_GATEWAY_SECRET || "g".repeat(32);
+    process.env.TRUSTED_PROXY_CIDRS = "10.0.0.0/8";
     gatewaySecret = process.env.INTERNAL_GATEWAY_SECRET;
     origin = process.env.FRONTEND_URL;
 
@@ -57,13 +58,13 @@ describe("P5.4 Owner Privacy & Consumer Claim Filtering", { timeout: 60_000 }, (
     return raw.map((c: string) => c.split(";")[0]).join("; ");
   }
 
-  async function issueTokens(cookie: string, clientId: string, clientSecret: string, redirectUri: string, scope: string) {
+  async function issueTokens(cookie: string, clientId: string, clientSecret: string, redirectUri: string, scope: string, ip = "198.51.100.94, 10.0.0.1") {
     const verifier = crypto.randomBytes(32).toString("base64url");
     const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
     const state = crypto.randomBytes(16).toString("hex");
 
     const authUrl = `/api/auth/oauth2/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}&code_challenge=${challenge}&code_challenge_method=S256`;
-    const authRes = await app.request(authUrl, { method: "GET", headers: headers({ Cookie: cookie }) });
+    const authRes = await app.request(authUrl, { method: "GET", headers: headers({ Cookie: cookie, "x-forwarded-for": ip }) });
     if (authRes.status !== 302) {
       assert.fail(`Expected 302 from authorize, got ${authRes.status}: ${await authRes.text()}`);
     }
@@ -218,27 +219,37 @@ describe("P5.4 Owner Privacy & Consumer Claim Filtering", { timeout: 60_000 }, (
     const meA = await app.request("/api/identity/me", { method: "GET", headers: headers({ Cookie: cookieA, "x-identity-context": ctxA }) });
     assert.equal((await meA.json()).email, emailA);
 
-    // 5. Missing-scope regression: stored family without profile/email scope never gains optional scopes on refresh
-    const familyA = await db.collection("oauth_token_families").findOne({ userId: String(userA._id) });
-    assert.ok(familyA, "Token family for A must exist");
-    assert.ok(familyA.scopes === undefined || Array.isArray(familyA.scopes), "Token family scopes must be undefined or an array");
-
-    // Simulate a family created with openid-only scope
-    const openidOnlyFamilyId = `p54_openid_only_${Date.now()}`;
-    await db.collection("oauth_token_families").insertOne({
-      familyId: openidOnlyFamilyId,
-      userId: String(userA._id),
-      clientId,
-      scopes: ["openid"],
-      status: "active",
-      createdAt: new Date(),
+    // 5. Real OAuth refresh narrowing & persisted scope verification
+    const narrowRes = await app.request("/api/auth/oauth2/token", {
+      method: "POST",
+      headers: headers({ "Content-Type": "application/x-www-form-urlencoded" }),
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshedA.refresh_token,
+        client_id: clientId,
+        scope: "openid",
+      }).toString(),
     });
-    const storedOpenidFamily = await db.collection("oauth_token_families").findOne({ familyId: openidOnlyFamilyId });
-    assert.deepEqual(storedOpenidFamily.scopes, ["openid"]);
+    assert.equal(narrowRes.status, 200);
+    const narrowedA = await narrowRes.json();
+    const narrowedClaimsA = decodeJwt(narrowedA.id_token);
+    assert.equal(narrowedClaimsA.sub, String(userA._id));
+    assert.equal(narrowedClaimsA.email, undefined);
+    assert.equal(narrowedClaimsA.name, undefined);
+
+    const uiNarrowedA = await app.request("/api/auth/oauth2/userinfo", {
+      method: "GET",
+      headers: headers({ Authorization: `Bearer ${narrowedA.access_token}` }),
+    });
+    assert.equal(uiNarrowedA.status, 200);
+    const uiNarrowedJsonA = await uiNarrowedA.json();
+    assert.equal(uiNarrowedJsonA.sub, String(userA._id));
+    assert.equal(uiNarrowedJsonA.email, undefined);
+    assert.equal(uiNarrowedJsonA.name, undefined);
 
     // User B still shares email and profile
-    const fullTokensB = await issueTokens(cookieB, clientId, clientSecret, redirectUri, "openid profile email");
-    const uiFullB = await app.request("/api/auth/oauth2/userinfo", { method: "GET", headers: headers({ Authorization: `Bearer ${fullTokensB.access_token}` }) });
+    const fullTokensB = await issueTokens(cookieB, clientId, clientSecret, redirectUri, "openid profile email", "198.51.100.95, 10.0.0.1");
+    const uiFullB = await app.request("/api/auth/oauth2/userinfo", { method: "GET", headers: headers({ Authorization: `Bearer ${fullTokensB.access_token}`, "x-forwarded-for": "198.51.100.95, 10.0.0.1" }) });
     assert.equal(uiFullB.status, 200);
     const uiFullJsonB = await uiFullB.json();
     assert.equal(uiFullJsonB.email, emailB);
