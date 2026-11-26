@@ -4,6 +4,8 @@ import {
   isStrongPassword,
   getTrustedClientIp,
   resolveOAuthClient,
+  toApprovedDisplayLabel,
+  isEmailShaped,
 } from "../utils/security";
 import { recordAdminAudit } from "../db/state";
 import { hashPassword } from "better-auth/crypto";
@@ -168,8 +170,8 @@ export const updateAppAdminHandler = async (c: any): Promise<Response> => {
       success: true,
       admin: {
         id: updated._id.toString(),
-        email: updated.email,
-        name: updated.name,
+        displayLabel: toApprovedDisplayLabel(updated.email, updated.name),
+        name: isEmailShaped(updated.name) ? toApprovedDisplayLabel(updated.name) : (updated.name || toApprovedDisplayLabel(updated.email)),
         redirectUrl: updated.redirectUrl || "",
         isActive: updated.isActive !== false,
         loginCount: updated.loginCount || 0,

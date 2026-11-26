@@ -33,7 +33,8 @@ describe("P5.3 Admin Data Masking & Search", { timeout: 60_000 }, () => {
   });
 
   after(async () => {
-    process.exit(0);
+    const { closeDb } = await import("../../src/db/mongo");
+    await closeDb();
   });
 
   function headers(extra: Record<string, string> = {}) {
@@ -76,10 +77,57 @@ describe("P5.3 Admin Data Masking & Search", { timeout: 60_000 }, () => {
     const byEmail = await app.request(`/api/admin/users?q=${encodeURIComponent(userEmail)}`, { method: "GET", headers: headers({ Cookie: adminCookie }) });
     assert.equal((await byEmail.json()).length, 0, "Admin search must not match by full email");
 
-    // 3. GET /api/admin/logs omits full email
+    // 3. App-user assignment and app-admin creation omit full email
+    const clientRes = await app.request("/api/admin/clients", {
+      method: "POST",
+      headers: headers({ Cookie: adminCookie }),
+      body: JSON.stringify({
+        name: "P53 Test App",
+        redirectUris: ["https://app.example.com/callback"],
+        clientType: "confidential",
+        accessPolicy: "private",
+      }),
+    });
+    assert.equal(clientRes.status, 201);
+    const clientJson = await clientRes.json();
+    const clientId = clientJson.client?.clientId || clientJson.clientId;
+    assert.ok(clientId, "Created client must return clientId");
+
+    const assignRes = await app.request(`/api/admin/clients/${clientId}/users`, {
+      method: "POST",
+      headers: headers({ Cookie: adminCookie }),
+      body: JSON.stringify({ email: userEmail }),
+    });
+    assert.equal(assignRes.status, 201);
+    const assignText = await assignRes.text();
+    assert.equal(assignText.includes(userEmail), false, "Full user email must be absent from app-user assignment response");
+    const assignJson = JSON.parse(assignText);
+    assert.ok(assignJson.user?.userId, "Opaque userId must be returned");
+    assert.ok(assignJson.user?.displayLabel, "Approved displayLabel must be returned");
+
+    const appAdminEmail = `p53_app_admin_${Date.now()}@example.com`;
+    const createAdminRes = await app.request(`/api/admin/clients/${clientId}/app-admins`, {
+      method: "POST",
+      headers: headers({ Cookie: adminCookie }),
+      body: JSON.stringify({
+        email: appAdminEmail,
+        password: pass,
+        name: "App Admin",
+        redirectUrl: "https://app.example.com/callback",
+      }),
+    });
+    assert.equal(createAdminRes.status, 201);
+    const createAdminText = await createAdminRes.text();
+    assert.equal(createAdminText.includes(appAdminEmail), false, "Full email must be absent from app-admin creation response");
+    const createAdminJson = JSON.parse(createAdminText);
+    assert.ok(createAdminJson.admin?.id, "Opaque admin id must be returned");
+    assert.ok(createAdminJson.admin?.displayLabel, "Approved displayLabel must be returned");
+
+    // 4. GET /api/admin/logs omits full email including nested audit details
     const logsRes = await app.request("/api/admin/logs", { method: "GET", headers: headers({ Cookie: adminCookie }) });
     assert.equal(logsRes.status, 200);
     const logsText = await logsRes.text();
     assert.equal(logsText.includes(userEmail), false, "Full user email must be absent from /api/admin/logs");
+    assert.equal(logsText.includes(appAdminEmail), false, "Full app-admin email must be absent from /api/admin/logs");
   });
 });

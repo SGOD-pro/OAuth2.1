@@ -230,8 +230,8 @@ export async function handlePostAppAdmins(c: any): Promise<Response> {
         success: true,
         admin: {
           id: insertResult.insertedId.toString(),
-          email,
-          name,
+          displayLabel: toApprovedDisplayLabel(email, name),
+          name: isEmailShaped(name) ? toApprovedDisplayLabel(name) : (name || toApprovedDisplayLabel(email)),
           redirectUrl,
           isActive: true,
           loginCount: 0,

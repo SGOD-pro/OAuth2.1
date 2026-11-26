@@ -145,8 +145,8 @@ export async function handlePostAppUsers(c: any): Promise<Response> {
       message: "User successfully authorized for this application",
       user: {
         userId,
-        email: user.email,
-        name: user.name || user.email.split("@")[0],
+        displayLabel: toApprovedDisplayLabel(user.email, user.name),
+        name: isEmailShaped(user.name) ? toApprovedDisplayLabel(user.name) : (user.name || "User"),
         registeredAt: now.toISOString(),
       },
     }, 201);

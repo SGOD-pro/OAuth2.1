@@ -3,6 +3,23 @@ import { toApprovedDisplayLabel } from "../utils/security";
 import { AggregatedLogsParams, AggregatedLogsResult, NormalizedLogEntry } from "./admin-logs-types";
 import { buildLogsFilters, buildLogsPipeline } from "./admin-logs-pipeline";
 
+function sanitizeAuditDetails(details: unknown): Record<string, unknown> | null {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(details as Record<string, unknown>)) {
+    if (typeof value === "string" && (key.toLowerCase().includes("email") || value.includes("@"))) {
+      out[key] = toApprovedDisplayLabel(value);
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      out[key] = sanitizeAuditDetails(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 export async function getAggregatedLogs(
   database: any,
   params: AggregatedLogsParams
@@ -63,7 +80,7 @@ export async function getAggregatedLogs(
       applicationName: appName,
       clientId: doc.clientId || null,
       reason: doc.reason || null,
-      details: doc.details || null,
+      details: sanitizeAuditDetails(doc.details),
     };
   });
 
