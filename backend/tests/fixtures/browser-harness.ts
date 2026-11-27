@@ -82,8 +82,12 @@ export async function startIdpAndFrontendHarness(options: {
                   try {
                     process.kill(-child.pid, 0);
                     await new Promise((r) => setTimeout(r, 50));
-                  } catch {
-                    resolve();
+                  } catch (err: any) {
+                    if (err?.code === "ESRCH") {
+                      resolve();
+                      return;
+                    }
+                    reject(err);
                     return;
                   }
                 }
