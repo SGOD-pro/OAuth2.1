@@ -67,16 +67,28 @@ export async function startIdpAndFrontendHarness(options: {
     await Promise.all(
       children.map(
         (child) =>
-          new Promise<void>((resolve) => {
+          new Promise<void>((resolve, reject) => {
             if (child.exitCode !== null || child.signalCode !== null) {
               resolve();
               return;
             }
-            const timer = setTimeout(() => {
+            const timer = setTimeout(async () => {
               if (child.pid) {
                 try { process.kill(-child.pid, "SIGKILL"); } catch {
                   try { child.kill("SIGKILL"); } catch {}
                 }
+                const killDeadline = Date.now() + 1000;
+                while (Date.now() < killDeadline) {
+                  try {
+                    process.kill(-child.pid, 0);
+                    await new Promise((r) => setTimeout(r, 50));
+                  } catch {
+                    resolve();
+                    return;
+                  }
+                }
+                reject(new Error(`Process group -${child.pid} survived SIGKILL`));
+                return;
               }
               resolve();
             }, 2000);
@@ -204,7 +216,15 @@ export async function startIdpAndFrontendHarness(options: {
     );
     idpChild.stderr?.on("data", (d) => process.stderr.write(`[IdP ERR] ${d}`));
     children.push(idpChild);
-    await waitForHttp(`${idpUrl}/health`);
+    await Promise.race([
+      waitForHttp(`${idpUrl}/health`),
+      new Promise<never>((_, reject) => {
+        idpChild.once("error", (err) => reject(new Error(`IdP spawn error: ${err.message}`)));
+        idpChild.once("exit", (code, sig) =>
+          reject(new Error(`IdP exited early (code=${code}, signal=${sig})`))
+        );
+      }),
+    ]);
 
     stage = "browser_launch";
     const executablePath = getChromiumExecutable();
