@@ -63,22 +63,44 @@ export async function startIdpAndFrontendHarness(options: {
   let browser: Browser | null = null;
   let stage = "init";
 
-  const killChildren = () => {
-    for (const child of children) {
-      if (!child.killed && child.pid) {
-        try { process.kill(-child.pid, "SIGKILL"); } catch {
-          try { child.kill("SIGKILL"); } catch {}
-        }
-      }
-    }
+  const killAndAwaitChildren = async () => {
+    await Promise.all(
+      children.map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) {
+              resolve();
+              return;
+            }
+            const timer = setTimeout(() => {
+              if (child.pid) {
+                try { process.kill(-child.pid, "SIGKILL"); } catch {
+                  try { child.kill("SIGKILL"); } catch {}
+                }
+              }
+              resolve();
+            }, 2000);
+            child.once("exit", () => {
+              clearTimeout(timer);
+              resolve();
+            });
+            if (child.pid) {
+              try { process.kill(-child.pid, "SIGTERM"); } catch {
+                try { child.kill("SIGTERM"); } catch {}
+              }
+            }
+          })
+      )
+    );
   };
 
   const cleanup = async () => {
     await browser?.close().catch(() => {});
     if (frontendServer) {
+      (frontendServer as any).closeAllConnections?.();
       await new Promise<void>((resolve) => frontendServer!.close(() => resolve()));
     }
-    killChildren();
+    await killAndAwaitChildren();
   };
 
   try {
