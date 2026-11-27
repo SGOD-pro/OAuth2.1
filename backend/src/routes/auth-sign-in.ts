@@ -1,4 +1,7 @@
+import crypto from "node:crypto";
 import { getCookie } from "hono/cookie";
+import { ObjectId } from "mongodb";
+import { DEVICE_BINDING_COOKIE, extractCoarseDeviceSignals } from "../identity/device-risk";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import {
@@ -17,6 +20,7 @@ import { extractClientContext, executeDummyHash } from "./auth-client-context";
 import { enforceTargetRateLimit } from "./auth-rate-limit";
 import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
 import { attachOrdinaryBrowserSessionToResponse } from "../identity/session-adapter";
+import { isAccountDeniedInLedger } from "../utils/account-eligibility";
 
 /**
  * Handle password sign-in (/sign-in/email).
@@ -113,7 +117,7 @@ export async function handleSignInEmail(c: any): Promise<Response> {
         if (!user) {
             // Equalize CPU timing with real password verification
             await executeDummyHash();
-        } else if (user.disabled === true || user.isActive === false || user.banned === true) {
+        } else if (user.disabled === true || user.isActive === false || user.banned === true || user.status === "deleting" || user.status === "deleted" || Boolean(user.deletedAt) || (await isAccountDeniedInLedger(database, String(user.id || user._id)))) {
             await executeDummyHash();
             await recordAuthEvent({
                 eventType: "sign_in",
@@ -225,6 +229,20 @@ export async function handleSignInEmail(c: any): Promise<Response> {
         });
         const sessionId = attached.sessionId;
         res = attached.response;
+        if (sessionId && ObjectId.isValid(sessionId)) {
+            const existingDev = getCookie(c, DEVICE_BINDING_COOKIE);
+            const rawDev = existingDev && existingDev.length >= 16 ? existingDev : crypto.randomBytes(24).toString("base64url");
+            if (!existingDev || existingDev.length < 16) {
+                const cloned = new Response(res.body, { status: res.status, statusText: res.statusText, headers: new Headers(res.headers) });
+                cloned.headers.append("Set-Cookie", `${DEVICE_BINDING_COOKIE}=${rawDev}; Path=/; HttpOnly; SameSite=Lax${config.env === "production" ? "; Secure" : ""}`);
+                res = cloned;
+            }
+            const deviceBinding = extractCoarseDeviceSignals(c.req.raw.headers, rawDev);
+            await database.collection("session").updateOne(
+                { _id: new ObjectId(sessionId) },
+                { $set: { deviceBinding } }
+            ).catch(() => {});
+        }
         if (attached.capacityExceeded) {
             await recordAuthEvent({
                 eventType: "sign_in", outcome: "denied", userId: authUserId, targetIdentifier,

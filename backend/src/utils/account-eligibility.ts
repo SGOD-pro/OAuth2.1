@@ -161,3 +161,25 @@ export function checkAccountEligibility(
 
   return { eligible: true };
 }
+
+export async function isAccountDeniedInLedger(database: any, userId: string): Promise<boolean> {
+  if (!userId || typeof database?.collection !== "function") return false;
+  const col = database.collection("deletion_ledger");
+  if (!col || typeof col.findOne !== "function") return false;
+  const entry = await col.findOne({ userId });
+  return Boolean(entry);
+}
+
+export async function checkAccountEligibilityWithLedger(
+  database: any,
+  user: any,
+  options?: AccountEligibilityOptions
+): Promise<AccountEligibilityResult> {
+  const base = checkAccountEligibility(user, options);
+  if (!base.eligible) return base;
+  const uid = String(user?._id || user?.id || "");
+  if (uid && (await isAccountDeniedInLedger(database, uid))) {
+    return { eligible: false, reason: "account_deleting" };
+  }
+  return base;
+}

@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { handleEmailChangeRequest, handleEmailChangeConfirm } from "./identity-email-change";
 import { handleListOwnerSessions, handleRevokeOwnerSession, handleListOwnerApps, handleDisconnectOwnerApp, handleGetOwnerMe, handlePatchOwnerMe, handleGetOwnerPrivacy, handlePatchOwnerPrivacy } from "./identity-owner-portal";
+import { handleCreateOwnerExport, handleDownloadOwnerExport, handleGetOwnerExportStatus } from "./identity-export";
+import { handleGetDeletionStatus, handleRequestOwnerDeletion } from "./identity-deletion";
 import { csrfProtection } from "../middleware/csrf";
 import {
   handleGetRegistrationConfig,
@@ -56,6 +58,7 @@ identity.use("/sessions/*", csrfProtection);
 identity.use("/apps", csrfProtection);
 identity.use("/apps/*", csrfProtection);
 identity.use("/me", csrfProtection);
+identity.use("/me/*", csrfProtection);
 
 identity.get("/registration/config", handleGetRegistrationConfig);
 identity.get("/registration/intent/:intentId", handleGetRegistrationIntentStatus);
@@ -88,6 +91,11 @@ identity.get("/apps", handleListOwnerApps);
 identity.post("/apps/:clientId/disconnect", totpIpRateLimit, handleDisconnectOwnerApp);
 identity.get("/me", handleGetOwnerMe);
 identity.patch("/me", totpIpRateLimit, handlePatchOwnerMe);
+identity.post("/me/export", totpIpRateLimit, handleCreateOwnerExport);
+identity.get("/me/export/:jobId", handleGetOwnerExportStatus);
+identity.get("/me/export/:jobId/download", handleDownloadOwnerExport);
+identity.post("/me/deletion", totpIpRateLimit, handleRequestOwnerDeletion);
+identity.get("/deletion/status", handleGetDeletionStatus);
 identity.get("/privacy", handleGetOwnerPrivacy);
 identity.patch("/privacy", totpIpRateLimit, handlePatchOwnerPrivacy);
 

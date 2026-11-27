@@ -2,8 +2,24 @@ import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { hashToken } from "../utils/security";
 import { verifyAndRotateTokenFamily } from "../db/state";
-import { mintJwtAccessToken, resignIdTokenWithNewAtHash } from "./auth-jwt";
-import { filterConsumerClaims } from "../identity/claim-policy";
+import {
+    buildProtectedIdTokenClaimFilter,
+    mapProtectedTokenError,
+    mintJwtAccessToken,
+    resignIdTokenWithNewAtHash,
+    type ProtectedTokenClaimDeps,
+    type TokenGrantDeps,
+} from "./auth-jwt";
+import { AccountKeyAccessError } from "../identity/account-key-provider";
+import { resolveAuthorizedProtectedUserInfoClaims } from "../identity/protected-profile-store";
+
+export function buildRefreshIdTokenClaimFilter(
+    scope: string | string[],
+    userDoc: any,
+    deps: ProtectedTokenClaimDeps = {}
+) {
+    return buildProtectedIdTokenClaimFilter(scope, userDoc, deps);
+}
 import { getTokenBarrierHookForTesting } from "./auth-keys";
 import { claimRotationRights } from "./auth-token-claim";
 import { AuthenticatedClientContext } from "./auth-token-auth";
@@ -38,11 +54,12 @@ async function releaseRotationLock(
 export async function handleRefreshTokenGrant(
     c: any,
     clientContext: AuthenticatedClientContext,
-    refreshToken: string
+    refreshToken: string,
+    deps: TokenGrantDeps = {}
 ): Promise<Response> {
     const { canonicalClientId, clientDoc, reqToForward } = clientContext;
     const clientFence = buildClientIssuanceFence(canonicalClientId, clientDoc);
-    const database = await getDb();
+    const database = await (deps.getDb ?? getDb)();
     const incomingHash = hashToken(refreshToken, "hex");
 
     const claimResult = await claimRotationRights(c, database, canonicalClientId, clientDoc, incomingHash);
@@ -92,6 +109,11 @@ export async function handleRefreshTokenGrant(
             } catch {}
         }
 
+        let preCheckUserDoc: any = null;
+        let preflightScopes: string | string[] | undefined =
+            clientContext.params?.get("scope") ||
+            (Array.isArray(existingFamily?.scopes) && existingFamily.scopes.length > 0 ? existingFamily.scopes : undefined);
+
         if (preRefreshUserId) {
             const preCheck = await validatePreRefreshEligibility(
                 database,
@@ -112,11 +134,44 @@ export async function handleRefreshTokenGrant(
                     preCheck.errorResponse.status
                 );
             }
+            preCheckUserDoc = preCheck.userDoc;
+        }
+
+        let requestDeps: TokenGrantDeps = deps;
+        if (deps.protectedProfileStore && deps.accountKeyProvider && preRefreshUserId && preCheckUserDoc) {
+            try {
+                const preResolvedProtectedClaims = await resolveAuthorizedProtectedUserInfoClaims({
+                    store: deps.protectedProfileStore,
+                    provider: deps.accountKeyProvider,
+                    accountId: preRefreshUserId,
+                    migrationMode: deps.migrationMode ?? "compat",
+                    userDoc: preCheckUserDoc,
+                    scopes: preflightScopes || "openid profile email",
+                    claims: {},
+                });
+                requestDeps = { ...deps, preResolvedProtectedClaims };
+            } catch (preflightErr) {
+                const isTransientOutage = preflightErr instanceof AccountKeyAccessError && preflightErr.code === "provider_outage";
+                if (isTransientOutage) {
+                    await releaseRotationLock(database, incomingHash, canonicalClientId, leaseOwner);
+                } else {
+                    const revokeRes = await database.collection("oauth_token_families").updateOne(
+                        { activeTokenHash: incomingHash, clientId: canonicalClientId, rotationOwner: leaseOwner },
+                        { $set: { status: "revoked", revokedAt: new Date(), rotating: false }, $unset: { rotationOwner: "" } }
+                    ).catch(() => ({ matchedCount: 0 }));
+                    if (!revokeRes?.matchedCount) {
+                        await releaseRotationLock(database, incomingHash, canonicalClientId, leaseOwner);
+                    }
+                }
+                const mapped = mapProtectedTokenError(c, preflightErr);
+                if (mapped) return mapped;
+                throw preflightErr;
+            }
         }
 
         let res: Response;
         try {
-            res = await authProvider.handler(reqToForward);
+            res = await (deps.authHandler ?? ((req: Request) => authProvider.handler(req)))(reqToForward);
         } catch (handlerErr) {
             await releaseRotationLock(database, incomingHash, canonicalClientId, leaseOwner);
             throw handlerErr;
@@ -199,16 +254,40 @@ export async function handleRefreshTokenGrant(
 
                     const currentFamilyId = rotationResult.familyId || existingFamily?.familyId;
 
-                    const jwtAt = await mintJwtAccessToken({
-                        userId: resolvedUserId,
-                        clientId: canonicalClientId,
-                        expiresInSeconds: tokenData.expires_in || 900,
-                        scope: tokenData.scope,
-                        tokenIssuedAtMs: preRefreshIssuedAtMs,
-                        tokenIssuedAtSec: preRefreshIssuedAtSec,
-                        tokenVersion: expectedRefreshTokenVersion,
-                        familyId: currentFamilyId || undefined,
-                    });
+                    const refreshScopes = tokenData.scope || (Array.isArray(claimResult.existingFamily?.scopes) && claimResult.existingFamily.scopes.length > 0 ? claimResult.existingFamily.scopes : "openid");
+                    let jwtAt: string | null = null;
+                    let resignedIdToken = tokenData.id_token;
+                    try {
+                        jwtAt = await mintJwtAccessToken({
+                            userId: resolvedUserId,
+                            clientId: canonicalClientId,
+                            expiresInSeconds: tokenData.expires_in || 900,
+                            scope: tokenData.scope,
+                            tokenIssuedAtMs: preRefreshIssuedAtMs,
+                            tokenIssuedAtSec: preRefreshIssuedAtSec,
+                            tokenVersion: expectedRefreshTokenVersion,
+                            familyId: currentFamilyId || undefined,
+                        }, requestDeps);
+                        if (jwtAt && tokenData.id_token) {
+                            resignedIdToken = await resignIdTokenWithNewAtHash(
+                                tokenData.id_token,
+                                jwtAt,
+                                buildRefreshIdTokenClaimFilter(refreshScopes, userDoc, requestDeps),
+                                requestDeps.getSigningKey
+                            );
+                        }
+                    } catch (mintErr) {
+                        await purgeTokensOnMintFailure(database, tokenData, null);
+                        if (rotationResult.familyId) {
+                            await database.collection("oauth_token_families").updateOne(
+                                { familyId: rotationResult.familyId, activeTokenHash: newHash },
+                                { $set: { status: "revoked", revokedAt: new Date(), rotating: false } }
+                            ).catch(() => {});
+                        }
+                        const mapped = mapProtectedTokenError(c, mintErr);
+                        if (mapped) return mapped;
+                        throw mintErr;
+                    }
 
                     if (!jwtAt) {
                         console.error("[TOKEN_MINTING] Failed to mint RS256 access token in refresh_token flow; failing closed without opaque fallback");
@@ -286,15 +365,7 @@ export async function handleRefreshTokenGrant(
 
                     tokenData.access_token = jwtAt;
                     if (tokenData.id_token) {
-                        tokenData.id_token = await resignIdTokenWithNewAtHash(
-                            tokenData.id_token,
-                            jwtAt,
-                            (payload) => filterConsumerClaims(
-                                payload,
-                                tokenData.scope || (Array.isArray(claimResult.existingFamily?.scopes) && claimResult.existingFamily.scopes.length > 0 ? claimResult.existingFamily.scopes : "openid"),
-                                userDoc
-                            )
-                        );
+                        tokenData.id_token = resignedIdToken;
                     }
                     return c.json(tokenData, 200);
                 }

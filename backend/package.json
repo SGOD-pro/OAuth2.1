@@ -115,7 +115,9 @@
     "test:p4-invitations": "node --import tsx tests/security/p4-private-app-invitations.test.ts",
     "test:p4-recovery": "node --import tsx tests/security/p4-backup-code-recovery.test.ts",
     "test:p4-user-totp": "node --import tsx tests/security/p4-optional-user-totp.test.ts",
-    "test:p3-two-tab": "node --import tsx tests/e2e/p3-two-tab-chooser-browser.test.ts"
+    "test:p3-two-tab": "node --import tsx tests/e2e/p3-two-tab-chooser-browser.test.ts",
+    "worker:deletion": "tsx src/workers/deletion.ts",
+    "worker:deletion:once": "tsx src/workers/deletion.ts --once"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

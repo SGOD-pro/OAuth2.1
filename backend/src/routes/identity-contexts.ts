@@ -5,6 +5,9 @@ import { getDb } from "../db/mongo";
 import { authProvider } from "../utils/auth";
 import { hasDangerousMongoKeys } from "../utils/security";
 import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
+import { DEVICE_BINDING_COOKIE, evaluateSessionDeviceRisk, extractCoarseDeviceSignals } from "../identity/device-risk";
+import { ObjectId } from "mongodb";
+import { recordAuthEvent } from "../db/state";
 import {
   IdentityContextError,
   issueOwnerDashboardContext,
@@ -39,6 +42,27 @@ export async function handleIssueIdentityContext(c: Context): Promise<Response> 
       entryId: body.entryId.trim(),
       purpose: typeof body.purpose === "string" ? body.purpose.trim() : undefined,
     });
+    const ctxDoc = await database.collection("identity_contexts").findOne({ contextId: { $exists: true }, entryId: body.entryId.trim(), revokedAt: null }, { sort: { createdAt: -1 } });
+    const sessDoc = ctxDoc?.sessionId && ObjectId.isValid(ctxDoc.sessionId)
+      ? await database.collection("session").findOne({ _id: new ObjectId(ctxDoc.sessionId) })
+      : null;
+    if (ctxDoc && sessDoc?.deviceBinding) {
+      const current = extractCoarseDeviceSignals(c.req.raw.headers, getCookie(c, DEVICE_BINDING_COOKIE));
+      const risk = evaluateSessionDeviceRisk({ bound: sessDoc.deviceBinding, current });
+      if (risk.level === "high") {
+        await Promise.all([
+          database.collection("session").updateOne({ _id: sessDoc._id }, { $set: { revokedAt: new Date(), revokedReason: "suspected_session_theft" } }),
+          database.collection("identity_contexts").updateOne({ _id: ctxDoc._id }, { $set: { revokedAt: new Date() } }),
+          recordAuthEvent({ eventType: "device_risk_high", outcome: "denied", userId: ctxDoc.userId, sessionId: ctxDoc.sessionId, reason: risk.reasons.join(",") }),
+        ]);
+        return c.json({ error: "session_compromised", code: "ERR_SESSION_COMPROMISED", message: "Session revoked due to suspicious device/network change", requestId }, 401);
+      }
+      if (risk.level === "elevated") {
+        await database.collection("identity_contexts").updateOne({ _id: ctxDoc._id }, { $set: { revokedAt: new Date() } });
+        await recordAuthEvent({ eventType: "device_risk_elevated", outcome: "denied", userId: ctxDoc.userId, sessionId: ctxDoc.sessionId, reason: risk.reasons.join(",") });
+        return c.json({ error: "step_up_required", code: "ERR_STEP_UP_REQUIRED", message: "Additional verification required on new browser", requestId }, 403);
+      }
+    }
     return c.json({ ...issued, requestId }, 201);
   } catch (err: any) {
     if (err instanceof IdentityContextError) {

@@ -9,6 +9,19 @@ import {
   isEmailShaped,
 } from "../utils/security";
 import { recordAdminAudit } from "../db/state";
+import { AccountKeyAccessError, type AccountKeyProvider } from "../identity/account-key-provider";
+import { ProtectedFieldError } from "../identity/protected-envelope";
+import {
+  resolveProtectedAdminDisplayFields,
+  type ProtectedProfileCollection,
+} from "../identity/protected-profile-store";
+
+export interface AdminUsersRouteDeps {
+  getDb?: () => Promise<any>;
+  protectedProfileStore?: ProtectedProfileCollection;
+  accountKeyProvider?: AccountKeyProvider;
+  migrationMode?: "compat" | "strict";
+}
 
 const authApi = authProvider.api as any;
 
@@ -184,7 +197,15 @@ export async function handlePostUsers(c: any): Promise<Response> {
   }
 }
 
+export function createGetUsersHandler(deps: AdminUsersRouteDeps = {}) {
+  return (c: any) => runGetUsers(c, deps);
+}
+
 export async function handleGetUsers(c: any): Promise<Response> {
+  return runGetUsers(c, {});
+}
+
+async function runGetUsers(c: any, deps: AdminUsersRouteDeps): Promise<Response> {
   try {
     const rawLimit = parseInt(c.req.query("limit") || "100", 10);
     const rawPage = parseInt(c.req.query("page") || "1", 10);
@@ -206,7 +227,7 @@ export async function handleGetUsers(c: any): Promise<Response> {
       filter.$or = orClauses;
     }
 
-    const database = await getDb();
+    const database = await (deps.getDb ?? getDb)();
     const users = await database
       .collection("user")
       .find(filter)
@@ -214,17 +235,31 @@ export async function handleGetUsers(c: any): Promise<Response> {
       .skip(skip)
       .limit(limit)
       .toArray();
-    const safeUsers = users.map((u: any) => ({
-      _id: u._id?.toString() || u.id,
-      username: u.username ?? null,
-      displayLabel: toApprovedDisplayLabel(u.email, u.name),
-      name: isEmailShaped(u.name) ? toApprovedDisplayLabel(u.name) : (u.name || "User"),
-      role: u.role || "user",
-      scopedClientId: u.scopedClientId || null,
-      createdAt: u.createdAt || new Date(),
+    const safeUsers = await Promise.all(users.map(async (u: any) => {
+      const resolved = await resolveProtectedAdminDisplayFields({
+        userDoc: u,
+        store: deps.protectedProfileStore,
+        provider: deps.accountKeyProvider,
+        migrationMode: deps.migrationMode,
+      });
+      return {
+        _id: u._id?.toString() || u.id,
+        username: u.username ?? null,
+        displayLabel: toApprovedDisplayLabel(resolved.email, resolved.name),
+        name: isEmailShaped(resolved.name) ? toApprovedDisplayLabel(resolved.name) : (resolved.name || "User"),
+        role: u.role || "user",
+        scopedClientId: u.scopedClientId || null,
+        createdAt: u.createdAt || new Date(),
+      };
     }));
     return c.json(safeUsers);
   } catch (err: any) {
+    if (err instanceof AccountKeyAccessError) {
+      return c.json({ error: err.code, error_description: err.message }, err.code === "provider_outage" ? 503 : 403);
+    }
+    if (err instanceof ProtectedFieldError) {
+      return c.json({ error: err.code, error_description: err.message }, err.code === "profile_not_found" ? 404 : 500);
+    }
     console.error("[ADMIN_USERS] Error listing users:", err);
     return c.json({ error: "Failed to fetch users" }, 500);
   }

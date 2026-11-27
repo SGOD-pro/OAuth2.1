@@ -168,11 +168,13 @@ export async function listBrowserSetEntriesWithLiveStatus(database: Db, rawBrows
 
   const userIds = Array.from(new Set(setDoc.entries.map((e) => e.userId)));
   const sessionIds = Array.from(new Set(setDoc.entries.map((e) => e.sessionId)));
-  const [users, sessions] = await Promise.all([
+  const [users, sessions, ledgerEntries] = await Promise.all([
     userIds.length ? database.collection("user").find({ $or: [{ _id: { $in: toIdFilters(userIds) } }, { id: { $in: userIds } }] }).toArray() : [],
     sessionIds.length ? database.collection("session").find({ $or: [{ _id: { $in: toIdFilters(sessionIds) } }, { id: { $in: sessionIds } }] }).toArray() : [],
+    userIds.length ? database.collection("deletion_ledger").find({ userId: { $in: userIds } }).toArray() : [],
   ]);
 
+  const deniedSet = new Set(ledgerEntries.map((d: any) => String(d.userId)));
   const userMap = new Map<string, any>();
   for (const u of users) userMap.set(String(u.id || u._id), u);
   const sessMap = new Map<string, any>();
@@ -182,7 +184,7 @@ export async function listBrowserSetEntriesWithLiveStatus(database: Db, rawBrows
   const accounts = setDoc.entries.map((entry) => {
     const userDoc = userMap.get(entry.userId);
     const sessDoc = sessMap.get(entry.sessionId);
-    const userValid = Boolean(userDoc && !userDoc.disabled && !userDoc.banned && userDoc.isActive !== false && (userDoc.tokenVersion ?? 1) === entry.sessionVersion);
+    const userValid = Boolean(userDoc && !deniedSet.has(entry.userId) && !userDoc.disabled && !userDoc.banned && userDoc.isActive !== false && !["inactive", "deleting", "deleted"].includes(userDoc.status) && !userDoc.deletedAt && (userDoc.tokenVersion ?? 1) === entry.sessionVersion);
     const sessValid = Boolean(sessDoc && !sessDoc.revokedAt && String(sessDoc.userId) === entry.userId && new Date(sessDoc.expiresAt).getTime() > nowMs);
     const liveStatus = entry.status === "active" && userValid && sessValid ? "active" : "signed_out";
     return { entryId: entry.entryId, status: liveStatus, label: entry.label, addedAt: entry.addedAt, lastUsedAt: entry.lastUsedAt };

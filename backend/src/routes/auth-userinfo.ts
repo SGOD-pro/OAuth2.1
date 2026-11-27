@@ -4,17 +4,53 @@ import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { config } from "../config";
 import { getIdpPublicKey } from "../middleware/admin-auth";
-import { checkAccountEligibility } from "../utils/account-eligibility";
+import { checkAccountEligibilityWithLedger } from "../utils/account-eligibility";
 import { hashToken, resolveOAuthClient, checkPrivateAppTokenAccess } from "../utils/security";
 import { resolveUserRoleForClient } from "./auth-keys";
 import { filterConsumerClaims } from "../identity/claim-policy";
+import { AccountKeyAccessError, type AccountKeyProvider } from "../identity/account-key-provider";
+import { ProtectedFieldError } from "../identity/protected-envelope";
+import {
+    resolveAuthorizedProtectedUserInfoClaims,
+    type ProtectedProfileCollection,
+} from "../identity/protected-profile-store";
+
+export interface UserInfoRouteDeps {
+    getDb?: () => Promise<any>;
+    authHandler?: (req: Request) => Promise<Response>;
+    resolveClient?: (database: any, clientId: string) => Promise<any>;
+    checkPrivateAccess?: (database: any, userDoc: any, clientDoc: any) => Promise<boolean>;
+    resolveRole?: (database: any, userDoc: any, clientId: string) => Promise<{ role: string; scopedClientId: string | null }>;
+    protectedProfileStore?: ProtectedProfileCollection;
+    accountKeyProvider?: AccountKeyProvider;
+    migrationMode?: "compat" | "strict";
+}
+
+function mapProtectedUserInfoError(c: any, err: unknown): Response | null {
+    if (err instanceof AccountKeyAccessError) {
+        const status = err.code === "provider_outage" ? 503 : 403;
+        return c.json({ error: err.code, error_description: err.message }, status);
+    }
+    if (err instanceof ProtectedFieldError) {
+        return c.json({ error: err.code, error_description: err.message }, err.code === "profile_not_found" ? 404 : 500);
+    }
+    return null;
+}
+
+export function createOAuthUserInfoHandler(deps: UserInfoRouteDeps = {}) {
+    return (c: any) => runOAuthUserInfo(c, deps);
+}
 
 export async function handleOAuthUserInfo(c: any): Promise<Response> {
+    return runOAuthUserInfo(c, {});
+}
+
+async function runOAuthUserInfo(c: any, deps: UserInfoRouteDeps): Promise<Response> {
     try {
         const authHeader = c.req.header("authorization") || c.req.header("Authorization");
         const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : null;
 
-        let res = await authProvider.handler(c.req.raw);
+        let res = await (deps.authHandler ?? ((req: Request) => authProvider.handler(req)))(c.req.raw);
 
         // Fallback for RS256 JWT access tokens if Better Auth expects opaque tokens
         if (res.status !== 200 && bearerToken && bearerToken.includes(".")) {
@@ -31,7 +67,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                         issuer: config.auth.baseURL,
                     });
                     if (payload && payload.sub) {
-                        const database = await getDb();
+                        const database = await (deps.getDb ?? getDb)();
                         const userId = String(payload.sub);
                         const userDoc = await database.collection("user").findOne({
                             $or: [
@@ -45,7 +81,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                             ? payload.iat_ms
                             : (typeof payload.iat === "number" ? payload.iat * 1000 : undefined);
                         const tokenVersion = typeof payload.token_version === "number" ? payload.token_version : undefined;
-                        const eligibility = checkAccountEligibility(userDoc, {
+                        const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
                             tokenIssuedAtMs,
                             tokenIssuedAtSec: payload.iat,
                             tokenVersion,
@@ -76,7 +112,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                             );
                         }
 
-                        const clientDoc = await resolveOAuthClient(database, targetClientId);
+                        const clientDoc = await (deps.resolveClient ?? resolveOAuthClient)(database, targetClientId);
                         if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
                             return c.json(
                                 { error: "invalid_client", error_description: "Target client is disabled, ambiguous, or not found" },
@@ -84,7 +120,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                             );
                         }
 
-                        const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
+                        const hasAccess = await (deps.checkPrivateAccess ?? checkPrivateAppTokenAccess)(database, userDoc, clientDoc);
                         if (!hasAccess) {
                             return c.json(
                                 { error: "forbidden", error_description: "User is not an authorized member of this private application" },
@@ -106,12 +142,12 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                             }
                         }
 
-                        const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
+                        const resolved = await (deps.resolveRole ?? resolveUserRoleForClient)(database, userDoc, targetClientId);
 
                         // Scope and Privacy Enforcement (Slice 2)
                         const scopes = ((payload.scope as string) || "openid").split(" ").map(s => s.trim().toLowerCase());
                         const scopeSet = new Set(scopes);
-                        const responsePayload: Record<string, any> = {
+                        let responsePayload: Record<string, any> = {
                             sub: userId,
                             role: resolved.role,
                             scoped_client_id: resolved.scopedClientId,
@@ -124,6 +160,24 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
 
                         if (scopeSet.has("profile")) {
                             responsePayload.name = userDoc?.name || payload.name || (userDoc?.email ? userDoc.email.split("@")[0] : userId);
+                        }
+
+                        if (deps.protectedProfileStore && deps.accountKeyProvider) {
+                            try {
+                                responsePayload = await resolveAuthorizedProtectedUserInfoClaims({
+                                    store: deps.protectedProfileStore,
+                                    provider: deps.accountKeyProvider,
+                                    accountId: userId,
+                                    migrationMode: deps.migrationMode ?? "compat",
+                                    userDoc,
+                                    scopes,
+                                    claims: responsePayload,
+                                });
+                            } catch (err) {
+                                const mapped = mapProtectedUserInfoError(c, err);
+                                if (mapped) return mapped;
+                                throw err;
+                            }
                         }
 
                         return c.json(filterConsumerClaims(responsePayload, scopes, userDoc), 200);
@@ -162,7 +216,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                     );
                 }
 
-                const database = await getDb();
+                const database = await (deps.getDb ?? getDb)();
                 const userId = String(data.sub || data.id);
                 const orConditions: any[] = [{ id: userId }];
                 if (ObjectId.isValid(userId) && userId.length === 24) {
@@ -196,7 +250,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                 }
 
                 // Authoritative Account Eligibility Check
-                const eligibility = checkAccountEligibility(userDoc, {
+                const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
                     tokenIssuedAtMs,
                     tokenIssuedAtSec: tokenIssuedAtSec ?? Math.floor(Date.now() / 1000),
                     tokenVersion,
@@ -233,7 +287,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                     );
                 }
 
-                const clientDoc = await resolveOAuthClient(database, targetClientId);
+                const clientDoc = await (deps.resolveClient ?? resolveOAuthClient)(database, targetClientId);
                 if (!clientDoc || clientDoc.disabled || clientDoc.isAmbiguous) {
                     return c.json(
                         { error: "invalid_client", error_description: "Target client is disabled, ambiguous, or not found" },
@@ -241,7 +295,7 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                     );
                 }
 
-                const hasAccess = await checkPrivateAppTokenAccess(database, userDoc, clientDoc);
+                const hasAccess = await (deps.checkPrivateAccess ?? checkPrivateAppTokenAccess)(database, userDoc, clientDoc);
                 if (!hasAccess) {
                     return c.json(
                         { error: "forbidden", error_description: "User is not an authorized member of this private application" },
@@ -263,10 +317,27 @@ export async function handleOAuthUserInfo(c: any): Promise<Response> {
                     }
                 }
 
-                const resolved = await resolveUserRoleForClient(database, userDoc, targetClientId);
+                const resolved = await (deps.resolveRole ?? resolveUserRoleForClient)(database, userDoc, targetClientId);
                 data.role = resolved.role;
                 data.scoped_client_id = resolved.scopedClientId;
                 const opaqueScopes = accDoc?.scopes || accDoc?.scope || "openid";
+                if (deps.protectedProfileStore && deps.accountKeyProvider) {
+                    try {
+                        data = await resolveAuthorizedProtectedUserInfoClaims({
+                            store: deps.protectedProfileStore,
+                            provider: deps.accountKeyProvider,
+                            accountId: userId,
+                            migrationMode: deps.migrationMode ?? "compat",
+                            userDoc,
+                            scopes: opaqueScopes,
+                            claims: data,
+                        });
+                    } catch (err) {
+                        const mapped = mapProtectedUserInfoError(c, err);
+                        if (mapped) return mapped;
+                        throw err;
+                    }
+                }
                 return c.json(filterConsumerClaims(data, opaqueScopes, userDoc), 200);
             } catch (err) {
                 console.error("[USERINFO_ERR]", err);

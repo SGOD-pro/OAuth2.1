@@ -9,15 +9,37 @@ import {
   escapeRegex,
 } from "../utils/security";
 import { recordAdminAudit } from "../db/state";
+import { AccountKeyAccessError, type AccountKeyProvider } from "../identity/account-key-provider";
+import { ProtectedFieldError } from "../identity/protected-envelope";
+import {
+  resolveProtectedAdminDisplayFields,
+  type ProtectedProfileCollection,
+} from "../identity/protected-profile-store";
+
+export interface AdminAppUsersRouteDeps {
+  getDb?: () => Promise<any>;
+  resolveClient?: typeof resolveOAuthClient;
+  protectedProfileStore?: ProtectedProfileCollection;
+  accountKeyProvider?: AccountKeyProvider;
+  migrationMode?: "compat" | "strict";
+}
+
+export function createGetAppUsersHandler(deps: AdminAppUsersRouteDeps = {}) {
+  return (c: any) => runGetAppUsers(c, deps);
+}
 
 export async function handleGetAppUsers(c: any): Promise<Response> {
+  return runGetAppUsers(c, {});
+}
+
+async function runGetAppUsers(c: any, deps: AdminAppUsersRouteDeps): Promise<Response> {
   const rawClientId = c.req.param("clientId");
   const queryUserId = c.req.query("userId");
   try {
-    const database = await getDb();
+    const database = await (deps.getDb ?? getDb)();
     let client: any;
     try {
-      client = await resolveOAuthClient(database, rawClientId);
+      client = await (deps.resolveClient ?? resolveOAuthClient)(database, rawClientId);
     } catch (err: any) {
       console.error("[ADMIN_LIST_APP_USERS] DB error resolving client:", err);
       return c.json({ error: "Failed to resolve client due to database error" }, 500);
@@ -64,19 +86,31 @@ export async function handleGetAppUsers(c: any): Promise<Response> {
       userMap.set(String(u._id), u);
     });
 
-    const enriched = regs.map((r: any) => {
+    const enriched = await Promise.all(regs.map(async (r: any) => {
       const u = userMap.get(String(r.userId));
+      const resolved = await resolveProtectedAdminDisplayFields({
+        userDoc: u,
+        store: deps.protectedProfileStore,
+        provider: deps.accountKeyProvider,
+        migrationMode: deps.migrationMode,
+      });
       return {
         registrationId: r._id.toString(),
         userId: r.userId,
-        displayLabel: toApprovedDisplayLabel(u?.email, u?.name),
-        name: isEmailShaped(u?.name) ? toApprovedDisplayLabel(u?.name) : (u?.name || "User"),
+        displayLabel: toApprovedDisplayLabel(resolved.email, resolved.name),
+        name: isEmailShaped(resolved.name) ? toApprovedDisplayLabel(resolved.name) : (resolved.name || "User"),
         registeredAt: r.registeredAt ? r.registeredAt.toISOString() : null,
       };
-    });
+    }));
 
     return c.json({ users: enriched });
   } catch (err: any) {
+    if (err instanceof AccountKeyAccessError) {
+      return c.json({ error: err.code, error_description: err.message }, err.code === "provider_outage" ? 503 : 403);
+    }
+    if (err instanceof ProtectedFieldError) {
+      return c.json({ error: err.code, error_description: err.message }, err.code === "profile_not_found" ? 404 : 500);
+    }
     console.error("[ADMIN_LIST_APP_USERS] Error:", err);
     return c.json({ error: "Failed to load assigned users" }, 500);
   }

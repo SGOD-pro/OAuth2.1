@@ -6,8 +6,30 @@ import { client, getDb } from "../db/mongo";
 import { authProvider } from "../utils/auth";
 import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
 import { IdentityContextError, resolveOwnerDashboardContext } from "../identity/owner-contexts";
-import { digestToken } from "../identity/registration-crypto";
+import { computeEmailLookup, digestToken } from "../identity/registration-crypto";
 import { recordEmailChangeMailForTesting } from "../identity/mail-service";
+import { AccountKeyAccessError, type AccountKeyProvider } from "../identity/account-key-provider";
+import { ProtectedFieldError } from "../identity/protected-envelope";
+import { writeProtectedProfileFields, type ProtectedProfileCollection } from "../identity/protected-profile-store";
+
+export interface EmailChangeRouteDeps {
+  getDb?: () => Promise<any>;
+  startSession?: () => any;
+  resolveOwner?: (c: Context, database: any) => Promise<
+    | { ok: true; userId: string; sessionId: string; contextId: string }
+    | { ok: false; response: Response }
+  >;
+  verifyPassword?: (database: any, userId: string, password: string) => Promise<boolean>;
+  protectedProfileStore?: ProtectedProfileCollection;
+  accountKeyProvider?: AccountKeyProvider;
+}
+
+export function createEmailChangeHandlers(deps: EmailChangeRouteDeps = {}) {
+  return {
+    requestEmailChange: (c: Context) => runEmailChangeRequest(c, deps),
+    confirmEmailChange: (c: Context) => runEmailChangeConfirm(c, deps),
+  };
+}
 
 const ADMIN_ROLES = new Set(["admin", "super-admin", "super_admin", "app-admin", "app_admin"]);
 const MFA_FRESH_WINDOW_MS = 5 * 60 * 1000;
@@ -60,8 +82,12 @@ async function resolveOwnerOrError(c: Context, database: any) {
 }
 
 export async function handleEmailChangeRequest(c: Context) {
-  const database = await getDb();
-  const owner = await resolveOwnerOrError(c, database);
+  return runEmailChangeRequest(c, {});
+}
+
+async function runEmailChangeRequest(c: Context, deps: EmailChangeRouteDeps) {
+  const database = await (deps.getDb ?? getDb)();
+  const owner = await (deps.resolveOwner ?? resolveOwnerOrError)(c, database);
   if (!owner.ok) return owner.response;
 
   const body = await c.req.json().catch(() => null);
@@ -89,7 +115,7 @@ export async function handleEmailChangeRequest(c: Context) {
     }
   }
 
-  const passwordOk = await verifyUserPassword(database, owner.userId, password);
+  const passwordOk = await (deps.verifyPassword ?? verifyUserPassword)(database, owner.userId, password);
   if (!passwordOk) {
     return c.json({ error: "invalid_password", message: "Invalid password" }, 401);
   }
@@ -127,8 +153,12 @@ export async function handleEmailChangeRequest(c: Context) {
 }
 
 export async function handleEmailChangeConfirm(c: Context) {
-  const database = await getDb();
-  const owner = await resolveOwnerOrError(c, database);
+  return runEmailChangeConfirm(c, {});
+}
+
+async function runEmailChangeConfirm(c: Context, deps: EmailChangeRouteDeps) {
+  const database = await (deps.getDb ?? getDb)();
+  const owner = await (deps.resolveOwner ?? resolveOwnerOrError)(c, database);
   if (!owner.ok) return owner.response;
 
   const body = await c.req.json().catch(() => null);
@@ -142,7 +172,7 @@ export async function handleEmailChangeConfirm(c: Context) {
   let oldEmail = "";
   let newEmail = "";
 
-  const mongoSession = client.startSession();
+  const mongoSession = (deps.startSession ?? (() => client.startSession()))();
   try {
     await mongoSession.withTransaction(async () => {
       const session = mongoSession;
@@ -158,11 +188,18 @@ export async function handleEmailChangeConfirm(c: Context) {
       newEmail = reqDoc.newEmail;
 
       const userObjectId = new ObjectId(owner.userId);
-      const collision = await database.collection("user").findOne(
-        { email: newEmail, _id: { $ne: userObjectId } },
-        { session }
-      );
-      if (collision) {
+      const nextEmailLookup = computeEmailLookup(newEmail);
+      const [collision, lookupCollision] = await Promise.all([
+        database.collection("user").findOne(
+          { email: newEmail, _id: { $ne: userObjectId } },
+          { session }
+        ),
+        database.collection("identity_lookup").findOne(
+          { kind: "email", keyVersion: 1, keyedLookup: nextEmailLookup, userId: { $ne: owner.userId } },
+          { session }
+        ),
+      ]);
+      if (collision || lookupCollision) {
         throw Object.assign(new Error("Email address is already in use"), { status: 409 });
       }
 
@@ -185,6 +222,23 @@ export async function handleEmailChangeConfirm(c: Context) {
       );
       if (upd.matchedCount === 0) {
         throw Object.assign(new Error("User not found or email already changed"), { status: 409 });
+      }
+
+      await database.collection("identity_lookup").updateOne(
+        { kind: "email", userId: owner.userId },
+        { $set: { kind: "email", userId: owner.userId, keyVersion: 1, keyedLookup: nextEmailLookup, updatedAt: now } },
+        { upsert: true, session }
+      );
+
+      if (deps.protectedProfileStore && deps.accountKeyProvider) {
+        await writeProtectedProfileFields({
+          store: deps.protectedProfileStore,
+          provider: deps.accountKeyProvider,
+          accountId: owner.userId,
+          email: newEmail,
+          fallbackName: String(userDoc.name || ""),
+          session,
+        });
       }
 
       const uFilters = buildUserIdFilters(owner.userId);
@@ -217,6 +271,13 @@ export async function handleEmailChangeConfirm(c: Context) {
       ]);
     });
   } catch (err: any) {
+    if (err instanceof AccountKeyAccessError) {
+      const status = err.code === "provider_outage" ? 503 : err.code === "key_not_found" ? 404 : 403;
+      return c.json({ error: err.code, message: err.message }, status as any);
+    }
+    if (err instanceof ProtectedFieldError) {
+      return c.json({ error: err.code, message: err.message }, (err.code === "profile_not_found" ? 404 : 500) as any);
+    }
     if (err?.status) {
       return c.json({ error: "email_change_rejected", message: err.message }, err.status);
     }

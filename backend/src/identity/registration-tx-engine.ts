@@ -8,6 +8,9 @@ import { toApprovedDisplayLabel } from "../utils/security";
 import { ensureIdentityCollectionIndexes } from "../db/indexes";
 import { createEngineTransactionBoundary } from "./engine-transaction";
 import { runWithVerifiedCreation } from "./registration-context";
+import type { AccountKeyProvider } from "./account-key-provider";
+import { sealProtectedField } from "./protected-envelope";
+import { MongoProfileCollection, type ProtectedProfileCollection, type ProtectedProfileDoc } from "./protected-profile-store";
 
 const identityTxSchemaPlugin: BetterAuthPlugin = {
   id: "identity-tx-schema",
@@ -32,8 +35,10 @@ const identityTxSchemaPlugin: BetterAuthPlugin = {
       disableMigration: true,
       fields: {
         userId: { type: "string" }, username: { type: "string" }, normalizedUsername: { type: "string" },
-        privacyVersion: { type: "string" }, schemaVersion: { type: "number" }, acceptedTermsVersion: { type: "string" },
+        privacyVersion: { type: "string" }, schemaVersion: { type: "number" }, keyVersion: { type: "number", required: false },
+        acceptedTermsVersion: { type: "string" },
         keyRef: { type: "string", required: false }, encryptedAttributes: { type: "string", required: false },
+        nameEnvelope: { type: "json", required: false }, emailEnvelope: { type: "json", required: false },
         createdAt: { type: "date" }, updatedAt: { type: "date" },
       },
     },
@@ -112,6 +117,7 @@ export async function executeCompletionTransaction(
     email: string; emailLookup: string; displayUsername: string; normalizedUsername: string; usernameLookup: string;
     acceptedTermsVersion: string; passwordHash: string; idemLookup?: string; clientIp: string | null; userAgent: string | null;
     onInsideAfterUser?: () => void | Promise<void>;
+    protectedProfile?: { provider: AccountKeyProvider; store?: ProtectedProfileCollection };
   }
 ): Promise<string> {
   let createdUserId = "";
@@ -165,10 +171,57 @@ export async function executeCompletionTransaction(
 
     await adapter.create({ model: "identity_lookup", data: { kind: "email", keyVersion: 1, keyedLookup: params.emailLookup, userId: createdUserId, createdAt: txNow } });
     await adapter.create({ model: "identity_lookup", data: { kind: "username", keyVersion: 1, keyedLookup: params.usernameLookup, userId: createdUserId, createdAt: txNow } });
+    let protectedDoc: ProtectedProfileDoc | null = null;
+    if (params.protectedProfile) {
+      const [nameEnvelope, emailEnvelope] = await Promise.all([
+        sealProtectedField({
+          provider: params.protectedProfile.provider,
+          accountId: createdUserId,
+          collection: "identity_profiles",
+          recordId: createdUserId,
+          fieldPurpose: "profile.name",
+          plaintext: params.displayUsername,
+        }),
+        sealProtectedField({
+          provider: params.protectedProfile.provider,
+          accountId: createdUserId,
+          collection: "identity_profiles",
+          recordId: createdUserId,
+          fieldPurpose: "profile.email",
+          plaintext: params.email,
+        }),
+      ]);
+      protectedDoc = {
+        userId: createdUserId,
+        schemaVersion: 1,
+        keyVersion: 1,
+        nameEnvelope,
+        emailEnvelope,
+        updatedAt: txNow.toISOString(),
+      };
+    }
+
     await adapter.create({
       model: "identity_profiles",
-      data: { userId: createdUserId, username: params.displayUsername, normalizedUsername: params.normalizedUsername, privacyVersion: "v1", schemaVersion: 1, acceptedTermsVersion: params.acceptedTermsVersion, keyRef: null, encryptedAttributes: null, createdAt: txNow, updatedAt: txNow },
+      data: {
+        userId: createdUserId,
+        username: params.displayUsername,
+        normalizedUsername: params.normalizedUsername,
+        privacyVersion: "v1",
+        schemaVersion: 1,
+        keyVersion: 1,
+        acceptedTermsVersion: params.acceptedTermsVersion,
+        keyRef: protectedDoc ? protectedDoc.nameEnvelope.keyRef : null,
+        encryptedAttributes: null,
+        nameEnvelope: protectedDoc?.nameEnvelope ?? null,
+        emailEnvelope: protectedDoc?.emailEnvelope ?? null,
+        createdAt: txNow,
+        updatedAt: txNow,
+      },
     });
+    if (protectedDoc && params.protectedProfile?.store && !(params.protectedProfile.store instanceof MongoProfileCollection)) {
+      await params.protectedProfile.store.upsertByUserId(protectedDoc);
+    }
     await adapter.create({
       model: "auth_events",
       data: { eventId: crypto.randomUUID(), eventType: "registration_complete", outcome: "success", userId: createdUserId, intentId: params.intentId, targetIdentifier: toApprovedDisplayLabel(params.email, params.displayUsername), clientId: null, ipAddress: params.clientIp, userAgent: params.userAgent, timestamp: txNow },

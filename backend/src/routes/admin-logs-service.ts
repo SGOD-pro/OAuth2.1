@@ -1,7 +1,18 @@
 import { ObjectId } from "mongodb";
 import { toApprovedDisplayLabel } from "../utils/security";
+import type { AccountKeyProvider } from "../identity/account-key-provider";
+import {
+  readProtectedProfile,
+  type ProtectedProfileCollection,
+} from "../identity/protected-profile-store";
 import { AggregatedLogsParams, AggregatedLogsResult, NormalizedLogEntry } from "./admin-logs-types";
 import { buildLogsFilters, buildLogsPipeline } from "./admin-logs-pipeline";
+
+export interface AdminLogsDeps {
+  protectedProfileStore?: ProtectedProfileCollection;
+  accountKeyProvider?: AccountKeyProvider;
+  migrationMode?: "compat" | "strict";
+}
 
 function sanitizeAuditValue(value: unknown, keyHint = ""): unknown {
   if (Array.isArray(value)) {
@@ -31,7 +42,8 @@ function sanitizeAuditDetails(details: unknown): Record<string, unknown> | null 
 
 export async function getAggregatedLogs(
   database: any,
-  params: AggregatedLogsParams
+  params: AggregatedLogsParams,
+  deps: AdminLogsDeps = {}
 ): Promise<AggregatedLogsResult> {
   const { page, limit } = params;
   const filterContext = buildLogsFilters(params);
@@ -103,37 +115,76 @@ export async function getAggregatedLogs(
 
   if (unresolvedUserIds.size > 0) {
     const stringIds = Array.from(unresolvedUserIds);
-    const objectIds = stringIds
-      .filter((id) => ObjectId.isValid(id))
-      .map((id) => {
-        try {
-          return new ObjectId(id);
-        } catch {
-          return null;
-        }
-      })
-      .filter((id): id is ObjectId => id !== null);
-
-    const userDocs = await database
-      .collection("user")
-      .find(
-        {
-          $or: [
-            ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
-            { id: { $in: stringIds } },
-          ],
-        },
-        { projection: { email: 1, id: 1 } }
-      )
-      .toArray();
-
     const emailMap = new Map<string, string>();
-    userDocs.forEach((u: any) => {
-      if (u.email) {
-        emailMap.set(String(u._id), u.email);
-        if (u.id) emailMap.set(String(u.id), u.email);
+    const useProtected = Boolean(deps.protectedProfileStore && deps.accountKeyProvider);
+
+    if (useProtected && deps.migrationMode === "strict") {
+      await Promise.all(
+        stringIds.map(async (uid) => {
+          const resolved = await readProtectedProfile({
+            store: deps.protectedProfileStore!,
+            provider: deps.accountKeyProvider!,
+            accountId: uid,
+            migrationMode: "strict",
+            fields: ["email"],
+          });
+          emailMap.set(uid, resolved.email);
+        })
+      );
+    } else {
+      const objectIds = stringIds
+        .filter((id) => ObjectId.isValid(id))
+        .map((id) => {
+          try {
+            return new ObjectId(id);
+          } catch {
+            return null;
+          }
+        })
+        .filter((id): id is ObjectId => id !== null);
+
+      const userDocs = await database
+        .collection("user")
+        .find(
+          {
+            $or: [
+              ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
+              { id: { $in: stringIds } },
+            ],
+          },
+          { projection: { email: 1, id: 1 } }
+        )
+        .toArray();
+
+      const legacyMap = new Map<string, any>();
+      userDocs.forEach((u: any) => {
+        legacyMap.set(String(u._id), u);
+        if (u.id) legacyMap.set(String(u.id), u);
+      });
+
+      if (useProtected) {
+        await Promise.all(
+          stringIds.map(async (uid) => {
+            const resolved = await readProtectedProfile({
+              store: deps.protectedProfileStore!,
+              provider: deps.accountKeyProvider!,
+              accountId: uid,
+              migrationMode: deps.migrationMode ?? "compat",
+              legacyUserDoc: legacyMap.get(uid) ?? null,
+              fields: ["email"],
+            });
+            emailMap.set(uid, resolved.email);
+          })
+        );
+      } else {
+        userDocs.forEach((u: any) => {
+          if (u.email) {
+            emailMap.set(String(u._id), u.email);
+            if (u.id) emailMap.set(String(u.id), u.email);
+          }
+        });
       }
-    });
+    }
 
     paginated.forEach((entry) => {
       if (entry.userId && (!entry.userEmail || entry.userEmail === entry.userId || entry.userEmail === "unknown")) {

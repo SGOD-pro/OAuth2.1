@@ -4,7 +4,7 @@ import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { config } from "../config";
 import { getIdpPublicKey } from "../middleware/admin-auth";
-import { checkAccountEligibility } from "../utils/account-eligibility";
+import { checkAccountEligibilityWithLedger } from "../utils/account-eligibility";
 import { resolveOAuthClient, checkPrivateAppTokenAccess } from "../utils/security";
 import { resolveUserRoleForClient } from "./auth-keys";
 
@@ -113,7 +113,7 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
                         ...(ObjectId.isValid(tokenSub) && tokenSub.length === 24 ? [{ _id: new ObjectId(tokenSub) }] : [])
                     ]
                 });
-                const eligibility = checkAccountEligibility(userDoc, {
+                const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
                     tokenIssuedAtMs: data.iat_ms || (data.iat ? data.iat * 1000 : undefined),
                     tokenIssuedAtSec: data.iat || (data.exp ? data.exp - 900 : undefined),
                     tokenVersion: data.token_version,
@@ -222,7 +222,7 @@ export async function handleOAuthIntrospect(c: any): Promise<Response> {
                     ? payload.iat_ms
                     : (typeof payload.iat === "number" ? payload.iat * 1000 : undefined);
                 const tokenVersion = typeof payload.token_version === "number" ? payload.token_version : undefined;
-                const eligibility = checkAccountEligibility(userDoc, {
+                const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
                     tokenIssuedAtMs,
                     tokenIssuedAtSec: payload.iat,
                     tokenVersion,

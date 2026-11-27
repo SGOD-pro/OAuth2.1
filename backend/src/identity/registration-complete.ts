@@ -17,6 +17,19 @@ import {
   getRegistrationTxEngine,
 } from "./registration-tx-engine";
 import { resolveAndEnrollSession } from "./browser-session-registry";
+import { AccountKeyAccessError, type AccountKeyProvider } from "./account-key-provider";
+import type { ProtectedProfileCollection } from "./protected-profile-store";
+import type { UsernameBloomFilter } from "./username-bloom-filter";
+
+export interface CompleteRegistrationDeps {
+  getDb?: () => Promise<Db>;
+  getTxEngine?: (database: Db, mongoClient: any) => Promise<any>;
+  signInEmail?: (params: { email: string; password: string; headers: Headers }) => Promise<Response | null>;
+  resolveAndEnrollSession?: typeof resolveAndEnrollSession;
+  protectedProfileStore?: ProtectedProfileCollection;
+  accountKeyProvider?: AccountKeyProvider;
+  bloomFilter?: UsernameBloomFilter;
+}
 
 export interface RegistrationCompleteTestHooks {
   onBeforePasswordHash?: () => void | Promise<void>;
@@ -96,6 +109,11 @@ async function resolveConflictAfterAbort(
   err: any,
   ctx: { intentId: string; browserBindingHash: string; usernameLookup: string; email: string; idemLookup?: string; requestId: string }
 ): Promise<CompleteRegistrationResult | null> {
+  if (err instanceof AccountKeyAccessError) {
+    const status = err.code === "provider_outage" ? 503 : 403;
+    const code = err.code === "provider_outage" ? "ERR_KEY_PROVIDER_UNAVAILABLE" : "ERR_KEY_DENIED";
+    return { status, body: { error: err.code, code, requestId: ctx.requestId } };
+  }
   if (err instanceof CompletionHttpError) {
     return { status: err.httpStatus, body: { error: err.error, code: err.code, requestId: ctx.requestId } };
   }
@@ -123,7 +141,10 @@ async function resolveConflictAfterAbort(
   return null;
 }
 
-export async function completeVerifiedRegistration(input: CompleteRegistrationInput): Promise<CompleteRegistrationResult> {
+export async function completeVerifiedRegistration(
+  input: CompleteRegistrationInput,
+  deps: CompleteRegistrationDeps = {}
+): Promise<CompleteRegistrationResult> {
   const { requestId } = input;
   if (config.identity.registrationMode !== "verified") {
     return { status: 403, body: { error: "registration_disabled", code: "ERR_REGISTRATION_DISABLED", requestId } };
@@ -133,7 +154,7 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
   }
 
   const browserBindingHash = computeBrowserBindingHash(input.rawBrowser);
-  const database = await getDb();
+  const database = await (deps.getDb ?? getDb)();
   await ensureIdentityCollectionIndexes(database);
 
   const idemLookup = input.idempotencyKey?.trim() ? `complete:${browserBindingHash}:${input.idempotencyKey.trim()}` : undefined;
@@ -186,10 +207,15 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
 
   await completeHooks?.onBeforePasswordHash?.();
   const mongoClient = (database as any).client ?? defaultMongoClient;
-  const txEngine = await getRegistrationTxEngine(database, mongoClient);
+  const txEngine = await (deps.getTxEngine ?? getRegistrationTxEngine)(database, mongoClient);
   const txContext = await txEngine.engine.$context;
   const passwordHash = await txContext.password.hash(input.password);
   await completeHooks?.onBeforeCommitTransaction?.();
+
+  const protectedProfile =
+    deps.accountKeyProvider
+      ? { provider: deps.accountKeyProvider, store: deps.protectedProfileStore }
+      : undefined;
 
   let createdUserId = "";
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -199,7 +225,9 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
         emailLookup: intent.emailLookup, displayUsername: parsedUser.display, normalizedUsername: parsedUser.normalized,
         usernameLookup, acceptedTermsVersion, passwordHash, idemLookup, clientIp: input.clientIp, userAgent: input.userAgent,
         onInsideAfterUser: completeHooks?.onInsideTransactionAfterUser,
+        protectedProfile,
       });
+      deps.bloomFilter?.add(parsedUser.normalized);
       break;
     } catch (err: any) {
       const isWriteConflict = err?.code === 112 || err?.codeName === "WriteConflict";
@@ -222,6 +250,7 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
   let sessionSetCookies: string[] = [];
   let sessionEstablished = false;
   let nextBrowserSessionProof: string | undefined;
+  let createdEngineToken: string | null = null;
   try {
     await completeHooks?.onSessionCreate?.();
     const signInHeaders = new Headers();
@@ -229,20 +258,23 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
       const val = input.requestHeaders.get(h);
       if (val) signInHeaders.set(h, val);
     }
-    const signInRes = await (authProvider.api as any).signInEmail({
-      body: { email: verifiedEmail, password: input.password },
-      headers: signInHeaders,
-      asResponse: true,
-    });
+    const signInRes = deps.signInEmail
+      ? await deps.signInEmail({ email: verifiedEmail, password: input.password, headers: signInHeaders })
+      : await (authProvider.api as any).signInEmail({
+          body: { email: verifiedEmail, password: input.password },
+          headers: signInHeaders,
+          asResponse: true,
+        });
     if (signInRes?.ok) {
-      sessionSetCookies = typeof signInRes.headers?.getSetCookie === "function"
+      const candidateCookies: string[] = typeof signInRes.headers?.getSetCookie === "function"
         ? signInRes.headers.getSetCookie()
         : (signInRes.headers?.get("set-cookie") ? [signInRes.headers.get("set-cookie")] : []);
-      const sessionCookieHdr = sessionSetCookies.find((c) => /(?:__Secure-)?better-auth\.session_token=([^;]+)/.test(c));
+      const sessionCookieHdr = candidateCookies.find((c) => /(?:__Secure-)?better-auth\.session_token=([^;]+)/.test(c));
       const match = sessionCookieHdr?.match(/(?:__Secure-)?better-auth\.session_token=([^;]+)/);
       if (match) {
         const rawTok = decodeURIComponent(match[1]);
-        const enrolled = await resolveAndEnrollSession({
+        createdEngineToken = rawTok;
+        const enrolled = await (deps.resolveAndEnrollSession ?? resolveAndEnrollSession)({
           database,
           rawBrowserProof: input.rawBrowserSessionProof,
           sessionToken: rawTok,
@@ -250,16 +282,24 @@ export async function completeVerifiedRegistration(input: CompleteRegistrationIn
         });
         if (enrolled && enrolled.ok) {
           nextBrowserSessionProof = enrolled.nextRawProof;
+          sessionSetCookies = candidateCookies;
           sessionEstablished = true;
         } else if (enrolled && !enrolled.ok) {
           await database.collection("session").deleteOne({ token: rawTok.split(".")[0] }).catch(() => {});
           sessionSetCookies = [];
         } else {
+          sessionSetCookies = candidateCookies;
           sessionEstablished = true;
         }
       }
     }
   } catch (sessionErr: any) {
+    if (createdEngineToken) {
+      await database.collection("session").deleteOne({ token: createdEngineToken.split(".")[0] }).catch(() => {});
+    }
+    sessionSetCookies = [];
+    nextBrowserSessionProof = undefined;
+    sessionEstablished = false;
     console.warn("[REG_COMPLETE] Post-commit session establishment failed:", sessionErr?.message || sessionErr);
   }
 

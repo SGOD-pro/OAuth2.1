@@ -12,7 +12,7 @@ import {
     checkUserAppRegistration,
     checkUserHasAppAccess,
 } from "../utils/security";
-import { checkAccountEligibility } from "../utils/account-eligibility";
+import { checkAccountEligibilityWithLedger } from "../utils/account-eligibility";
 import { createOAuthTransaction, recordAuthEvent } from "../db/state";
 import { validatePkceAuthorizationParams } from "../utils/pkce";
 import { finalizeAuthorizeCodeWithFence } from "./auth-token-linearize";
@@ -130,7 +130,7 @@ export async function handleOAuthAuthorize(c: any): Promise<Response> {
                     ? new Date(sessionResult.session.createdAt).getTime()
                     : Date.now();
                 const sessionCreatedAtSec = Math.floor(sessionCreatedAtMs / 1000);
-                const eligibility = checkAccountEligibility(userDoc, {
+                const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
                     tokenIssuedAtMs: sessionCreatedAtMs,
                     tokenIssuedAtSec: sessionCreatedAtSec,
                     tokenVersion: userDoc?.tokenVersion,

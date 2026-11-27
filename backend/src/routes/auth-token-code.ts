@@ -3,11 +3,25 @@ import { ObjectId } from "mongodb";
 import { authProvider } from "../utils/auth";
 import { getDb } from "../db/mongo";
 import { hashToken, checkUserHasAppAccess } from "../utils/security";
-import { checkAccountEligibility } from "../utils/account-eligibility";
+import { checkAccountEligibilityWithLedger } from "../utils/account-eligibility";
 import { registerTokenFamily } from "../db/state";
 import { verifyAndConsumeAuthorizationCode } from "../utils/pkce";
-import { mintJwtAccessToken, resignIdTokenWithNewAtHash } from "./auth-jwt";
-import { filterConsumerClaims } from "../identity/claim-policy";
+import {
+    buildProtectedIdTokenClaimFilter,
+    mapProtectedTokenError,
+    mintJwtAccessToken,
+    resignIdTokenWithNewAtHash,
+    type ProtectedTokenClaimDeps,
+    type TokenGrantDeps,
+} from "./auth-jwt";
+
+export function buildCodeIdTokenClaimFilter(
+    scope: string | string[],
+    userDoc: any,
+    deps: ProtectedTokenClaimDeps = {}
+) {
+    return buildProtectedIdTokenClaimFilter(scope, userDoc, deps);
+}
 import { getTokenBarrierHookForTesting } from "./auth-keys";
 import { AuthenticatedClientContext, verifyConfidentialClientCredentials } from "./auth-token-auth";
 import {
@@ -26,10 +40,11 @@ import {
  */
 export async function handleAuthorizationCodeGrant(
     c: any,
-    clientContext: AuthenticatedClientContext
+    clientContext: AuthenticatedClientContext,
+    deps: TokenGrantDeps = {}
 ): Promise<Response> {
     const { canonicalClientId, reqToForward, params } = clientContext;
-    const database = await getDb();
+    const database = await (deps.getDb ?? getDb)();
     const incomingCode = params.get("code");
     if (!incomingCode) {
         return c.json({ error: "invalid_request", error_description: "code is required" }, 400);
@@ -90,7 +105,7 @@ export async function handleAuthorizationCodeGrant(
                     ...(ObjectId.isValid(preCodeUserId) && preCodeUserId.length === 24 ? [{ _id: new ObjectId(preCodeUserId) }] : []),
                 ],
             });
-            const eligibility = checkAccountEligibility(userDoc, {
+            const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
                 tokenIssuedAtMs: codeIssuedAtMs,
                 tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000),
                 tokenVersion: codeTokenVersion,
@@ -116,7 +131,7 @@ export async function handleAuthorizationCodeGrant(
         }
     }
 
-    const res = await authProvider.handler(reqToForward);
+    const res = await (deps.authHandler ?? ((req: Request) => authProvider.handler(req)))(reqToForward);
 
     if (res.status === 200) {
         try {
@@ -132,7 +147,7 @@ export async function handleAuthorizationCodeGrant(
                         ...(ObjectId.isValid(resolvedUserId) && resolvedUserId.length === 24 ? [{ _id: new ObjectId(resolvedUserId) }] : []),
                     ],
                 });
-                const eligibility = checkAccountEligibility(userDoc, {
+                const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
                     tokenIssuedAtMs: codeIssuedAtMs,
                     tokenIssuedAtSec: codeIssuedAtSec ?? Math.floor(Date.now() / 1000),
                     tokenVersion: codeTokenVersion,
@@ -197,16 +212,33 @@ export async function handleAuthorizationCodeGrant(
                     );
                 }
 
-                const jwtAt = await mintJwtAccessToken({
-                    userId: resolvedUserId,
-                    clientId: canonicalClientId,
-                    expiresInSeconds: tokenData.expires_in || 900,
-                    scope: tokenData.scope,
-                    tokenIssuedAtMs: codeIssuedAtMs,
-                    tokenIssuedAtSec: codeIssuedAtSec,
-                    tokenVersion: expectedTokenVersion,
-                    familyId: familyId || undefined,
-                });
+                let jwtAt: string | null = null;
+                let resignedIdToken = tokenData.id_token;
+                try {
+                    jwtAt = await mintJwtAccessToken({
+                        userId: resolvedUserId,
+                        clientId: canonicalClientId,
+                        expiresInSeconds: tokenData.expires_in || 900,
+                        scope: tokenData.scope,
+                        tokenIssuedAtMs: codeIssuedAtMs,
+                        tokenIssuedAtSec: codeIssuedAtSec,
+                        tokenVersion: expectedTokenVersion,
+                        familyId: familyId || undefined,
+                    }, deps);
+                    if (jwtAt && tokenData.id_token) {
+                        resignedIdToken = await resignIdTokenWithNewAtHash(
+                            tokenData.id_token,
+                            jwtAt,
+                            buildCodeIdTokenClaimFilter(tokenData.scope || "openid", userDoc, deps),
+                            deps.getSigningKey
+                        );
+                    }
+                } catch (mintErr) {
+                    await purgeTokensOnMintFailure(database, tokenData, familyId);
+                    const mapped = mapProtectedTokenError(c, mintErr);
+                    if (mapped) return mapped;
+                    throw mintErr;
+                }
 
                 if (!jwtAt) {
                     console.error("[TOKEN_MINTING] Failed to mint RS256 access token in authorization_code flow; failing closed without opaque fallback");
@@ -280,15 +312,7 @@ export async function handleAuthorizationCodeGrant(
 
                 tokenData.access_token = jwtAt;
                 if (tokenData.id_token) {
-                    tokenData.id_token = await resignIdTokenWithNewAtHash(
-                        tokenData.id_token,
-                        jwtAt,
-                        (payload) => filterConsumerClaims(
-                            payload,
-                            tokenData.scope || "openid",
-                            userDoc
-                        )
-                    );
+                    tokenData.id_token = resignedIdToken;
                 }
                 return c.json(tokenData, 200);
             }

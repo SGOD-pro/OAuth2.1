@@ -59,7 +59,7 @@ Use these structures only when measurements show a useful lookup/cost reduction.
 
 | Structure | Appropriate candidate use | Limits and V2 decision |
 |---|---|---|
-| Bloom filter | Immutable/versioned compromised-password corpus prefilter before exact check | False positives; deletion not directly supported; optional measured experiment |
+| Bloom filter | Immutable/versioned compromised-password corpus prefilter; optional normalized-username availability prefilter | False positives; deletion not directly supported; positive matches require exact DB check; negative fast path only when freshness is proven; never skips signup uniqueness transaction |
 | XOR filter | Compact static snapshot of the same corpus or immutable batch inventory | Rebuild for changed set; publish snapshot+version atomically; optional experiment |
 | Cuckoo/counting filter | Dynamic analytics/dedup candidate where deletion is needed | Incorrect deletion/count handling can lose entries; not selected for auth state |
 | Count-Min Sketch | Approximate aggregate abuse telemetry/heavy-hitter hints | Overestimates; only risk/measurement input, never sole account lock decision |
@@ -70,6 +70,8 @@ A positive probabilistic result means maybe present and requires exact confirmat
 For Bloom sizing, document expected `n`, desired false-positive `p`, `m = -n ln(p)/(ln 2)^2` bits and `k = (m/n) ln 2` hash functions. Example n=1,000,000, p=0.001 needs about 14.4 million bits (1.8 MB decimal), k about 10, before implementation overhead. Input-set fidelity, rebuild lag and memory costs matter more than the formula alone.
 
 For any experiment record benchmark, exact-store baseline, source/version/checksum, saturation/rebuild policy, rollback and unavailable-filter fallback. Do not filter first and then skip the database uniqueness check even when the filter says absent. The normal production default is filters disabled until this evidence exists.
+
+For normalized username availability (`/api/identity/username/check`): positive Bloom matches must be confirmed against `identity_lookup` in MongoDB; negative results may skip the read only while the filter snapshot is proven fresh (bounded age and valid state); stale or unavailable filters fall back to exact `identity_lookup` queries; and `executeCompletionTransaction` always enforces the final transactional uniqueness check on `identity_lookup` and `user`.
 
 References: [Redis Bloom semantics](https://redis.io/docs/latest/develop/data-types/probabilistic/bloom-filter/) and [Graf/Lemire XOR-filter paper](https://arxiv.org/abs/1912.08258). These describe data structures, not proof of auth security.
 

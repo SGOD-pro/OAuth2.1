@@ -25,7 +25,9 @@ export type AuthEventType =
   | "recovery_code_verify"
   | "sign_out"
   | "password_reset"
-  | "account_lockout";
+  | "account_lockout"
+  | "device_risk_elevated"
+  | "device_risk_high";
 
 export interface AuthAuditEvent {
   _id?: any;

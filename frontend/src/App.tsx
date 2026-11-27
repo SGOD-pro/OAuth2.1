@@ -23,6 +23,7 @@ const Consent = lazy(() => import('@/pages/Consent').then((module) => ({ default
 const AccountDashboard = lazy(() => import('@/pages/AccountDashboard'));
 const AccountProfile = lazy(() => import('@/pages/AccountProfile'));
 const AccountPrivacy = lazy(() => import('@/pages/AccountPrivacy'));
+const AccountData = lazy(() => import('@/pages/AccountData'));
 const AuthCallback = lazy(() =>
   import('@/pages/AuthCallback').then((module) => ({ default: module.AuthCallback }))
 );
@@ -73,6 +74,7 @@ const router = createBrowserRouter([
   { path: '/account', element: withLayout(<AccountDashboard />) },
   { path: '/account/profile', element: withLayout(<AccountProfile />) },
   { path: '/account/privacy', element: withLayout(<AccountPrivacy />) },
+  { path: '/account/data', element: withLayout(<AccountData />) },
   { path: '/callback', element: withLayout(<AuthCallback />) },
   { path: '/signout', element: <SignOut /> },
 

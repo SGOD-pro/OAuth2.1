@@ -3,6 +3,7 @@ import type { betterAuth } from "better-auth";
 import { makeSignature } from "better-auth/crypto";
 import { findActiveBrowserSet, isOrdinaryRole, resolveAndEnrollSession, serializeBrowserProofSetCookie } from "./browser-session-registry";
 import { dispatchSelectedEngineSession } from "./selected-engine-session";
+import { isAccountDeniedInLedger } from "../utils/account-eligibility";
 
 type SessionEngine = Parameters<typeof dispatchSelectedEngineSession>[0] & ReturnType<typeof betterAuth>;
 
@@ -47,7 +48,7 @@ async function resolveSelectedSessionInternal(
   }
 
   const userDoc = await database.collection("user").findOne(idMatch(entry.userId));
-  if (!userDoc || userDoc.disabled === true || userDoc.banned === true || userDoc.isActive === false) {
+  if (!userDoc || userDoc.disabled === true || userDoc.banned === true || userDoc.isActive === false || userDoc.status === "deleting" || userDoc.status === "deleted" || Boolean(userDoc.deletedAt) || (await isAccountDeniedInLedger(database, entry.userId))) {
     throw new SessionAdapterError("ERR_ACCOUNT_INVALID", "Referenced account is missing or disabled");
   }
   const currentVersion = typeof userDoc.tokenVersion === "number" ? userDoc.tokenVersion : 1;

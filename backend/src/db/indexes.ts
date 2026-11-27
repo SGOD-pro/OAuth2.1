@@ -28,6 +28,9 @@ async function ensureIdentityCollectionIndexesImpl(db: Awaited<ReturnType<typeof
     "identity_contexts",
     "app_invitations",
     "totp_used_steps",
+    "export_jobs",
+    "deletion_jobs",
+    "deletion_ledger",
   ];
   await Promise.all(cols.map((col) => db.createCollection(col).catch(() => {})));
   const safeCreate = async (col: string, spec: any, options?: any) => {
@@ -64,6 +67,16 @@ async function ensureIdentityCollectionIndexesImpl(db: Awaited<ReturnType<typeof
     safeCreate("app_invitations", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
     safeCreate("totp_used_steps", { userId: 1, step: 1, secretDigest: 1 }, { unique: true }),
     safeCreate("totp_used_steps", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    safeCreate("export_jobs", { jobId: 1 }, { unique: true }),
+    safeCreate("export_jobs", { ownerUserId: 1, idempotencyKey: 1 }, { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string" } } }),
+    safeCreate("export_jobs", { ownerUserId: 1, status: 1, createdAt: -1 }),
+    safeCreate("export_jobs", { status: 1, nextAttemptAt: 1, expiresAt: 1 }),
+    safeCreate("export_jobs", { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    safeCreate("deletion_jobs", { operationId: 1 }, { unique: true }),
+    safeCreate("deletion_jobs", { userId: 1 }, { unique: true }),
+    safeCreate("deletion_jobs", { receiptDigest: 1 }, { unique: true }),
+    safeCreate("deletion_ledger", { userId: 1 }, { unique: true }),
+    safeCreate("deletion_ledger", { operationId: 1 }, { unique: true }),
   ]);
   await db.collection("totp_used_steps").dropIndex("userId_1_step_1_purpose_1").catch(() => {});
   await db.collection("totp_used_steps").dropIndex("userId_1_step_1").catch(() => {});

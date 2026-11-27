@@ -1,5 +1,7 @@
 import { ObjectId } from "mongodb";
+import type { AccountKeyProvider } from "./account-key-provider";
 import { resolveOwnerPrivacyPreferences } from "./claim-policy";
+import { readProtectedProfile, type ProtectedProfileCollection } from "./protected-profile-store";
 
 export const EXPORT_POLICY_VERSION = 1;
 export const DEFAULT_MAX_GRANTS = 50;
@@ -48,7 +50,13 @@ export interface OwnerExportPayload {
 export async function prepareOwnerExport(
   database: any,
   ownerUserId: string,
-  options: { maxGrants?: number; maxSecurityEvents?: number } = {}
+  options: {
+    maxGrants?: number;
+    maxSecurityEvents?: number;
+    protectedProfileStore?: ProtectedProfileCollection;
+    accountKeyProvider?: AccountKeyProvider;
+    migrationMode?: "compat" | "strict";
+  } = {}
 ): Promise<OwnerExportPayload | null> {
   if (!ownerUserId || !ObjectId.isValid(ownerUserId)) {
     return null;
@@ -66,6 +74,16 @@ export async function prepareOwnerExport(
   }
 
   const prefs = resolveOwnerPrivacyPreferences(userDoc);
+  const resolvedProfile =
+    options.protectedProfileStore && options.accountKeyProvider
+      ? await readProtectedProfile({
+          store: options.protectedProfileStore,
+          provider: options.accountKeyProvider,
+          accountId: ownerUserId,
+          migrationMode: options.migrationMode ?? "compat",
+          legacyUserDoc: userDoc,
+        })
+      : { name: String(userDoc.name || ""), email: String(userDoc.email || "") };
 
   const rawGrants = await database
     .collection("oauthConsent")
@@ -101,8 +119,8 @@ export async function prepareOwnerExport(
     profile: {
       userId: ownerUserId,
       username: userDoc.username ?? null,
-      name: String(userDoc.name || ""),
-      email: String(userDoc.email || ""),
+      name: resolvedProfile.name,
+      email: resolvedProfile.email,
       emailVerified: Boolean(userDoc.emailVerified),
       createdAt: userDoc.createdAt instanceof Date ? userDoc.createdAt.toISOString() : null,
       updatedAt: userDoc.updatedAt instanceof Date ? userDoc.updatedAt.toISOString() : null,

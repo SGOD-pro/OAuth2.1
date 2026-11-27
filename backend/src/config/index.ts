@@ -166,5 +166,12 @@ export const config = {
         get mailProviderUrl(): string | undefined {
             return process.env.IDENTITY_MAIL_PROVIDER_URL || (parsedEnv as any).IDENTITY_MAIL_PROVIDER_URL || undefined;
         },
+        get deletionReconcileEnabled(): boolean {
+            const val = process.env.IDENTITY_DELETION_RECONCILE_ENABLED ?? (parsedEnv as any).IDENTITY_DELETION_RECONCILE_ENABLED ?? 'true';
+            return val !== 'false';
+        },
+        get deletionReconcileIntervalMs(): number {
+            return Math.max(1000, Number(process.env.IDENTITY_DELETION_RECONCILE_INTERVAL_MS) || (parsedEnv as any).IDENTITY_DELETION_RECONCILE_INTERVAL_MS || 30_000);
+        },
     },
 }

@@ -6,6 +6,33 @@ import { authProvider } from "../utils/auth";
 import { getBrowserSessionCookieName } from "../identity/browser-session-registry";
 import { IdentityContextError, resolveOwnerDashboardContext } from "../identity/owner-contexts";
 import { computeUsernameLookup, normalizeUsername } from "../identity/registration-crypto";
+import { AccountKeyAccessError, type AccountKeyProvider } from "../identity/account-key-provider";
+import { ProtectedFieldError } from "../identity/protected-envelope";
+import { readProtectedProfile, writeProtectedProfileFields, type ProtectedProfileCollection } from "../identity/protected-profile-store";
+
+export interface OwnerProfileRouteDeps {
+  getDb?: () => Promise<any>;
+  startSession?: () => any;
+  resolveOwner?: (c: Context, database: any) => Promise<
+    | { ok: true; userId: string; sessionId: string }
+    | { ok: false; response: Response }
+  >;
+  protectedProfileStore?: ProtectedProfileCollection;
+  accountKeyProvider?: AccountKeyProvider;
+  migrationMode?: "compat" | "strict";
+}
+
+function mapProtectedErrorStatus(err: unknown): { status: number; code: string; message: string } | null {
+  if (err instanceof AccountKeyAccessError) {
+    const status = err.code === "provider_outage" ? 503 : err.code === "key_not_found" ? 404 : 403;
+    return { status, code: err.code, message: err.message };
+  }
+  if (err instanceof ProtectedFieldError) {
+    const status = err.code === "profile_not_found" ? 404 : 500;
+    return { status, code: err.code, message: err.message };
+  }
+  return null;
+}
 
 const RECENT_AUTH_WINDOW_MS = 5 * 60 * 1000;
 
@@ -188,26 +215,61 @@ export async function handleDisconnectOwnerApp(c: Context) {
 
 const ALLOWED_PROFILE_FIELDS = new Set(["name", "username"]);
 
+export function createOwnerProfileHandlers(deps: OwnerProfileRouteDeps = {}) {
+  return {
+    getOwnerMe: (c: Context) => runGetOwnerMe(c, deps),
+    patchOwnerMe: (c: Context) => runPatchOwnerMe(c, deps),
+  };
+}
+
 export async function handleGetOwnerMe(c: Context) {
-  const database = await getDb();
-  const owner = await resolveOwner(c, database);
+  return runGetOwnerMe(c, {});
+}
+
+export async function handlePatchOwnerMe(c: Context) {
+  return runPatchOwnerMe(c, {});
+}
+
+async function runGetOwnerMe(c: Context, deps: OwnerProfileRouteDeps) {
+  const database = await (deps.getDb ?? getDb)();
+  const owner = await (deps.resolveOwner ?? resolveOwner)(c, database);
   if (!owner.ok) return owner.response;
 
   const user = await database.collection("user").findOne({ _id: new ObjectId(owner.userId) });
   if (!user) return c.json({ error: "not_found" }, 404);
 
+  let name = user.name ?? "";
+  let email = user.email ?? "";
+  if (deps.protectedProfileStore && deps.accountKeyProvider) {
+    try {
+      const resolved = await readProtectedProfile({
+        store: deps.protectedProfileStore,
+        provider: deps.accountKeyProvider,
+        accountId: owner.userId,
+        migrationMode: deps.migrationMode ?? "compat",
+        legacyUserDoc: user,
+      });
+      name = resolved.name;
+      email = resolved.email;
+    } catch (err) {
+      const mapped = mapProtectedErrorStatus(err);
+      if (mapped) return c.json({ error: mapped.code, message: mapped.message }, mapped.status as any);
+      throw err;
+    }
+  }
+
   return c.json({
     userId: owner.userId,
     username: user.username ?? null,
-    name: user.name ?? "",
-    email: user.email ?? "",
+    name,
+    email,
     emailVerified: Boolean(user.emailVerified),
   }, 200);
 }
 
-export async function handlePatchOwnerMe(c: Context) {
-  const database = await getDb();
-  const owner = await resolveOwner(c, database);
+async function runPatchOwnerMe(c: Context, deps: OwnerProfileRouteDeps) {
+  const database = await (deps.getDb ?? getDb)();
+  const owner = await (deps.resolveOwner ?? resolveOwner)(c, database);
   if (!owner.ok) return owner.response;
 
   const body = await c.req.json().catch(() => null);
@@ -241,7 +303,8 @@ export async function handlePatchOwnerMe(c: Context) {
   }
 
   const userObjectId = new ObjectId(owner.userId);
-  const mongoSession = client.startSession();
+  const mongoSession = (deps.startSession ?? (() => client.startSession()))();
+  let protectedWritten: { name: string; email: string } | null = null;
   try {
     await mongoSession.withTransaction(async () => {
       if (nextUsernameLookup) {
@@ -265,9 +328,27 @@ export async function handlePatchOwnerMe(c: Context) {
           { upsert: true, session: mongoSession }
         );
       }
+      const existingUser = await database.collection("user").findOne({ _id: userObjectId }, { session: mongoSession });
+      // Legacy engine plaintext user.name/user.email remain until P6b write fencing and backfill.
       await database.collection("user").updateOne({ _id: userObjectId }, { $set: updates }, { session: mongoSession });
+      if (deps.protectedProfileStore && deps.accountKeyProvider && "name" in updates) {
+        const doc = await writeProtectedProfileFields({
+          store: deps.protectedProfileStore,
+          provider: deps.accountKeyProvider,
+          accountId: owner.userId,
+          name: updates.name,
+          fallbackEmail: String(existingUser?.email || ""),
+          session: mongoSession,
+        });
+        void doc;
+        protectedWritten = { name: updates.name, email: String(existingUser?.email || "") };
+      }
     });
   } catch (err: any) {
+    const mapped = mapProtectedErrorStatus(err);
+    if (mapped) {
+      return c.json({ error: mapped.code, message: mapped.message }, mapped.status as any);
+    }
     if (err?.status === 409 || err?.code === 11000) {
       return c.json({ error: err?.code === 11000 ? "username_taken" : err.code || "username_taken", message: "Username is already taken" }, 409);
     }
@@ -277,11 +358,12 @@ export async function handlePatchOwnerMe(c: Context) {
   }
 
   const updated = await database.collection("user").findOne({ _id: userObjectId });
+  const writtenProfile = protectedWritten as { name: string; email: string } | null;
   return c.json({
     userId: owner.userId,
     username: updated?.username ?? null,
-    name: updated?.name ?? "",
-    email: updated?.email ?? "",
+    name: writtenProfile ? writtenProfile.name : updated?.name ?? "",
+    email: writtenProfile ? writtenProfile.email : updated?.email ?? "",
     emailVerified: Boolean(updated?.emailVerified),
   }, 200);
 }

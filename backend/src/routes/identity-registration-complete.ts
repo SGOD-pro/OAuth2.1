@@ -6,7 +6,17 @@ import { getTrustedClientIp, hasDangerousMongoKeys } from "../utils/security";
 import { completeVerifiedRegistration } from "../identity/registration-complete";
 import { buildBrowserProofCookieOptions, getBrowserSessionCookieName } from "../identity/browser-session-registry";
 import { computeBrowserBindingHash, computeUsernameLookup, digestToken, normalizeUsername } from "../identity/registration-crypto";
+import { checkUsernameAvailability, type UsernameBloomFilter } from "../identity/username-bloom-filter";
 import { BROWSER_COOKIE, PROOF_COOKIE, cookieSecurityOpts, getRequestId } from "./identity-registration-shared";
+
+export interface UsernameCheckDeps {
+  getDb?: () => Promise<any>;
+  bloomFilter?: UsernameBloomFilter;
+}
+
+export function createUsernameCheckHandler(deps: UsernameCheckDeps = {}) {
+  return (c: Context) => runUsernameCheck(c, deps);
+}
 
 export async function handleRegistrationComplete(c: Context): Promise<Response> {
   const requestId = getRequestId(c);
@@ -52,6 +62,10 @@ export async function handleRegistrationComplete(c: Context): Promise<Response> 
 }
 
 export async function handleUsernameCheck(c: Context): Promise<Response> {
+  return runUsernameCheck(c, {});
+}
+
+async function runUsernameCheck(c: Context, deps: UsernameCheckDeps): Promise<Response> {
   const requestId = getRequestId(c);
   if (config.identity.registrationMode !== "verified") {
     return c.json({ error: "registration_disabled", code: "ERR_REGISTRATION_DISABLED", requestId }, 403);
@@ -69,7 +83,7 @@ export async function handleUsernameCheck(c: Context): Promise<Response> {
   if (!parsed) {
     return c.json({ available: false, reason: "invalid_syntax", requestId }, 400);
   }
-  const database = await getDb();
+  const database = await (deps.getDb ?? getDb)();
   const intent = await database.collection("registration_intents").findOne({
     browserBindingHash: computeBrowserBindingHash(rawBrowser),
     proofDigest: digestToken(rawProof, "proof"),
@@ -79,9 +93,11 @@ export async function handleUsernameCheck(c: Context): Promise<Response> {
     return c.json({ error: "unauthorized", code: "ERR_PROOF_INVALID", requestId }, 403);
   }
   const lookup = computeUsernameLookup(parsed.normalized);
-  const taken = await database.collection("identity_lookup").findOne(
-    { kind: "username", keyVersion: 1, keyedLookup: lookup },
-    { projection: { _id: 1 } }
-  );
-  return c.json({ available: !taken, normalizedUsername: parsed.normalized, requestId });
+  const checked = await checkUsernameAvailability({
+    database,
+    normalizedUsername: parsed.normalized,
+    keyedLookup: lookup,
+    bloomFilter: deps.bloomFilter,
+  });
+  return c.json({ available: checked.available, normalizedUsername: parsed.normalized, requestId });
 }

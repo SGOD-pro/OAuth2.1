@@ -1,7 +1,7 @@
 import type { Db } from "mongodb";
 import { authProvider } from "../utils/auth";
 import { config } from "../config";
-import { checkAccountEligibility } from "../utils/account-eligibility";
+import { checkAccountEligibilityWithLedger } from "../utils/account-eligibility";
 import { checkUserHasAppAccess, resolveOAuthClient } from "../utils/security";
 import { bindOAuthTransactionSelection, getOAuthTransaction, type OAuthTransactionDoc } from "../db/oauth-transactions";
 import { findActiveBrowserSet, getBrowserSessionCookieName, listBrowserSetEntriesWithLiveStatus } from "./browser-session-registry";
@@ -125,7 +125,7 @@ export async function selectAccountForOAuthTransaction(params: {
     ?? await database.collection("user").findOne({ username: verified.label }).catch(() => null);
 
   if (userDoc) {
-    const elig = checkAccountEligibility(userDoc, {
+    const elig = await checkAccountEligibilityWithLedger(database, userDoc, {
       tokenIssuedAtMs: authTimeSec != null ? authTimeSec * 1000 : undefined,
       tokenIssuedAtSec: authTimeSec != null ? authTimeSec : undefined,
       tokenVersion: typeof userDoc.tokenVersion === "number" ? userDoc.tokenVersion : verified.tokenVersion,

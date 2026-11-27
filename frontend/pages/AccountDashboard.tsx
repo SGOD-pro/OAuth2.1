@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { AccountChooser, type BrowserAccountEntry } from "../components/AccountChooser";
 import { AccountTotpPanel } from "../components/AccountTotpPanel";
 import { AccountSessionsAppsPanel } from "../components/AccountSessionsAppsPanel";
@@ -84,7 +85,11 @@ export default function AccountDashboard() {
       <div className="w-full max-w-md rounded-lg border bg-card p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-semibold">Account Dashboard</h1>
-          <a href="/account/profile" className="text-xs underline text-muted-foreground hover:text-foreground" data-testid="edit-profile-link">Edit Profile</a>
+          <div className="flex items-center gap-3">
+            <Link to="/account/profile" className="text-xs underline text-muted-foreground hover:text-foreground" data-testid="edit-profile-link">Profile</Link>
+            <Link to="/account/privacy" className="text-xs underline text-muted-foreground hover:text-foreground" data-testid="privacy-link">Privacy</Link>
+            <Link to="/account/data" className="text-xs underline text-muted-foreground hover:text-foreground" data-testid="data-link">Data</Link>
+          </div>
         </div>
         <p className="text-sm text-muted-foreground" data-testid="dashboard-account-label">
           Signed in as <span className="font-medium text-foreground">{account.label}</span>

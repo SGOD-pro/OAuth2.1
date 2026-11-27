@@ -1,6 +1,6 @@
 import { ObjectId } from "mongodb";
 import { checkUserHasAppAccess } from "../utils/security";
-import { checkAccountEligibility } from "../utils/account-eligibility";
+import { checkAccountEligibilityWithLedger } from "../utils/account-eligibility";
 
 export interface RefreshValidationResult {
     valid: boolean;
@@ -49,7 +49,7 @@ export async function validatePreRefreshEligibility(
         ],
     });
 
-    const eligibility = checkAccountEligibility(userDoc, {
+    const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
         tokenIssuedAtMs: preRefreshIssuedAtMs,
         tokenIssuedAtSec: preRefreshIssuedAtSec ?? Math.floor(Date.now() / 1000),
         tokenVersion: preRefreshTokenVersion,
@@ -141,7 +141,7 @@ export async function validatePostRefreshEligibility(
         ],
     });
 
-    const eligibility = checkAccountEligibility(userDoc, {
+    const eligibility = await checkAccountEligibilityWithLedger(database, userDoc, {
         tokenIssuedAtMs: preRefreshIssuedAtMs,
         tokenIssuedAtSec: preRefreshIssuedAtSec ?? Math.floor(Date.now() / 1000),
         tokenVersion: preRefreshTokenVersion,

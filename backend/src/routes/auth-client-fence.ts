@@ -2,6 +2,7 @@ import { ObjectId } from "mongodb";
 import { hashToken } from "../utils/security";
 import { bindAuthorizationCode, type BindAuthorizationCodeParams } from "../utils/pkce";
 import { getTokenBarrierHookForTesting } from "./auth-keys";
+import { isAccountDeniedInLedger } from "../utils/account-eligibility";
 import {
     type SelectedSessionIssuanceFence,
     commitSelectedSessionLinearization,
@@ -123,6 +124,9 @@ export async function commitUserIssuanceLinearization(
     expectedTokenVersion: number,
     issuedAtMs?: number
 ): Promise<boolean> {
+    if (await isAccountDeniedInLedger(database, resolvedUserId)) {
+        return false;
+    }
     const commitCondition: Record<string, any> = {
         $or: [
             { id: resolvedUserId },

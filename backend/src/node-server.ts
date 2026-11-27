@@ -1,6 +1,8 @@
 import { serve } from "@hono/node-server";
 import app, { appBootTime } from "./app";
 import { config } from "./config";
+import { startDeletionReconcileWorker } from "./workers/deletion";
+import { startExportWorker } from "./workers/export";
 
 const initMs = Date.now() - appBootTime;
 console.log(`Node server init in ${initMs}ms`);
@@ -14,3 +16,10 @@ serve({
   port,
   hostname: host,
 });
+
+if (config.env !== "test" && config.identity.deletionReconcileEnabled) {
+  startDeletionReconcileWorker({ intervalMs: config.identity.deletionReconcileIntervalMs });
+}
+if (config.env !== "test") {
+  startExportWorker({ intervalMs: 5000 });
+}
