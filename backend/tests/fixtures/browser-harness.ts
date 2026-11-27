@@ -78,6 +78,8 @@ export async function startIdpAndFrontendHarness(options: {
   gatewaySecret: string;
   betterAuthSecret: string;
   extraEnv?: Record<string, string>;
+  idpArgs?: string[];
+  onResourcesAllocated?: (info: { frontendPort: number; idpPid: number }) => void;
 }): Promise<BrowserTestEnvironment> {
   const children: ChildProcess[] = [];
   let frontendServer: http.Server | null = null;
@@ -174,7 +176,7 @@ export async function startIdpAndFrontendHarness(options: {
     stage = "idp_spawn";
     const idpChild = spawn(
       process.execPath,
-      [
+      options.idpArgs ?? [
         path.join(options.backendDir, "node_modules/tsx/dist/cli.mjs"),
         path.join(options.backendDir, "tests/fixtures/idp-test-launcher.ts"),
       ],
@@ -200,6 +202,9 @@ export async function startIdpAndFrontendHarness(options: {
     );
     idpChild.stderr?.on("data", (d) => process.stderr.write(`[IdP ERR] ${d}`));
     children.push(idpChild);
+    if (idpChild.pid) {
+      options.onResourcesAllocated?.({ frontendPort: frontendAddr.port, idpPid: idpChild.pid });
+    }
 
     idpUrl = await Promise.race([
       new Promise<string>((resolve, reject) => {
@@ -208,6 +213,9 @@ export async function startIdpAndFrontendHarness(options: {
           if (msg?.type === "ready" && typeof msg.idpUrl === "string") {
             clearTimeout(timer);
             resolve(msg.idpUrl);
+          } else if (msg?.type === "error") {
+            clearTimeout(timer);
+            reject(new Error(String(msg.message || "IdP startup error")));
           }
         });
       }),
