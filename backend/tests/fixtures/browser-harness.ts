@@ -102,6 +102,7 @@ export async function startIdpAndFrontendHarness(options: {
             headers.set(k, Array.isArray(v) ? v.join(", ") : v);
           }
         }
+        headers.set("x-gateway-secret", options.gatewaySecret);
         const chunks: Buffer[] = [];
         for await (const chunk of req) chunks.push(Buffer.from(chunk));
         const body = chunks.length > 0 && req.method !== "GET" && req.method !== "HEAD" ? Buffer.concat(chunks) : undefined;

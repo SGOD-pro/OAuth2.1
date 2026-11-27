@@ -128,7 +128,13 @@ try {
   await page.fill('input[placeholder="e.g. Customer Portal"]', "BAC Open Public App");
   await page.fill('input[placeholder*="callback"]', "https://open-pub.example.com/cb");
   await page.click('button:has-text("Add") >> nth=0');
-  await page.click('button[type="submit"]:has-text("Register application")');
+  {
+    const [regRes] = await Promise.all([
+      page.waitForResponse((res) => res.url().includes("/api/admin/clients") && res.request().method() === "POST"),
+      page.click('button[type="submit"]:has-text("Register application")'),
+    ]);
+    assert.equal(regRes.status(), 201, `Expected 201 from POST /api/admin/clients, got ${regRes.status()}`);
+  }
   await page.waitForSelector('button:has-text("Done")', { timeout: 10000 });
   assert.equal(await page.getByText('Client Secret', { exact: true }).count(), 0, "Public client must not display secret field");
   assert.equal(await page.locator('button:has-text("Copy secret")').count(), 0, "Public client must not render Copy secret button");
@@ -176,7 +182,13 @@ try {
   await page.fill('input[placeholder="e.g. Customer Portal"]', "BAC Priv Pub App");
   await page.fill('input[placeholder*="callback"]', "https://priv-pub.example.com/cb");
   await page.click('button:has-text("Add") >> nth=0');
-  await page.click('button[type="submit"]:has-text("Register application")');
+  {
+    const [regRes] = await Promise.all([
+      page.waitForResponse((res) => res.url().includes("/api/admin/clients") && res.request().method() === "POST"),
+      page.click('button[type="submit"]:has-text("Register application")'),
+    ]);
+    assert.equal(regRes.status(), 201, `Expected 201 from POST /api/admin/clients, got ${regRes.status()}`);
+  }
   await page.waitForSelector('button:has-text("Done")', { timeout: 10000 });
   assert.equal(await page.getByText('Client Secret', { exact: true }).count(), 0);
   assert.equal(await page.locator('button:has-text("Copy secret")').count(), 0);
