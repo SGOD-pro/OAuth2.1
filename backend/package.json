@@ -110,6 +110,7 @@
     "test:p5-owner-portal": "node --import tsx tests/e2e/p5-owner-portal-browser.test.ts",
     "test:p5-owner-profile": "node --import tsx tests/e2e/p5-owner-profile-browser.test.ts",
     "test:p5-privacy": "node --import tsx tests/e2e/p5-privacy-browser.test.ts",
+    "test:browser-harness-lifecycle": "node --import tsx tests/e2e/browser-harness-lifecycle.test.ts",
     "test:p4-admin-mfa": "node --import tsx tests/security/p4-admin-mfa-enrollment.test.ts",
     "test:p4-invitations": "node --import tsx tests/security/p4-private-app-invitations.test.ts",
     "test:p4-recovery": "node --import tsx tests/security/p4-backup-code-recovery.test.ts",

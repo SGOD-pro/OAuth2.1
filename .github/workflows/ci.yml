@@ -135,6 +135,8 @@ jobs:
 
       - name: Run Live Browser E2E Test Suite (Playwright)
         run: npm run test:browser-e2e
+      - name: Run Playwright Harness Lifecycle Regression
+        run: npm run test:browser-harness-lifecycle
 
       - name: Run P1c Admin Browser E2E Suite (Playwright)
         run: npm run test:p1c-admin-browser

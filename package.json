@@ -51,6 +51,7 @@
     "test:p5-owner-portal": "npm --prefix backend run test:p5-owner-portal",
     "test:p5-owner-profile": "npm --prefix backend run test:p5-owner-profile",
     "test:p5-privacy": "npm --prefix backend run test:p5-privacy",
+    "test:browser-harness-lifecycle": "npm --prefix backend run test:browser-harness-lifecycle",
     "test:p4-admin-mfa": "npm --prefix backend run test:p4-admin-mfa",
     "test:p4-invitations": "npm --prefix backend run test:p4-invitations",
     "test:p4-recovery": "npm --prefix backend run test:p4-recovery",
