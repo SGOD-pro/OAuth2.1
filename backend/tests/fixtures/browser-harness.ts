@@ -14,21 +14,42 @@ export function getChromiumExecutable(): string | undefined {
   return undefined;
 }
 
-export async function reserveEphemeralPort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (!addr || typeof addr === "string") {
-        srv.close(() => reject(new Error("Failed to read ephemeral port")));
-        return;
-      }
-      const port = addr.port;
-      srv.close((closeErr) => (closeErr ? reject(closeErr) : resolve(port)));
-    });
-  });
+export async function killProcessGroupAndConfirm(pid: number, termTimeoutMs = 2000, killTimeoutMs = 1000): Promise<void> {
+  const isGroupGone = (): boolean => {
+    try {
+      process.kill(-pid, 0);
+      return false;
+    } catch (err: any) {
+      if (err?.code === "ESRCH") return true;
+      throw err;
+    }
+  };
+
+  if (isGroupGone()) return;
+
+  try { process.kill(-pid, "SIGTERM"); } catch (err: any) {
+    if (err?.code === "ESRCH") return;
+  }
+
+  const termDeadline = Date.now() + termTimeoutMs;
+  while (Date.now() < termDeadline) {
+    if (isGroupGone()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  try { process.kill(-pid, "SIGKILL"); } catch (err: any) {
+    if (err?.code === "ESRCH") return;
+  }
+
+  const killDeadline = Date.now() + killTimeoutMs;
+  while (Date.now() < killDeadline) {
+    if (isGroupGone()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  if (!isGroupGone()) {
+    throw new Error(`Process group -${pid} survived SIGKILL`);
+  }
 }
 
 export async function waitForHttp(url: string, timeoutMs = 25000): Promise<void> {
@@ -65,48 +86,7 @@ export async function startIdpAndFrontendHarness(options: {
 
   const killAndAwaitChildren = async () => {
     await Promise.all(
-      children.map(
-        (child) =>
-          new Promise<void>((resolve, reject) => {
-            if (child.exitCode !== null || child.signalCode !== null) {
-              resolve();
-              return;
-            }
-            const timer = setTimeout(async () => {
-              if (child.pid) {
-                try { process.kill(-child.pid, "SIGKILL"); } catch {
-                  try { child.kill("SIGKILL"); } catch {}
-                }
-                const killDeadline = Date.now() + 1000;
-                while (Date.now() < killDeadline) {
-                  try {
-                    process.kill(-child.pid, 0);
-                    await new Promise((r) => setTimeout(r, 50));
-                  } catch (err: any) {
-                    if (err?.code === "ESRCH") {
-                      resolve();
-                      return;
-                    }
-                    reject(err);
-                    return;
-                  }
-                }
-                reject(new Error(`Process group -${child.pid} survived SIGKILL`));
-                return;
-              }
-              resolve();
-            }, 2000);
-            child.once("exit", () => {
-              clearTimeout(timer);
-              resolve();
-            });
-            if (child.pid) {
-              try { process.kill(-child.pid, "SIGTERM"); } catch {
-                try { child.kill("SIGTERM"); } catch {}
-              }
-            }
-          })
-      )
+      children.map((child) => (child.pid ? killProcessGroupAndConfirm(child.pid) : Promise.resolve()))
     );
   };
 
@@ -126,8 +106,7 @@ export async function startIdpAndFrontendHarness(options: {
       execSync("npm run build:ui", { cwd: options.frontendDir, stdio: "pipe" });
     }
 
-    const idpPort = await reserveEphemeralPort();
-    const idpUrl = `http://127.0.0.1:${idpPort}`;
+    let idpUrl = "";
 
     // Bind frontend listener to port 0 first so its port is OS-assigned and reserved
     frontendServer = http.createServer(async (req, res) => {
@@ -195,18 +174,19 @@ export async function startIdpAndFrontendHarness(options: {
     stage = "idp_spawn";
     const idpChild = spawn(
       process.execPath,
-      [path.join(options.backendDir, "node_modules/tsx/dist/cli.mjs"), "src/node-server.ts"],
+      [
+        path.join(options.backendDir, "node_modules/tsx/dist/cli.mjs"),
+        path.join(options.backendDir, "tests/fixtures/idp-test-launcher.ts"),
+      ],
       {
         cwd: options.backendDir,
         detached: true,
         env: {
           ...process.env,
           NODE_ENV: "test",
-          PORT: String(idpPort),
           HOST: "127.0.0.1",
           MONGO_URI: options.mongoUri,
           BETTER_AUTH_SECRET: options.betterAuthSecret,
-          BETTER_AUTH_URL: idpUrl,
           FRONTEND_URL: frontendUrl,
           AUTH_PUBLIC_SIGNUP_ENABLED: "true",
           GOOGLE_CLIENT_ID: "test-google-id",
@@ -215,13 +195,22 @@ export async function startIdpAndFrontendHarness(options: {
           TRUSTED_PROXY_CIDRS: "127.0.0.1/32,10.0.0.0/8",
           ...(options.extraEnv || {}),
         },
-        stdio: "pipe",
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
       }
     );
     idpChild.stderr?.on("data", (d) => process.stderr.write(`[IdP ERR] ${d}`));
     children.push(idpChild);
-    await Promise.race([
-      waitForHttp(`${idpUrl}/health`),
+
+    idpUrl = await Promise.race([
+      new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Timeout waiting for IdP IPC ready")), 25000);
+        idpChild.on("message", (msg: any) => {
+          if (msg?.type === "ready" && typeof msg.idpUrl === "string") {
+            clearTimeout(timer);
+            resolve(msg.idpUrl);
+          }
+        });
+      }),
       new Promise<never>((_, reject) => {
         idpChild.once("error", (err) => reject(new Error(`IdP spawn error: ${err.message}`)));
         idpChild.once("exit", (code, sig) =>
