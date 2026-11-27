@@ -117,8 +117,8 @@ export default function AccountProfile() {
             error={error}
             onSelectAccount={handleSelectAccount}
             onSignOutAccount={async () => {}}
-            onSignInAgain={() => {}}
-            onUseAnotherAccount={() => {}}
+            onSignInAgain={() => { window.location.href = "/auth?callbackURL=%2Faccount%2Fprofile"; }}
+            onUseAnotherAccount={() => { window.location.href = "/auth?callbackURL=%2Faccount%2Fprofile"; }}
           />
         </div>
       </div>

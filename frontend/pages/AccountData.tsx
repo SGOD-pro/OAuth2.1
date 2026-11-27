@@ -220,8 +220,8 @@ export default function AccountData() {
             error={error}
             onSelectAccount={handleSelectAccount}
             onSignOutAccount={async () => {}}
-            onSignInAgain={() => { window.location.href = "/auth"; }}
-            onUseAnotherAccount={() => { window.location.href = "/auth"; }}
+            onSignInAgain={() => { window.location.href = "/auth?callbackURL=%2Faccount%2Fdata"; }}
+            onUseAnotherAccount={() => { window.location.href = "/auth?callbackURL=%2Faccount%2Fdata"; }}
           />
         </div>
       </div>

@@ -69,10 +69,10 @@ export default function AccountDashboard() {
             onSelectAccount={handleSelect}
             onSignOutAccount={handleSignOut}
             onSignInAgain={() => {
-              window.location.href = "/signin?redirect_to=%2Faccount";
+              window.location.href = "/auth?callbackURL=%2Faccount";
             }}
             onUseAnotherAccount={() => {
-              window.location.href = "/signin?redirect_to=%2Faccount";
+              window.location.href = "/auth?callbackURL=%2Faccount";
             }}
           />
         </div>
