@@ -14,29 +14,21 @@ export function getChromiumExecutable(): string | undefined {
   return undefined;
 }
 
-export async function getAvailablePort(usedPorts = new Set<number>()): Promise<number> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const candidate = 32000 + Math.floor(Math.random() * 25000);
-    if (usedPorts.has(candidate)) continue;
-    const isFree = await new Promise<boolean>((resolve) => {
-      const client = net.createConnection({ port: candidate, host: "127.0.0.1" }, () => {
-        client.destroy();
-        resolve(false);
-      });
-      client.on("error", () => resolve(true));
-      client.setTimeout(150, () => {
-        client.destroy();
-        resolve(true);
-      });
+export async function reserveEphemeralPort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      if (!addr || typeof addr === "string") {
+        srv.close(() => reject(new Error("Failed to read ephemeral port")));
+        return;
+      }
+      const port = addr.port;
+      srv.close((closeErr) => (closeErr ? reject(closeErr) : resolve(port)));
     });
-    if (isFree) {
-      usedPorts.add(candidate);
-      return candidate;
-    }
-  }
-  const fallback = 36000 + Math.floor(Math.random() * 10000);
-  usedPorts.add(fallback);
-  return fallback;
+  });
 }
 
 export async function waitForHttp(url: string, timeoutMs = 25000): Promise<void> {
@@ -66,13 +58,11 @@ export async function startIdpAndFrontendHarness(options: {
   betterAuthSecret: string;
   extraEnv?: Record<string, string>;
 }): Promise<BrowserTestEnvironment> {
-  const usedPorts = new Set<number>();
-  const idpPort = await getAvailablePort(usedPorts);
-  const frontendPort = await getAvailablePort(usedPorts);
-  const idpUrl = `http://127.0.0.1:${idpPort}`;
-  const frontendUrl = `http://127.0.0.1:${frontendPort}`;
-
   const children: ChildProcess[] = [];
+  let frontendServer: http.Server | null = null;
+  let browser: Browser | null = null;
+  let stage = "init";
+
   const killChildren = () => {
     for (const child of children) {
       if (!child.killed && child.pid) {
@@ -83,123 +73,131 @@ export async function startIdpAndFrontendHarness(options: {
     }
   };
 
-  const idpChild = spawn(
-    process.execPath,
-    [path.join(options.backendDir, "node_modules/tsx/dist/cli.mjs"), "src/node-server.ts"],
-    {
-      cwd: options.backendDir,
-      detached: true,
-      env: {
-        ...process.env,
-        NODE_ENV: "test",
-        PORT: String(idpPort),
-        HOST: "127.0.0.1",
-        MONGO_URI: options.mongoUri,
-        BETTER_AUTH_SECRET: options.betterAuthSecret,
-        BETTER_AUTH_URL: idpUrl,
-        FRONTEND_URL: frontendUrl,
-        AUTH_PUBLIC_SIGNUP_ENABLED: "true",
-        GOOGLE_CLIENT_ID: "test-google-id",
-        GOOGLE_CLIENT_SECRET: "test-google-secret",
-        INTERNAL_GATEWAY_SECRET: options.gatewaySecret,
-        TRUSTED_PROXY_CIDRS: "127.0.0.1/32,10.0.0.0/8",
-        ...(options.extraEnv || {}),
-      },
-      stdio: "pipe",
+  const cleanup = async () => {
+    await browser?.close().catch(() => {});
+    if (frontendServer) {
+      await new Promise<void>((resolve) => frontendServer!.close(() => resolve()));
     }
-  );
-  idpChild.stderr?.on("data", (d) => process.stderr.write(`[IdP ERR] ${d}`));
-  children.push(idpChild);
-  await waitForHttp(`${idpUrl}/health`);
-
-  if (!fs.existsSync(path.join(options.frontendDir, "dist/index.html"))) {
-    const { execSync } = await import("node:child_process");
-    execSync("npm run build:ui", { cwd: options.frontendDir, stdio: "pipe" });
-  }
-
-  let frontendServer: http.Server | null = null;
-  await new Promise<void>((resolve, reject) => {
-    const srv = http.createServer(async (req, res) => {
-      try {
-        const reqPath = req.url?.split("?")[0] || "/";
-        if (reqPath.startsWith("/api") || reqPath.startsWith("/.well-known")) {
-          const headers = new Headers();
-          for (const [k, v] of Object.entries(req.headers)) {
-            if (v && k.toLowerCase() !== "host") {
-              headers.set(k, Array.isArray(v) ? v.join(", ") : v);
-            }
-          }
-          headers.set("x-gateway-secret", options.gatewaySecret);
-          let bodyBuf: Buffer | undefined;
-          if (req.method !== "GET" && req.method !== "HEAD") {
-            const chunks: Buffer[] = [];
-            for await (const chunk of req) chunks.push(Buffer.from(chunk));
-            bodyBuf = Buffer.concat(chunks);
-          }
-          const upRes = await fetch(`${idpUrl}${req.url}`, {
-            method: req.method,
-            headers,
-            body: bodyBuf,
-            redirect: "manual",
-          });
-          res.statusCode = upRes.status;
-          for (const [k, v] of upRes.headers) {
-            if (k.toLowerCase() === "set-cookie") {
-              const setCookies = typeof (upRes.headers as any).getSetCookie === "function"
-                ? (upRes.headers as any).getSetCookie()
-                : [v];
-              res.setHeader("set-cookie", setCookies);
-            } else {
-              res.setHeader(k, v);
-            }
-          }
-          res.end(Buffer.from(await upRes.arrayBuffer()));
-          return;
-        }
-
-        let filePath = path.join(options.frontendDir, "dist", reqPath);
-        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-          filePath = path.join(options.frontendDir, "dist", "index.html");
-        }
-        const mimeTypes: Record<string, string> = {
-          ".html": "text/html; charset=utf-8",
-          ".js": "application/javascript; charset=utf-8",
-          ".css": "text/css; charset=utf-8",
-          ".json": "application/json; charset=utf-8",
-          ".svg": "image/svg+xml",
-          ".png": "image/png",
-        };
-        res.setHeader("Content-Type", mimeTypes[path.extname(filePath)] || "application/octet-stream");
-        fs.createReadStream(filePath).pipe(res);
-      } catch (err: any) {
-        res.statusCode = 500;
-        res.end(err?.message || "Internal error");
-      }
-    });
-    srv.listen(frontendPort, "127.0.0.1", () => {
-      frontendServer = srv;
-      resolve();
-    });
-    srv.on("error", reject);
-  });
-  await waitForHttp(`${frontendUrl}/admin/login`);
-
-  const browser = await chromium.launch({
-    executablePath: getChromiumExecutable(),
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  });
-
-  return {
-    idpUrl,
-    frontendUrl,
-    browser,
-    cleanup: async () => {
-      await browser.close().catch(() => {});
-      if (frontendServer) {
-        try { frontendServer.close(); } catch {}
-      }
-      killChildren();
-    },
+    killChildren();
   };
+
+  try {
+    stage = "frontend_listen";
+    if (!fs.existsSync(path.join(options.frontendDir, "dist/index.html"))) {
+      const { execSync } = await import("node:child_process");
+      execSync("npm run build:ui", { cwd: options.frontendDir, stdio: "pipe" });
+    }
+
+    const idpPort = await reserveEphemeralPort();
+    const idpUrl = `http://127.0.0.1:${idpPort}`;
+
+    // Bind frontend listener to port 0 first so its port is OS-assigned and reserved
+    frontendServer = http.createServer(async (req, res) => {
+      const urlPath = (req.url || "/").split("?")[0];
+      if (urlPath.startsWith("/api/") || urlPath.startsWith("/.well-known/")) {
+        const target = `${idpUrl}${req.url}`;
+        const headers = new Headers();
+        for (const [k, v] of Object.entries(req.headers)) {
+          if (v !== undefined && k.toLowerCase() !== "host") {
+            headers.set(k, Array.isArray(v) ? v.join(", ") : v);
+          }
+        }
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        const body = chunks.length > 0 && req.method !== "GET" && req.method !== "HEAD" ? Buffer.concat(chunks) : undefined;
+        try {
+          const upstream = await fetch(target, { method: req.method, headers, body, redirect: "manual" });
+          res.statusCode = upstream.status;
+          upstream.headers.forEach((val, key) => {
+            if (key.toLowerCase() !== "transfer-encoding") {
+              res.setHeader(key, val);
+            }
+          });
+          const getSetCookie = (upstream.headers as any).getSetCookie;
+          if (typeof getSetCookie === "function") {
+            const setCookies = getSetCookie.call(upstream.headers);
+            if (Array.isArray(setCookies) && setCookies.length > 0) {
+              res.setHeader("set-cookie", setCookies);
+            }
+          }
+          const buf = Buffer.from(await upstream.arrayBuffer());
+          res.end(buf);
+        } catch (err: any) {
+          res.statusCode = 502;
+          res.end(String(err?.message || err));
+        }
+        return;
+      }
+
+      const distDir = path.join(options.frontendDir, "dist");
+      const candidate = path.join(distDir, urlPath === "/" ? "index.html" : urlPath);
+      const filePath = fs.existsSync(candidate) && fs.statSync(candidate).isFile() ? candidate : path.join(distDir, "index.html");
+      const ext = path.extname(filePath);
+      const mime =
+        ext === ".html" ? "text/html; charset=utf-8"
+        : ext === ".js" ? "application/javascript; charset=utf-8"
+        : ext === ".css" ? "text/css; charset=utf-8"
+        : ext === ".svg" ? "image/svg+xml"
+        : "application/octet-stream";
+      res.setHeader("Content-Type", mime);
+      res.end(fs.readFileSync(filePath));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      frontendServer!.once("error", reject);
+      frontendServer!.listen(0, "127.0.0.1", () => resolve());
+    });
+    const frontendAddr = frontendServer.address();
+    if (!frontendAddr || typeof frontendAddr === "string") {
+      throw new Error("Failed to resolve bound frontend port");
+    }
+    const frontendUrl = `http://127.0.0.1:${frontendAddr.port}`;
+
+    stage = "idp_spawn";
+    const idpChild = spawn(
+      process.execPath,
+      [path.join(options.backendDir, "node_modules/tsx/dist/cli.mjs"), "src/node-server.ts"],
+      {
+        cwd: options.backendDir,
+        detached: true,
+        env: {
+          ...process.env,
+          NODE_ENV: "test",
+          PORT: String(idpPort),
+          HOST: "127.0.0.1",
+          MONGO_URI: options.mongoUri,
+          BETTER_AUTH_SECRET: options.betterAuthSecret,
+          BETTER_AUTH_URL: idpUrl,
+          FRONTEND_URL: frontendUrl,
+          AUTH_PUBLIC_SIGNUP_ENABLED: "true",
+          GOOGLE_CLIENT_ID: "test-google-id",
+          GOOGLE_CLIENT_SECRET: "test-google-secret",
+          INTERNAL_GATEWAY_SECRET: options.gatewaySecret,
+          TRUSTED_PROXY_CIDRS: "127.0.0.1/32,10.0.0.0/8",
+          ...(options.extraEnv || {}),
+        },
+        stdio: "pipe",
+      }
+    );
+    idpChild.stderr?.on("data", (d) => process.stderr.write(`[IdP ERR] ${d}`));
+    children.push(idpChild);
+    await waitForHttp(`${idpUrl}/health`);
+
+    stage = "browser_launch";
+    const executablePath = getChromiumExecutable();
+    browser = await chromium.launch({
+      headless: true,
+      ...(executablePath ? { executablePath } : {}),
+    });
+
+    return {
+      idpUrl,
+      frontendUrl,
+      browser,
+      cleanup,
+    };
+  } catch (err: any) {
+    await cleanup();
+    throw new Error(`[browser-harness] Startup failed at stage "${stage}": ${err?.message || err}`);
+  }
 }
