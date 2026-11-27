@@ -133,6 +133,9 @@ try {
 
   const { frontendUrl, browser } = harness;
   const db = suite.client.db(suite.dbName);
+  const shotDir = path.resolve(backendDir, "../screenshots/v2-e2e");
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(shotDir, { recursive: true });
   const { runExportWorkerPass } = await import("../../src/workers/export");
   const { runDeletionReconcilePass } = await import("../../src/workers/deletion");
 
@@ -244,6 +247,7 @@ try {
   await tabA.goto(`${appOpenBff.baseUrl}/login`, { waitUntil: "domcontentloaded" });
   await tabA.fill('input[name="email"]', emailA);
   await tabA.fill('input[name="password"]', password);
+  await tabA.screenshot({ path: path.join(shotDir, "01-signin.png") });
   await tabA.click('button[type="submit"]');
   await tabA.waitForSelector('[data-testid="consumer-sub"]', { timeout: 15_000 });
   assert.equal(await tabA.textContent('[data-testid="consumer-sub"]'), String(userA._id));
@@ -253,6 +257,7 @@ try {
   const tabB = await ctx.newPage();
   await tabB.goto(`${appOpenSpa.baseUrl}/login?prompt=select_account`, { waitUntil: "domcontentloaded" });
   await tabB.waitForSelector('[data-testid="choose-account-v2_alpha"]', { timeout: 15_000 });
+  await tabB.screenshot({ path: path.join(shotDir, "02-google-style-chooser.png") });
   await tabB.click('button:has-text("Use another account")');
   await tabB.fill('input[name="email"]', emailB);
   await tabB.fill('input[name="password"]', password);
@@ -265,6 +270,7 @@ try {
   await tabA.waitForSelector('[data-testid="choose-account-v2_alpha"]', { timeout: 15_000 });
   await tabA.click('[data-testid="choose-account-v2_alpha"]');
   await tabA.waitForSelector('[role="alert"]', { timeout: 15_000 });
+  await tabA.screenshot({ path: path.join(shotDir, "03-private-app-denied.png") });
   assert.equal(appPrivate.getLastResult(), null);
 
   await db.collection("user_app_registrations").insertOne({ clientId: "e2e-private-corp", userId: String(userA._id), registeredAt: new Date() });
@@ -295,6 +301,7 @@ try {
   await tabA.waitForSelector('[data-testid="choose-account-v2_alpha"]', { timeout: 15_000 });
   await tabA.click('[data-testid="choose-account-v2_alpha"]');
   await tabA.waitForSelector('[data-testid="dashboard-user-id"]', { timeout: 15_000 });
+  await tabA.screenshot({ path: path.join(shotDir, "04-account-dashboard.png") });
 
   // Export & Delete via /account/data
   await tabA.click('[data-testid="data-link"]');
@@ -304,6 +311,7 @@ try {
   await runExportWorkerPass(db);
   await tabA.click('[data-testid="refresh-export-btn"]');
   await tabA.waitForSelector('[data-testid="download-export-btn"]', { timeout: 10_000 });
+  await tabA.screenshot({ path: path.join(shotDir, "05-account-data-export.png") });
 
   // Confirm encrypted artifact in MongoDB (no raw email plaintext stored in export_jobs)
   const expDoc = await db.collection("export_jobs").findOne({ ownerUserId: String(userA._id) });
@@ -317,6 +325,7 @@ try {
   await runDeletionReconcilePass(db);
   await tabA.click('[data-testid="refresh-deletion-status-btn"]');
   await tabA.waitForFunction(() => document.querySelector('[data-testid="deletion-status-value"]')?.textContent === "purged", { timeout: 10_000 });
+  await tabA.screenshot({ path: path.join(shotDir, "06-account-deletion-receipt.png") });
 
   // Account B in Tab 2 remains active on /account and tests /account/privacy
   await tabB.goto(`${frontendUrl}/account`, { waitUntil: "networkidle" });
@@ -354,6 +363,8 @@ try {
   ]);
   const adminLogsText = await logsResp.text();
   assert.equal(adminLogsText.includes(emailB), false, "Admin logs must omit full email");
+  await adminPage.waitForTimeout(300);
+  await adminPage.screenshot({ path: path.join(shotDir, "07-admin-logs-masked.png") });
   await adminCtx.close();
 
   console.log("[PASS] V2 Full Platform Multi-Consumer Playwright E2E passed");
